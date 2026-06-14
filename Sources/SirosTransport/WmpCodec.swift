@@ -81,3 +81,11 @@ public enum WmpMessage: Sendable {
 public enum WmpCodecError: Error, Sendable {
     case invalidJSON
 }
+
+extension WmpCodecError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .invalidJSON: return "Invalid JSON in WMP message"
+        }
+    }
+}

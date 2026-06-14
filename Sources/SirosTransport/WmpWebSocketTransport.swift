@@ -105,3 +105,11 @@ public final class WmpWebSocketTransport: TransportProtocol, @unchecked Sendable
 public enum TransportError: Error, Sendable {
     case notConnected
 }
+
+extension TransportError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notConnected: return "Transport is not connected"
+        }
+    }
+}

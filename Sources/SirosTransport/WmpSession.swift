@@ -307,9 +307,28 @@ public enum WmpSessionError: Error, Sendable {
     case connectionFailed
 }
 
+extension WmpSessionError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .sessionCreationFailed(let msg): return "Session creation failed: \(msg)"
+        case .resumeFailed(let msg): return "Session resume failed: \(msg)"
+        case .missingResult: return "Missing result in WMP response"
+        case .noSession: return "No active WMP session"
+        case .noResumptionToken: return "No resumption token available"
+        case .connectionFailed: return "WMP connection failed"
+        }
+    }
+}
+
 public struct WmpTimeoutError: Error, Sendable {
     public let method: String
     public let timeoutMs: Int
+}
+
+extension WmpTimeoutError: LocalizedError {
+    public var errorDescription: String? {
+        "Request '\(method)' timed out after \(timeoutMs)ms"
+    }
 }
 
 /// Actor that serializes transport sends without holding locks across `await`.
