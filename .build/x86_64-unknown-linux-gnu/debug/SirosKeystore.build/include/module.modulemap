@@ -1,3 +1,0 @@
-module SirosKeystore {
-    header "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/include/SirosKeystore-Swift.h"
-}
