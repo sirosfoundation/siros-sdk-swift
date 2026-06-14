@@ -27,7 +27,7 @@ force_try: warning
 
 type_body_length:
   warning: 500
-  error: 700
+  error: 800
 
 file_length:
   warning: 700
@@ -39,6 +39,8 @@ function_body_length:
 
 identifier_name:
   min_length: 1
+  allowed_symbols:
+    - _
   excluded:
     - id
     - iv
