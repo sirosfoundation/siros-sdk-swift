@@ -53,6 +53,11 @@ let package = Package(
             dependencies: ["SirosAuth", "SirosCredentials"],
             path: "Sources/SirosKeystore"
         ),
+        .testTarget(
+            name: "SirosKeystoreTests",
+            dependencies: ["SirosKeystore"],
+            path: "Tests/SirosKeystoreTests"
+        ),
 
         // --- Flow: OID4VCI / OID4VP flow orchestration ---
         .target(

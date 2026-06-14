@@ -1,3 +1,5 @@
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/SirosAuth.swiftmodule.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialMatcher.swift.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStore.swift.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStoreProtocol.swift.o
@@ -13,7 +15,19 @@
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/InMemoryCredentialStoreTests.swift.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/SirosCredentialsTests.swiftmodule.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/VctmFetcherTests.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/ContainerTypes.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/EncryptedContainer.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JweKeystore.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JwtHelpers.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/KeystoreManager.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/SirosKeystore.swiftmodule.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/Base64UrlTests.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/ContainerTypesTests.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/EncryptedContainerTests.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/JweKeystoreTests.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/SirosKeystoreTests.swiftmodule.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o
+/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosKeystoreTests.swift.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosSDKPackageDiscoveredTests.swiftmodule.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosTransportTests.swift.o
 /home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o

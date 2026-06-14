@@ -457,7 +457,23 @@
       "inputs" : [
         {
           "kind" : "file",
-          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift"
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/ContainerTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/EncryptedContainer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JweKeystore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JwtHelpers.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/KeystoreManager.swift"
         },
         {
           "kind" : "file",
@@ -480,7 +496,11 @@
       "moduleName" : "SirosKeystore",
       "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystore.swiftmodule",
       "objects" : [
-        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/Keystore.swift.o"
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/ContainerTypes.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/EncryptedContainer.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JweKeystore.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JwtHelpers.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/KeystoreManager.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -519,7 +539,23 @@
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/Keystore.swift.o"
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/ContainerTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/EncryptedContainer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JweKeystore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JwtHelpers.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/KeystoreManager.swift.o"
         },
         {
           "kind" : "file",
@@ -528,9 +564,121 @@
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift"
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/ContainerTypes.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/EncryptedContainer.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JweKeystore.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JwtHelpers.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/KeystoreManager.swift"
       ],
       "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosKeystoreTests-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/Base64UrlTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/ContainerTypesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/EncryptedContainerTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/JweKeystoreTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosKeystoreTests",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystoreTests.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/Base64UrlTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/ContainerTypesTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/EncryptedContainerTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/JweKeystoreTests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/Base64UrlTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/ContainerTypesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/EncryptedContainerTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/JweKeystoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystoreTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/Base64UrlTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/ContainerTypesTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/EncryptedContainerTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/JweKeystoreTests.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build",
       "wholeModuleOptimization" : false
     },
     "C.SirosSDKPackageDiscoveredTests-x86_64-unknown-linux-gnu-debug.module" : {
@@ -541,6 +689,10 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosKeystoreTests.swift"
         },
         {
           "kind" : "file",
@@ -560,6 +712,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystoreTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentialsTests.swiftmodule"
         },
         {
@@ -572,6 +728,7 @@
       "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageDiscoveredTests.swiftmodule",
       "objects" : [
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosKeystoreTests.swift.o",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosTransportTests.swift.o",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
       ],
@@ -616,6 +773,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosKeystoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosTransportTests.swift.o"
         },
         {
@@ -630,6 +791,7 @@
       "prepareForIndexing" : false,
       "sources" : [
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosKeystoreTests.swift",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
       ],
@@ -652,6 +814,10 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransportTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystoreTests.swiftmodule"
         },
         {
           "kind" : "file",
@@ -1279,7 +1445,11 @@
       "-package-name",
       "siros_sdk_swift",
       "-c",
-      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/ContainerTypes.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/EncryptedContainer.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JweKeystore.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JwtHelpers.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/KeystoreManager.swift",
       "-I",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
       "-target",
@@ -1316,6 +1486,52 @@
       "-driver-use-frontend-path",
       "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
     ],
+    "SirosKeystoreTests" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosKeystoreTests",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/Base64UrlTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/ContainerTypesTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/EncryptedContainerTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/JweKeystoreTests.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
     "SirosSDKPackageDiscoveredTests" : [
       "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
       "-module-name",
@@ -1324,6 +1540,7 @@
       "siros_sdk_swift",
       "-c",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosKeystoreTests.swift",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift",
       "-I",
@@ -1571,8 +1788,17 @@
       "SirosCredentials",
       "SirosTransport"
     ],
+    "SirosKeystoreTests" : [
+      "SirosKeystore",
+      "SirosAuth",
+      "SirosCredentials",
+      "SirosTransport"
+    ],
     "SirosSDKPackageDiscoveredTests" : [
       "SirosCredentialsTests",
+      "SirosKeystoreTests",
+      "SirosKeystore",
+      "SirosAuth",
       "SirosCredentials",
       "SirosTransportTests",
       "SirosTransport"
@@ -1580,6 +1806,9 @@
     "SirosSDKPackageTests" : [
       "SirosSDKPackageDiscoveredTests",
       "SirosCredentialsTests",
+      "SirosKeystoreTests",
+      "SirosKeystore",
+      "SirosAuth",
       "SirosCredentials",
       "SirosTransportTests",
       "SirosTransport"
@@ -1619,6 +1848,22 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/Base64UrlTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/ContainerTypesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/EncryptedContainerTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/JweKeystoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swift.o"
         },
         {
@@ -1642,6 +1887,10 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosKeystoreTests.swift"
         },
         {
           "kind" : "file",
@@ -1785,10 +2034,52 @@
         },
         {
           "kind" : "file",
-          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift"
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/ContainerTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/EncryptedContainer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JweKeystore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JwtHelpers.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/KeystoreManager.swift"
         }
       ],
       "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/Base64UrlTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/ContainerTypesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/EncryptedContainerTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosKeystoreTests/JweKeystoreTests.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/sources"
     },
     "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/sources" : {
       "alwaysOutOfDate" : false,
@@ -1800,6 +2091,10 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosKeystoreTests.swift"
         },
         {
           "kind" : "file",
@@ -1832,6 +2127,14 @@
         {
           "kind" : "virtual",
           "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/SirosAuth.swiftmodule.o"
         },
         {
           "kind" : "file",
@@ -1895,7 +2198,55 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/ContainerTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/EncryptedContainer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JweKeystore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/JwtHelpers.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/KeystoreManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/SirosKeystore.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/Base64UrlTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/ContainerTypesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/EncryptedContainerTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/JweKeystoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystoreTests.build/SirosKeystoreTests.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosKeystoreTests.swift.o"
         },
         {
           "kind" : "file",

@@ -1,1 +1,5 @@
-/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/ContainerTypes.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/EncryptedContainer.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JweKeystore.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/JwtHelpers.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/KeystoreManager.swift
