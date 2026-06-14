@@ -2,6 +2,13 @@
   "": {
     "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/primary.swiftdeps"
   },
+  "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosAuthTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosAuthTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosAuthTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosAuthTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosAuthTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosAuthTests.dia"
+  },
   "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift": {
     "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.d",
     "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o",

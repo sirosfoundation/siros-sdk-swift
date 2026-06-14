@@ -46,6 +46,11 @@ let package = Package(
             dependencies: ["SirosTransport", "SirosCredentials"],
             path: "Sources/SirosAuth"
         ),
+        .testTarget(
+            name: "SirosAuthTests",
+            dependencies: ["SirosAuth"],
+            path: "Tests/SirosAuthTests"
+        ),
 
         // --- Keystore: JWE-encrypted key management ---
         .target(

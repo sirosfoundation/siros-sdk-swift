@@ -2,11 +2,32 @@
   "": {
     "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/primary.swiftdeps"
   },
-  "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/Auth.swift": {
-    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.d",
-    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.swift.o",
-    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth~partial.swiftmodule",
-    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.swiftdeps",
-    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.dia"
+  "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/AuthProvider.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/AuthProvider.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/AuthProvider.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/AuthProvider~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/AuthProvider.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/AuthProvider.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/BackendApiClient.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/BackendApiClient.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/BackendApiClient.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/BackendApiClient~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/BackendApiClient.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/BackendApiClient.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/TaggedBinary.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/TaggedBinary.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/TaggedBinary.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/TaggedBinary~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/TaggedBinary.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/TaggedBinary.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/WebAuthnAuthClient.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/WebAuthnAuthClient.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/WebAuthnAuthClient.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/WebAuthnAuthClient~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/WebAuthnAuthClient.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/WebAuthnAuthClient.dia"
   }
 }

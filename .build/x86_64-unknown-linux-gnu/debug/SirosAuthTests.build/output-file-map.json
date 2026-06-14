@@ -1,0 +1,47 @@
+{
+  "": {
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/primary.swiftdeps"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosAuthTests/AuthTypesTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/AuthTypesTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/AuthTypesTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/AuthTypesTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/AuthTypesTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/AuthTypesTests.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosAuthTests/BackendApiClientTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/BackendApiClientTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/BackendApiClientTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/BackendApiClientTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/BackendApiClientTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/BackendApiClientTests.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosAuthTests/FakeAuthProvider.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/FakeAuthProvider.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/FakeAuthProvider.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/FakeAuthProvider~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/FakeAuthProvider.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/FakeAuthProvider.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosAuthTests/MockHttpServer.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/MockHttpServer.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/MockHttpServer.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/MockHttpServer~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/MockHttpServer.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/MockHttpServer.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosAuthTests/TaggedBinaryTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/TaggedBinaryTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/TaggedBinaryTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/TaggedBinaryTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/TaggedBinaryTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/TaggedBinaryTests.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosAuthTests/WebAuthnAuthClientTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/WebAuthnAuthClientTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/WebAuthnAuthClientTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/WebAuthnAuthClientTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/WebAuthnAuthClientTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuthTests.build/WebAuthnAuthClientTests.dia"
+  }
+}
