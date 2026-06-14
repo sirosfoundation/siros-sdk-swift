@@ -285,10 +285,12 @@ final class JweKeystoreTests: XCTestCase {
 
         try await keystore.saveCredential(id: "c1", json: "a")
         try await keystore.saveCredential(id: "c2", json: "b")
-        XCTAssertEqual((try await keystore.getAllCredentials()).count, 2)
+        let allCreds = try await keystore.getAllCredentials()
+        XCTAssertEqual(allCreds.count, 2)
 
         try await keystore.clearCredentials()
-        XCTAssertEqual((try await keystore.getAllCredentials()).count, 0)
+        let clearedCreds = try await keystore.getAllCredentials()
+        XCTAssertEqual(clearedCreds.count, 0)
     }
 
     func testCredentialStorageLockedThrows() async {

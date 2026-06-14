@@ -23,7 +23,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
 
     #if canImport(CryptoKit)
 
-    private let lock = NSLock()
+    private let mutex = NSLock()
     private var keys: [String: P256.Signing.PrivateKey] = [:]
     private var credentials: [String: String] = [:]
     private var _mainKey: SymmetricKey?
@@ -32,21 +32,22 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     public init() {}
 
     public var isUnlocked: Bool {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         return _mainKey != nil
     }
 
     // MARK: - Unlock / Lock
 
+    // swiftlint:disable:next function_body_length
     public func unlock(
         prfOutput: Data,
         encryptedContainer: Data,
         hkdfSalt: Data,
         hkdfInfo: Data
     ) async throws {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
 
         if !encryptedContainer.isEmpty {
             let container = try EncryptedContainer.parse(encryptedContainer)
@@ -93,6 +94,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             )
 
             var prfSalt = Data(count: 32)
+            // swiftlint:disable:next force_unwrapping
             prfSalt.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
 
             containerMetadata = ContainerData(
@@ -115,8 +117,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func setCredentialId(_ credentialId: Data) {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         guard var meta = containerMetadata,
               !meta.prfKeys.isEmpty,
               meta.prfKeys[0].credentialId.isEmpty else { return }
@@ -125,8 +127,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func lock() {
-        lock.lock()
-        defer { self.lock.unlock() }
+        mutex.lock()
+        defer { self.mutex.unlock() }
         keys.removeAll()
         credentials.removeAll()
         _mainKey = nil
@@ -136,8 +138,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     // MARK: - Key operations
 
     public func generateKey(algorithm: String = "ES256") async throws -> String {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         let keyId = UUID().uuidString.lowercased()
         let privateKey = P256.Signing.PrivateKey()
@@ -146,8 +148,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func sign(keyId: String, payload: Data, algorithm: String = "ES256") async throws -> Data {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         guard let key = keys[keyId] else {
             throw KeystoreError.keyNotFound(keyId)
@@ -162,8 +164,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func generateProof(audience: String, nonce: String) async throws -> String {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
 
         let key: P256.Signing.PrivateKey
@@ -197,8 +199,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
 
         let key: P256.Signing.PrivateKey
@@ -238,8 +240,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         nonce: String,
         audience: String
     ) async throws -> String {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
 
         let key: P256.Signing.PrivateKey
@@ -301,11 +303,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func exportEncryptedContainer() async throws -> Data {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
 
-        let currentMainKey = _mainKey!
+        // swiftlint:disable:next force_unwrapping
+        let currentMainKey = _mainKey! // safe: requireUnlocked() above guarantees non-nil
         let walletState = buildWalletStateV3()
         let payload = try JSONSerialization.data(withJSONObject: walletState)
 
@@ -320,44 +323,44 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     public func listKeys() -> [KeyInfo] {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         return keys.map { KeyInfo(keyId: $0.key, algorithm: "ES256") }
     }
 
     // MARK: - Credential storage
 
     public func saveCredential(id: String, json: String) async throws {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         credentials[id] = json
     }
 
     public func getCredential(id: String) async throws -> String? {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         return credentials[id]
     }
 
     public func getAllCredentials() async throws -> [String: String] {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         return credentials
     }
 
     public func deleteCredential(id: String) async throws {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeValue(forKey: id)
     }
 
     public func clearCredentials() async throws {
-        lock.lock()
-        defer { lock.unlock() }
+        mutex.lock()
+        defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeAll()
     }
@@ -554,6 +557,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     private func encryptJwe(_ plaintext: Data, mainKey: SymmetricKey) throws -> String {
         // Generate a random CEK (256-bit)
         var cekBytes = Data(count: 32)
+        // swiftlint:disable:next force_unwrapping
         cekBytes.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
         let cek = SymmetricKey(data: cekBytes)
 

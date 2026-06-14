@@ -968,6 +968,7 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     /// Cross-platform secure random bytes.
+    // swiftlint:disable:next identifier_name
     private static func SecRandomCopyBuffer(_ buffer: inout [UInt8], _ count: Int) -> Int32 {
         #if canImport(Security)
         return SecRandomCopyBytes(kSecRandomDefault, count, &buffer)
