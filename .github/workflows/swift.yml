@@ -38,6 +38,23 @@ jobs:
             echo "::error::Coverage gate failed: ${PCT}% < ${COVERAGE_MIN_PCT}%"
             exit 1
           fi
+      - name: Convert coverage to lcov
+        if: always()
+        run: |
+          BIN_PATH=$(swift build --show-bin-path)
+          PROFDATA=$(find "$BIN_PATH" -name 'default.profdata' -type f | head -1)
+          XCTEST=$(find "$BIN_PATH" -name '*.xctest' -type d | head -1)/Contents/MacOS/*
+          if [ -n "$PROFDATA" ]; then
+            xcrun llvm-cov export -format=lcov -instr-profile "$PROFDATA" $XCTEST \
+              -ignore-filename-regex='\.build/|Tests/' > coverage.lcov
+          fi
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.lcov
+          flags: macos
+          fail_ci_if_error: false
 
   build-ios:
     name: Build (iOS)
@@ -68,3 +85,15 @@ jobs:
         run: brew install swiftlint
       - name: Run SwiftLint
         run: swiftlint lint
+
+  docs:
+    name: Documentation
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build DocC documentation
+        run: |
+          for target in SirosWallet SirosTransport SirosAuth SirosKeystore SirosFlow SirosCredentials; do
+            echo "Building docs for $target..."
+            swift package generate-documentation --target "$target"
+          done

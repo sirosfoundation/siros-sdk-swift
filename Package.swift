@@ -17,6 +17,9 @@ let package = Package(
         .library(name: "SirosFlow", targets: ["SirosFlow"]),
         .library(name: "SirosWallet", targets: ["SirosWallet"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.3"),
+    ],
     targets: [
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(

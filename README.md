@@ -1,6 +1,7 @@
 # SIROS SDK for iOS/macOS (Swift)
 
 [![Swift CI](https://github.com/sirosfoundation/siros-sdk-swift/actions/workflows/swift.yml/badge.svg)](https://github.com/sirosfoundation/siros-sdk-swift/actions/workflows/swift.yml)
+[![codecov](https://codecov.io/gh/sirosfoundation/siros-sdk-swift/graph/badge.svg)](https://codecov.io/gh/sirosfoundation/siros-sdk-swift)
 [![Swift 5.10+](https://img.shields.io/badge/Swift-5.10+-orange.svg)](https://swift.org)
 [![Platform](https://img.shields.io/badge/platform-iOS%2016%2B%20%7C%20macOS%2013%2B-lightgrey.svg)](https://developer.apple.com)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
@@ -64,6 +65,45 @@ guard let wallet = SirosWallet(
 // Register / login
 try await wallet.register(userName: "alice")
 try await wallet.login()
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│           Your iOS/macOS App            │
+│  ┌───────────────────────────────────┐  │
+│  │          SIROS SDK                │  │
+│  │  ┌─────────┐  ┌───────────────┐  │  │
+│  │  │  Flow   │  │  Credentials  │  │  │
+│  │  ├─────────┤  ├───────────────┤  │  │
+│  │  │Keystore │  │   Transport   │  │  │
+│  │  ├─────────┤  ├───────────────┤  │  │
+│  │  │  Auth   │  │    Wallet     │  │  │
+│  │  └─────────┘  └───────────────┘  │  │
+│  └───────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+```
+
+## Build & Test
+
+```bash
+# Run all tests
+swift test --parallel
+
+# Build for iOS Simulator
+swift build \
+  --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+  --triple arm64-apple-ios16.0-simulator
+```
+
+## Documentation
+
+API documentation is generated using [DocC](https://www.swift.org/documentation/docc/).
+
+```bash
+# Generate documentation
+swift package generate-documentation --target SirosWallet
 ```
 
 ## License
