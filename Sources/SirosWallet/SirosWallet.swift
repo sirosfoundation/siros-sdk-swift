@@ -124,8 +124,10 @@ public final class SirosWallet: @unchecked Sendable {
     ///   - config: backend URL, tenant ID, etc.
     ///   - authProvider: platform-specific WebAuthn/passkey implementation.
     ///   - sessionStore: persistent session storage. Defaults to in-memory.
-    ///   - keystore: encrypted keystore. Defaults to JweKeystore.
-    public init(
+    ///   - keystore: encrypted keystore. Defaults to JweKeystore on Apple platforms.
+    ///     On Linux, you **must** provide a custom `KeystoreManager`.
+    /// - Returns: `nil` if no keystore is available (Linux without custom keystore).
+    public init?(
         config: WalletConfig,
         authProvider: AuthProvider,
         sessionStore: SessionStoreProtocol = InMemorySessionStore(),
@@ -138,11 +140,10 @@ public final class SirosWallet: @unchecked Sendable {
         #if canImport(CryptoKit)
         self.keystore = keystore ?? JweKeystore()
         #else
-        if let ks = keystore {
-            self.keystore = ks
-        } else {
-            fatalError("SirosWallet: JweKeystore requires CryptoKit (Apple platforms). Provide a custom KeystoreManager on Linux.")
+        guard let ks = keystore else {
+            return nil
         }
+        self.keystore = ks
         #endif
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)

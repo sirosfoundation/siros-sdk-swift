@@ -78,6 +78,6 @@ public enum WmpMessage: Sendable {
 }
 
 /// Errors from the WMP codec.
-public enum WmpCodecError: Error {
+public enum WmpCodecError: Error, Sendable {
     case invalidJSON
 }

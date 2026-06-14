@@ -29,8 +29,8 @@ public final class WmpSession: @unchecked Sendable {
     private let notificationContinuation: AsyncStream<JsonRpcRequest>.Continuation
     private let _notifications: AsyncStream<JsonRpcRequest>
 
-    // Send serialization
-    private let sendLock = NSLock()
+    // Send serialization — actor ensures no concurrent sends without holding locks across await
+    private let sendSerializer = SendSerializer()
 
     /// Notifications from the server (flow.progress, flow.complete, etc.).
     public func notifications() -> AsyncStream<JsonRpcRequest> {
@@ -152,9 +152,7 @@ public final class WmpSession: @unchecked Sendable {
 
             Task {
                 do {
-                    sendLock.lock()
-                    defer { sendLock.unlock() }
-                    try await transport.send(message)
+                    try await sendSerializer.send(message, via: transport)
                 } catch {
                     pendingLock.lock()
                     let cont = pendingRequests.removeValue(forKey: id)
@@ -176,9 +174,7 @@ public final class WmpSession: @unchecked Sendable {
     /// Send a JSON-RPC notification (no response expected).
     public func sendNotification(method: String, params: [String: AnyCodable]?) async throws {
         let message = try codec.encodeNotification(method: method, params: params)
-        sendLock.lock()
-        defer { sendLock.unlock() }
-        try await transport.send(message)
+        try await sendSerializer.send(message, via: transport)
     }
 
     // MARK: - Private
@@ -314,4 +310,11 @@ public enum WmpSessionError: Error, Sendable {
 public struct WmpTimeoutError: Error, Sendable {
     public let method: String
     public let timeoutMs: Int
+}
+
+/// Actor that serializes transport sends without holding locks across `await`.
+private actor SendSerializer {
+    func send(_ data: Data, via transport: any TransportProtocol) async throws {
+        try await transport.send(data)
+    }
 }
