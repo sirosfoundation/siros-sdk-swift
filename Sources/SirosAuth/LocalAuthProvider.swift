@@ -1,7 +1,10 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+
+#if canImport(CommonCrypto)
 import CommonCrypto
+#endif
 
 #if canImport(Security)
 import Security
@@ -208,10 +211,23 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     public func getPrfOutput(credentialId: Data, salt: Data) async throws -> PrfOutput {
         computePrf(credentialId: credentialId, salt: salt)
     }
+    #else
+    public func register(options: RegisterOptions) async throws -> RegisterResult {
+        throw SirosError.auth("LocalAuthProvider is not available on this platform")
+    }
+
+    public func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
+        throw SirosError.auth("LocalAuthProvider is not available on this platform")
+    }
+
+    public func getPrfOutput(credentialId: Data, salt: Data) async throws -> PrfOutput {
+        throw SirosError.auth("LocalAuthProvider is not available on this platform")
+    }
     #endif
 
     // MARK: - Internal helpers
 
+    #if canImport(CommonCrypto)
     private func sha256(_ data: Data) -> Data {
         var hash = Data(count: Int(CC_SHA256_DIGEST_LENGTH))
         data.withUnsafeBytes { dataPtr in
@@ -238,6 +254,7 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
         }
         return PrfOutput(first: hmac)
     }
+    #endif
 
     private func base64UrlEncode(_ data: Data) -> String {
         data.base64EncodedString()
