@@ -26,7 +26,12 @@ jobs:
         run: |
           BIN=$(swift build --show-bin-path)
           PROFDATA=$(find .build -name 'default.profdata' -print -quit)
-          XCTEST=$(find "$BIN" -name '*.xctest' -o -name '*PackageTests' | head -1)
+          # Find the test binary (not the .xctest bundle directory)
+          XCTEST=$(find "$BIN" -name '*PackageTests' -not -name '*.xctest' -type f | head -1)
+          if [ -z "$XCTEST" ]; then
+            # Fallback: look inside .xctest bundle
+            XCTEST=$(find "$BIN" -path '*PackageTests.xctest/Contents/MacOS/*' -type f | head -1)
+          fi
           if [ -z "$PROFDATA" ] || [ -z "$XCTEST" ]; then
             echo "Warning: could not find profdata or test binary, skipping coverage gate"
             exit 0
