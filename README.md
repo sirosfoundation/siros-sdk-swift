@@ -1,5 +1,10 @@
 # SIROS SDK for iOS/macOS (Swift)
 
+[![Swift CI](https://github.com/sirosfoundation/siros-sdk-swift/actions/workflows/swift.yml/badge.svg)](https://github.com/sirosfoundation/siros-sdk-swift/actions/workflows/swift.yml)
+[![Swift 5.10+](https://img.shields.io/badge/Swift-5.10+-orange.svg)](https://swift.org)
+[![Platform](https://img.shields.io/badge/platform-iOS%2016%2B%20%7C%20macOS%2013%2B-lightgrey.svg)](https://developer.apple.com)
+[![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
+
 Native Swift SDK for integrating SIROS ID wallet infrastructure into iOS and macOS apps.
 
 ## Modules
