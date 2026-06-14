@@ -344,6 +344,7 @@ public enum EncryptedContainer {
         #if canImport(CommonCrypto)
         var outLength = 0
         var outData = Data(count: data.count + 16)
+        let outCapacity = outData.count
         let status = outData.withUnsafeMutableBytes { outPtr in
             data.withUnsafeBytes { dataPtr in
                 key.withUnsafeBytes { keyPtr in
@@ -354,7 +355,7 @@ public enum EncryptedContainer {
                         keyPtr.baseAddress, key.count,
                         nil,
                         dataPtr.baseAddress, data.count,
-                        outPtr.baseAddress, outData.count,
+                        outPtr.baseAddress, outCapacity,
                         &outLength
                     )
                 }

@@ -11,8 +11,6 @@ opt_in_rules:
   - contains_over_first_not_nil
   - discouraged_optional_boolean
   - fatal_error_message
-  - force_unwrapping
-  - implicitly_unwrapped_optional
   - overridden_super_call
   - private_action
   - private_outlet
@@ -22,7 +20,7 @@ opt_in_rules:
 excluded:
   - .build
   - Package.swift
-  - Tests
+  - Tests/
 
 force_cast: warning
 force_try: warning
@@ -41,10 +39,6 @@ function_body_length:
 
 identifier_name:
   min_length: 1
-
-identifier_name:
-  min_length:
-    warning: 2
   excluded:
     - id
     - iv
