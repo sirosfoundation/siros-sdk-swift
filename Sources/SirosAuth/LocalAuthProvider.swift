@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosCredentials
 
 #if canImport(CommonCrypto)
 import CommonCrypto
@@ -60,7 +61,7 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
 
         var error: Unmanaged<CFError>?
         guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-            throw SirosError.auth("Failed to generate key pair")
+            throw SirosError.auth(message: "Failed to generate key pair")
         }
 
         // Build authenticator data
@@ -80,7 +81,7 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
         // Export public key in COSE format
         guard let publicKey = SecKeyCopyPublicKey(privateKey),
               let pubKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
-            throw SirosError.auth("Failed to export public key")
+            throw SirosError.auth(message: "Failed to export public key")
         }
 
         // The external representation is 04 || x || y (65 bytes for P-256)
@@ -123,11 +124,11 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             signCount: 0,
             privateKey: privateKey
         )
-        lock.lock()
-        credentials[credentialId] = entry
-        lastCredentialId = credentialId
-        lastPrfOutput = prfOutput
-        lock.unlock()
+        lock.withLock {
+            credentials[credentialId] = entry
+            lastCredentialId = credentialId
+            lastPrfOutput = prfOutput
+        }
 
         return RegisterResult(
             credentialId: credentialId,
@@ -138,28 +139,25 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     }
 
     public func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
-        lock.lock()
-        // Find matching credential
-        var entry: CredentialEntry?
-        if let allowed = options.allowCredentials {
-            for cred in allowed {
-                if let found = credentials[cred.id] {
-                    entry = found
-                    break
+        let found: CredentialEntry = try lock.withLock {
+            var entry: CredentialEntry?
+            if let allowed = options.allowCredentials {
+                for cred in allowed {
+                    if let found = credentials[cred.id] {
+                        entry = found
+                        break
+                    }
                 }
+            } else {
+                entry = credentials.values.first { $0.rpId == options.rpId }
             }
-        } else {
-            // Find by rpId
-            entry = credentials.values.first { $0.rpId == options.rpId }
+            guard var result = entry else {
+                throw SirosError.auth(message: "No matching credential found for rpId: \(options.rpId)")
+            }
+            result.signCount += 1
+            credentials[result.credentialId] = result
+            return result
         }
-        guard var found = entry else {
-            lock.unlock()
-            throw SirosError.auth("No matching credential found for rpId: \(options.rpId)")
-        }
-
-        found.signCount += 1
-        credentials[found.credentialId] = found
-        lock.unlock()
 
         // Build authenticator data
         let rpIdHash = sha256(Data(options.rpId.utf8))
@@ -193,10 +191,10 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             prfOutput = computePrf(credentialId: found.credentialId, salt: salt)
         }
 
-        lock.lock()
-        lastCredentialId = found.credentialId
-        lastPrfOutput = prfOutput
-        lock.unlock()
+        lock.withLock {
+            lastCredentialId = found.credentialId
+            lastPrfOutput = prfOutput
+        }
 
         return AuthenticateResult(
             credentialId: found.credentialId,
@@ -213,15 +211,15 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     }
     #else
     public func register(options: RegisterOptions) async throws -> RegisterResult {
-        throw SirosError.auth("LocalAuthProvider is not available on this platform")
+        throw SirosError.auth(message: "LocalAuthProvider is not available on this platform")
     }
 
     public func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
-        throw SirosError.auth("LocalAuthProvider is not available on this platform")
+        throw SirosError.auth(message: "LocalAuthProvider is not available on this platform")
     }
 
     public func getPrfOutput(credentialId: Data, salt: Data) async throws -> PrfOutput {
-        throw SirosError.auth("LocalAuthProvider is not available on this platform")
+        throw SirosError.auth(message: "LocalAuthProvider is not available on this platform")
     }
     #endif
 
@@ -272,7 +270,7 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             data as CFData,
             &error
         ) as Data? else {
-            throw SirosError.auth("Signing failed")
+            throw SirosError.auth(message: "Signing failed")
         }
         return signature
     }
