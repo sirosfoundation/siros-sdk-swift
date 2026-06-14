@@ -1,0 +1,1684 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.xctest",
+      "packagePath" : "/home/leifj/work/siros.org/siros-sdk-swift",
+      "productName" : "SirosSDKPackageTests"
+    }
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+    "SirosSDKPackageDiscoveredTests"
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.SirosAuth-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/Auth.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentials.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosAuth",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosAuth.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/include/SirosAuth-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/Auth.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosAuth.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/Auth.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosCredentials-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialMatcher.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStoreProtocol.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialUtils.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/IssuerTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/PresentationRecord.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/SirosError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmFetcher.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosCredentials",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentials.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialMatcher.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStore.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStoreProtocol.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialUtils.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/IssuerTypes.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/PresentationRecord.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/SirosError.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/VctmFetcher.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/VctmTypes.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/include/SirosCredentials-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialMatcher.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStoreProtocol.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialUtils.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/IssuerTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/PresentationRecord.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/SirosError.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/VctmFetcher.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/VctmTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentials.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialMatcher.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStore.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStoreProtocol.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialUtils.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/IssuerTypes.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/PresentationRecord.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/SirosError.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmFetcher.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmTypes.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosCredentialsTests-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialMatcherTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialUtilsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/InMemoryCredentialStoreTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/VctmFetcherTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentials.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosCredentialsTests",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentialsTests.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialMatcherTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialUtilsTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/InMemoryCredentialStoreTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/VctmFetcherTests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialMatcherTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialUtilsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/InMemoryCredentialStoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/VctmFetcherTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentialsTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialMatcherTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialUtilsTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/InMemoryCredentialStoreTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/VctmFetcherTests.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosFlow-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosFlow/Flow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosFlow",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosFlow.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/Flow.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/include/SirosFlow-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/Flow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosFlow.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosFlow/Flow.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosKeystore-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosAuth.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentials.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosKeystore",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystore.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/Keystore.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/include/SirosKeystore-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/Keystore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystore.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosSDKPackageDiscoveredTests-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentialsTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosSDKPackageDiscoveredTests",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageDiscoveredTests.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/include/SirosSDKPackageDiscoveredTests-Swift.h",
+        "-color-diagnostics",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageDiscoveredTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosSDKPackageTests-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentialsTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageDiscoveredTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosSDKPackageTests",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageTests.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/include/SirosSDKPackageTests-Swift.h",
+        "-color-diagnostics",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosTransport-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosTransport",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/Transport.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/include/SirosTransport-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/Transport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosWallet-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosWallet/Wallet.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosAuth.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosKeystore.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosFlow.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosCredentials.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosWallet",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosWallet.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/Wallet.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/include/SirosWallet-Swift.h",
+        "-color-diagnostics",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/Wallet.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosWallet.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosWallet/Wallet.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "SirosAuth" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosAuth",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/Auth.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/include/SirosAuth-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosCredentials" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosCredentials",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialMatcher.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStore.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStoreProtocol.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialUtils.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/IssuerTypes.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/PresentationRecord.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/SirosError.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmFetcher.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmTypes.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/include/SirosCredentials-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosCredentialsTests" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosCredentialsTests",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialMatcherTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialUtilsTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/InMemoryCredentialStoreTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/VctmFetcherTests.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosFlow" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosFlow",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosFlow/Flow.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/include/SirosFlow-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosKeystore" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosKeystore",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/include/SirosKeystore-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosSDKPackageDiscoveredTests" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosSDKPackageDiscoveredTests",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/include/SirosSDKPackageDiscoveredTests-Swift.h",
+      "-color-diagnostics",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosSDKPackageTests" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosSDKPackageTests",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.derived/runner.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/include/SirosSDKPackageTests-Swift.h",
+      "-color-diagnostics",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosTransport" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosTransport",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/include/SirosTransport-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosWallet" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosWallet",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosWallet/Wallet.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/include/SirosWallet-Swift.h",
+      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "SirosAuth" : [
+      "SirosCredentials",
+      "SirosTransport"
+    ],
+    "SirosCredentials" : [
+
+    ],
+    "SirosCredentialsTests" : [
+      "SirosCredentials"
+    ],
+    "SirosFlow" : [
+      "SirosKeystore",
+      "SirosAuth",
+      "SirosCredentials",
+      "SirosTransport"
+    ],
+    "SirosKeystore" : [
+      "SirosAuth",
+      "SirosCredentials",
+      "SirosTransport"
+    ],
+    "SirosSDKPackageDiscoveredTests" : [
+      "SirosCredentialsTests",
+      "SirosCredentials"
+    ],
+    "SirosSDKPackageTests" : [
+      "SirosSDKPackageDiscoveredTests",
+      "SirosCredentialsTests",
+      "SirosCredentials"
+    ],
+    "SirosTransport" : [
+
+    ],
+    "SirosWallet" : [
+      "SirosFlow",
+      "SirosKeystore",
+      "SirosAuth",
+      "SirosCredentials",
+      "SirosTransport"
+    ]
+  },
+  "testDiscoveryCommands" : {
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialMatcherTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialUtilsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/InMemoryCredentialStoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/VctmFetcherTests.swift.o"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
+        }
+      ]
+    }
+  },
+  "testEntryPointCommands" : {
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.derived/runner.swift" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageDiscoveredTests.swiftmodule"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosAuth/Auth.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialMatcher.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialStoreProtocol.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/CredentialUtils.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/IssuerTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/PresentationRecord.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/SirosError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmFetcher.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosCredentials/VctmTypes.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialMatcherTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialUtilsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/InMemoryCredentialStoreTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/VctmFetcherTests.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosFlow/Flow.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosKeystore/Keystore.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialMatcher.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialStoreProtocol.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/CredentialUtils.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/IssuerTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/PresentationRecord.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/SirosCredentials.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/SirosError.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/VctmFetcher.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/VctmTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialMatcherTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/CredentialUtilsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/InMemoryCredentialStoreTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/SirosCredentialsTests.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/VctmFetcherTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosSDKPackageDiscoveredTests.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/SirosSDKPackageTests.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/runner.swift.o"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.product/Objects.LinkFileList"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosWallet/Wallet.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+    }
+  }
+}

@@ -1,0 +1,72 @@
+// swift-tools-version: 5.10
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import PackageDescription
+
+let package = Package(
+    name: "SirosSDK",
+    platforms: [
+        .iOS(.v16),
+        .macOS(.v13),
+    ],
+    products: [
+        .library(name: "SirosCredentials", targets: ["SirosCredentials"]),
+        .library(name: "SirosTransport", targets: ["SirosTransport"]),
+        .library(name: "SirosAuth", targets: ["SirosAuth"]),
+        .library(name: "SirosKeystore", targets: ["SirosKeystore"]),
+        .library(name: "SirosFlow", targets: ["SirosFlow"]),
+        .library(name: "SirosWallet", targets: ["SirosWallet"]),
+    ],
+    targets: [
+        // --- Credentials: data models, DCQL matcher, VCTM types ---
+        .target(
+            name: "SirosCredentials",
+            path: "Sources/SirosCredentials"
+        ),
+        .testTarget(
+            name: "SirosCredentialsTests",
+            dependencies: ["SirosCredentials"],
+            path: "Tests/SirosCredentialsTests"
+        ),
+
+        // --- Transport: WebSocket + WMP protocol ---
+        .target(
+            name: "SirosTransport",
+            path: "Sources/SirosTransport"
+        ),
+
+        // --- Auth: WebAuthn / passkey authentication ---
+        .target(
+            name: "SirosAuth",
+            dependencies: ["SirosTransport", "SirosCredentials"],
+            path: "Sources/SirosAuth"
+        ),
+
+        // --- Keystore: JWE-encrypted key management ---
+        .target(
+            name: "SirosKeystore",
+            dependencies: ["SirosAuth", "SirosCredentials"],
+            path: "Sources/SirosKeystore"
+        ),
+
+        // --- Flow: OID4VCI / OID4VP flow orchestration ---
+        .target(
+            name: "SirosFlow",
+            dependencies: ["SirosTransport", "SirosKeystore"],
+            path: "Sources/SirosFlow"
+        ),
+
+        // --- Wallet: main facade ---
+        .target(
+            name: "SirosWallet",
+            dependencies: [
+                "SirosTransport",
+                "SirosAuth",
+                "SirosKeystore",
+                "SirosFlow",
+                "SirosCredentials",
+            ],
+            path: "Sources/SirosWallet"
+        ),
+    ]
+)

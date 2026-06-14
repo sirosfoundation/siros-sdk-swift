@@ -1,0 +1,4 @@
+/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialMatcherTests.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/CredentialUtilsTests.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/InMemoryCredentialStoreTests.swift
+/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosCredentialsTests/VctmFetcherTests.swift

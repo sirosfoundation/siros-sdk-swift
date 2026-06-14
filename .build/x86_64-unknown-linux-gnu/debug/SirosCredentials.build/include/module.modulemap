@@ -1,0 +1,3 @@
+module SirosCredentials {
+    header "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/include/SirosCredentials-Swift.h"
+}
