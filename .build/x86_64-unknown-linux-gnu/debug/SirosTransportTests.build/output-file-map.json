@@ -1,0 +1,40 @@
+{
+  "": {
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/primary.swiftdeps"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/AnyCodableTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/EngineTypesTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/FakeTransport.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpCodecTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.dia"
+  },
+  "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpSessionTests.swift": {
+    "dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.d",
+    "object": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.swift.o",
+    "swiftmodule": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests~partial.swiftmodule",
+    "swift-dependencies": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.swiftdeps",
+    "diagnostics": "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.dia"
+  }
+}

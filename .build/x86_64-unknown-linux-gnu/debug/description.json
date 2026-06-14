@@ -74,7 +74,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/include/SirosAuth-Swift.h",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -190,7 +189,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/include/SirosCredentials-Swift.h",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -324,7 +322,6 @@
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
         "-parseable-output",
         "-parse-as-library",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -423,7 +420,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/include/SirosFlow-Swift.h",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -507,7 +503,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/include/SirosKeystore-Swift.h",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -549,11 +544,19 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
         },
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransportTests.swiftmodule"
         },
         {
           "kind" : "file",
@@ -569,6 +572,7 @@
       "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosSDKPackageDiscoveredTests.swiftmodule",
       "objects" : [
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosCredentialsTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosTransportTests.swift.o",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
       ],
       "otherArguments" : [
@@ -594,7 +598,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/include/SirosSDKPackageDiscoveredTests-Swift.h",
-        "-color-diagnostics",
         "-g",
         "-Xcc",
         "-fPIC",
@@ -613,6 +616,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosTransportTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
         },
         {
@@ -623,6 +630,7 @@
       "prepareForIndexing" : false,
       "sources" : [
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
       ],
       "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build",
@@ -640,6 +648,10 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransportTests.swiftmodule"
         },
         {
           "kind" : "file",
@@ -683,7 +695,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/include/SirosSDKPackageTests-Swift.h",
-        "-color-diagnostics",
         "-g",
         "-Xcc",
         "-fPIC",
@@ -719,7 +730,35 @@
       "inputs" : [
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/AnyCodable.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/EngineTypes.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WalletEngineSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpCodec.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpWebSocketTransport.swift"
         },
         {
           "kind" : "file",
@@ -734,7 +773,14 @@
       "moduleName" : "SirosTransport",
       "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule",
       "objects" : [
-        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/Transport.swift.o"
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/AnyCodable.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/EngineTypes.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/Transport.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WalletEngineSession.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpCodec.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpSession.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpTypes.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpWebSocketTransport.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -757,7 +803,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/include/SirosTransport-Swift.h",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -774,7 +819,35 @@
       "outputs" : [
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/AnyCodable.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/EngineTypes.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/Transport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WalletEngineSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpCodec.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpWebSocketTransport.swift.o"
         },
         {
           "kind" : "file",
@@ -783,9 +856,134 @@
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift"
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/AnyCodable.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/EngineTypes.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WalletEngineSession.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpCodec.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpSession.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpTypes.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpWebSocketTransport.swift"
       ],
       "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SirosTransportTests-x86_64-unknown-linux-gnu-debug.module" : {
+      "executable" : "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "fileList" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/sources",
+      "importPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/AnyCodableTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/EngineTypesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/FakeTransport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpCodecTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpSessionTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/swift-version--3E91A6914DE40B16.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransport.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SirosTransportTests",
+      "moduleOutputPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransportTests.swiftmodule",
+      "objects" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.swift.o",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-unknown-linux-gnu",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "5",
+        "-g",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "siros_sdk_swift",
+        "-Xcc",
+        "-fno-omit-frame-pointer"
+      ],
+      "outputFileMapPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules/SirosTransportTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/AnyCodableTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/EngineTypesTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/FakeTransport.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpCodecTests.swift",
+        "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpSessionTests.swift"
+      ],
+      "tempsPath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build",
       "wholeModuleOptimization" : false
     },
     "C.SirosWallet-x86_64-unknown-linux-gnu-debug.module" : {
@@ -853,7 +1051,6 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/include/SirosWallet-Swift.h",
-        "-color-diagnostics",
         "-swift-version",
         "5",
         "-g",
@@ -919,7 +1116,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosAuth.build/include/SirosAuth-Swift.h",
-      "-color-diagnostics",
       "-swift-version",
       "5",
       "-g",
@@ -972,7 +1168,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentials.build/include/SirosCredentials-Swift.h",
-      "-color-diagnostics",
       "-swift-version",
       "5",
       "-g",
@@ -1019,7 +1214,6 @@
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
       "-parseable-output",
       "-parse-as-library",
-      "-color-diagnostics",
       "-swift-version",
       "5",
       "-g",
@@ -1064,7 +1258,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosFlow.build/include/SirosFlow-Swift.h",
-      "-color-diagnostics",
       "-swift-version",
       "5",
       "-g",
@@ -1109,7 +1302,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosKeystore.build/include/SirosKeystore-Swift.h",
-      "-color-diagnostics",
       "-swift-version",
       "5",
       "-g",
@@ -1132,6 +1324,7 @@
       "siros_sdk_swift",
       "-c",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift",
       "-I",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
@@ -1157,7 +1350,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/include/SirosSDKPackageDiscoveredTests-Swift.h",
-      "-color-diagnostics",
       "-g",
       "-Xcc",
       "-fPIC",
@@ -1202,7 +1394,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/include/SirosSDKPackageTests-Swift.h",
-      "-color-diagnostics",
       "-g",
       "-Xcc",
       "-fPIC",
@@ -1222,7 +1413,14 @@
       "-package-name",
       "siros_sdk_swift",
       "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/AnyCodable.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/EngineTypes.swift",
       "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WalletEngineSession.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpCodec.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpSession.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpTypes.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpWebSocketTransport.swift",
       "-I",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
       "-target",
@@ -1245,7 +1443,53 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/include/SirosTransport-Swift.h",
-      "-color-diagnostics",
+      "-swift-version",
+      "5",
+      "-g",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "siros_sdk_swift",
+      "-Xcc",
+      "-fno-omit-frame-pointer",
+      "-driver-use-frontend-path",
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc"
+    ],
+    "SirosTransportTests" : [
+      "/home/leifj/.local/share/swiftly/toolchains/6.3.2/usr/bin/swiftc",
+      "-module-name",
+      "SirosTransportTests",
+      "-package-name",
+      "siros_sdk_swift",
+      "-c",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/AnyCodableTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/EngineTypesTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/FakeTransport.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpCodecTests.swift",
+      "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpSessionTests.swift",
+      "-I",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/Modules",
+      "-target",
+      "x86_64-unknown-linux-gnu",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
       "-swift-version",
       "5",
       "-g",
@@ -1290,7 +1534,6 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/include/SirosWallet-Swift.h",
-      "-color-diagnostics",
       "-swift-version",
       "5",
       "-g",
@@ -1330,15 +1573,22 @@
     ],
     "SirosSDKPackageDiscoveredTests" : [
       "SirosCredentialsTests",
-      "SirosCredentials"
+      "SirosCredentials",
+      "SirosTransportTests",
+      "SirosTransport"
     ],
     "SirosSDKPackageTests" : [
       "SirosSDKPackageDiscoveredTests",
       "SirosCredentialsTests",
-      "SirosCredentials"
+      "SirosCredentials",
+      "SirosTransportTests",
+      "SirosTransport"
     ],
     "SirosTransport" : [
 
+    ],
+    "SirosTransportTests" : [
+      "SirosTransport"
     ],
     "SirosWallet" : [
       "SirosFlow",
@@ -1366,12 +1616,36 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosCredentialsTests.build/VctmFetcherTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.swift.o"
         }
       ],
       "outputs" : [
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosCredentialsTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift"
         },
         {
           "kind" : "file",
@@ -1529,6 +1803,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/SirosTransportTests.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.derived/all-discovered-tests.swift"
         }
       ],
@@ -1625,6 +1903,10 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/SirosTransportTests.swift.o"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageDiscoveredTests.build/all-discovered-tests.swift.o"
         },
         {
@@ -1634,6 +1916,66 @@
         {
           "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/AnyCodable.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/EngineTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/SirosTransport.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/Transport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WalletEngineSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpCodec.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/WmpWebSocketTransport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/AnyCodableTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/EngineTypesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/FakeTransport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/SirosTransportTests.swiftmodule.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpCodecTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/WmpSessionTests.swift.o"
         }
       ],
       "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosSDKPackageTests.product/Objects.LinkFileList"
@@ -1647,10 +1989,68 @@
         },
         {
           "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/AnyCodable.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/EngineTypes.swift"
+        },
+        {
+          "kind" : "file",
           "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/Transport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WalletEngineSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpCodec.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Sources/SirosTransport/WmpWebSocketTransport.swift"
         }
       ],
       "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransport.build/sources"
+    },
+    "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/AnyCodableTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/EngineTypesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/FakeTransport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpCodecTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/home/leifj/work/siros.org/siros-sdk-swift/Tests/SirosTransportTests/WmpSessionTests.swift"
+        }
+      ],
+      "outputFilePath" : "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosTransportTests.build/sources"
     },
     "/home/leifj/work/siros.org/siros-sdk-swift/.build/x86_64-unknown-linux-gnu/debug/SirosWallet.build/sources" : {
       "alwaysOutOfDate" : false,

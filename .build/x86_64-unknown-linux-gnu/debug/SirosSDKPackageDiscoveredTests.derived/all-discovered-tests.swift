@@ -4,6 +4,7 @@ import XCTest
 public func __allDiscoveredTests() -> [XCTestCaseEntry] {
     var tests = [XCTestCaseEntry]()
 
+    tests += __SirosTransportTests__allTests()
     tests += __SirosCredentialsTests__allTests()
 
     return tests

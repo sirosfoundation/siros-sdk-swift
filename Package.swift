@@ -34,6 +34,11 @@ let package = Package(
             name: "SirosTransport",
             path: "Sources/SirosTransport"
         ),
+        .testTarget(
+            name: "SirosTransportTests",
+            dependencies: ["SirosTransport"],
+            path: "Tests/SirosTransportTests"
+        ),
 
         // --- Auth: WebAuthn / passkey authentication ---
         .target(
