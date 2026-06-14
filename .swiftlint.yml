@@ -21,6 +21,7 @@ opt_in_rules:
 excluded:
   - .build
   - Package.swift
+  - Tests
 
 force_cast: warning
 force_try: warning
