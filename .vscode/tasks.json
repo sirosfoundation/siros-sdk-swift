@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Swift Build (macOS)",
+      "type": "shell",
+      "command": "swift build",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$swiftc"]
+    },
+    {
+      "label": "Swift Test (macOS)",
+      "type": "shell",
+      "command": "swift test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$swiftc"]
+    },
+    {
+      "label": "Swift Build (iOS Simulator)",
+      "type": "shell",
+      "command": "swift build --sdk $(xcrun --sdk iphonesimulator --show-sdk-path) --triple arm64-apple-ios16.0-simulator",
+      "problemMatcher": ["$swiftc"]
+    },
+    {
+      "label": "Swift Build (iOS Device)",
+      "type": "shell",
+      "command": "swift build --sdk $(xcrun --sdk iphoneos --show-sdk-path) --triple arm64-apple-ios16.0",
+      "problemMatcher": ["$swiftc"]
+    }
+  ]
+}
