@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosCredentials
 
 #if canImport(CommonCrypto)
 import CommonCrypto
@@ -123,11 +124,11 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             signCount: 0,
             privateKey: privateKey
         )
-        lock.lock()
-        credentials[credentialId] = entry
-        lastCredentialId = credentialId
-        lastPrfOutput = prfOutput
-        lock.unlock()
+        lock.withLock {
+            credentials[credentialId] = entry
+            lastCredentialId = credentialId
+            lastPrfOutput = prfOutput
+        }
 
         return RegisterResult(
             credentialId: credentialId,
@@ -138,28 +139,25 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     }
 
     public func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
-        lock.lock()
-        // Find matching credential
-        var entry: CredentialEntry?
-        if let allowed = options.allowCredentials {
-            for cred in allowed {
-                if let found = credentials[cred.id] {
-                    entry = found
-                    break
+        let found: CredentialEntry = try lock.withLock {
+            var entry: CredentialEntry?
+            if let allowed = options.allowCredentials {
+                for cred in allowed {
+                    if let found = credentials[cred.id] {
+                        entry = found
+                        break
+                    }
                 }
+            } else {
+                entry = credentials.values.first { $0.rpId == options.rpId }
             }
-        } else {
-            // Find by rpId
-            entry = credentials.values.first { $0.rpId == options.rpId }
+            guard var result = entry else {
+                throw SirosError.auth("No matching credential found for rpId: \(options.rpId)")
+            }
+            result.signCount += 1
+            credentials[result.credentialId] = result
+            return result
         }
-        guard var found = entry else {
-            lock.unlock()
-            throw SirosError.auth("No matching credential found for rpId: \(options.rpId)")
-        }
-
-        found.signCount += 1
-        credentials[found.credentialId] = found
-        lock.unlock()
 
         // Build authenticator data
         let rpIdHash = sha256(Data(options.rpId.utf8))
@@ -193,10 +191,10 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             prfOutput = computePrf(credentialId: found.credentialId, salt: salt)
         }
 
-        lock.lock()
-        lastCredentialId = found.credentialId
-        lastPrfOutput = prfOutput
-        lock.unlock()
+        lock.withLock {
+            lastCredentialId = found.credentialId
+            lastPrfOutput = prfOutput
+        }
 
         return AuthenticateResult(
             credentialId: found.credentialId,
