@@ -4,6 +4,9 @@ import Foundation
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
+#if canImport(CommonCrypto)
+import CommonCrypto
+#endif
 
 /// Kotlin model of the wallet-frontend's `EncryptedContainer` format.
 ///
