@@ -24,20 +24,14 @@ jobs:
         env:
           COVERAGE_MIN_PCT: "25"
         run: |
-          BIN=$(swift build --show-bin-path)
-          PROFDATA=$(find .build -name 'default.profdata' -print -quit)
-          # Find the test binary (not the .xctest bundle directory or dSYM)
-          XCTEST=$(find "$BIN" -name '*PackageTests' -not -name '*.xctest' -not -path '*.dSYM*' -type f | head -1)
-          if [ -z "$XCTEST" ]; then
-            # Fallback: look inside .xctest bundle, excluding dSYM
-            XCTEST=$(find "$BIN" -path '*PackageTests.xctest/Contents/MacOS/*PackageTests' -not -path '*.dSYM*' -type f | head -1)
-          fi
-          if [ -z "$PROFDATA" ] || [ -z "$XCTEST" ]; then
-            echo "Warning: could not find profdata or test binary, skipping coverage gate"
+          # Use swift test's built-in coverage JSON output
+          CODECOV_PATH=$(swift test --show-codecov-path 2>/dev/null || true)
+          if [ -z "$CODECOV_PATH" ] || [ ! -f "$CODECOV_PATH" ]; then
+            echo "Warning: could not find codecov JSON, skipping coverage gate"
             exit 0
           fi
-          REPORT=$(xcrun llvm-cov report "$XCTEST" -instr-profile="$PROFDATA" -ignore-filename-regex='Tests/')
-          PCT=$(echo "$REPORT" | tail -1 | awk '{print $(NF-2)}')
+          # Extract line coverage percentage from the totals
+          PCT=$(python3 -c "import json; d=json.load(open('$CODECOV_PATH')); print(f\"{d['data'][0]['totals']['lines']['percent']:.1f}\")")
           echo "Line coverage: ${PCT}%"
           echo "Required minimum: ${COVERAGE_MIN_PCT}%"
           if (( $(echo "$PCT < $COVERAGE_MIN_PCT" | bc -l) )); then
