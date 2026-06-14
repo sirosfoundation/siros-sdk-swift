@@ -70,6 +70,11 @@ let package = Package(
             dependencies: ["SirosTransport", "SirosKeystore"],
             path: "Sources/SirosFlow"
         ),
+        .testTarget(
+            name: "SirosFlowTests",
+            dependencies: ["SirosFlow"],
+            path: "Tests/SirosFlowTests"
+        ),
 
         // --- Wallet: main facade ---
         .target(
@@ -82,6 +87,11 @@ let package = Package(
                 "SirosCredentials",
             ],
             path: "Sources/SirosWallet"
+        ),
+        .testTarget(
+            name: "SirosWalletTests",
+            dependencies: ["SirosWallet"],
+            path: "Tests/SirosWalletTests"
         ),
     ]
 )

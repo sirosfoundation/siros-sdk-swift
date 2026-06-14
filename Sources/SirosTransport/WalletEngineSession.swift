@@ -394,3 +394,12 @@ public enum EngineSessionError: Error, Sendable {
     case connectionTimeout
     case connectionFailed
 }
+
+extension EngineSessionError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .connectionTimeout: return "Engine session connection timed out"
+        case .connectionFailed: return "Engine session connection failed"
+        }
+    }
+}

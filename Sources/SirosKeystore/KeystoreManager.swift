@@ -94,3 +94,15 @@ public enum KeystoreError: Error, Sendable {
     case cryptoError(String)
     case invalidContainer(String)
 }
+
+extension KeystoreError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .locked: return "Keystore is locked"
+        case .keyNotFound(let id): return "Key not found: \(id)"
+        case .containerMissing(let id): return "Container missing: \(id)"
+        case .cryptoError(let msg): return "Crypto error: \(msg)"
+        case .invalidContainer(let msg): return "Invalid container: \(msg)"
+        }
+    }
+}

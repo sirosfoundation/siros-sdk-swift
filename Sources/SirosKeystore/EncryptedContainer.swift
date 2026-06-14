@@ -362,7 +362,7 @@ public enum EncryptedContainer {
         }
         return outData.prefix(outLength)
         #else
-        fatalError("AES ECB on Linux requires CommonCrypto — this code path is Apple-only")
+        throw KeystoreError.cryptoError("AES ECB requires CommonCrypto (Apple platforms only)")
         #endif
     }
 

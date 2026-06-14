@@ -1,0 +1,52 @@
+name: Swift CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & Test with Coverage
+        run: swift test --parallel --enable-code-coverage
+      - name: Check coverage gate
+        env:
+          COVERAGE_MIN_PCT: "25"
+        run: |
+          BIN=$(swift build --show-bin-path)
+          PROFDATA=$(find .build -name 'default.profdata' -print -quit)
+          XCTEST=$(find "$BIN" -name '*.xctest' -o -name '*PackageTests' | head -1)
+          if [ -z "$PROFDATA" ] || [ -z "$XCTEST" ]; then
+            echo "Warning: could not find profdata or test binary, skipping coverage gate"
+            exit 0
+          fi
+          REPORT=$(xcrun llvm-cov report "$XCTEST" -instr-profile="$PROFDATA" -ignore-filename-regex='Tests/')
+          PCT=$(echo "$REPORT" | tail -1 | awk '{print $(NF-2)}')
+          echo "Line coverage: ${PCT}%"
+          echo "Required minimum: ${COVERAGE_MIN_PCT}%"
+          if (( $(echo "$PCT < $COVERAGE_MIN_PCT" | bc -l) )); then
+            echo "::error::Coverage gate failed: ${PCT}% < ${COVERAGE_MIN_PCT}%"
+            exit 1
+          fi
+
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for iOS Simulator
+        run: |
+          swift build \
+            --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+            --triple arm64-apple-ios16.0-simulator
+
+  test-linux:
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & Test
+        run: swift test --parallel
