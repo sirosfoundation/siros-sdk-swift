@@ -108,6 +108,28 @@ final class WalletViewModel: ObservableObject {
         wallet?.cancelCurrentFlow()
     }
 
+    /// Start issuance from a credential offer URI (for testing/automation).
+    func startIssuance(_ offerUri: String) {
+        Task {
+            do {
+                try wallet?.startIssuance(offerUri: offerUri)
+            } catch {
+                setError(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Start presentation from a request URI (for testing/automation).
+    func startPresentation(_ requestUri: String) {
+        Task {
+            do {
+                try wallet?.startPresentation(requestUri: requestUri)
+            } catch {
+                setError(error.localizedDescription)
+            }
+        }
+    }
+
     // MARK: - Credential operations
 
     func openAddCredential() {
@@ -244,21 +266,35 @@ final class WalletViewModel: ObservableObject {
             redirectUri: "\(redirectScheme)://callback"
         )
 
-        // Rebuild if config changed or first time
+        // Rebuild if wallet doesn't exist or is in Disconnected/Error state
+        let needsRebuild: Bool
         if wallet == nil {
-            #if os(iOS)
-            let authProvider = ASAuthorizationAuthProvider()
-            #else
-            let authProvider = LocalAuthProvider()
-            #endif
-            wallet = SirosWallet(
-                config: config,
-                authProvider: authProvider,
-                sessionStore: KeychainSessionStore()
-            )
-            wallet?.setEventListener(self)
-            observeState()
+            needsRebuild = true
+        } else {
+            switch walletState {
+            case .disconnected, .error:
+                wallet?.destroy()
+                wallet = nil
+                needsRebuild = true
+            default:
+                needsRebuild = false
+            }
         }
+
+        guard needsRebuild else { return }
+
+        #if os(iOS)
+        let authProvider = ASAuthorizationAuthProvider()
+        #else
+        let authProvider = LocalAuthProvider()
+        #endif
+        wallet = SirosWallet(
+            config: config,
+            authProvider: authProvider,
+            sessionStore: KeychainSessionStore()
+        )
+        wallet?.setEventListener(self)
+        observeState()
     }
 
     private func observeState() {
