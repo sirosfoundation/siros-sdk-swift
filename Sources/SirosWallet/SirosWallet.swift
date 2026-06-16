@@ -480,6 +480,32 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
+    // MARK: - Identity Verification
+
+    /// Perform identity verification via a plugin provider and automatically start
+    /// credential issuance with the resulting offer.
+    ///
+    /// This is the primary integration point for IDV flows (FaceTec, iProov, etc.).
+    /// The provider handles all capture UI and backend communication; this method
+    /// bridges the IDV result into the standard OID4VCI issuance flow.
+    ///
+    /// - Parameters:
+    ///   - provider: An ``IdentityVerificationProvider`` implementation.
+    ///   - presentingViewController: The UIViewController to present the IDV UI from.
+    /// - Throws: ``IDVError`` if verification fails, or ``SirosError`` if issuance fails.
+    public func verifyIdentityAndIssue(
+        provider: IdentityVerificationProvider,
+        presentingViewController: Any
+    ) async throws {
+        guard await provider.isAvailable() else {
+            throw IDVError.unavailable(reason: "\(provider.name) is not available on this device")
+        }
+        let result = try await provider.startVerification(
+            presentingViewController: presentingViewController
+        )
+        try startIssuance(offerUri: result.credentialOfferURI)
+    }
+
     /// Complete an OAuth authorization flow.
     public func completeAuthorization(flowId: String, code: String, state: String) {
         guard let engine = engineSession else { return }
