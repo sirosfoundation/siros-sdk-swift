@@ -140,32 +140,40 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
 
     func send(command: [UInt8]) throws -> [UInt8] {
         let semaphore = DispatchSemaphore(value: 0)
-        var result: Result<[UInt8], Error>?
-        Task.detached {
+        let box = UnsafeMutablePointer<Result<[UInt8], Error>?>.allocate(capacity: 1)
+        box.initialize(to: nil)
+        Task.detached { [provider, box] in
             do {
-                let response = try await self.provider.send(command: Data(command))
-                result = .success([UInt8](response))
+                let response = try await provider.send(command: Data(command))
+                box.pointee = .success([UInt8](response))
             } catch {
-                result = .failure(error)
+                box.pointee = .failure(error)
             }
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 30)
-        guard let r = result else {
+        let r = box.pointee
+        box.deinitialize(count: 1)
+        box.deallocate()
+        guard let result = r else {
             throw NSError(domain: "UniFFISigner", code: -1, userInfo: [NSLocalizedDescriptionKey: "CTAP2 send timed out"])
         }
-        return try r.get()
+        return try result.get()
     }
 
     func isAvailable() -> Bool {
         let semaphore = DispatchSemaphore(value: 0)
-        var available = false
-        Task.detached {
-            available = await self.provider.isAvailable()
+        let box = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
+        box.initialize(to: false)
+        Task.detached { [provider, box] in
+            box.pointee = await provider.isAvailable()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 5)
-        return available
+        let result = box.pointee
+        box.deinitialize(count: 1)
+        box.deallocate()
+        return result
     }
 }
 

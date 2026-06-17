@@ -249,15 +249,19 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
 
     public func listKeys() -> [KeyInfo] {
         let semaphore = DispatchSemaphore(value: 0)
-        var result: [KeyInfo] = []
-        Task.detached {
-            let signerKeys = (try? await self.signer.listKeys()) ?? []
-            result = signerKeys.map {
+        let box = UnsafeMutablePointer<[KeyInfo]>.allocate(capacity: 1)
+        box.initialize(to: [])
+        Task.detached { [signer, box] in
+            let signerKeys = (try? await signer.listKeys()) ?? []
+            box.pointee = signerKeys.map {
                 KeyInfo(keyId: $0.keyId, algorithm: $0.algorithm)
             }
             semaphore.signal()
         }
         semaphore.wait()
+        let result = box.pointee
+        box.deinitialize(count: 1)
+        box.deallocate()
         return result
     }
 
@@ -294,30 +298,35 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
     // MARK: - Credential storage (local in-memory)
 
     public func saveCredential(id: String, json: String) async throws {
+        try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         credentials[id] = json
     }
 
     public func getCredential(id: String) async throws -> String? {
+        try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         return credentials[id]
     }
 
     public func getAllCredentials() async throws -> [String: String] {
+        try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         return credentials
     }
 
     public func deleteCredential(id: String) async throws {
+        try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         credentials.removeValue(forKey: id)
     }
 
     public func clearCredentials() async throws {
+        try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         credentials.removeAll()
