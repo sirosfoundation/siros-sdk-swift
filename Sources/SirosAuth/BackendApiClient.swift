@@ -138,6 +138,56 @@ public final class BackendApiClient: @unchecked Sendable {
         try await post("/user/session/refresh", body: ["refreshToken": refreshToken])
     }
 
+    // MARK: - Wallet Provider endpoints
+
+    /// POST /wallet-provider/key-attestation/generate — request a key attestation JWT.
+    /// - Parameters:
+    ///   - jwks: Array of JWK dictionaries for the keys to attest.
+    ///   - nonce: OpenID4VCI nonce from the issuer.
+    /// - Returns: Key attestation JWT string.
+    public func requestKeyAttestation(jwks: [[String: Any]], nonce: String) async throws -> String {
+        let body: [String: Any] = [
+            "jwks": jwks,
+            "openid4vci": ["nonce": nonce],
+        ]
+        let result = try await post("/wallet-provider/key-attestation/generate", body: body)
+        guard let attestation = result["key_attestation"] as? String else {
+            throw SirosError.backendApi(code: 0, message: "Missing key_attestation in response", body: "")
+        }
+        return attestation
+    }
+
+    /// POST /wallet-provider/wia/challenge — request a WIA challenge nonce.
+    /// - Returns: Dictionary with "challenge" and "expires_at" keys.
+    public func requestWIAChallenge() async throws -> [String: Any] {
+        try await post("/wallet-provider/wia/challenge", body: [:])
+    }
+
+    /// POST /wallet-provider/wia/generate — generate a Wallet Instance Attestation.
+    /// - Parameters:
+    ///   - pop: WIA-PoP JWT (typ: oauth-client-attestation-pop+jwt).
+    ///   - challenge: The challenge nonce from requestWIAChallenge().
+    ///   - nativeAttestation: Optional platform attestation evidence.
+    /// - Returns: WIA JWT string.
+    public func generateWIA(
+        pop: String,
+        challenge: String,
+        nativeAttestation: [String: Any]? = nil
+    ) async throws -> String {
+        var body: [String: Any] = [
+            "pop": pop,
+            "challenge": challenge,
+        ]
+        if let native = nativeAttestation {
+            body["native_attestation"] = native
+        }
+        let result = try await post("/wallet-provider/wia/generate", body: body)
+        guard let wia = result["wallet_instance_attestation"] as? String else {
+            throw SirosError.backendApi(code: 0, message: "Missing wallet_instance_attestation in response", body: "")
+        }
+        return wia
+    }
+
     // MARK: - HTTP primitives
 
     private func get(_ path: String) async throws -> [String: Any] {

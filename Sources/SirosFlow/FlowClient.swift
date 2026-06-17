@@ -3,6 +3,10 @@
 import Foundation
 import SirosTransport
 import SirosKeystore
+import SirosAuth
+
+/// Proof type precedence order (attestation preferred over jwt).
+private let proofTypePrecedence = ["attestation", "jwt"]
 
 /// Manages OID4VCI and OID4VP flows over a WMP session.
 ///
@@ -14,13 +18,15 @@ public final class FlowClient: @unchecked Sendable {
 
     private let session: WmpSession
     private let keystore: KeystoreManager
+    private let apiClient: BackendApiClient?
     private let autoSign: Bool
     private let lock = NSLock()
     private var continuations: [String: AsyncStream<FlowEvent>.Continuation] = [:]
 
-    public init(session: WmpSession, keystore: KeystoreManager, autoSign: Bool = true) {
+    public init(session: WmpSession, keystore: KeystoreManager, apiClient: BackendApiClient? = nil, autoSign: Bool = true) {
         self.session = session
         self.keystore = keystore
+        self.apiClient = apiClient
         self.autoSign = autoSign
     }
 
@@ -98,6 +104,8 @@ public final class FlowClient: @unchecked Sendable {
         ]
         if let jwt = response.proofJwt { params["proof_jwt"] = .string(jwt) }
         if let vp = response.vpToken { params["vp_token"] = .string(vp) }
+        if let attestation = response.attestation { params["attestation"] = .string(attestation) }
+        if let proofType = response.proofType { params["proof_type"] = .string(proofType) }
         try await session.sendNotification(method: "wmp.flow.action", params: params)
     }
 
@@ -157,11 +165,15 @@ public final class FlowClient: @unchecked Sendable {
               let actionStr = payload["action"]?.stringValue,
               let action = SignAction(rawValue: actionStr) else { return }
 
+        let proofTypesSupported = anyCodableDictToAny(payload["proofTypesSupported"]?.objectValue) as? [String: Any]
+
         let signParams = SignParams(
             audience: payload["audience"]?.stringValue,
             nonce: payload["nonce"]?.stringValue,
             issuer: payload["issuer"]?.stringValue,
             responseUri: payload["response_uri"]?.stringValue,
+            count: payload["count"]?.intValue,
+            proofTypesSupported: proofTypesSupported,
             credentialsToInclude: payload["credentials_to_include"]?.arrayValue?.compactMap {
                 anyCodableDictToAny($0.objectValue) as? [String: Any]
             }
@@ -172,11 +184,24 @@ public final class FlowClient: @unchecked Sendable {
                 let response: SignResponse
                 switch action {
                 case .generateProof:
-                    let proof = try await keystore.generateProof(
-                        audience: signParams.audience ?? "",
-                        nonce: signParams.nonce ?? ""
-                    )
-                    response = SignResponse(proofJwt: proof)
+                    // Select proof type: prefer attestation if supported and apiClient is available
+                    let selectedProofType = selectProofType(proofTypesSupported: proofTypesSupported)
+
+                    if selectedProofType == "attestation", let api = apiClient {
+                        let count = signParams.count ?? 1
+                        let keypairs = try await keystore.generateKeypairs(count: count)
+                        let keyAttestation = try await api.requestKeyAttestation(
+                            jwks: keypairs.map { $0.publicKeyJWK },
+                            nonce: signParams.nonce ?? ""
+                        )
+                        response = SignResponse(attestation: keyAttestation, proofType: "attestation")
+                    } else {
+                        let proof = try await keystore.generateProof(
+                            audience: signParams.audience ?? "",
+                            nonce: signParams.nonce ?? ""
+                        )
+                        response = SignResponse(proofJwt: proof, proofType: "jwt")
+                    }
 
                 case .signPresentation:
                     let credIds = signParams.credentialsToInclude?.compactMap {
@@ -196,6 +221,12 @@ public final class FlowClient: @unchecked Sendable {
         } else {
             emit(.signRequest(flowId: flowId, messageId: messageId, action: action, params: signParams))
         }
+    }
+
+    /// Select the preferred proof type from supported types.
+    private func selectProofType(proofTypesSupported: [String: Any]?) -> String? {
+        guard let supported = proofTypesSupported else { return "jwt" }
+        return proofTypePrecedence.first { supported[$0] != nil }
     }
 
     private func handleMatchRequest(flowId: String, params: [String: AnyCodable]) async {

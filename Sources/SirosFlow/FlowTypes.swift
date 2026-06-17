@@ -32,6 +32,8 @@ public struct SignParams: Sendable {
     public var nonce: String?
     public var issuer: String?
     public var responseUri: String?
+    public var count: Int?
+    public var proofTypesSupported: [String: Any]?
     public var credentialsToInclude: [[String: Any]]?
 
     public init(
@@ -39,12 +41,16 @@ public struct SignParams: Sendable {
         nonce: String? = nil,
         issuer: String? = nil,
         responseUri: String? = nil,
+        count: Int? = nil,
+        proofTypesSupported: [String: Any]? = nil,
         credentialsToInclude: [[String: Any]]? = nil
     ) {
         self.audience = audience
         self.nonce = nonce
         self.issuer = issuer
         self.responseUri = responseUri
+        self.count = count
+        self.proofTypesSupported = proofTypesSupported
         self.credentialsToInclude = credentialsToInclude
     }
 }
@@ -54,11 +60,15 @@ public struct SignResponse: Sendable {
     public var proofJwt: String?
     public var proofs: [String]?
     public var vpToken: String?
+    public var attestation: String?
+    public var proofType: String?
 
-    public init(proofJwt: String? = nil, proofs: [String]? = nil, vpToken: String? = nil) {
+    public init(proofJwt: String? = nil, proofs: [String]? = nil, vpToken: String? = nil, attestation: String? = nil, proofType: String? = nil) {
         self.proofJwt = proofJwt
         self.proofs = proofs
         self.vpToken = vpToken
+        self.attestation = attestation
+        self.proofType = proofType
     }
 }
 

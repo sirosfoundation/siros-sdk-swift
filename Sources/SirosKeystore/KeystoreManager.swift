@@ -71,6 +71,21 @@ public protocol KeystoreManager: AnyObject, Sendable {
 
     /// Remove all stored credentials.
     func clearCredentials() async throws
+
+    /// Generate `count` keypairs and return their public JWKs.
+    /// Used for key attestation requests.
+    func generateKeypairs(count: Int) async throws -> [KeypairInfo]
+}
+
+/// Result of a generateKeypairs call.
+public struct KeypairInfo: Sendable {
+    public let keyId: String
+    public let publicKeyJWK: [String: Any]
+
+    public init(keyId: String, publicKeyJWK: [String: Any]) {
+        self.keyId = keyId
+        self.publicKeyJWK = publicKeyJWK
+    }
 }
 
 /// Information about a key in the keystore.
