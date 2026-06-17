@@ -165,7 +165,7 @@ public final class FlowClient: @unchecked Sendable {
               let actionStr = payload["action"]?.stringValue,
               let action = SignAction(rawValue: actionStr) else { return }
 
-        let proofTypesSupported = anyCodableDictToAny(payload["proofTypesSupported"]?.objectValue) as? [String: Any]
+        let proofTypesSupported = anyCodableDictToAny(payload["proof_types_supported"]?.objectValue) as? [String: Any]
 
         let signParams = SignParams(
             audience: payload["audience"]?.stringValue,

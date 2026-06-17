@@ -17,7 +17,7 @@ import CryptoKit
 /// let attestation = try await provider.attest(keyId: keyId, challenge: challengeData)
 /// ```
 @available(iOS 14.0, macOS 12.0, *)
-public final class AppAttestProvider: Sendable {
+public final class AppAttestProvider: @unchecked Sendable {
 
     /// Errors specific to App Attest operations.
     public enum AppAttestError: Error, Sendable {
@@ -58,7 +58,7 @@ public final class AppAttestProvider: Sendable {
     /// - Parameters:
     ///   - keyId: The App Attest key ID from `generateKey()`.
     ///   - challenge: The challenge nonce from the backend's `/wia/challenge` endpoint.
-    /// - Returns: Base64-encoded attestation object for the backend.
+    /// - Returns: Raw attestation object (caller must Base64-encode for transport).
     public func attest(keyId: String, challenge: Data) async throws -> Data {
         guard isSupported else { throw AppAttestError.notSupported }
 
@@ -80,7 +80,7 @@ public final class AppAttestProvider: Sendable {
     /// - Parameters:
     ///   - keyId: The App Attest key ID (must have been attested first).
     ///   - challenge: The challenge nonce to sign.
-    /// - Returns: Base64-encoded assertion for the backend.
+    /// - Returns: Raw assertion data (caller must Base64-encode for transport).
     public func assert(keyId: String, challenge: Data) async throws -> Data {
         guard isSupported else { throw AppAttestError.notSupported }
 

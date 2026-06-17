@@ -78,7 +78,7 @@ public protocol KeystoreManager: AnyObject, Sendable {
 }
 
 /// Result of a generateKeypairs call.
-public struct KeypairInfo: Sendable {
+public struct KeypairInfo: @unchecked Sendable {
     public let keyId: String
     public let publicKeyJWK: [String: Any]
 
@@ -108,6 +108,7 @@ public enum KeystoreError: Error, Sendable {
     case containerMissing(String)
     case cryptoError(String)
     case invalidContainer(String)
+    case invalidParameter(String)
 }
 
 extension KeystoreError: LocalizedError {
@@ -118,6 +119,7 @@ extension KeystoreError: LocalizedError {
         case .containerMissing(let id): return "Container missing: \(id)"
         case .cryptoError(let msg): return "Crypto error: \(msg)"
         case .invalidContainer(let msg): return "Invalid container: \(msg)"
+        case .invalidParameter(let msg): return "Invalid parameter: \(msg)"
         }
     }
 }
