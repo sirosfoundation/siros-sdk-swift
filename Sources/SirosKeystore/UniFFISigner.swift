@@ -29,6 +29,8 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
 
     private let ffi: FfiWscdManager
     private let ctap2Bridge: Ctap2TransportBridge?
+    /// Serial queue for ordered access to FFI bindings.
+    private let ffiQueue = DispatchQueue(label: "org.sirosfoundation.UniFFISigner.ffi")
 
     /// Create a UniFFI-backed signer.
     ///
@@ -111,10 +113,10 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
 
     // MARK: - Private helpers
 
-    /// Execute a blocking FFI call off the main thread.
+    /// Execute a blocking FFI call on the serial FFI queue.
     private func onFFIQueue<T>(_ block: @escaping () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
+            ffiQueue.async {
                 do {
                     let result = try block()
                     continuation.resume(returning: result)
@@ -139,27 +141,30 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
     func send(command: [UInt8]) throws -> [UInt8] {
         let semaphore = DispatchSemaphore(value: 0)
         var result: Result<[UInt8], Error>?
-        Task {
+        Task.detached {
             do {
-                let response = try await provider.send(command: Data(command))
+                let response = try await self.provider.send(command: Data(command))
                 result = .success([UInt8](response))
             } catch {
                 result = .failure(error)
             }
             semaphore.signal()
         }
-        semaphore.wait()
-        return try result!.get()
+        _ = semaphore.wait(timeout: .now() + 30)
+        guard let r = result else {
+            throw NSError(domain: "UniFFISigner", code: -1, userInfo: [NSLocalizedDescriptionKey: "CTAP2 send timed out"])
+        }
+        return try r.get()
     }
 
     func isAvailable() -> Bool {
         let semaphore = DispatchSemaphore(value: 0)
         var available = false
-        Task {
-            available = await provider.isAvailable()
+        Task.detached {
+            available = await self.provider.isAvailable()
             semaphore.signal()
         }
-        semaphore.wait()
+        _ = semaphore.wait(timeout: .now() + 5)
         return available
     }
 }

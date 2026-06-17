@@ -142,8 +142,24 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         credential: String,
         disclosedClaims: [String]?,
         nonce: String,
+        audience: String
+    ) async throws -> String {
+        try await signVpToken(
+            credential: credential,
+            disclosedClaims: disclosedClaims,
+            nonce: nonce,
+            audience: audience,
+            transactionData: nil
+        )
+    }
+
+    /// Extended VP token signing with transaction data (Phase I: TS12 payment SCA).
+    public func signVpToken(
+        credential: String,
+        disclosedClaims: [String]?,
+        nonce: String,
         audience: String,
-        transactionData: [TransactionDataItem]? = nil
+        transactionData: [TransactionDataItem]?
     ) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()
@@ -201,8 +217,11 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
 
         // Phase I: Transaction data hashes (TS12 payment SCA)
         if let txData = transactionData, !txData.isEmpty {
-            let hashes = txData.map { item -> String in
-                let digest = SHA256.hash(data: item.rawJson.data(using: .utf8)!)
+            let hashes = try txData.map { item -> String in
+                guard let jsonData = item.rawJson.data(using: .utf8) else {
+                    throw KeystoreError.cryptoError("Failed to encode transaction data as UTF-8")
+                }
+                let digest = SHA256.hash(data: jsonData)
                 return EncryptedContainer.base64UrlEncode(Data(digest))
             }
             kbClaimsDict["transaction_data_hashes"] = hashes
@@ -223,14 +242,16 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
     public func exportEncryptedContainer() async throws -> Data {
         // WSCD keys are not exportable as a JWE container —
         // they live in the hardware/remote HSM.
-        return Data()
+        // Return a valid empty JSON object so callers that parse the result
+        // (e.g. syncPrivateDataToBackend) don't fail on empty data.
+        return Data("{}".utf8)
     }
 
     public func listKeys() -> [KeyInfo] {
         let semaphore = DispatchSemaphore(value: 0)
         var result: [KeyInfo] = []
-        Task {
-            let signerKeys = (try? await signer.listKeys()) ?? []
+        Task.detached {
+            let signerKeys = (try? await self.signer.listKeys()) ?? []
             result = signerKeys.map {
                 KeyInfo(keyId: $0.keyId, algorithm: $0.algorithm)
             }
