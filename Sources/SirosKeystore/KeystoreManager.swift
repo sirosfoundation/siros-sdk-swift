@@ -71,6 +71,21 @@ public protocol KeystoreManager: AnyObject, Sendable {
 
     /// Remove all stored credentials.
     func clearCredentials() async throws
+
+    /// Generate `count` keypairs and return their public JWKs.
+    /// Used for key attestation requests.
+    func generateKeypairs(count: Int) async throws -> [KeypairInfo]
+}
+
+/// Result of a generateKeypairs call.
+public struct KeypairInfo: @unchecked Sendable {
+    public let keyId: String
+    public let publicKeyJWK: [String: Any]
+
+    public init(keyId: String, publicKeyJWK: [String: Any]) {
+        self.keyId = keyId
+        self.publicKeyJWK = publicKeyJWK
+    }
 }
 
 /// Information about a key in the keystore.
@@ -93,6 +108,7 @@ public enum KeystoreError: Error, Sendable {
     case containerMissing(String)
     case cryptoError(String)
     case invalidContainer(String)
+    case invalidParameter(String)
 }
 
 extension KeystoreError: LocalizedError {
@@ -103,6 +119,7 @@ extension KeystoreError: LocalizedError {
         case .containerMissing(let id): return "Container missing: \(id)"
         case .cryptoError(let msg): return "Crypto error: \(msg)"
         case .invalidContainer(let msg): return "Invalid container: \(msg)"
+        case .invalidParameter(let msg): return "Invalid parameter: \(msg)"
         }
     }
 }

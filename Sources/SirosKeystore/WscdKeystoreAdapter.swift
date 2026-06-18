@@ -332,6 +332,24 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         credentials.removeAll()
     }
 
+    public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
+        try checkUnlocked()
+        guard count >= 1 else {
+            throw KeystoreError.invalidParameter("count must be >= 1")
+        }
+        var result: [KeypairInfo] = []
+        for _ in 0..<count {
+            let keyId = try await generateKey(algorithm: "ES256")
+            let pubData = try await signer.exportPublicKey(keyId: keyId)
+            guard let jwk = try JSONSerialization.jsonObject(with: pubData) as? [String: Any],
+                  jwk["kty"] != nil else {
+                throw KeystoreError.invalidParameter("failed to parse exported public key as JWK")
+            }
+            result.append(KeypairInfo(keyId: keyId, publicKeyJWK: jwk))
+        }
+        return result
+    }
+
     // MARK: - Private helpers
 
     private func checkUnlocked() throws {

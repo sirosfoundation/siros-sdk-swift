@@ -365,6 +365,24 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         credentials.removeAll()
     }
 
+    public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+        var result: [KeypairInfo] = []
+        for _ in 0..<count {
+            let keyId = UUID().uuidString.lowercased()
+            let privateKey = P256.Signing.PrivateKey()
+            keys[keyId] = privateKey
+            let jwk = JwtHelpers.publicKeyJwk(privateKey)
+            // Convert [String: String] to [String: Any]
+            var jwkAny: [String: Any] = [:]
+            for (k, v) in jwk { jwkAny[k] = v }
+            result.append(KeypairInfo(keyId: keyId, publicKeyJWK: jwkAny))
+        }
+        return result
+    }
+
     // MARK: - Private helpers
 
     private func requireUnlocked() throws {
@@ -633,6 +651,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func clearCredentials() async throws {
+        throw KeystoreError.cryptoError("CryptoKit not available on this platform")
+    }
+    public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     #endif
