@@ -75,6 +75,16 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Generate `count` keypairs and return their public JWKs.
     /// Used for key attestation requests.
     func generateKeypairs(count: Int) async throws -> [KeypairInfo]
+
+    /// Get the security properties for this keystore's signing keys.
+    /// Used to populate KA JWT claims (CS-04 §7.1.3, Annex C §C.3.1).
+    /// Returns nil if security properties are not available.
+    func securityProperties() async -> SignerSecurityProperties?
+}
+
+/// Default implementation for optional methods.
+public extension KeystoreManager {
+    func securityProperties() async -> SignerSecurityProperties? { nil }
 }
 
 /// Result of a generateKeypairs call.

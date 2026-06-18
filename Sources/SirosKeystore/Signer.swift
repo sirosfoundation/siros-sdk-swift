@@ -70,37 +70,40 @@ public struct SignerKeyInfo: Sendable, Equatable {
     }
 }
 
-/// Key storage type classification per CS-04 §7.1.3.
-public enum KeyStorageType: String, Sendable {
-    case software
-    case hardware
-    case remoteHsm = "remote_hsm"
-    case trustedExecution = "trusted_execution"
-}
-
-/// Certification level for the WSCD.
-public enum CertificationLevel: String, Sendable {
+/// Certification information for the WSCD (CS-04 §7.1.3, Annex C §C.3.1).
+/// Either `.none` for uncertified devices, or `.certified` with scheme and assurance level.
+public enum CertificationInfo: Sendable, Equatable {
+    /// No certification.
     case none
-    case baseline
-    case substantial
-    case high
+    /// Certified under a specific scheme.
+    case certified(scheme: String, assuranceLevel: String)
+
+    /// Serialize to the JSON-compatible form expected by the backend.
+    public func toJsonValue() -> Any {
+        switch self {
+        case .none:
+            return "none"
+        case .certified(let scheme, let assuranceLevel):
+            return ["scheme": scheme, "assurance_level": assuranceLevel]
+        }
+    }
 }
 
 /// Security properties reported by a `Signer` for a given key.
 public struct SignerSecurityProperties: Sendable {
-    /// How the key material is stored.
-    public let keyStorage: KeyStorageType
+    /// Key storage security levels — ISO 18045 AVA_VAN scale values.
+    public let keyStorage: [String]
     /// User authentication methods supported.
     public let userAuthentication: [String]
-    /// Certification level of the key storage.
-    public let certification: CertificationLevel
+    /// Certification status of the key storage (CS-04 §7.1.3, Annex C §C.3.1).
+    public let certification: CertificationInfo
     /// Authentication Method Reference values from the last sign operation.
     public let amr: [String]
 
     public init(
-        keyStorage: KeyStorageType,
+        keyStorage: [String],
         userAuthentication: [String] = [],
-        certification: CertificationLevel = .none,
+        certification: CertificationInfo = .none,
         amr: [String] = []
     ) {
         self.keyStorage = keyStorage
