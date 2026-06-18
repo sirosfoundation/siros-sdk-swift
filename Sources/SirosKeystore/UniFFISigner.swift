@@ -140,21 +140,35 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
 
     func send(command: [UInt8]) throws -> [UInt8] {
         let semaphore = DispatchSemaphore(value: 0)
-        let box = UnsafeMutablePointer<Result<[UInt8], Error>?>.allocate(capacity: 1)
-        box.initialize(to: nil)
+        // Use a class-based box to safely coordinate deallocation with the async task.
+        final class Box: @unchecked Sendable {
+            var result: Result<[UInt8], Error>?
+            var consumed = false
+            let lock = NSLock()
+        }
+        let box = Box()
         Task.detached { [provider, box] in
             do {
                 let response = try await provider.send(command: Data(command))
-                box.pointee = .success([UInt8](response))
+                box.lock.lock()
+                if !box.consumed {
+                    box.result = .success([UInt8](response))
+                }
+                box.lock.unlock()
             } catch {
-                box.pointee = .failure(error)
+                box.lock.lock()
+                if !box.consumed {
+                    box.result = .failure(error)
+                }
+                box.lock.unlock()
             }
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 30)
-        let r = box.pointee
-        box.deinitialize(count: 1)
-        box.deallocate()
+        box.lock.lock()
+        let r = box.result
+        box.consumed = true
+        box.lock.unlock()
         guard let result = r else {
             throw NSError(domain: "UniFFISigner", code: -1, userInfo: [NSLocalizedDescriptionKey: "CTAP2 send timed out"])
         }
@@ -163,16 +177,26 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
 
     func isAvailable() -> Bool {
         let semaphore = DispatchSemaphore(value: 0)
-        let box = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
-        box.initialize(to: false)
+        final class Box: @unchecked Sendable {
+            var result = false
+            var consumed = false
+            let lock = NSLock()
+        }
+        let box = Box()
         Task.detached { [provider, box] in
-            box.pointee = await provider.isAvailable()
+            let available = await provider.isAvailable()
+            box.lock.lock()
+            if !box.consumed {
+                box.result = available
+            }
+            box.lock.unlock()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + 5)
-        let result = box.pointee
-        box.deinitialize(count: 1)
-        box.deallocate()
+        box.lock.lock()
+        let result = box.result
+        box.consumed = true
+        box.lock.unlock()
         return result
     }
 }
