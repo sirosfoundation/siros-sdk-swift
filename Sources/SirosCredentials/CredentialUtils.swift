@@ -27,7 +27,7 @@ public enum CredentialUtils {
 
     private static let jwtSkipKeys: Set<String> = [
         "iss", "sub", "aud", "exp", "nbf", "iat", "jti",
-        "_sd", "_sd_alg", "cnf", "vct", "status", "type",
+        "_sd", "_sd_alg", "cnf", "vct", "status", "client_status", "type",
     ]
 
     /// Parse the payload of a JWT (or the JWT part of an SD-JWT).

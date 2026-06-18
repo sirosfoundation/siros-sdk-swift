@@ -190,9 +190,11 @@ public final class FlowClient: @unchecked Sendable {
                     if selectedProofType == "attestation", let api = apiClient {
                         let count = signParams.count ?? 1
                         let keypairs = try await keystore.generateKeypairs(count: count)
+                        let secProps = await keystore.securityProperties()
                         let keyAttestation = try await api.requestKeyAttestation(
                             jwks: keypairs.map { $0.publicKeyJWK },
-                            nonce: signParams.nonce ?? ""
+                            nonce: signParams.nonce ?? "",
+                            securityProperties: secProps
                         )
                         response = SignResponse(attestation: keyAttestation, proofType: "attestation")
                     } else {

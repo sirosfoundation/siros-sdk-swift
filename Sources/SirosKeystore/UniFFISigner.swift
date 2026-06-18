@@ -103,9 +103,9 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         try await onFFIQueue {
             let props = try self.ffi.securityProperties(kid: keyId)
             return SignerSecurityProperties(
-                keyStorage: KeyStorageType(from: props.keyStorage),
+                keyStorage: props.keyStorage,  // [String] from FFI
                 userAuthentication: props.userAuthentication,
-                certification: CertificationLevel(from: props.certification),
+                certification: .none,  // TODO: map structured certification from FFI
                 amr: props.amr
             )
         }
@@ -203,26 +203,8 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
 
 // MARK: - FFI enum mapping
 
-private extension KeyStorageType {
-    init(from ffi: FfiKeyStorageType) {
-        switch ffi {
-        case .software: self = .software
-        case .hardware: self = .hardware
-        case .remoteHsm: self = .remoteHsm
-        case .trustedExecution: self = .trustedExecution
-        }
-    }
-}
-
-private extension CertificationLevel {
-    init(from ffi: FfiCertificationLevel) {
-        switch ffi {
-        case .none: self = .none
-        case .baseline: self = .baseline
-        case .substantial: self = .substantial
-        case .high: self = .high
-        }
-    }
-}
+// FFI bridge types will need updating when siros-wscd-manager exposes
+// the new [String] key_storage and structured certification.
+// For now, the UniFFISigner maps to the new types directly.
 
 #endif // canImport(SirosWscdFFI)
