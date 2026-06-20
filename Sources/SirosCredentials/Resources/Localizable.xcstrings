@@ -1,153 +1,720 @@
 {
-  "sourceLanguage" : "en",
-  "strings" : {
-    "error_network_error" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Network connection failed. Please check your internet and try again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η σύνδεση δικτύου απέτυχε. Ελέγξτε τη σύνδεσή σας στο διαδίκτυο και δοκιμάστε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A conexão de rede falhou. Verifique sua internet e tente novamente." } }
+  "sourceLanguage": "en",
+  "strings": {
+    "error_network_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network connection failed. Please check your internet and try again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η σύνδεση δικτύου απέτυχε. Ελέγξτε τη σύνδεσή σας στο διαδίκτυο και δοκιμάστε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A conexão de rede falhou. Verifique sua internet e tente novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nätverksanslutningen misslyckades. Kontrollera din internetanslutning och försök igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verkkoyhteys epäonnistui. Tarkista internetyhteytesi ja yritä uudelleen."
+          }
+        }
       }
     },
-    "error_network_timeout" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The request timed out. Please try again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η αίτηση εξέπνευσε. Δοκιμάστε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A solicitação expirou. Tente novamente." } }
+    "error_network_timeout": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The request timed out. Please try again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η αίτηση εξέπνευσε. Δοκιμάστε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A solicitação expirou. Tente novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Förfrågan tog för lång tid. Försök igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pyyntö aikakatkaistiin. Yritä uudelleen."
+          }
+        }
       }
     },
-    "error_auth_failed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Authentication failed. Please try again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η αυθεντικοποίηση απέτυχε. Δοκιμάστε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A autenticação falhou. Tente novamente." } }
+    "error_auth_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentication failed. Please try again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η αυθεντικοποίηση απέτυχε. Δοκιμάστε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A autenticação falhou. Tente novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autentiseringen misslyckades. Försök igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Todennus epäonnistui. Yritä uudelleen."
+          }
+        }
       }
     },
-    "error_auth_expired" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Your session has expired. Please log in again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η συνεδρία σας έληξε. Συνδεθείτε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Sua sessão expirou. Faça login novamente." } }
+    "error_auth_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has expired. Please log in again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η συνεδρία σας έληξε. Συνδεθείτε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sua sessão expirou. Faça login novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Din session har löpt ut. Logga in igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Istuntosi on vanhentunut. Kirjaudu uudelleen."
+          }
+        }
       }
     },
-    "error_keystore_error" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "A keystore error occurred. Your secure storage may need attention." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Σφάλμα χώρου κλειδιών. Ο ασφαλής χώρος αποθήκευσης χρειάζεται προσοχή." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Erro no armazenamento de chaves. Seu armazenamento seguro precisa de atenção." } }
+    "error_keystore_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A keystore error occurred. Your secure storage may need attention."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Σφάλμα χώρου κλειδιών. Ο ασφαλής χώρος αποθήκευσης χρειάζεται προσοχή."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro no armazenamento de chaves. Seu armazenamento seguro precisa de atenção."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nyckellagringsfel. Det säkra lagringsutrymmet behöver åtgärd."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avainvarastovirhe. Suojattu tallennustila vaatii huomiota."
+          }
+        }
       }
     },
-    "error_keystore_locked" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The keystore is locked. Please authenticate to unlock." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Ο χώρος κλειδιών είναι κλειδωμένος. Πιστοποιήστε για ξεκλείδωμα." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "O armazenamento de chaves está bloqueado. Autentique-se para desbloquear." } }
+    "error_keystore_locked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The keystore is locked. Please authenticate to unlock."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ο χώρος κλειδιών είναι κλειδωμένος. Πιστοποιήστε για ξεκλείδωμα."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O armazenamento de chaves está bloqueado. Autentique-se para desbloquear."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nyckellagringen är låst. Autentisera för att låsa upp."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avainvarasto on lukittu. Todenna avataksesi."
+          }
+        }
       }
     },
-    "error_wallet_error" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "A wallet error occurred. Please try again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Σφάλμα πορτοφολιού. Δοκιμάστε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Erro na carteira. Tente novamente." } }
+    "error_wallet_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A wallet error occurred. Please try again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Σφάλμα πορτοφολιού. Δοκιμάστε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro na carteira. Tente novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plånboksfel. Försök igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lompakkovirhe. Yritä uudelleen."
+          }
+        }
       }
     },
-    "error_wallet_not_connected" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Wallet is not connected. Please log in first." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Το πορτοφόλι δεν είναι συνδεδεμένο. Συνδεθείτε πρώτα." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Carteira não conectada. Faça login primeiro." } }
+    "error_wallet_not_connected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wallet is not connected. Please log in first."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Το πορτοφόλι δεν είναι συνδεδεμένο. Συνδεθείτε πρώτα."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carteira não conectada. Faça login primeiro."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plånboken är inte ansluten. Anslut först."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lompakkoa ei ole yhdistetty. Yhdistä ensin."
+          }
+        }
       }
     },
-    "error_wallet_prf_unsupported" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Your authenticator does not support PRF — cannot secure wallet data." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Ο αυθεντικοποιητής σας δεν υποστηρίζει PRF — δεν είναι δυνατή η ασφάλιση δεδομένων πορτοφολιού." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Seu autenticador não suporta PRF — não é possível proteger os dados da carteira." } }
+    "error_wallet_prf_unsupported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your authenticator does not support PRF — cannot secure wallet data."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ο αυθεντικοποιητής σας δεν υποστηρίζει PRF — δεν είναι δυνατή η ασφάλιση δεδομένων πορτοφολιού."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seu autenticador não suporta PRF — não é possível proteger os dados da carteira."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Din autentiserare stöder inte PRF — kan inte säkra plånboksdata."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Todentajasi ei tue PRF:ää — lompakkotietoja ei voida suojata."
+          }
+        }
       }
     },
-    "error_idv_cancelled" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Identity verification was cancelled." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η επαλήθευση ταυτότητας ακυρώθηκε." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A verificação de identidade foi cancelada." } }
+    "error_idv_cancelled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity verification was cancelled."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η επαλήθευση ταυτότητας ακυρώθηκε."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificação de identidade foi cancelada."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identitetsverifiering avbröts."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henkilöllisyyden todentaminen peruutettiin."
+          }
+        }
       }
     },
-    "error_idv_unavailable" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Identity verification is not available on this device." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η επαλήθευση ταυτότητας δεν είναι διαθέσιμη σε αυτήν τη συσκευή." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A verificação de identidade não está disponível neste dispositivo." } }
+    "error_idv_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity verification is not available on this device."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η επαλήθευση ταυτότητας δεν είναι διαθέσιμη σε αυτήν τη συσκευή."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificação de identidade não está disponível neste dispositivo."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identitetsverifiering är inte tillgänglig på denna enhet."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henkilöllisyyden todentaminen ei ole saatavilla tällä laitteella."
+          }
+        }
       }
     },
-    "error_idv_liveness_failed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Liveness check failed. Please try again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Ο έλεγχος ζωντάνιας απέτυχε. Δοκιμάστε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A verificação de vivacidade falhou. Tente novamente." } }
+    "error_idv_liveness_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness check failed. Please try again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ο έλεγχος ζωντάνιας απέτυχε. Δοκιμάστε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificação de vivacidade falhou. Tente novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Livlighetskontroll misslyckades. Försök igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elävyystarkistus epäonnistui. Yritä uudelleen."
+          }
+        }
       }
     },
-    "error_idv_verification_failed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Identity verification failed. Please try again." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η επαλήθευση ταυτότητας απέτυχε. Δοκιμάστε ξανά." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A verificação de identidade falhou. Tente novamente." } }
+    "error_idv_verification_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity verification failed. Please try again."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η επαλήθευση ταυτότητας απέτυχε. Δοκιμάστε ξανά."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificação de identidade falhou. Tente novamente."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identitetsverifieringen misslyckades. Försök igen."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henkilöllisyyden todentaminen epäonnistui. Yritä uudelleen."
+          }
+        }
       }
     },
-    "error_idv_network_error" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Network error during identity verification." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Σφάλμα δικτύου κατά την επαλήθευση ταυτότητας." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Erro de rede durante a verificação de identidade." } }
+    "error_idv_network_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network error during identity verification."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Σφάλμα δικτύου κατά την επαλήθευση ταυτότητας."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro de rede durante a verificação de identidade."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nätverksfel under identitetsverifiering."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verkkovirhe henkilöllisyyden todentamisen aikana."
+          }
+        }
       }
     },
-    "error_ctap2_not_available" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Security key transport is not available." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η μεταφορά κλειδιού ασφαλείας δεν είναι διαθέσιμη." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "O transporte de chave de segurança não está disponível." } }
+    "error_ctap2_not_available": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Security key transport is not available."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η μεταφορά κλειδιού ασφαλείας δεν είναι διαθέσιμη."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O transporte de chave de segurança não está disponível."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transport för säkerhetsnyckel är inte tillgänglig."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turva-avaimen siirto ei ole saatavilla."
+          }
+        }
       }
     },
-    "error_ctap2_connection_failed" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to connect to security key." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Αποτυχία σύνδεσης με το κλειδί ασφαλείας." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Falha ao conectar à chave de segurança." } }
+    "error_ctap2_connection_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to connect to security key."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Αποτυχία σύνδεσης με το κλειδί ασφαλείας."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao conectar à chave de segurança."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att ansluta till säkerhetsnyckeln."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turva-avaimeen yhdistäminen epäonnistui."
+          }
+        }
       }
     },
-    "error_ctap2_timeout" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Security key communication timed out." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Η επικοινωνία με το κλειδί ασφαλείας εξέπνευσε." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A comunicação com a chave de segurança expirou." } }
+    "error_ctap2_timeout": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Security key communication timed out."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Η επικοινωνία με το κλειδί ασφαλείας εξέπνευσε."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A comunicação com a chave de segurança expirou."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kommunikation med säkerhetsnyckeln tog för lång tid."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turva-avaimen viestintä aikakatkaistiin."
+          }
+        }
       }
     },
-    "error_ctap2_device_disconnected" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Security key was disconnected." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Το κλειδί ασφαλείας αποσυνδέθηκε." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "A chave de segurança foi desconectada." } }
+    "error_ctap2_device_disconnected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Security key was disconnected."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Το κλειδί ασφαλείας αποσυνδέθηκε."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chave de segurança foi desconectada."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Säkerhetsnyckeln kopplades från."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turva-avain irrotettiin."
+          }
+        }
       }
     },
-    "error_insufficient_credentials" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "You do not have the required credentials for this request." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Δεν διαθέτετε τα απαιτούμενα πιστοποιητικά για αυτό το αίτημα." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Você não possui as credenciais necessárias para esta solicitação." } }
+    "error_insufficient_credentials": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You do not have the required credentials for this request."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Δεν διαθέτετε τα απαιτούμενα πιστοποιητικά για αυτό το αίτημα."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você não possui as credenciais necessárias para esta solicitação."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du har inte de intyg som krävs för denna begäran."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sinulla ei ole tarvittavia todistuksia tähän pyyntöön."
+          }
+        }
       }
     },
-    "error_flow_error" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "An error occurred during the credential flow." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Παρουσιάστηκε σφάλμα κατά τη ροή πιστοποιητικού." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Ocorreu um erro durante o fluxo de credencial." } }
+    "error_flow_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An error occurred during the credential flow."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Παρουσιάστηκε σφάλμα κατά τη ροή πιστοποιητικού."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ocorreu um erro durante o fluxo de credencial."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ett fel uppstod under intygsflödet."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Virhe tapahtui todistusprosessin aikana."
+          }
+        }
       }
     },
-    "error_generic" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "An unexpected error occurred." } },
-        "el" : { "stringUnit" : { "state" : "translated", "value" : "Παρουσιάστηκε ένα μη αναμενόμενο σφάλμα." } },
-        "pt" : { "stringUnit" : { "state" : "translated", "value" : "Ocorreu um erro inesperado." } }
+    "error_generic": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An unexpected error occurred."
+          }
+        },
+        "el": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Παρουσιάστηκε ένα μη αναμενόμενο σφάλμα."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ocorreu um erro inesperado."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ett oväntat fel inträffade."
+          }
+        },
+        "fi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Odottamaton virhe tapahtui."
+          }
+        }
       }
     }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }
