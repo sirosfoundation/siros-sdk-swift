@@ -36,6 +36,18 @@ struct LoginView: View {
                         .textInputAutocapitalization(.never)
                         .disabled(viewModel.isLoading)
 
+                    // R2PS remote signing toggle
+                    Toggle("R2PS Remote Signing", isOn: $viewModel.r2psEnabled)
+                        .disabled(viewModel.isLoading)
+
+                    if viewModel.r2psEnabled {
+                        TextField("R2PS Server URL", text: $viewModel.r2psServerUrl)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .disabled(viewModel.isLoading)
+                    }
+
                     Spacer().frame(height: 4)
 
                     Button(action: viewModel.login) {
