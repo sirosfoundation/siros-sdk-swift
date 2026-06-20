@@ -44,12 +44,25 @@ public protocol Ctap2TransportProvider: AnyObject, Sendable {
 }
 
 /// Errors specific to CTAP2 transport operations.
+///
+/// Each case exposes an ``errorCode`` for i18n mapping.
 public enum Ctap2TransportError: Error, Sendable {
     case notAvailable
     case connectionFailed(String)
     case timeout
     case deviceDisconnected
     case invalidResponse(String)
+
+    /// Machine-readable error code for i18n mapping.
+    public var errorCode: String {
+        switch self {
+        case .notAvailable: return "ctap2_not_available"
+        case .connectionFailed: return "ctap2_connection_failed"
+        case .timeout: return "ctap2_timeout"
+        case .deviceDisconnected: return "ctap2_device_disconnected"
+        case .invalidResponse: return "ctap2_invalid_response"
+        }
+    }
 }
 
 extension Ctap2TransportError: LocalizedError {
