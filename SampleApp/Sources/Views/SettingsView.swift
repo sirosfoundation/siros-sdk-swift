@@ -12,6 +12,9 @@ struct SettingsView: View {
                     LabeledContent("User", value: viewModel.displayName ?? "—")
                     LabeledContent("Backend", value: viewModel.backendUrl)
                     LabeledContent("Tenant", value: viewModel.tenantId)
+                    if viewModel.r2psEnabled {
+                        LabeledContent("R2PS Server", value: viewModel.r2psServerUrl)
+                    }
                 }
 
                 Section("Activity") {

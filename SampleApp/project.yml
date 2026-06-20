@@ -24,6 +24,8 @@ targets:
         product: SirosCredentials
       - package: SirosSDK
         product: SirosAuth
+      - package: SirosSDK
+        product: SirosKeystore
     settings:
       base:
         SWIFT_VERSION: "5.10"

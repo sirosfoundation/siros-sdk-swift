@@ -5,6 +5,10 @@ import SwiftUI
 import SirosWallet
 import SirosCredentials
 import SirosAuth
+import SirosKeystore
+#if canImport(SirosWscdFFI)
+import SirosWscdFFI
+#endif
 
 #if DEBUG
 private let defaultBackendUrl = "http://192.168.240.1:8090"
@@ -13,6 +17,7 @@ private let defaultBackendUrl = "https://wallet.sirosid.dev"
 #endif
 
 private let defaultTenantId = "default"
+private let defaultR2psUrl = "http://192.168.240.1:9000"
 private let redirectScheme = "siros-sample"
 
 /// Sample app ViewModel.
@@ -27,6 +32,8 @@ final class WalletViewModel: ObservableObject {
 
     @Published var backendUrl: String = defaultBackendUrl
     @Published var tenantId: String = defaultTenantId
+    @Published var r2psEnabled: Bool = false
+    @Published var r2psServerUrl: String = defaultR2psUrl
 
     // MARK: - Wallet state
 
@@ -283,6 +290,35 @@ final class WalletViewModel: ObservableObject {
 
         guard needsRebuild else { return }
 
+        // Build WSCD-backed keystore when R2PS is enabled
+        var keystore: KeystoreManager?
+        #if canImport(SirosWscdFFI)
+        if r2psEnabled {
+            do {
+                let wscdConfig = FfiWscdConfig(defaultPlugin: "r2ps")
+                let signer = try UniFFISigner(config: wscdConfig)
+                let r2psConfig = FfiR2psConfig(
+                    serverUrl: r2psServerUrl,
+                    clientId: "sample-app",
+                    context: "wallet",
+                    authMode: "opaque",
+                    rpId: "",
+                    allowedCredentialIds: [],
+                    clientKeyPem: "", // Populated from device enrollment in production
+                    serverPublicKeyPem: "" // Populated from R2PS server discovery
+                )
+                let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
+                let pake = SamplePakeClient()
+                try signer.registerR2psPlugin(config: r2psConfig, transport: transport, pake: pake)
+                keystore = WscdKeystoreAdapter(signer: signer)
+            } catch {
+                // Fall back to default keystore if R2PS setup fails
+                print("R2PS setup failed: \(error). Falling back to default keystore.")
+                keystore = nil
+            }
+        }
+        #endif
+
         #if os(iOS)
         let authProvider = ASAuthorizationAuthProvider()
         #else
@@ -291,7 +327,8 @@ final class WalletViewModel: ObservableObject {
         wallet = SirosWallet(
             config: config,
             authProvider: authProvider,
-            sessionStore: KeychainSessionStore()
+            sessionStore: KeychainSessionStore(),
+            keystore: keystore
         )
         wallet?.setEventListener(self)
         observeState()
