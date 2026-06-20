@@ -20,6 +20,8 @@ public struct IDVResult: Sendable, Equatable {
 }
 
 /// Errors that can occur during identity verification.
+///
+/// Each case exposes an ``errorCode`` for i18n mapping.
 public enum IDVError: Error, Sendable {
     /// The user cancelled the verification flow.
     case cancelled
@@ -33,6 +35,31 @@ public enum IDVError: Error, Sendable {
     case networkError(underlying: Error)
     /// Provider-specific error.
     case providerError(code: String, message: String)
+
+    /// Machine-readable error code for i18n mapping.
+    public var errorCode: String {
+        switch self {
+        case .cancelled: return "idv_cancelled"
+        case .unavailable: return "idv_unavailable"
+        case .livenessFailed: return "idv_liveness_failed"
+        case .verificationFailed: return "idv_verification_failed"
+        case .networkError: return "idv_network_error"
+        case .providerError(let code, _): return "idv_provider_\(code)"
+        }
+    }
+}
+
+extension IDVError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled: return "Identity verification cancelled by user"
+        case .unavailable(let reason): return "IDV provider unavailable: \(reason)"
+        case .livenessFailed(let message): return message
+        case .verificationFailed(let message): return message
+        case .networkError(let underlying): return "Network error during IDV: \(underlying.localizedDescription)"
+        case .providerError(let code, let message): return "[\(code)] \(message)"
+        }
+    }
 }
 
 /// Plugin protocol for identity verification (document + liveness).
