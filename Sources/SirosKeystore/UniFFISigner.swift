@@ -9,6 +9,35 @@ import Foundation
 #if canImport(SirosWscdFFI)
 import SirosWscdFFI
 
+/// Provides user authentication credentials when requested by the WSCD.
+///
+/// Implement this protocol in the wallet application to handle
+/// PIN entry prompts and WebAuthn assertion ceremonies during
+/// signing operations that require 2FA (e.g. R2PS remote signing).
+///
+/// Note: These methods are called synchronously from the FFI queue.
+/// Implementations that show UI should use platform mechanisms to
+/// block until the user completes the interaction.
+public protocol AuthProvider: AnyObject, Sendable {
+    /// Request the user's PIN (e.g. for OPAQUE authentication).
+    /// - Returns: The PIN as raw bytes (UTF-8 encoded).
+    /// - Throws: If the user cancels.
+    func requestPin() throws -> Data
+
+    /// Request a WebAuthn assertion.
+    /// - Parameters:
+    ///   - challenge: The authentication challenge bytes.
+    ///   - rpId: The Relying Party ID.
+    ///   - allowedCredentials: List of allowed credential IDs.
+    /// - Returns: The CBOR-encoded authenticator assertion response.
+    /// - Throws: If the user cancels or no credential is available.
+    func requestWebauthnAssertion(
+        challenge: Data,
+        rpId: String,
+        allowedCredentials: [Data]
+    ) throws -> Data
+}
+
 /// `UniFFISigner` wraps the Rust `siros-wscd-manager` UniFFI bindings
 /// into the SDK's `Signer` protocol.
 ///
@@ -17,53 +46,79 @@ import SirosWscdFFI
 ///
 /// Usage:
 /// ```swift
-/// let config = FfiWscdConfig(
-///     defaultPlugin: "softkey",
-///     pluginConfigs: [:]
-/// )
+/// let config = FfiWscdConfig(defaultPlugin: "softkey")
 /// let signer = try UniFFISigner(config: config)
 /// let keystore = WscdKeystoreAdapter(signer: signer)
-/// let wallet = SirosWallet(keystore: keystore)
 /// ```
 public final class UniFFISigner: Signer, @unchecked Sendable {
 
     private let ffi: FfiWscdManager
-    private let ctap2Bridge: Ctap2TransportBridge?
+    private weak var authProvider: AuthProvider?
     /// Serial queue for ordered access to FFI bindings.
     private let ffiQueue = DispatchQueue(label: "org.sirosfoundation.UniFFISigner.ffi")
+    /// Cache of key ID → JWK JSON Data, populated at generateKey time.
+    private var publicKeyCache: [String: Data] = [:]
+    private let cacheLock = NSLock()
 
     /// Create a UniFFI-backed signer.
     ///
     /// - Parameters:
-    ///   - config: WSCD manager configuration (default plugin, plugin configs).
-    ///   - transport: Optional CTAP2 transport provider for FIDO2 plugin.
-    public init(config: FfiWscdConfig, transport: Ctap2TransportProvider? = nil) throws {
-        self.ctap2Bridge = transport.map { Ctap2TransportBridge($0) }
-        self.ffi = try FfiWscdManager(
-            config: config,
-            transport: ctap2Bridge
-        )
+    ///   - config: WSCD manager configuration.
+    ///   - authProvider: Optional callback for user authentication (PIN/WebAuthn).
+    public init(config: FfiWscdConfig, authProvider: AuthProvider? = nil) throws {
+        self.ffi = FfiWscdManager(config: config)
+        self.authProvider = authProvider
+        try self.ffi.registerSoftkeyPlugin()
+    }
+
+    /// Register the R2PS remote HSM plugin.
+    ///
+    /// - Parameters:
+    ///   - config: R2PS server connection parameters.
+    ///   - transport: HTTP transport for R2PS protocol messages.
+    ///   - pake: OPAQUE (RFC 9807) client for PAKE authentication.
+    public func registerR2psPlugin(
+        config: FfiR2psConfig,
+        transport: FfiHttpTransport,
+        pake: FfiPakeClient
+    ) throws {
+        try ffi.registerR2psPlugin(config: config, transport: transport, pake: pake)
     }
 
     // MARK: - Signer conformance
 
     public func generateKey(algorithm: String) async throws -> String {
         try await onFFIQueue {
-            try self.ffi.generateKey(algorithm: algorithm)
+            let ffiAlgorithm = try Self.mapAlgorithm(algorithm)
+            let result = try self.ffi.generateKey(
+                algorithm: ffiAlgorithm,
+                auth: self.authCallbackBridge(),
+                progress: NoOpProgressCallback()
+            )
+            self.cacheLock.lock()
+            self.publicKeyCache[result.kid] = Data(result.publicKeyJwk.utf8)
+            self.cacheLock.unlock()
+            return result.kid
         }
     }
 
     public func sign(keyId: String, data: Data) async throws -> Data {
         try await onFFIQueue {
-            let result = try self.ffi.sign(kid: keyId, data: [UInt8](data), callback: nil)
-            return Data(result.signature)
+            let result = try self.ffi.sign(
+                kid: keyId,
+                data: data,
+                algorithm: .es256, // algorithm is inferred from key by the manager
+                auth: self.authCallbackBridge(),
+                progress: NoOpProgressCallback()
+            )
+            return result.data
         }
     }
 
     public func listKeys() async throws -> [SignerKeyInfo] {
         try await onFFIQueue {
             try self.ffi.listKeys().map {
-                SignerKeyInfo(keyId: $0.kid, algorithm: $0.algorithm)
+                SignerKeyInfo(keyId: $0.kid, algorithm: Self.algorithmToString($0.algorithm))
             }
         }
     }
@@ -71,25 +126,37 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     public func deleteKey(keyId: String) async throws {
         try await onFFIQueue {
             try self.ffi.deleteKey(kid: keyId)
+            self.cacheLock.lock()
+            self.publicKeyCache.removeValue(forKey: keyId)
+            self.cacheLock.unlock()
         }
     }
 
     public func attestationChain(keyId: String) async throws -> [Data]? {
         try await onFFIQueue {
-            try self.ffi.attestationChain(kid: keyId)?.map { Data($0) }
+            try self.ffi.attestationChain(kid: keyId)?.certificates
         }
     }
 
     public func exportPublicKey(keyId: String) async throws -> Data {
         try await onFFIQueue {
-            let jwk = try self.ffi.exportPublicKey(kid: keyId)
-            return Data(jwk)
+            self.cacheLock.lock()
+            let cached = self.publicKeyCache[keyId]
+            self.cacheLock.unlock()
+            guard let jwkData = cached else {
+                throw UniFFISignerError.publicKeyNotCached(keyId: keyId)
+            }
+            return jwkData
         }
     }
 
     public func migrateKey(keyId: String, targetPlugin: String) async throws -> MigrationResult {
         try await onFFIQueue {
-            let result = try self.ffi.migrateKey(kid: keyId, targetPlugin: targetPlugin)
+            let result = try self.ffi.migrateKey(
+                kid: keyId,
+                targetPluginId: targetPlugin,
+                auth: self.authCallbackBridge()
+            )
             switch result {
             case .migrated(let newKid):
                 return .migrated(newKeyId: newKid)
@@ -103,12 +170,22 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         try await onFFIQueue {
             let props = try self.ffi.securityProperties(kid: keyId)
             return SignerSecurityProperties(
-                keyStorage: props.keyStorage,  // [String] from FFI
+                keyStorage: [Self.keyStorageToString(props.keyStorage)],
                 userAuthentication: props.userAuthentication,
-                certification: .none,  // TODO: map structured certification from FFI
+                certification: Self.certificationToSdk(props.certification),
                 amr: props.amr
             )
         }
+    }
+
+    /// Export the softkey plugin container as JSON bytes for encrypted backup.
+    public func exportSoftkeyContainer() throws -> Data {
+        Data(try ffi.exportSoftkeyContainer())
+    }
+
+    /// Import a softkey container (JSON bytes) to restore keys from backup.
+    public func importSoftkeyContainer(_ container: Data) throws {
+        try ffi.importSoftkeyContainer(container: [UInt8](container))
     }
 
     // MARK: - Private helpers
@@ -126,11 +203,111 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
             }
         }
     }
+
+    private func authCallbackBridge() -> AuthCallbackBridge {
+        AuthCallbackBridge(provider: authProvider)
+    }
+
+    // MARK: - Type mapping
+
+    private static func mapAlgorithm(_ s: String) throws -> FfiAlgorithm {
+        switch s.uppercased() {
+        case "ES256": return .es256
+        case "EDDSA", "ED25519": return .edDsa
+        default: throw UniFFISignerError.unsupportedAlgorithm(s)
+        }
+    }
+
+    private static func algorithmToString(_ alg: FfiAlgorithm) -> String {
+        switch alg {
+        case .es256: return "ES256"
+        case .edDsa: return "EdDSA"
+        }
+    }
+
+    private static func keyStorageToString(_ ks: FfiKeyStorageType) -> String {
+        switch ks {
+        case .software: return "software"
+        case .hardware: return "hardware"
+        case .remoteHsm: return "remote_hsm"
+        case .trustedExecution: return "trusted_execution"
+        }
+    }
+
+    private static func certificationToSdk(_ cert: FfiCertificationLevel) -> CertificationInfo {
+        switch cert {
+        case .none: return .none
+        case .baseline: return .certified(scheme: "EUCC", assuranceLevel: "baseline")
+        case .substantial: return .certified(scheme: "EUCC", assuranceLevel: "substantial")
+        case .high: return .certified(scheme: "EUCC", assuranceLevel: "high")
+        }
+    }
+}
+
+// MARK: - Errors
+
+public enum UniFFISignerError: Error, LocalizedError {
+    case unsupportedAlgorithm(String)
+    case publicKeyNotCached(keyId: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedAlgorithm(let alg):
+            return "Unsupported algorithm: \(alg)"
+        case .publicKeyNotCached(let kid):
+            return "Public key not cached for \(kid). Key was generated before this session or on another device."
+        }
+    }
+}
+
+// MARK: - Auth callback bridge
+
+private final class AuthCallbackBridge: FfiAuthCallback, @unchecked Sendable {
+    private weak var provider: AuthProvider?
+
+    init(provider: AuthProvider?) {
+        self.provider = provider
+    }
+
+    func requestPin() throws -> Data {
+        guard let provider = provider else {
+            throw FfiWscdError.AuthCancelled(message: "No AuthProvider configured")
+        }
+        return try provider.requestPin()
+    }
+
+    func requestWebauthnAssertion(
+        challenge: Data,
+        rpId: String,
+        allowedCredentials: [Data]
+    ) throws -> Data {
+        guard let provider = provider else {
+            throw FfiWscdError.AuthCancelled(message: "No AuthProvider configured")
+        }
+        return try provider.requestWebauthnAssertion(
+            challenge: challenge,
+            rpId: rpId,
+            allowedCredentials: allowedCredentials
+        )
+    }
+}
+
+// MARK: - No-op progress callback
+
+private final class NoOpProgressCallback: FfiProgressCallback, @unchecked Sendable {
+    func onProgress(progress: FfiOperationProgress) { /* no-op */ }
 }
 
 // MARK: - CTAP2 bridge
 
 /// Bridges the SDK's `Ctap2TransportProvider` to the UniFFI `FfiCtap2Transport` callback.
+///
+/// The FFI expects structured CTAP2 operations (makeCredential, getAssertion)
+/// while the SDK provider exposes a raw command-level interface. This bridge
+/// constructs the appropriate CBOR commands and parses responses.
+///
+/// Note: CTAP2/FIDO2 plugin support is not yet wired — the R2PS plugin
+/// uses its own HTTP transport and does not require CTAP2.
 private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable {
     private let provider: Ctap2TransportProvider
 
@@ -138,73 +315,35 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
         self.provider = provider
     }
 
-    func send(command: [UInt8]) throws -> [UInt8] {
-        let semaphore = DispatchSemaphore(value: 0)
-        // Use a class-based box to safely coordinate deallocation with the async task.
-        final class Box: @unchecked Sendable {
-            var result: Result<[UInt8], Error>?
-            var consumed = false
-            let lock = NSLock()
-        }
-        let box = Box()
-        Task.detached { [provider, box] in
-            do {
-                let response = try await provider.send(command: Data(command))
-                box.lock.lock()
-                if !box.consumed {
-                    box.result = .success([UInt8](response))
-                }
-                box.lock.unlock()
-            } catch {
-                box.lock.lock()
-                if !box.consumed {
-                    box.result = .failure(error)
-                }
-                box.lock.unlock()
-            }
-            semaphore.signal()
-        }
-        _ = semaphore.wait(timeout: .now() + 30)
-        box.lock.lock()
-        let r = box.result
-        box.consumed = true
-        box.lock.unlock()
-        guard let result = r else {
-            throw NSError(domain: "UniFFISigner", code: -1, userInfo: [NSLocalizedDescriptionKey: "CTAP2 send timed out"])
-        }
-        return try result.get()
+    func ctap2MakeCredential(
+        clientDataHash: [UInt8],
+        rpId: String,
+        userId: [UInt8],
+        algorithms: [Int64]
+    ) throws -> [UInt8] {
+        // CTAP2 makeCredential requires CBOR command construction.
+        // This will be implemented when the FIDO2 plugin is activated.
+        throw NSError(
+            domain: "UniFFISigner.Ctap2",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "CTAP2 makeCredential not yet implemented"]
+        )
     }
 
-    func isAvailable() -> Bool {
-        let semaphore = DispatchSemaphore(value: 0)
-        final class Box: @unchecked Sendable {
-            var result = false
-            var consumed = false
-            let lock = NSLock()
-        }
-        let box = Box()
-        Task.detached { [provider, box] in
-            let available = await provider.isAvailable()
-            box.lock.lock()
-            if !box.consumed {
-                box.result = available
-            }
-            box.lock.unlock()
-            semaphore.signal()
-        }
-        _ = semaphore.wait(timeout: .now() + 5)
-        box.lock.lock()
-        let result = box.result
-        box.consumed = true
-        box.lock.unlock()
-        return result
+    func ctap2GetAssertion(
+        rpId: String,
+        challenge: [UInt8],
+        credentialHandles: [[UInt8]],
+        dataToSign: [[UInt8]]
+    ) throws -> [[UInt8]] {
+        // CTAP2 getAssertion requires CBOR command construction.
+        // This will be implemented when the FIDO2 plugin is activated.
+        throw NSError(
+            domain: "UniFFISigner.Ctap2",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "CTAP2 getAssertion not yet implemented"]
+        )
     }
 }
-
-// MARK: - FFI enum mapping
-
-// FFI bridge types will need updating when siros-wscd-manager exposes
-// the new [String] key_storage and structured certification.
-// For now, the UniFFISigner maps to the new types directly.
 
 #endif // canImport(SirosWscdFFI)
