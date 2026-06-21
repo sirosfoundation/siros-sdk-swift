@@ -295,10 +295,14 @@ public struct CredentialResult: Codable, Sendable {
     public var credential: String
     public var vct: String?
     public var typeMetadata: AnyCodable?
+    public var notificationId: String?
+    public var notificationEndpoint: String?
 
     enum CodingKeys: String, CodingKey {
         case format, credential, vct
         case typeMetadata = "type_metadata"
+        case notificationId = "notification_id"
+        case notificationEndpoint = "notification_endpoint"
     }
 }
 
@@ -319,6 +323,20 @@ public struct FlowError: Codable, Sendable {
     public var code: String
     public var message: String
     public var details: [String: AnyCodable]?
+}
+
+/// Client → Server: request the backend to send a credential lifecycle notification to the issuer.
+public struct CredentialNotificationMessage: Codable, Sendable {
+    public var type: String = "credential_notification"
+    public var credentialIdentifier: String
+    public var event: String
+    public var eventDescription: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, event
+        case credentialIdentifier = "credential_identifier"
+        case eventDescription = "event_description"
+    }
 }
 
 public struct SignRequestMessage: Codable, Sendable {

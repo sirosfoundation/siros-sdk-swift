@@ -6,6 +6,10 @@ import SwiftUI
 struct SirosSampleApp: App {
     @StateObject private var viewModel = WalletViewModel()
 
+    init() {
+        WalletNotificationHelper.shared.requestPermission()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

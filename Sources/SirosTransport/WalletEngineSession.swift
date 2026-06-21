@@ -335,6 +335,15 @@ public final class WalletEngineSession: @unchecked Sendable {
         sendFlowAction(flowId: flowId, action: "trust_result", payload: payload)
     }
 
+    /// Send a credential lifecycle notification request to the backend (OID4VCI §10).
+    public func sendCredentialNotification(credentialIdentifier: String, event: String, eventDescription: String? = nil) {
+        send(CredentialNotificationMessage(
+            credentialIdentifier: credentialIdentifier,
+            event: event,
+            eventDescription: eventDescription
+        ))
+    }
+
     /// Suspend until the engine WebSocket handshake completes or fails.
     public func awaitConnected(timeoutMs: UInt64 = 10_000) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in

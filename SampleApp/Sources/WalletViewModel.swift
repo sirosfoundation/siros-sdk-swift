@@ -169,9 +169,11 @@ final class WalletViewModel: ObservableObject {
     }
 
     func deleteCredential(_ id: String) {
+        let credentialName = selectedCredential?.metadata?.name
         Task {
             await wallet?.deleteCredential(id)
             selectedCredential = nil
+            WalletNotificationHelper.shared.notifyCredentialDeleted(credentialName: credentialName)
         }
     }
 
@@ -381,7 +383,9 @@ extension WalletViewModel: WalletEventListener {
         }
     }
 
-    nonisolated func onCredentialReceived(credential: StoredCredential) {}
+    nonisolated func onCredentialReceived(credential: StoredCredential) {
+        WalletNotificationHelper.shared.notifyCredentialReceived(credentialName: credential.metadata?.name)
+    }
     nonisolated func onFlowComplete(flowId: String) {}
 
     nonisolated func onFlowError(flowId: String, errorMessage: String) {

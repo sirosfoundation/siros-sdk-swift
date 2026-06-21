@@ -18,6 +18,10 @@ public struct StoredCredential: Codable, Sendable, Equatable, Identifiable {
     public let metadata: CredentialMetadata?
     public let issuedAt: Int64?
     public let expiresAt: Int64?
+    /// OID4VCI notification ID for credential lifecycle events.
+    public let notificationId: String?
+    /// Issuer's notification endpoint URL.
+    public let notificationEndpoint: String?
 
     public init(
         id: String,
@@ -25,7 +29,9 @@ public struct StoredCredential: Codable, Sendable, Equatable, Identifiable {
         raw: String,
         metadata: CredentialMetadata? = nil,
         issuedAt: Int64? = nil,
-        expiresAt: Int64? = nil
+        expiresAt: Int64? = nil,
+        notificationId: String? = nil,
+        notificationEndpoint: String? = nil
     ) {
         self.id = id
         self.format = format
@@ -33,12 +39,16 @@ public struct StoredCredential: Codable, Sendable, Equatable, Identifiable {
         self.metadata = metadata
         self.issuedAt = issuedAt
         self.expiresAt = expiresAt
+        self.notificationId = notificationId
+        self.notificationEndpoint = notificationEndpoint
     }
 
     enum CodingKeys: String, CodingKey {
         case id, format, raw, metadata
         case issuedAt = "issued_at"
         case expiresAt = "expires_at"
+        case notificationId = "notification_id"
+        case notificationEndpoint = "notification_endpoint"
     }
 }
 

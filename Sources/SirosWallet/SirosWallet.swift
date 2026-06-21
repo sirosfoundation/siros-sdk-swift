@@ -396,6 +396,15 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Delete a credential by ID and sync to backend.
     public func deleteCredential(_ credentialId: String) async {
+        // Send credential_deleted notification if the credential has notification info
+        let allCreds = await credentialStore.getAll()
+        if let credential = allCreds.first(where: { $0.id == credentialId }),
+           credential.notificationId != nil {
+            engineSession?.sendCredentialNotification(
+                credentialIdentifier: credential.id,
+                event: "credential_deleted"
+            )
+        }
         await credentialStore.delete(credentialId)
         if case .ready(let userId, let displayName, _) = state {
             let creds = await credentialStore.getAll()
@@ -901,7 +910,9 @@ public final class SirosWallet: @unchecked Sendable {
                     raw: cred.credential,
                     metadata: metadata,
                     issuedAt: payload["iat"] as? Int64,
-                    expiresAt: exp
+                    expiresAt: exp,
+                    notificationId: cred.notificationId,
+                    notificationEndpoint: cred.notificationEndpoint
                 )
                 await credentialStore.save(stored)
                 lock.lock(); let listener = eventListener; lock.unlock()
