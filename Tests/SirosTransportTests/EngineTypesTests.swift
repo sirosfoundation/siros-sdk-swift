@@ -179,4 +179,71 @@ final class EngineTypesTests: XCTestCase {
         XCTAssertEqual(msg.code, "bad_request")
         XCTAssertEqual(msg.details, "invalid flow")
     }
+
+    func testCredentialNotificationEncoding() throws {
+        let msg = CredentialNotificationMessage(
+            flowId: "flow-1",
+            notificationId: "notif-abc",
+            event: CredentialNotificationEvent.accepted,
+            eventDescription: "stored",
+            timestamp: "2026-06-22T00:00:00Z"
+        )
+        let data = try encoder.encode(msg)
+        let text = String(data: data, encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"type\":\"credential_notification\""))
+        XCTAssertTrue(text.contains("\"flow_id\":\"flow-1\""))
+        XCTAssertTrue(text.contains("\"notification_id\":\"notif-abc\""))
+        XCTAssertTrue(text.contains("\"event\":\"credential_accepted\""))
+        XCTAssertTrue(text.contains("\"event_description\":\"stored\""))
+    }
+
+    func testCredentialNotificationOmitsOptionalDescription() throws {
+        let msg = CredentialNotificationMessage(
+            flowId: "flow-1",
+            notificationId: "notif-abc",
+            event: CredentialNotificationEvent.failure
+        )
+        let data = try encoder.encode(msg)
+        let text = String(data: data, encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"event\":\"credential_failure\""))
+        XCTAssertFalse(text.contains("event_description"))
+    }
+
+    func testNotificationAckDecoding() throws {
+        let json = """
+        {"type":"notification_ack","flow_id":"flow-1","notification_id":"notif-abc","status":"forwarded"}
+        """
+        let msg = try decoder.decode(NotificationAckMessage.self, from: json.data(using: .utf8)!)
+        XCTAssertEqual(msg.type, "notification_ack")
+        XCTAssertEqual(msg.flowId, "flow-1")
+        XCTAssertEqual(msg.notificationId, "notif-abc")
+        XCTAssertEqual(msg.status, "forwarded")
+        XCTAssertNil(msg.error)
+    }
+
+    func testCredentialResultNotificationIdRoundtrip() throws {
+        let json = """
+        {"format":"dc+sd-jwt","credential":"jwt-token","vct":"urn:eu:pid:1","notification_id":"notif-xyz"}
+        """
+        let result = try decoder.decode(CredentialResult.self, from: json.data(using: .utf8)!)
+        XCTAssertEqual(result.notificationId, "notif-xyz")
+
+        let data = try encoder.encode(result)
+        let text = String(data: data, encoding: .utf8)!
+        XCTAssertTrue(text.contains("\"notification_id\":\"notif-xyz\""))
+    }
+
+    func testCredentialResultOmitsNilNotificationId() throws {
+        let json = """
+        {"format":"dc+sd-jwt","credential":"jwt-token","vct":"urn:eu:pid:1"}
+        """
+        let result = try decoder.decode(CredentialResult.self, from: json.data(using: .utf8)!)
+        XCTAssertNil(result.notificationId)
+
+        let data = try encoder.encode(result)
+        let text = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(text.contains("notification_id"))
+    }
 }

@@ -10,6 +10,9 @@ public enum MessageTypes {
     public static let flowAction = "flow_action"
     public static let signResponse = "sign_response"
     public static let matchResponse = "match_response"
+    /// OID4VCI §10 credential lifecycle notification reported to the backend
+    /// for forwarding to the issuer.
+    public static let credentialNotification = "credential_notification"
 
     // Server → Client
     public static let handshakeComplete = "handshake_complete"
@@ -20,6 +23,8 @@ public enum MessageTypes {
     public static let matchRequest = "match_request"
     public static let push = "push"
     public static let error = "error"
+    /// Acknowledgement of a credential_notification from the backend.
+    public static let notificationAck = "notification_ack"
 }
 
 /// Base envelope — every engine message carries at least a type.
@@ -295,11 +300,73 @@ public struct CredentialResult: Codable, Sendable {
     public var credential: String
     public var vct: String?
     public var typeMetadata: AnyCodable?
+    /// OID4VCI §10 notification identifier for this credential, if the issuer
+    /// returned one. Persisted client-side and echoed back when a lifecycle
+    /// event occurs.
+    public var notificationId: String?
 
     enum CodingKeys: String, CodingKey {
         case format, credential, vct
         case typeMetadata = "type_metadata"
+        case notificationId = "notification_id"
     }
+}
+
+/// Outgoing OID4VCI §10 credential lifecycle notification. The client supplies
+/// the notification_id obtained at issuance; the backend supplies the issuer
+/// endpoint and access token from ephemeral flow state.
+public struct CredentialNotificationMessage: Codable, Sendable {
+    public var type: String
+    public var flowId: String
+    public var notificationId: String
+    public var event: String
+    public var eventDescription: String?
+    public var timestamp: String?
+
+    public init(
+        type: String = MessageTypes.credentialNotification,
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String? = nil,
+        timestamp: String? = nil
+    ) {
+        self.type = type
+        self.flowId = flowId
+        self.notificationId = notificationId
+        self.event = event
+        self.eventDescription = eventDescription
+        self.timestamp = timestamp
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, event, timestamp
+        case flowId = "flow_id"
+        case notificationId = "notification_id"
+        case eventDescription = "event_description"
+    }
+}
+
+/// Incoming acknowledgement for a credential_notification.
+public struct NotificationAckMessage: Codable, Sendable {
+    public var type: String
+    public var flowId: String?
+    public var notificationId: String?
+    public var status: String
+    public var error: String?
+    public var timestamp: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, status, error, timestamp
+        case flowId = "flow_id"
+        case notificationId = "notification_id"
+    }
+}
+
+/// OID4VCI §10 credential lifecycle event identifiers reportable to the backend.
+public enum CredentialNotificationEvent {
+    public static let accepted = "credential_accepted"
+    public static let failure = "credential_failure"
 }
 
 public struct FlowErrorMessage: Codable, Sendable {
