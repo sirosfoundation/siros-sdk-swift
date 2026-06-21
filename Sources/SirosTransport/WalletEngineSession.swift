@@ -335,6 +335,24 @@ public final class WalletEngineSession: @unchecked Sendable {
         sendFlowAction(flowId: flowId, action: "trust_result", payload: payload)
     }
 
+    /// Send an OID4VCI §10 credential lifecycle notification for forwarding to
+    /// the issuer. The backend authenticates the notification using the
+    /// ephemeral issuance token it captured at flow completion.
+    public func sendCredentialNotification(
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String? = nil
+    ) {
+        send(CredentialNotificationMessage(
+            flowId: flowId,
+            notificationId: notificationId,
+            event: event,
+            eventDescription: eventDescription,
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        ))
+    }
+
     /// Suspend until the engine WebSocket handshake completes or fails.
     public func awaitConnected(timeoutMs: UInt64 = 10_000) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in

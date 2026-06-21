@@ -901,9 +901,23 @@ public final class SirosWallet: @unchecked Sendable {
                     raw: cred.credential,
                     metadata: metadata,
                     issuedAt: payload["iat"] as? Int64,
-                    expiresAt: exp
+                    expiresAt: exp,
+                    notificationId: cred.notificationId
                 )
                 await credentialStore.save(stored)
+
+                // OID4VCI §10: confirm acceptance to the issuer (via the backend)
+                // while the issuance access token is still valid. The backend
+                // forwards using ephemeral flow state; nothing is stored there.
+                if let notificationId = cred.notificationId {
+                    lock.lock(); let engine = engineSession; lock.unlock()
+                    engine?.sendCredentialNotification(
+                        flowId: msg.flowId,
+                        notificationId: notificationId,
+                        event: CredentialNotificationEvent.accepted
+                    )
+                }
+
                 lock.lock(); let listener = eventListener; lock.unlock()
                 listener?.onCredentialReceived(credential: stored)
             }
