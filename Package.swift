@@ -46,7 +46,7 @@ let package = Package(
         // --- Auth: WebAuthn / passkey authentication ---
         .target(
             name: "SirosAuth",
-            dependencies: ["SirosTransport", "SirosCredentials"],
+            dependencies: ["SirosTransport", "SirosCredentials", "SirosKeystore"],
             path: "Sources/SirosAuth"
         ),
         .testTarget(
@@ -58,7 +58,7 @@ let package = Package(
         // --- Keystore: JWE-encrypted key management ---
         .target(
             name: "SirosKeystore",
-            dependencies: ["SirosAuth", "SirosCredentials"],
+            dependencies: ["SirosCredentials"],
             path: "Sources/SirosKeystore"
         ),
         .testTarget(
@@ -70,7 +70,7 @@ let package = Package(
         // --- Flow: OID4VCI / OID4VP flow orchestration ---
         .target(
             name: "SirosFlow",
-bu            dependencies: ["SirosTransport", "SirosKeystore", "SirosAuth"],
+            dependencies: ["SirosTransport", "SirosKeystore", "SirosAuth"],
             path: "Sources/SirosFlow"
         ),
         .testTarget(
