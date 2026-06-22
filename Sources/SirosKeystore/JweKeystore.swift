@@ -28,6 +28,10 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     private var credentials: [String: String] = [:]
     private var _mainKey: SymmetricKey?
     private var containerMetadata: ContainerData?
+    // Preserve full WalletStateContainer for round-trip fidelity
+    private var preservedWalletState: [String: Any]?
+    // Preserve full WalletStateContainer for round-trip fidelity
+    private var preservedWalletState: [String: Any]?
 
     public init() {}
 
@@ -55,7 +59,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
                 throw KeystoreError.containerMissing("Container missing mainKey")
             }
 
-            let prfKeyInfo = container.prfKeys.first(where: { $0.hkdfSalt == hkdfSalt })
+            let prfKeyInfo = container.prfKeys.first(where: { !$0.credentialId.isEmpty && $0.hkdfSalt == hkdfSalt })
+                ?? container.prfKeys.first(where: { $0.hkdfSalt == hkdfSalt })
                 ?? container.prfKeys.first
             guard let prfKeyInfo else {
                 throw KeystoreError.containerMissing("No PRF key entries in container")
@@ -75,6 +80,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             _mainKey = unwrappedMainKey
 
             let jwePayload = try decryptJwe(container.jwe, mainKey: unwrappedMainKey)
+            if let jweDict = jwePayload as? [String: Any] {
+                preservedWalletState = jweDict
+            }
             loadWalletState(jwePayload)
             containerMetadata = container
         } else {
@@ -128,11 +136,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
 
     public func lock() {
         mutex.lock()
-        defer { self.mutex.unlock() }
+        defer { mutex.unlock() }
         keys.removeAll()
         credentials.removeAll()
         _mainKey = nil
         containerMetadata = nil
+        preservedWalletState = nil
     }
 
     // MARK: - Key operations
@@ -459,6 +468,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     private func buildWalletStateV3() -> [String: Any] {
+        // Preserve existing state if available, otherwise initialize fresh
+        if let existingState = preservedWalletState {
+            return existingState
+        }
+
+        // First-time or missing state: build minimal valid state
         let keypairs: [[String: Any]] = keys.map { (kid, ecKey) in
             let publicKey = ecKey.publicKey
             let x963 = publicKey.x963Representation
@@ -513,7 +528,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
                 "credentials": creds,
                 "presentations": [] as [Any],
                 "settings": [
-                    "openidRefreshTokenMaxAgeInSeconds": "",
+                    "openidRefreshTokenMaxAgeInSeconds": "0",
                 ],
                 "credentialIssuanceSessions": [] as [Any],
             ] as [String: Any],
