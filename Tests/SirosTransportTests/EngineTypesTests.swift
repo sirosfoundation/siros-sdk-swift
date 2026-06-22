@@ -246,4 +246,17 @@ final class EngineTypesTests: XCTestCase {
         let text = String(data: data, encoding: .utf8)!
         XCTAssertFalse(text.contains("notification_id"))
     }
+
+    func testSendCredentialNotificationIsNoOpWhenNotConnected() {
+        // A never-connected session must report disconnected and must not crash
+        // when an automatic credential notification is attempted (the send is a
+        // no-op rather than a preconditionFailure).
+        let session = WalletEngineSession(baseUrl: "https://wallet.example.com", tenantId: "t")
+        XCTAssertFalse(session.isConnected)
+        session.sendCredentialNotification(
+            flowId: "flow-1",
+            notificationId: "notif-1",
+            event: CredentialNotificationEvent.accepted
+        )
+    }
 }
