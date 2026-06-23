@@ -70,7 +70,7 @@ let package = Package(
         // --- Flow: OID4VCI / OID4VP flow orchestration ---
         .target(
             name: "SirosFlow",
-bu            dependencies: ["SirosTransport", "SirosKeystore", "SirosAuth"],
+            dependencies: ["SirosTransport", "SirosKeystore", "SirosAuth"],
             path: "Sources/SirosFlow"
         ),
         .testTarget(
