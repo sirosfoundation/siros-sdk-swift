@@ -52,7 +52,7 @@ public protocol AuthProvider: AnyObject, Sendable {
 /// ```
 public final class UniFFISigner: Signer, @unchecked Sendable {
 
-    private let ffi: FfiWscdManager
+    let ffi: FfiWscdManager
     private weak var authProvider: AuthProvider?
     /// Serial queue for ordered access to FFI bindings.
     private let ffiQueue = DispatchQueue(label: "org.sirosfoundation.UniFFISigner.ffi")
@@ -191,7 +191,7 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     // MARK: - Private helpers
 
     /// Execute a blocking FFI call on the serial FFI queue.
-    private func onFFIQueue<T>(_ block: @escaping () throws -> T) async throws -> T {
+    func onFFIQueue<T>(_ block: @escaping () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             ffiQueue.async {
                 do {
@@ -204,7 +204,7 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         }
     }
 
-    private func authCallbackBridge() -> AuthCallbackBridge {
+    func authCallbackBridge() -> AuthCallbackBridge {
         AuthCallbackBridge(provider: authProvider)
     }
 
@@ -262,7 +262,7 @@ public enum UniFFISignerError: Error, LocalizedError {
 
 // MARK: - Auth callback bridge
 
-private final class AuthCallbackBridge: FfiAuthCallback, @unchecked Sendable {
+final class AuthCallbackBridge: FfiAuthCallback, @unchecked Sendable {
     private weak var provider: AuthProvider?
 
     init(provider: AuthProvider?) {
@@ -294,7 +294,7 @@ private final class AuthCallbackBridge: FfiAuthCallback, @unchecked Sendable {
 
 // MARK: - No-op progress callback
 
-private final class NoOpProgressCallback: FfiProgressCallback, @unchecked Sendable {
+final class NoOpProgressCallback: FfiProgressCallback, @unchecked Sendable {
     func onProgress(progress: FfiOperationProgress) { /* no-op */ }
 }
 
