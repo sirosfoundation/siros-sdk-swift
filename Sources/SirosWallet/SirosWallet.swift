@@ -38,7 +38,7 @@ public final class SirosWallet: @unchecked Sendable {
 
     // MARK: - Public state
 
-    private let lock = NSLock()
+    let lock = NSLock()
     private var _state: WalletState = .disconnected
     private var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
@@ -72,14 +72,14 @@ public final class SirosWallet: @unchecked Sendable {
     private let authProvider: AuthProvider
     private let sessionStore: SessionStoreProtocol
     private let keystore: KeystoreManager
-    private let credentialStore: CredentialStore
+    let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
 
     private var apiClient: BackendApiClient?
-    private var engineSession: WalletEngineSession?
-    private weak var eventListener: WalletEventListener?
-    private var activeOffer: CredentialOffer?
-    private var activeVctm: Vctm?
+    var engineSession: WalletEngineSession?
+    weak var eventListener: WalletEventListener?
+    var activeOffer: CredentialOffer?
+    var activeVctm: Vctm?
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
 
@@ -530,7 +530,7 @@ public final class SirosWallet: @unchecked Sendable {
 
     // MARK: - Private helpers
 
-    private func setState(_ newState: WalletState) {
+    func setState(_ newState: WalletState) {
         lock.lock()
         _state = newState
         let conts = Array(stateContinuations.values)
@@ -605,7 +605,7 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
-    private func persistAndSyncKeystore() async {
+    func persistAndSyncKeystore() async {
         guard keystore.isUnlocked else { return }
         do {
             let container = try await keystore.exportEncryptedContainer()
@@ -881,47 +881,6 @@ public final class SirosWallet: @unchecked Sendable {
             engine.sendTrustResult(flowId: flowId, trusted: decision)
         } catch {
             engine.sendTrustResult(flowId: flowId, trusted: false, reason: error.localizedDescription)
-        }
-    }
-
-    private func handleFlowComplete(msg: FlowCompleteMessage) async {
-        if let credentials = msg.credentials {
-            for cred in credentials {
-                guard let payload = CredentialUtils.parseJwtPayload(cred.credential) else { continue }
-                let exp = payload["exp"] as? Int64
-                let now = Int64(Date().timeIntervalSince1970)
-                if let exp, exp < now { continue }
-
-                lock.lock(); let offer = activeOffer; let vctm = activeVctm; lock.unlock()
-                let metadata = offer.flatMap { CredentialUtils.buildMetadata(offer: $0, vctm: vctm, rawCredential: cred.credential) }
-
-                let stored = StoredCredential(
-                    id: UUID().uuidString,
-                    format: cred.format,
-                    raw: cred.credential,
-                    metadata: metadata,
-                    issuedAt: payload["iat"] as? Int64,
-                    expiresAt: exp
-                )
-                await credentialStore.save(stored)
-                lock.lock(); let listener = eventListener; lock.unlock()
-                listener?.onCredentialReceived(credential: stored)
-            }
-        }
-        lock.lock(); activeOffer = nil; activeVctm = nil; lock.unlock()
-
-        await persistAndSyncKeystore()
-
-        lock.lock(); let listener = eventListener; lock.unlock()
-        listener?.onFlowComplete(flowId: msg.flowId)
-
-        switch state {
-        case .flowActive(let userId, let displayName, _, _, _, _),
-             .ready(let userId, let displayName, _):
-            let creds = await credentialStore.getAll()
-            setState(.ready(userId: userId, displayName: displayName, credentials: creds))
-        default:
-            break
         }
     }
 

@@ -17,7 +17,7 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: macos-15
+    runs-on: ${{ matrix.runner }}
     permissions:
       actions: read
       contents: read
@@ -25,7 +25,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ['swift']
+        include:
+          - language: swift
+            runner: macos-15
+          - language: actions
+            runner: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -37,3 +41,5 @@ jobs:
         uses: github/codeql-action/autobuild@v4
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
