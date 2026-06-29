@@ -53,7 +53,11 @@ public final class AuthServerClient: @unchecked Sendable {
     }
 
     #if !os(Linux)
-    /// Create a client using a shared URLSession with cookie storage.
+    /// Create a client using a shared URLSession with persistent cookie storage.
+    ///
+    /// Uses `HTTPCookieStorage.shared` which persists cookies to disk, so the
+    /// session cookie survives app suspension or process termination (e.g., when
+    /// the OS offloads the app during an extended issuance or presentation flow).
     public convenience init(baseUrl: String, tenantId: String = "default") {
         let config = URLSessionConfiguration.default
         config.httpCookieAcceptPolicy = .always
