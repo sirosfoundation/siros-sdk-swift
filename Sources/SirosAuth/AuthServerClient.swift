@@ -153,14 +153,14 @@ public final class AuthServerClient: @unchecked Sendable {
     ///   - challengeId: The challenge ID from registerBegin.
     ///   - credential: The serialized WebAuthn credential attestation.
     ///   - displayName: Display name for the new user.
-    ///   - privateData: Optional initial private data (encrypted keystore).
+    ///   - privateData: Optional initial private data (encrypted keystore, as a string).
     ///   - oidcIdToken: Optional OIDC ID token.
     /// - Returns: Registration result with `uuid`, `displayName`, `tenantId`.
     public func registerFinish(
         challengeId: String,
         credential: [String: Any],
         displayName: String,
-        privateData: Any? = nil,
+        privateData: String? = nil,
         oidcIdToken: String? = nil
     ) async throws -> RegisterFinishResult {
         var headers = defaultHeaders()
@@ -192,8 +192,8 @@ public final class AuthServerClient: @unchecked Sendable {
     public func requestAccessToken(aud: String, tac: String? = nil) async throws -> AccessToken {
         let key = "\(tenantId)::\(aud)::\(tac ?? "")"
 
-        // Check cache
-        if let cached = await cache.get(key), !cached.isExpired() {
+        // Use actor method to atomically check cache and claim the fetch.
+        if let cached = await cache.getIfValid(key) {
             return cached
         }
 
@@ -264,6 +264,16 @@ private actor TokenCache {
     private var tokens: [String: AccessToken] = [:]
 
     func get(_ key: String) -> AccessToken? { tokens[key] }
+
+    /// Returns cached token if valid (not expired), otherwise nil.
+    func getIfValid(_ key: String) -> AccessToken? {
+        guard let token = tokens[key], !token.isExpired() else {
+            tokens.removeValue(forKey: key)
+            return nil
+        }
+        return token
+    }
+
     func set(_ key: String, _ token: AccessToken) { tokens[key] = token }
     func clear() { tokens.removeAll() }
 }
