@@ -137,10 +137,4 @@ public struct TokenResponse: Codable, Sendable {
     }
 }
 
-// MARK: - Auth Error
 
-/// Error type for authentication failures.
-public struct AuthTokenError: Error, Sendable {
-    public let message: String
-    public init(_ message: String) { self.message = message }
-}

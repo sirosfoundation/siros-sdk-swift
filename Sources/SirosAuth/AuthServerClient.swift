@@ -53,7 +53,7 @@ public final class AuthServerClient: @unchecked Sendable {
     }
 
     #if !os(Linux)
-    /// Create a client using a shared URLSession with persistent cookie storage.
+    /// Create a client using a URLSession with persistent cookie storage.
     ///
     /// Uses `HTTPCookieStorage.shared` which persists cookies to disk, so the
     /// session cookie survives app suspension or process termination (e.g., when
@@ -207,7 +207,7 @@ public final class AuthServerClient: @unchecked Sendable {
         let response = try await post(
             path: "/auth/token",
             body: body,
-            headers: ["X-Token-Mode": "session"]
+            headers: defaultHeaders()
         )
         let data = try JSONSerialization.data(withJSONObject: response)
         let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
@@ -225,7 +225,7 @@ public final class AuthServerClient: @unchecked Sendable {
         guard let url = URL(string: "\(baseUrl)/auth/session") else {
             throw SirosError.auth(message: "Invalid URL")
         }
-        _ = try await httpFn("DELETE", url, [:], nil)
+        _ = try await httpFn("DELETE", url, defaultHeaders(), nil)
         await cache.clear()
     }
 
