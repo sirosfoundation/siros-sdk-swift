@@ -33,6 +33,15 @@ public struct RegisterFinishResult: Codable, Sendable {
 /// Mirrors the TypeScript `AuthServerClient` from wallet-frontend PR 177.
 public final class AuthServerClient: @unchecked Sendable {
 
+    // MARK: - Endpoint Paths
+
+    private static let pathLoginBegin = "/auth/passkey/login/begin"
+    private static let pathLoginFinish = "/auth/passkey/login/finish"
+    private static let pathRegisterBegin = "/auth/passkey/register/begin"
+    private static let pathRegisterFinish = "/auth/passkey/register/finish"
+    private static let pathToken = "/auth/token"
+    private static let pathSession = "/auth/session"
+
     private let baseUrl: String
     private let tenantId: String
     private let httpFn: @Sendable (String, URL, [String: String], Data?) async throws -> Data
@@ -94,7 +103,7 @@ public final class AuthServerClient: @unchecked Sendable {
         if let token = oidcIdToken {
             headers["Authorization"] = "Bearer \(token)"
         }
-        let response = try await post(path: "/auth/passkey/login/begin", body: [:], headers: headers)
+        let response = try await post(path: Self.pathLoginBegin, body: [:], headers: headers)
         return TaggedBinary.decode(response)
     }
 
@@ -118,7 +127,7 @@ public final class AuthServerClient: @unchecked Sendable {
             "challengeId": challengeId,
             "credential": credential,
         ]
-        let response = try await post(path: "/auth/passkey/login/finish", body: body, headers: headers)
+        let response = try await post(path: Self.pathLoginFinish, body: body, headers: headers)
         let data = try JSONSerialization.data(withJSONObject: response)
         return try JSONDecoder().decode(LoginFinishResult.self, from: data)
     }
@@ -143,7 +152,7 @@ public final class AuthServerClient: @unchecked Sendable {
         if let code = inviteCode {
             body["inviteCode"] = code
         }
-        let response = try await post(path: "/auth/passkey/register/begin", body: body, headers: headers)
+        let response = try await post(path: Self.pathRegisterBegin, body: body, headers: headers)
         return TaggedBinary.decode(response)
     }
 
@@ -175,7 +184,7 @@ public final class AuthServerClient: @unchecked Sendable {
         if let pd = privateData {
             body["privateData"] = pd
         }
-        let response = try await post(path: "/auth/passkey/register/finish", body: body, headers: headers)
+        let response = try await post(path: Self.pathRegisterFinish, body: body, headers: headers)
         let data = try JSONSerialization.data(withJSONObject: response)
         return try JSONDecoder().decode(RegisterFinishResult.self, from: data)
     }
@@ -205,7 +214,7 @@ public final class AuthServerClient: @unchecked Sendable {
             body["tac"] = tac
         }
         let response = try await post(
-            path: "/auth/token",
+            path: Self.pathToken,
             body: body,
             headers: defaultHeaders()
         )
@@ -222,7 +231,7 @@ public final class AuthServerClient: @unchecked Sendable {
 
     /// End the current session.
     public func logout() async throws {
-        guard let url = URL(string: "\(baseUrl)/auth/session") else {
+        guard let url = URL(string: "\(baseUrl)\(Self.pathSession)") else {
             throw SirosError.auth(message: "Invalid URL")
         }
         _ = try await httpFn("DELETE", url, defaultHeaders(), nil)
