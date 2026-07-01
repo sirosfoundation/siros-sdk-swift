@@ -74,7 +74,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Build & Test
-        run: swift test --parallel
+        run: |
+          # SirosKeystore, SirosFlow, SirosWallet depend on Apple-only frameworks
+          # Only build and test platform-independent targets on Linux
+          swift build --target SirosCredentials --target SirosTransport --target SirosAuth
+          swift test --filter "SirosCredentialsTests|SirosTransportTests|SirosAuthTests" --parallel
 
   lint:
     name: Lint

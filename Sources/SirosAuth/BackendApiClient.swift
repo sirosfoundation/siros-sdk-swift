@@ -5,7 +5,6 @@ import Foundation
 import FoundationNetworking
 #endif
 import SirosCredentials
-import SirosKeystore
 
 /// Type alias for an injectable HTTP function used by BackendApiClient.
 /// Parameters: method, URL, headers, optional body. Returns: response data.
@@ -145,23 +144,19 @@ public final class BackendApiClient: @unchecked Sendable {
     /// - Parameters:
     ///   - jwks: Array of JWK dictionaries for the keys to attest.
     ///   - nonce: OpenID4VCI nonce from the issuer.
-    ///   - securityProperties: Optional WSCD security properties for KA claims (CS-04 §7.1.3).
+    ///   - securityProperties: Optional security properties dictionary for KA claims (CS-04 §7.1.3).
     /// - Returns: Key attestation JWT string.
     public func requestKeyAttestation(
         jwks: [[String: Any]],
         nonce: String,
-        securityProperties: SignerSecurityProperties? = nil
+        securityProperties: [String: Any]? = nil
     ) async throws -> String {
         var body: [String: Any] = [
             "jwks": jwks,
             "openid4vci": ["nonce": nonce],
         ]
         if let props = securityProperties {
-            body["security_properties"] = [
-                "key_storage": props.keyStorage,
-                "user_authentication": props.userAuthentication,
-                "certification": props.certification.toJsonValue(),
-            ] as [String: Any]
+            body["security_properties"] = props
         }
         let result = try await post("/wallet-provider/key-attestation/generate", body: body)
         guard let attestation = result["key_attestation"] as? String else {
