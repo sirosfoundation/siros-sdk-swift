@@ -17,7 +17,7 @@ jobs:
     name: Test (macOS)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.0
       - name: Build & Test with Coverage
         run: swift test --parallel --enable-code-coverage
       - name: Check coverage gate
@@ -60,7 +60,7 @@ jobs:
     name: Build (iOS)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.0
       - name: Build for iOS Simulator
         run: |
           swift build \
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.1
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.0
       - name: Build & Test
         run: |
           # SirosKeystore, SirosFlow, SirosWallet depend on Apple-only frameworks
@@ -84,7 +84,7 @@ jobs:
     name: Lint
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.0
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Run SwiftLint
@@ -94,7 +94,7 @@ jobs:
     name: Documentation
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.0
       - name: Build DocC documentation
         run: |
           for target in SirosWallet SirosTransport SirosAuth SirosKeystore SirosFlow SirosCredentials; do
