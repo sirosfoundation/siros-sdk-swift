@@ -62,4 +62,34 @@ final class InMemoryCredentialStoreTests: XCTestCase {
         let all = await store.getAll()
         XCTAssertTrue(all.isEmpty)
     }
+
+    func testNotificationIdPersistsThroughStore() async {
+        let store = InMemoryCredentialStore()
+        let cred = StoredCredential(id: "n1", format: "dc+sd-jwt", raw: "raw-1",
+                                    notificationId: "notif-123")
+        await store.save(cred)
+
+        let retrieved = await store.getById("n1")
+        XCTAssertEqual(retrieved?.notificationId, "notif-123")
+    }
+
+    func testNotificationIdCodableRoundtrip() throws {
+        let cred = StoredCredential(id: "n2", format: "dc+sd-jwt", raw: "raw-2",
+                                    notificationId: "notif-456")
+        let data = try JSONEncoder().encode(cred)
+        let text = String(data: data, encoding: .utf8)!
+        XCTAssertTrue(text.contains("\"notification_id\":\"notif-456\""))
+
+        let decoded = try JSONDecoder().decode(StoredCredential.self, from: data)
+        XCTAssertEqual(decoded.notificationId, "notif-456")
+    }
+
+    func testNotificationIdDefaultsToNil() throws {
+        let cred = StoredCredential(id: "n3", format: "dc+sd-jwt", raw: "raw-3")
+        XCTAssertNil(cred.notificationId)
+
+        let data = try JSONEncoder().encode(cred)
+        let text = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(text.contains("notification_id"))
+    }
 }

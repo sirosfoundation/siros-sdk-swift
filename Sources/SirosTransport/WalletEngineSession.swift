@@ -64,6 +64,9 @@ public final class WalletEngineSession: @unchecked Sendable {
     private let pushContinuation: AsyncStream<PushMessage>.Continuation
     private let _pushMessages: AsyncStream<PushMessage>
 
+    private let notificationAckContinuation: AsyncStream<NotificationAckMessage>.Continuation
+    private let _notificationAcks: AsyncStream<NotificationAckMessage>
+
     public init(
         baseUrl: String,
         tenantId: String = "default",
@@ -104,6 +107,10 @@ public final class WalletEngineSession: @unchecked Sendable {
         var pCont: AsyncStream<PushMessage>.Continuation!
         self._pushMessages = AsyncStream { pCont = $0 }
         self.pushContinuation = pCont
+
+        var naCont: AsyncStream<NotificationAckMessage>.Continuation!
+        self._notificationAcks = AsyncStream { naCont = $0 }
+        self.notificationAckContinuation = naCont
     }
 
     /// All incoming messages as raw `EngineMessage`.
@@ -126,6 +133,15 @@ public final class WalletEngineSession: @unchecked Sendable {
 
     /// Server push notifications.
     public func pushMessages() -> AsyncStream<PushMessage> { _pushMessages }
+
+    /// Acknowledgements for OID4VCI §10 credential notifications sent via
+    /// `sendCredentialNotification`. Each value reports whether the backend
+    /// forwarded the notification to the issuer (`status == "forwarded"`) or
+    /// rejected it, including any `error` detail.
+    public func notificationAcks() -> AsyncStream<NotificationAckMessage> { _notificationAcks }
+
+    /// Whether the underlying WebSocket is currently connected.
+    public var isConnected: Bool { webSocketTask != nil }
 
     /// Connect to the engine WebSocket and perform the handshake.
     public func connect(appToken: String) {
@@ -247,6 +263,10 @@ public final class WalletEngineSession: @unchecked Sendable {
             if let msg = try? decoder.decode(PushMessage.self, from: data) {
                 pushContinuation.yield(msg)
             }
+        case MessageTypes.notificationAck:
+            if let msg = try? decoder.decode(NotificationAckMessage.self, from: data) {
+                notificationAckContinuation.yield(msg)
+            }
         case MessageTypes.error:
             let _ = try? decoder.decode(ErrorMessage.self, from: data)
             setState(.failed)
@@ -335,6 +355,30 @@ public final class WalletEngineSession: @unchecked Sendable {
         sendFlowAction(flowId: flowId, action: "trust_result", payload: payload)
     }
 
+    /// Send an OID4VCI §10 credential lifecycle notification for forwarding to
+    /// the issuer. The backend authenticates the notification using the
+    /// ephemeral issuance token it captured at flow completion.
+    ///
+    /// This is a no-op when the session is not connected: the notification is
+    /// triggered automatically after a credential is stored, which may race with
+    /// a concurrent disconnect (e.g. logout). Dropping it in that case is safe
+    /// because §10 notifications are optional and best-effort.
+    public func sendCredentialNotification(
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String? = nil
+    ) {
+        guard isConnected else { return }
+        send(CredentialNotificationMessage(
+            flowId: flowId,
+            notificationId: notificationId,
+            event: event,
+            eventDescription: eventDescription,
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        ))
+    }
+
     /// Suspend until the engine WebSocket handshake completes or fails.
     public func awaitConnected(timeoutMs: UInt64 = 10_000) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -371,6 +415,7 @@ public final class WalletEngineSession: @unchecked Sendable {
         signRequestContinuation.finish()
         matchRequestContinuation.finish()
         pushContinuation.finish()
+        notificationAckContinuation.finish()
     }
 
     private func send<T: Encodable>(_ message: T) {
