@@ -30,8 +30,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     private var containerMetadata: ContainerData?
     // Preserve full WalletStateContainer for round-trip fidelity
     private var preservedWalletState: [String: Any]?
-    // Preserve full WalletStateContainer for round-trip fidelity
-    private var preservedWalletState: [String: Any]?
 
     public init() {}
 
