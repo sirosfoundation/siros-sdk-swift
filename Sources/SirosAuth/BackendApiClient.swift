@@ -66,6 +66,16 @@ public final class BackendApiClient: @unchecked Sendable {
         _appToken = token
     }
 
+    private var _authTokens: AuthTokens?
+
+    /// Configure this client to use `AuthTokens` for automatic token management.
+    /// When set, `setAppToken` is ignored and tokens are obtained from the AS.
+    public func setAuthTokens(_ tokens: AuthTokens) {
+        lock.lock()
+        defer { lock.unlock() }
+        _authTokens = tokens
+    }
+
     // MARK: - API endpoints
 
     /// GET /user/session/account-info
@@ -227,7 +237,10 @@ public final class BackendApiClient: @unchecked Sendable {
             "X-Tenant-ID": tenantId,
             "Content-Type": "application/json",
         ]
-        if let token = currentAppToken() {
+        if let tokens = currentAuthTokens() {
+            let token = try await tokens.ensureBackendToken()
+            headers["Authorization"] = "Bearer \(token.raw)"
+        } else if let token = currentAppToken() {
             headers["Authorization"] = "Bearer \(token)"
         }
         return try await httpFn(method, url, headers, body)
@@ -237,6 +250,12 @@ public final class BackendApiClient: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return _appToken
+    }
+
+    private func currentAuthTokens() -> AuthTokens? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _authTokens
     }
 
     private func parseJsonObject(_ data: Data) throws -> [String: Any] {

@@ -13,6 +13,7 @@ public struct LoginFinishResult: Codable, Sendable {
     public let uuid: String
     public let displayName: String
     public let tenantId: String
+    public let tenantDisplayName: String?
 }
 
 /// Result of a successful registration via the AS.
@@ -20,6 +21,7 @@ public struct RegisterFinishResult: Codable, Sendable {
     public let uuid: String
     public let displayName: String
     public let tenantId: String
+    public let tenantDisplayName: String?
 }
 
 // MARK: - AuthServerClient
@@ -209,6 +211,41 @@ public final class AuthServerClient: @unchecked Sendable {
         var body: [String: Any] = [
             "aud": aud,
             "tenant_id": tenantId,
+        ]
+        if let tac = tac {
+            body["tac"] = tac
+        }
+        let response = try await post(
+            path: Self.pathToken,
+            body: body,
+            headers: defaultHeaders()
+        )
+        let data = try JSONSerialization.data(withJSONObject: response)
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        let token = try AccessToken(jwt: tokenResponse.accessToken)
+
+        await cache.set(key, token)
+
+        return token
+    }
+
+    /// Request an anonymous access token (no session cookie required).
+    ///
+    /// - Parameters:
+    ///   - aud: Target audience (e.g., "wallet-backend").
+    ///   - tac: Token Access Control string (e.g., "rl").
+    /// - Returns: Parsed `AccessToken` with claims.
+    public func requestAnonymousToken(aud: String, tac: String? = nil) async throws -> AccessToken {
+        let key = "\(tenantId)::\(aud)::\(tac ?? "")::anonymous"
+
+        if let cached = await cache.getIfValid(key) {
+            return cached
+        }
+
+        var body: [String: Any] = [
+            "aud": aud,
+            "tenant_id": tenantId,
+            "anonymous": true,
         ]
         if let tac = tac {
             body["tac"] = tac
