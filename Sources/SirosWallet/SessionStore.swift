@@ -52,7 +52,7 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public var privateDataJwe: String? { get { get("privateDataJwe") } set { set("privateDataJwe", newValue) } }
     public var privateDataEtag: String? { get { get("privateDataEtag") } set { set("privateDataEtag", newValue) } }
 
-    public var hasSession: Bool { appToken != nil && userId != nil }
+    public var hasSession: Bool { userId != nil }
 
     public func clear() {
         lock.lock(); defer { lock.unlock() }
