@@ -15,7 +15,7 @@ import FoundationNetworking
 /// 2. Send `{"type":"handshake","app_token":"<jwt>"}`
 /// 3. Receive `{"type":"handshake_complete","session_id":"...","capabilities":[...]}`
 /// 4. Exchange flow messages until disconnect
-public final class WalletEngineSession: @unchecked Sendable {
+public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable {
     public enum State: String, Sendable {
         case disconnected, connecting, connected, reconnecting, failed
     }

@@ -77,6 +77,8 @@ public final class SirosWallet: @unchecked Sendable {
 
     private var apiClient: BackendApiClient?
     var engineSession: WalletEngineSession?
+    /// Transport-independent notifier for OID4VCI §10 events.
+    var credentialNotifier: CredentialNotifier?
     weak var eventListener: WalletEventListener?
     var activeOffer: CredentialOffer?
     var activeVctm: Vctm?
@@ -393,15 +395,17 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Disconnect, lock keystore, clear session.
     public func logout() {
-        engineSession?.disconnect()
+        lock.lock()
+        let engine = engineSession
         engineSession = nil
+        credentialNotifier = nil
+        apiClient = nil
+        lock.unlock()
+        engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
         sessionStore.clear()
         authTokens?.clear()
-        lock.lock()
-        apiClient = nil
-        lock.unlock()
         Task {
             try? await authServerClient?.logout()
         }
@@ -652,11 +656,15 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Release all resources. Instance must not be reused after this.
     public func destroy() {
-        engineSession?.disconnect()
+        lock.lock()
+        let engine = engineSession
         engineSession = nil
+        credentialNotifier = nil
+        apiClient = nil
+        lock.unlock()
+        engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
-        lock.lock(); apiClient = nil; lock.unlock()
     }
 
     // MARK: - Private helpers
@@ -774,7 +782,7 @@ public final class SirosWallet: @unchecked Sendable {
 
     func connectEngine(appToken: String) async throws {
         let engine = Self.createEngineSession(config.backendUrl, config.tenantId)
-        lock.lock(); engineSession = engine; lock.unlock()
+        lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
         engine.connect(appToken: appToken)
         try await engine.awaitConnected()
 

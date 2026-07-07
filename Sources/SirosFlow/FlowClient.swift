@@ -14,7 +14,7 @@ private let proofTypePrecedence = ["attestation", "jwt"]
 /// When `autoSign` is enabled, automatically handles sign_request events
 /// using the provided `KeystoreManager`. When disabled, the consumer must
 /// call `respondToSignRequest` manually.
-public final class FlowClient: @unchecked Sendable {
+public final class FlowClient: CredentialNotifier, @unchecked Sendable {
 
     private let session: WmpSession
     private let keystore: KeystoreManager
@@ -117,6 +117,33 @@ public final class FlowClient: @unchecked Sendable {
             "credential_ids": .array(response.credentialIds.map { .string($0) }),
         ]
         try await session.sendNotification(method: "wmp.flow.action", params: params)
+    }
+
+    // MARK: - CredentialNotifier
+
+    /// Send an OID4VCI §10 credential lifecycle notification over WMP.
+    /// Fire-and-forget: errors are logged, never thrown.
+    public func sendCredentialNotification(
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String? = nil
+    ) {
+        Task {
+            do {
+                var params: [String: AnyCodable] = [
+                    "flow_id": .string(flowId),
+                    "notification_id": .string(notificationId),
+                    "event": .string(event),
+                ]
+                if let desc = eventDescription {
+                    params["event_description"] = .string(desc)
+                }
+                try await session.sendNotification(method: "wmp.credential.notification", params: params)
+            } catch {
+                print("[FlowClient] Failed to send credential notification for flow \(flowId): \(error)")
+            }
+        }
     }
 
     // MARK: - Private
