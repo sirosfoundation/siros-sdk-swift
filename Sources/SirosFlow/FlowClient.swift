@@ -129,7 +129,6 @@ public final class FlowClient: CredentialNotifier, @unchecked Sendable {
         event: String,
         eventDescription: String? = nil
     ) {
-        guard session.currentState == .active else { return }
         Task {
             do {
                 var params: [String: AnyCodable] = [
@@ -142,7 +141,7 @@ public final class FlowClient: CredentialNotifier, @unchecked Sendable {
                 }
                 try await session.sendNotification(method: "wmp.credential.notification", params: params)
             } catch {
-                // Best-effort: log and drop.
+                print("[FlowClient] Failed to send credential notification for flow \(flowId): \(error)")
             }
         }
     }

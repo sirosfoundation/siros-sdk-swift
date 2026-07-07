@@ -286,15 +286,16 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Disconnect, lock keystore, clear session.
     public func logout() {
-        engineSession?.disconnect()
+        lock.lock()
+        let engine = engineSession
         engineSession = nil
         credentialNotifier = nil
+        apiClient = nil
+        lock.unlock()
+        engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
         sessionStore.clear()
-        lock.lock()
-        apiClient = nil
-        lock.unlock()
         setState(.disconnected)
     }
 
@@ -524,12 +525,15 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Release all resources. Instance must not be reused after this.
     public func destroy() {
-        engineSession?.disconnect()
+        lock.lock()
+        let engine = engineSession
         engineSession = nil
         credentialNotifier = nil
+        apiClient = nil
+        lock.unlock()
+        engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
-        lock.lock(); apiClient = nil; lock.unlock()
     }
 
     // MARK: - Private helpers
