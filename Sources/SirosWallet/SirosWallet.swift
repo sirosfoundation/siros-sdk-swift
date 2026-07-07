@@ -77,6 +77,8 @@ public final class SirosWallet: @unchecked Sendable {
 
     private var apiClient: BackendApiClient?
     var engineSession: WalletEngineSession?
+    /// Transport-independent notifier for OID4VCI §10 events.
+    var credentialNotifier: CredentialNotifier?
     weak var eventListener: WalletEventListener?
     var activeOffer: CredentialOffer?
     var activeVctm: Vctm?
@@ -286,6 +288,7 @@ public final class SirosWallet: @unchecked Sendable {
     public func logout() {
         engineSession?.disconnect()
         engineSession = nil
+        credentialNotifier = nil
         cancelEngineTasks()
         keystore.lock()
         sessionStore.clear()
@@ -523,6 +526,7 @@ public final class SirosWallet: @unchecked Sendable {
     public func destroy() {
         engineSession?.disconnect()
         engineSession = nil
+        credentialNotifier = nil
         cancelEngineTasks()
         keystore.lock()
         lock.lock(); apiClient = nil; lock.unlock()
@@ -645,7 +649,7 @@ public final class SirosWallet: @unchecked Sendable {
 
     func connectEngine(appToken: String) async throws {
         let engine = Self.createEngineSession(config.backendUrl, config.tenantId)
-        lock.lock(); engineSession = engine; lock.unlock()
+        lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
         engine.connect(appToken: appToken)
         try await engine.awaitConnected()
 

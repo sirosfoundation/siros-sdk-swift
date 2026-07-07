@@ -41,8 +41,8 @@ extension SirosWallet {
                 // while the issuance access token is still valid. The backend
                 // forwards using ephemeral flow state; nothing is stored there.
                 if let notificationId = cred.notificationId {
-                    lock.lock(); let engine = engineSession; lock.unlock()
-                    engine?.sendCredentialNotification(
+                    lock.lock(); let notifier = credentialNotifier; lock.unlock()
+                    notifier?.sendCredentialNotification(
                         flowId: msg.flowId,
                         notificationId: notificationId,
                         event: CredentialNotificationEvent.accepted
