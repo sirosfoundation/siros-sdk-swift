@@ -85,6 +85,10 @@ public final class SirosWallet: @unchecked Sendable {
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
 
+    // New AS-based auth
+    private var authServerClient: AuthServerClient?
+    private var authTokens: AuthTokens?
+
     /// Presentation history — most recent first.
     public var presentationHistory: [PresentationRecord] {
         lock.lock(); defer { lock.unlock() }
@@ -160,6 +164,15 @@ public final class SirosWallet: @unchecked Sendable {
                 return nil
             }
         }
+
+        // Set up new AS-based auth
+        let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
+        self.authServerClient = asClient
+        let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
+        tokens.onSessionRejected = { [weak self] in
+            self?.logout()
+        }
+        self.authTokens = tokens
     }
 
     // MARK: - Event listener
@@ -182,19 +195,66 @@ public final class SirosWallet: @unchecked Sendable {
     /// 6. Opens the engine WebSocket.
     public func register(displayName: String) async throws {
         precondition(!displayName.isEmpty && displayName.count <= 256, "displayName must be 1-256 characters")
+        guard let asClient = authServerClient, let tokens = authTokens else {
+            throw SirosError.wallet(message: "AuthServerClient not initialized")
+        }
         setState(.connecting)
         do {
             let prfSalt = Self.randomBytes(32)
             let hkdfSalt = Self.randomBytes(32)
             let hkdfInfo = Data(Self.hkdfInfo.utf8)
 
-            let authClient = WebAuthnAuthClient(
-                baseUrl: config.backendUrl,
-                tenantId: config.tenantId,
-                authProvider: authProvider,
-                httpPost: Self.defaultHttpPost
+            // Step 1: Get challenge from AS
+            let challengeResponse = try await asClient.registerBegin()
+            guard let challengeId = challengeResponse["challengeId"] as? String else {
+                throw SirosError.auth(message: "Missing challengeId")
+            }
+            guard let createOptions = challengeResponse["createOptions"] as? [String: Any],
+                  let publicKey = createOptions["publicKey"] as? [String: Any] else {
+                throw SirosError.auth(message: "Missing createOptions.publicKey")
+            }
+            guard let rpObj = publicKey["rp"] as? [String: Any],
+                  let rpId = rpObj["id"] as? String else {
+                throw SirosError.auth(message: "Missing rp.id")
+            }
+            let rpName = rpObj["name"] as? String ?? rpId
+            guard let challengeB64 = publicKey["challenge"] as? String,
+                  let challenge = Self.b64UrlDecode(challengeB64) else {
+                throw SirosError.auth(message: "Missing challenge")
+            }
+            guard let userObj = publicKey["user"] as? [String: Any],
+                  let userIdB64 = userObj["id"] as? String,
+                  let userId = Self.b64UrlDecode(userIdB64) else {
+                throw SirosError.auth(message: "Missing user.id")
+            }
+            let userName = userObj["name"] as? String ?? displayName
+
+            // Step 2: Create credential via platform AuthProvider
+            let result = try await authProvider.register(options: RegisterOptions(
+                rpId: rpId,
+                rpName: rpName,
+                userId: userId,
+                userName: userName,
+                userDisplayName: displayName,
+                challenge: challenge,
+                prfSalt: prfSalt
+            ))
+
+            // Step 3: Complete registration with AS
+            let credential: [String: Any] = [
+                "id": Self.b64UrlEncode(result.credentialId),
+                "rawId": Self.b64UrlEncode(result.credentialId),
+                "type": "public-key",
+                "response": [
+                    "attestationObject": Self.b64UrlEncode(result.attestationObject),
+                    "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
+                ],
+            ]
+            let session = try await asClient.registerFinish(
+                challengeId: challengeId,
+                credential: credential,
+                displayName: displayName
             )
-            let session = try await authClient.register(displayName: displayName, prfSalt: prfSalt)
 
             let prfOutput = try await authProvider.getPrfOutput(credentialId: Data(), salt: prfSalt)
 
@@ -207,12 +267,17 @@ public final class SirosWallet: @unchecked Sendable {
 
             let encryptedContainer = try await keystore.exportEncryptedContainer()
 
-            saveSession(session: session, credentialId: Data(), prfSalt: prfSalt, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+            sessionStore.userId = session.uuid
+            sessionStore.displayName = session.displayName
+            sessionStore.tenantId = config.tenantId
+            sessionStore.prfSalt = Self.b64Encode(prfSalt)
+            sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
+            sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
             sessionStore.privateDataJwe = String(data: encryptedContainer, encoding: .utf8)
 
-            setupApiClient(session: session)
+            setupApiClientWithTokens(tokens)
             try await syncPrivateDataToBackend()
-            try await connectEngine(appToken: session.appToken)
+            try await connectEngineWithToken(tokens)
 
             let creds = await credentialStore.getAll()
             setState(.ready(userId: session.uuid, displayName: session.displayName, credentials: creds))
@@ -234,21 +299,60 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Login with an existing passkey.
     public func login() async throws {
+        guard let asClient = authServerClient, let tokens = authTokens else {
+            throw SirosError.wallet(message: "AuthServerClient not initialized")
+        }
         setState(.connecting)
         do {
             let storedPrfSalt = sessionStore.prfSalt.flatMap { Self.b64Decode($0) }
 
-            let authClient = WebAuthnAuthClient(
-                baseUrl: config.backendUrl,
-                tenantId: config.tenantId,
-                authProvider: authProvider,
-                httpPost: Self.defaultHttpPost
+            // Step 1: Get challenge from AS
+            let challengeResponse = try await asClient.loginBegin()
+            guard let challengeId = challengeResponse["challengeId"] as? String else {
+                throw SirosError.auth(message: "Missing challengeId")
+            }
+            guard let getOptions = challengeResponse["getOptions"] as? [String: Any],
+                  let publicKey = getOptions["publicKey"] as? [String: Any] else {
+                throw SirosError.auth(message: "Missing getOptions.publicKey")
+            }
+            guard let rpId = publicKey["rpId"] as? String else {
+                throw SirosError.auth(message: "Missing rpId")
+            }
+            guard let challengeB64 = publicKey["challenge"] as? String,
+                  let challenge = Self.b64UrlDecode(challengeB64) else {
+                throw SirosError.auth(message: "Missing challenge")
+            }
+
+            // Step 2: Authenticate via platform AuthProvider
+            let result = try await authProvider.authenticate(options: AuthenticateOptions(
+                rpId: rpId,
+                challenge: challenge,
+                prfSalt: storedPrfSalt
+            ))
+
+            // Step 3: Complete login with AS
+            var responseDict: [String: Any] = [
+                "authenticatorData": Self.b64UrlEncode(result.authenticatorData),
+                "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
+                "signature": Self.b64UrlEncode(result.signature),
+            ]
+            if let uh = result.userHandle {
+                responseDict["userHandle"] = Self.b64UrlEncode(uh)
+            }
+            let credential: [String: Any] = [
+                "id": Self.b64UrlEncode(result.credentialId),
+                "rawId": Self.b64UrlEncode(result.credentialId),
+                "type": "public-key",
+                "response": responseDict,
+            ]
+            let session = try await asClient.loginFinish(
+                challengeId: challengeId,
+                credential: credential
             )
-            let session = try await authClient.login(prfSalt: storedPrfSalt)
 
             let prfOutput = try await authProvider.getPrfOutput(credentialId: Data(), salt: storedPrfSalt ?? Self.randomBytes(32))
 
-            setupApiClient(session: session)
+            setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
 
             let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) } ?? Self.randomBytes(32)
@@ -262,9 +366,14 @@ public final class SirosWallet: @unchecked Sendable {
                 hkdfInfo: hkdfInfo
             )
 
-            saveSession(session: session, credentialId: Data(), prfSalt: prfSaltBytes, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+            sessionStore.userId = session.uuid
+            sessionStore.displayName = session.displayName
+            sessionStore.tenantId = config.tenantId
+            sessionStore.prfSalt = Self.b64Encode(prfSaltBytes)
+            sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
+            sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
 
-            try await connectEngine(appToken: session.appToken)
+            try await connectEngineWithToken(tokens)
 
             let creds = await credentialStore.getAll()
             setState(.ready(userId: session.uuid, displayName: session.displayName, credentials: creds))
@@ -296,6 +405,10 @@ public final class SirosWallet: @unchecked Sendable {
         cancelEngineTasks()
         keystore.lock()
         sessionStore.clear()
+        authTokens?.clear()
+        Task {
+            try? await authServerClient?.logout()
+        }
         setState(.disconnected)
     }
 
@@ -303,34 +416,24 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Resume a previous session without requiring a new WebAuthn assertion.
     public func resumeSession() async {
-        guard sessionStore.hasSession else { return }
+        guard let userId = sessionStore.userId, let tokens = authTokens else { return }
         setState(.connecting)
         do {
-            let token = sessionStore.appToken!
-            let userId = sessionStore.userId ?? ""
             let displayName = sessionStore.displayName
 
-            let client = BackendApiClient(
-                baseUrl: config.backendUrl,
-                tenantId: config.tenantId,
-                httpFn: Self.defaultHttpFn
-            )
-            client.setAppToken(token)
-            lock.lock(); apiClient = client; lock.unlock()
+            setupApiClientWithTokens(tokens)
 
+            // Verify the session is still valid by requesting a backend token
             do {
-                _ = try await client.healthCheck()
+                _ = try await tokens.ensureBackendToken()
             } catch {
-                let refreshed = await refreshToken()
-                if !refreshed {
-                    sessionStore.clear()
-                    lock.lock(); apiClient = nil; lock.unlock()
-                    setState(.disconnected)
-                    return
-                }
+                sessionStore.clear()
+                lock.lock(); apiClient = nil; lock.unlock()
+                setState(.disconnected)
+                return
             }
 
-            try await connectEngine(appToken: sessionStore.appToken!)
+            try await connectEngineWithToken(tokens)
 
             let storedJwe = sessionStore.privateDataJwe
             let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
@@ -350,16 +453,44 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Unlock the keystore after a session resume.
     public func unlockKeystore() async throws {
-        guard case .keystoreLocked(let userId, let displayName) = state else { return }
+        guard case .keystoreLocked(let userId, let displayName) = state,
+              let asClient = authServerClient else { return }
         do {
             let storedPrfSalt = sessionStore.prfSalt.flatMap { Self.b64Decode($0) }
-            let authClient = WebAuthnAuthClient(
-                baseUrl: config.backendUrl,
-                tenantId: config.tenantId,
-                authProvider: authProvider,
-                httpPost: Self.defaultHttpPost
-            )
-            _ = try await authClient.login(prfSalt: storedPrfSalt)
+
+            // Use AS login to get PRF output via biometric assertion
+            let challengeResponse = try await asClient.loginBegin()
+            guard let challengeId = challengeResponse["challengeId"] as? String,
+                  let getOptions = challengeResponse["getOptions"] as? [String: Any],
+                  let publicKey = getOptions["publicKey"] as? [String: Any],
+                  let rpId = publicKey["rpId"] as? String,
+                  let challengeB64 = publicKey["challenge"] as? String,
+                  let challenge = Self.b64UrlDecode(challengeB64) else {
+                throw SirosError.auth(message: "Invalid login challenge for keystore unlock")
+            }
+
+            let result = try await authProvider.authenticate(options: AuthenticateOptions(
+                rpId: rpId,
+                challenge: challenge,
+                prfSalt: storedPrfSalt
+            ))
+
+            // Complete login with AS (refreshes session cookie)
+            var responseDict: [String: Any] = [
+                "authenticatorData": Self.b64UrlEncode(result.authenticatorData),
+                "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
+                "signature": Self.b64UrlEncode(result.signature),
+            ]
+            if let uh = result.userHandle {
+                responseDict["userHandle"] = Self.b64UrlEncode(uh)
+            }
+            let credential: [String: Any] = [
+                "id": Self.b64UrlEncode(result.credentialId),
+                "rawId": Self.b64UrlEncode(result.credentialId),
+                "type": "public-key",
+                "response": responseDict,
+            ]
+            _ = try await asClient.loginFinish(challengeId: challengeId, credential: credential)
 
             let prfOutput = try await authProvider.getPrfOutput(
                 credentialId: Data(),
@@ -556,6 +687,16 @@ public final class SirosWallet: @unchecked Sendable {
         lock.lock(); apiClient = client; lock.unlock()
     }
 
+    private func setupApiClientWithTokens(_ tokens: AuthTokens) {
+        let client = BackendApiClient(
+            baseUrl: config.backendUrl,
+            tenantId: config.tenantId,
+            httpFn: Self.defaultHttpFn
+        )
+        client.setAuthTokens(tokens)
+        lock.lock(); apiClient = client; lock.unlock()
+    }
+
     private func saveSession(session: AuthSession, credentialId: Data, prfSalt: Data, hkdfSalt: Data, hkdfInfo: Data) {
         sessionStore.appToken = session.appToken
         sessionStore.refreshToken = session.refreshToken
@@ -626,30 +767,18 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
-    private func refreshToken() async -> Bool {
-        guard let refreshTok = sessionStore.refreshToken else { return false }
-        lock.lock(); let client = apiClient; lock.unlock()
-        guard let client else { return false }
-        do {
-            let response = try await client.refreshSession(refreshToken: refreshTok)
-            guard let newToken = response["appToken"] as? String else { return false }
-            sessionStore.appToken = newToken
-            client.setAppToken(newToken)
-            if let newRefresh = response["refreshToken"] as? String {
-                sessionStore.refreshToken = newRefresh
-            }
-            return true
-        } catch {
-            return false
-        }
-    }
-
     private func cancelEngineTasks() {
         for t in engineTasks { t.cancel() }
         engineTasks.removeAll()
     }
 
     // MARK: - Engine connection
+
+    /// Connect engine using an anonymous token from the AS.
+    private func connectEngineWithToken(_ tokens: AuthTokens) async throws {
+        let token = try await tokens.ensureAnonymousToken()
+        try await connectEngine(appToken: token.raw)
+    }
 
     func connectEngine(appToken: String) async throws {
         let engine = Self.createEngineSession(config.backendUrl, config.tenantId)

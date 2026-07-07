@@ -80,7 +80,7 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         set { write("privateDataEtag", newValue) }
     }
 
-    public var hasSession: Bool { appToken != nil && userId != nil }
+    public var hasSession: Bool { userId != nil }
 
     public func clear() {
         lock.lock()
