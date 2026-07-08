@@ -911,7 +911,16 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     func connectEngine(appToken: String) async throws {
-        let engine = Self.createEngineSession(config.backendUrl, config.tenantId)
+        // Resolve engine URL: explicit config > discovery > same as backend
+        let engineBase: String
+        if !config.engineUrl.isEmpty {
+            engineBase = config.engineUrl
+        } else if let discovered = await WalletConfig.discoverEngineUrl(backendUrl: config.backendUrl) {
+            engineBase = discovered
+        } else {
+            engineBase = config.backendUrl
+        }
+        let engine = Self.createEngineSession(engineBase, config.tenantId)
         lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
         engine.connect(appToken: appToken)
         try await engine.awaitConnected()
