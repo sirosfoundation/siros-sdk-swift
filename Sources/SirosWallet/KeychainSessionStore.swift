@@ -19,6 +19,8 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
     private let service: String
     private let accessGroup: String?
 
+    public var activeAccountId: String?
+
     /// Create a Keychain session store.
     ///
     /// - Parameters:
@@ -82,26 +84,55 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
 
     public var hasSession: Bool { userId != nil }
 
-    public func clear() {
-        lock.lock()
-        defer { lock.unlock() }
+    public func clearAccount() {
+        guard let id = activeAccountId else { return }
+        // Delete all keys with the account prefix
+        // Since Keychain doesn't support prefix queries easily,
+        // we delete each known key individually
+        let keys = ["appToken", "refreshToken", "userId", "displayName",
+                    "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
+                    "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag"]
+        lock.lock(); defer { lock.unlock() }
+        for key in keys {
+            let scopedKey = "\(id)/\(key)"
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: scopedKey,
+            ]
+            if let group = accessGroup { query[kSecAttrAccessGroup as String] = group }
+            SecItemDelete(query as CFDictionary)
+        }
+    }
+
+    public func clearAll() {
+        lock.lock(); defer { lock.unlock() }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
         SecItemDelete(query as CFDictionary)
+        activeAccountId = nil
     }
+
+    public func clear() { clearAccount() }
 
     // MARK: - Keychain helpers
 
+    private func scopedKey(_ key: String) -> String? {
+        guard let id = activeAccountId else { return nil }
+        return "\(id)/\(key)"
+    }
+
     private func read(_ key: String) -> String? {
+        guard let k = scopedKey(key) else { return nil }
         lock.lock()
         defer { lock.unlock() }
 
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
+            kSecAttrAccount as String: k,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -116,14 +147,14 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
     }
 
     private func write(_ key: String, _ value: String?) {
+        guard let k = scopedKey(key) else { return }
         lock.lock()
         defer { lock.unlock() }
 
-        // Always delete first to avoid duplicates
         var deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
+            kSecAttrAccount as String: k,
         ]
         if let group = accessGroup {
             deleteQuery[kSecAttrAccessGroup as String] = group
@@ -135,7 +166,7 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         var addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
+            kSecAttrAccount as String: k,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
