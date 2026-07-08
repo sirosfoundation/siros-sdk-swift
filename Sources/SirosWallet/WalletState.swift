@@ -5,14 +5,14 @@ import SirosCredentials
 
 /// Observable wallet state. Apps observe `SirosWallet.state` to drive their UI.
 public enum WalletState: Sendable, Equatable {
-    /// Not authenticated.
-    case disconnected
+    /// Not authenticated. `cachedAccounts` are loginable accounts for the picker.
+    case disconnected(cachedAccounts: [CachedAccount] = [])
 
     /// Authentication / keystore unlock in progress.
     case connecting
 
     /// Authenticated, keystore unlocked, ready.
-    case ready(userId: String, displayName: String?, credentials: [StoredCredential])
+    case ready(userId: String, displayName: String?, credentials: [StoredCredential], cachedAccounts: [CachedAccount] = [])
 
     /// Session resumed but keystore still locked (requires PRF).
     case keystoreLocked(userId: String, displayName: String?)

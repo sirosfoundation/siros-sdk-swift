@@ -39,7 +39,7 @@ public final class SirosWallet: @unchecked Sendable {
     // MARK: - Public state
 
     let lock = NSLock()
-    private var _state: WalletState = .disconnected
+    private var _state: WalletState = .disconnected()
     private var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
     /// Current wallet state (thread-safe read).
@@ -450,7 +450,7 @@ public final class SirosWallet: @unchecked Sendable {
         Task {
             try? await authServerClient?.logout()
         }
-        setState(.disconnected)
+        setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
     }
 
     // MARK: - Session resume
@@ -474,7 +474,7 @@ public final class SirosWallet: @unchecked Sendable {
             } catch {
                 sessionStore.clear()
                 lock.lock(); apiClient = nil; lock.unlock()
-                setState(.disconnected)
+                setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
                 return
             }
 
@@ -490,7 +490,7 @@ public final class SirosWallet: @unchecked Sendable {
                 setState(.ready(userId: userId, displayName: displayName, credentials: []))
             }
         } catch {
-            setState(.disconnected)
+            setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
     }
 
@@ -577,7 +577,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// Delete a credential by ID and sync to backend.
     public func deleteCredential(_ credentialId: String) async {
         await credentialStore.delete(credentialId)
-        if case .ready(let userId, let displayName, _) = state {
+        if case .ready(let userId, let displayName, _, _) = state {
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
         }
@@ -1005,7 +1005,7 @@ public final class SirosWallet: @unchecked Sendable {
 
         // Transition to FlowActive state
         switch state {
-        case .ready(let userId, let displayName, let creds),
+        case .ready(let userId, let displayName, let creds, _),
              .flowActive(let userId, let displayName, _, _, _, let creds):
             setState(.flowActive(
                 userId: userId,
@@ -1073,7 +1073,7 @@ public final class SirosWallet: @unchecked Sendable {
 
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),
-             .ready(let userId, let displayName, _):
+             .ready(let userId, let displayName, _, _):
             Task {
                 let creds = await credentialStore.getAll()
                 setState(.ready(userId: userId, displayName: displayName, credentials: creds))
