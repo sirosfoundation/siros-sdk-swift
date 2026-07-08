@@ -29,8 +29,7 @@ public final class AccountRegistry: @unchecked Sendable {
     /// All known accounts across all tenants and backends.
     public func listAccounts() -> [CachedAccount] {
         lock.lock(); defer { lock.unlock() }
-        guard let data = defaults.data(forKey: Keys.accounts) else { return [] }
-        return (try? decoder.decode([CachedAccount].self, from: data)) ?? []
+        return loadAccountsLocked()
     }
 
     /// Accounts for a specific tenant.
