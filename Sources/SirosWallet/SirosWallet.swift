@@ -80,6 +80,24 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
+    // MARK: - Passkey Management
+
+    /// Passkeys registered for the active account.
+    public func listPasskeys() -> [CachedPasskey] {
+        guard let active = accountRegistry.activeAccountId else { return [] }
+        return accountRegistry.findAccount(accountId: active)?.passkeys ?? []
+    }
+
+    /// Rename a passkey (local AccountRegistry only).
+    public func renamePasskey(credentialId: String, nickname: String) {
+        guard let active = accountRegistry.activeAccountId,
+              var account = accountRegistry.findAccount(accountId: active) else { return }
+        account.passkeys = account.passkeys.map {
+            $0.credentialId == credentialId ? CachedPasskey(credentialId: $0.credentialId, prfSalt: $0.prfSalt, nickname: nickname) : $0
+        }
+        accountRegistry.upsertAccount(account)
+    }
+
     // MARK: - Configuration & dependencies
 
     private let config: WalletConfig
