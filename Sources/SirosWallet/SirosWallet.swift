@@ -66,6 +66,20 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
+    /// All known accounts across all tenants. Survives logout.
+    public func listAccounts() -> [CachedAccount] { accountRegistry.listAccounts() }
+
+    /// Accounts that have passkeys and can log in.
+    public func listLoginableAccounts() -> [CachedAccount] { accountRegistry.listLoginableAccounts() }
+
+    /// Remove a cached account (forgets it from the login screen).
+    public func forgetAccount(accountId: String) {
+        accountRegistry.removeAccount(accountId: accountId)
+        if accountRegistry.activeAccountId == accountId {
+            logout()
+        }
+    }
+
     // MARK: - Configuration & dependencies
 
     private let config: WalletConfig
@@ -74,6 +88,7 @@ public final class SirosWallet: @unchecked Sendable {
     private let keystore: KeystoreManager
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
+    private let accountRegistry: AccountRegistry
 
     private var apiClient: BackendApiClient?
     var engineSession: WalletEngineSession?
@@ -153,6 +168,8 @@ public final class SirosWallet: @unchecked Sendable {
         #endif
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
+
+        self.accountRegistry = AccountRegistry()
 
         self.vctmFetcher = VctmFetcher { url in
             guard let u = URL(string: url) else { return nil }
@@ -267,6 +284,25 @@ public final class SirosWallet: @unchecked Sendable {
 
             let encryptedContainer = try await keystore.exportEncryptedContainer()
 
+            // Register account in the persistent registry (survives logout)
+            let accountId = "\(config.tenantId):\(session.uuid)"
+            let credIdStr = Self.b64UrlEncode(result.credentialId)
+            accountRegistry.upsertAccount(CachedAccount(
+                userId: session.uuid,
+                tenantId: config.tenantId,
+                displayName: displayName,
+                backendUrl: config.backendUrl,
+                passkeys: [CachedPasskey(
+                    credentialId: credIdStr,
+                    prfSalt: Self.b64Encode(prfSalt)
+                )],
+                hkdfSalt: Self.b64Encode(hkdfSalt),
+                hkdfInfo: Self.b64Encode(hkdfInfo)
+            ))
+            accountRegistry.activeAccountId = accountId
+
+            // Scope session store to this account
+            sessionStore.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
@@ -366,6 +402,10 @@ public final class SirosWallet: @unchecked Sendable {
                 hkdfInfo: hkdfInfo
             )
 
+            // Scope session store to this account
+            let accountId = "\(config.tenantId):\(session.uuid)"
+            sessionStore.activeAccountId = accountId
+            accountRegistry.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
@@ -404,7 +444,8 @@ public final class SirosWallet: @unchecked Sendable {
         engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
-        sessionStore.clear()
+        sessionStore.clear()  // clears active account's session only
+        accountRegistry.activeAccountId = nil
         authTokens?.clear()
         Task {
             try? await authServerClient?.logout()
@@ -416,6 +457,10 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Resume a previous session without requiring a new WebAuthn assertion.
     public func resumeSession() async {
+        // Restore the active account ID so the session store reads the right data
+        if let activeId = accountRegistry.activeAccountId {
+            sessionStore.activeAccountId = activeId
+        }
         guard let userId = sessionStore.userId, let tokens = authTokens else { return }
         setState(.connecting)
         do {
