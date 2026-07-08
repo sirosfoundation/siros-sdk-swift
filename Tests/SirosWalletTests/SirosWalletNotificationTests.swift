@@ -74,7 +74,7 @@ final class SirosWalletNotificationTests: XCTestCase {
         XCTAssertEqual(stored.first?.raw, jwt)
         XCTAssertEqual(stored.first?.format, "vc+sd-jwt")
 
-        if case let .ready(userId, displayName, credentials) = wallet.state {
+        if case let .ready(userId, displayName, credentials, _) = wallet.state {
             XCTAssertEqual(userId, "user-1")
             XCTAssertEqual(displayName, "User One")
             XCTAssertEqual(credentials.count, 1)
