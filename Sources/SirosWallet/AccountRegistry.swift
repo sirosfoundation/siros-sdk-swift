@@ -1,6 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 
 /// Persistent registry of known accounts that survives logout.
 ///
@@ -8,22 +11,17 @@ import Foundation
 /// of ``CachedAccount`` entries so the login screen can show "Welcome back"
 /// with a list of known accounts and their passkeys.
 ///
-/// On iOS, backed by `UserDefaults` (the Keychain stores session secrets
-/// separately via ``KeychainSessionStore``). On macOS/Linux, uses
-/// `UserDefaults` as well.
+/// On Apple platforms, backed by the Keychain for encrypted storage.
+/// On Linux, falls back to UserDefaults.
 public final class AccountRegistry: @unchecked Sendable {
 
-    private let defaults: UserDefaults
     private let lock = NSLock()
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+    private let service: String
 
-    public init(suiteName: String? = nil) {
-        if let suite = suiteName {
-            self.defaults = UserDefaults(suiteName: suite) ?? .standard
-        } else {
-            self.defaults = .standard
-        }
+    public init(service: String = "org.siros.wallet.accounts") {
+        self.service = service
     }
 
     // MARK: - Account CRUD
@@ -73,29 +71,27 @@ public final class AccountRegistry: @unchecked Sendable {
         var accounts = loadAccountsLocked()
         accounts.removeAll { $0.accountId == accountId }
         saveAccountsLocked(accounts)
-        // Clear active if it was the removed account
-        if defaults.string(forKey: Keys.active) == accountId {
-            defaults.removeObject(forKey: Keys.active)
+        if readString(Keys.active) == accountId {
+            deleteKey(Keys.active)
         }
     }
 
     /// Remove all cached accounts (factory reset).
     public func clear() {
         lock.lock(); defer { lock.unlock() }
-        defaults.removeObject(forKey: Keys.accounts)
-        defaults.removeObject(forKey: Keys.active)
+        deleteAll()
     }
 
     // MARK: - Active Account
 
     /// The ID of the currently active account, or nil.
     public var activeAccountId: String? {
-        get { defaults.string(forKey: Keys.active) }
+        get { readString(Keys.active) }
         set {
             if let id = newValue {
-                defaults.set(id, forKey: Keys.active)
+                writeString(Keys.active, id)
             } else {
-                defaults.removeObject(forKey: Keys.active)
+                deleteKey(Keys.active)
             }
         }
     }
@@ -115,17 +111,88 @@ public final class AccountRegistry: @unchecked Sendable {
         }
     }
 
-    // MARK: - Private
+    // MARK: - Storage Backend
 
     private func loadAccountsLocked() -> [CachedAccount] {
-        guard let data = defaults.data(forKey: Keys.accounts) else { return [] }
+        guard let data = readData(Keys.accounts) else { return [] }
         return (try? decoder.decode([CachedAccount].self, from: data)) ?? []
     }
 
     private func saveAccountsLocked(_ accounts: [CachedAccount]) {
         guard let data = try? encoder.encode(accounts) else { return }
-        defaults.set(data, forKey: Keys.accounts)
+        writeData(Keys.accounts, data)
     }
+
+    #if canImport(Security)
+    // Keychain-backed storage (Apple platforms)
+
+    private func readData(_ key: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    private func writeData(_ key: String, _ data: Data) {
+        deleteKey(key)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private func readString(_ key: String) -> String? {
+        guard let data = readData(key) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func writeString(_ key: String, _ value: String) {
+        guard let data = value.data(using: .utf8) else { return }
+        writeData(key, data)
+    }
+
+    private func deleteKey(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    private func deleteAll() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    #else
+    // UserDefaults fallback (Linux)
+    private let defaults = UserDefaults.standard
+
+    private func readData(_ key: String) -> Data? { defaults.data(forKey: key) }
+    private func writeData(_ key: String, _ data: Data) { defaults.set(data, forKey: key) }
+    private func readString(_ key: String) -> String? { defaults.string(forKey: key) }
+    private func writeString(_ key: String, _ value: String) { defaults.set(value, forKey: key) }
+    private func deleteKey(_ key: String) { defaults.removeObject(forKey: key) }
+    private func deleteAll() {
+        deleteKey(Keys.accounts)
+        deleteKey(Keys.active)
+    }
+    #endif
 
     private enum Keys {
         static let accounts = "siros_cached_accounts"
