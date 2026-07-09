@@ -167,4 +167,3 @@ struct PasskeyRow: View {
 
 // Re-export for use in views
 import SirosWallet
-typealias CachedPasskey = SirosWallet.CachedPasskey
