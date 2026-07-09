@@ -5,6 +5,7 @@ import SirosKeystore
 
 struct SettingsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -98,6 +99,18 @@ struct SettingsView: View {
                 Section {
                     Button(role: .destructive, action: { viewModel.disconnect() }) {
                         Label("Disconnect", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+
+                    Button(role: .destructive, action: { showDeleteConfirm = true }) {
+                        Label("Delete Account", systemImage: "trash")
+                    }
+                    .alert("Delete Account?", isPresented: $showDeleteConfirm) {
+                        Button("Delete", role: .destructive) {
+                            viewModel.disconnect()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This will remove all local data, credentials, and passkeys. This cannot be undone.")
                     }
                 }
             }
