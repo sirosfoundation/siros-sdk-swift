@@ -32,7 +32,7 @@ struct LoginView: View {
                         Text(showBackendInfo ? viewModel.backendUrl : "Digital Identity For Humans")
                             .font(.caption)
                     }
-                    .foregroundColor(Color(SirosTheme.onSurfaceVariant))
+                    .foregroundColor(SirosTheme.onSurfaceVariant)
                 }
                 .buttonStyle(.plain)
 
@@ -58,13 +58,13 @@ struct LoginView: View {
                 .padding(20)
                 .background(
                     RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(SirosTheme.surface))
+                        .fill(SirosTheme.surface)
                         .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
                 )
             }
             .padding(.horizontal, 32)
         }
-        .background(Color(SirosTheme.background))
+        .background(SirosTheme.background)
     }
 
     @ViewBuilder
@@ -99,7 +99,7 @@ struct LoginView: View {
                 .frame(height: 48)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color(SirosTheme.brand))
+            .tint(SirosTheme.brand)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(viewModel.isLoading || registerName.isEmpty || registerName.utf8.count > 64)
 
@@ -131,7 +131,7 @@ struct LoginView: View {
                         .frame(height: 48)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(SirosTheme.brand))
+                    .tint(SirosTheme.brand)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .disabled(viewModel.isLoading)
 
@@ -164,7 +164,7 @@ struct LoginView: View {
                 .frame(height: 48)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color(SirosTheme.brand))
+            .tint(SirosTheme.brand)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(viewModel.isLoading)
 
@@ -192,7 +192,7 @@ struct SirosMarkView: View {
         ZStack {
             // Navy background circle
             Circle()
-                .fill(Color(SirosTheme.brand))
+                .fill(SirosTheme.brand)
 
             // Simplified SIROS star/compass mark in white
             Image(systemName: "sparkle")

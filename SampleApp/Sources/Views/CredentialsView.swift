@@ -15,7 +15,7 @@ struct CredentialsView: View {
 
             Text(credentialCountText)
                 .font(.subheadline)
-                .foregroundColor(Color(SirosTheme.onSurfaceVariant))
+                .foregroundColor(SirosTheme.onSurfaceVariant)
                 .padding(.horizontal, 16)
 
             Spacer().frame(height: 16)
@@ -60,13 +60,13 @@ struct CredentialsView: View {
             Spacer()
             Image(systemName: "plus.circle.fill")
                 .font(.system(size: 48))
-                .foregroundColor(Color(SirosTheme.brand))
+                .foregroundColor(SirosTheme.brand)
             Text("No credentials yet")
                 .font(.headline)
                 .fontWeight(.medium)
             Text("Tap to add your first credential")
                 .font(.subheadline)
-                .foregroundColor(Color(SirosTheme.onSurfaceVariant))
+                .foregroundColor(SirosTheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
             Spacer()
         }
@@ -74,7 +74,7 @@ struct CredentialsView: View {
         .padding(32)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(SirosTheme.surfaceVariant))
+                .fill(SirosTheme.surfaceVariant)
         )
         .padding(.horizontal, 16)
         .onTapGesture {

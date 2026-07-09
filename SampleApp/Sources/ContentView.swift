@@ -51,18 +51,18 @@ struct FlowActiveView: View {
         VStack(spacing: 16) {
             ProgressView()
                 .scaleEffect(1.5)
-                .tint(Color(SirosTheme.brand))
+                .tint(SirosTheme.brand)
             Text(message)
                 .font(.body)
-                .foregroundColor(Color(SirosTheme.onSurfaceVariant))
+                .foregroundColor(SirosTheme.onSurfaceVariant)
             Button("Cancel") {
                 viewModel.cancelCurrentFlow()
             }
             .buttonStyle(.bordered)
-            .tint(Color(SirosTheme.brand))
+            .tint(SirosTheme.brand)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(SirosTheme.background))
+        .background(SirosTheme.background)
     }
 }
 
@@ -76,22 +76,22 @@ struct ErrorView: View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
-                .foregroundColor(Color(SirosTheme.error))
+                .foregroundColor(SirosTheme.error)
             Text("Something went wrong")
                 .font(.title2.bold())
             Text(message)
                 .font(.body)
-                .foregroundColor(Color(SirosTheme.onSurfaceVariant))
+                .foregroundColor(SirosTheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
             Button("Retry") {
                 viewModel.disconnect()
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color(SirosTheme.brand))
+            .tint(SirosTheme.brand)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(SirosTheme.background))
+        .background(SirosTheme.background)
     }
 }
 
@@ -115,12 +115,12 @@ struct MainTabView: View {
                 Button(action: { viewModel.openQrScanner() }) {
                     Image(systemName: "qrcode.viewfinder")
                         .font(.title3)
-                        .foregroundColor(Color(SirosTheme.onSurface))
+                        .foregroundColor(SirosTheme.onSurface)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color(SirosTheme.surface))
+            .background(SirosTheme.surface)
 
             Divider()
 
@@ -165,9 +165,9 @@ struct MainTabView: View {
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 8)
-            .background(Color(SirosTheme.surfaceVariant))
+            .background(SirosTheme.surfaceVariant)
         }
-        .background(Color(SirosTheme.background))
+        .background(SirosTheme.background)
     }
 
     @ViewBuilder
@@ -186,7 +186,7 @@ struct MainTabView: View {
                 Text(label)
                     .font(.caption2)
             }
-            .foregroundColor(isSelected ? Color(SirosTheme.brand) : Color(SirosTheme.onSurfaceVariant))
+            .foregroundColor(isSelected ? SirosTheme.brand : SirosTheme.onSurfaceVariant)
         }
         .buttonStyle(.plain)
     }

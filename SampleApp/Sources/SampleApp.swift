@@ -13,7 +13,7 @@ struct SirosSampleApp: App {
                 .onOpenURL { url in
                     viewModel.handleDeepLink(url)
                 }
-                .tint(Color(SirosTheme.brand))
+                .tint(SirosTheme.brand)
         }
     }
 }
