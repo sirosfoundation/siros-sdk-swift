@@ -512,7 +512,9 @@ final class WalletViewModel: ObservableObject {
         #endif
 
         #if os(iOS)
-        let authProvider = ASAuthorizationAuthProvider()
+        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        let anchor = windowScene?.windows.first ?? UIWindow()
+        let authProvider = ASAuthorizationAuthProvider(presentationAnchor: anchor)
         #else
         let authProvider = LocalAuthProvider()
         #endif
