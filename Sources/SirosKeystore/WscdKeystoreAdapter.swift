@@ -239,6 +239,35 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         return sdJwtPresentation + kbJwt
     }
 
+    public func signMdocPresentation(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        nonce: String,
+        audience: String,
+        responseUri: String,
+        verifierJwkThumbprint: String?
+    ) async throws -> Data {
+        try checkUnlocked()
+        let keys = try await signer.listKeys()
+        guard let key = keys.first else {
+            throw KeystoreError.keyNotFound("no keys available for mDoc signing")
+        }
+
+        let builder = MdocDeviceResponseBuilder(
+            issuerSignedBytes: credentialBytes,
+            algorithm: key.algorithm
+        )
+
+        return try await builder.build(
+            nonce: nonce,
+            audience: audience,
+            responseUri: responseUri,
+            verifierJwkThumbprint: verifierJwkThumbprint,
+            disclosedClaims: disclosedClaims,
+            signer: { data in try await self.signer.sign(keyId: key.keyId, data: data) }
+        )
+    }
+
     public func exportEncryptedContainer() async throws -> Data {
         // WSCD keys are not exportable as a JWE container —
         // they live in the hardware/remote HSM.

@@ -974,13 +974,36 @@ public final class SirosWallet: @unchecked Sendable {
                     var vpParts: [String] = []
                     for ref in credsToInclude {
                         guard let cred = allCreds.first(where: { $0.id == ref.credentialId }) else { continue }
-                        let vp = try await keystore.signVpToken(
-                            credential: cred.raw,
-                            disclosedClaims: ref.disclosedClaims,
-                            nonce: nonce,
-                            audience: audience
-                        )
-                        vpParts.append(vp)
+
+                        if cred.format == "mso_mdoc" {
+                            // mDoc DeviceResponse (ISO 18013-5)
+                            let credBytes = Data(base64Encoded: cred.raw
+                                .replacingOccurrences(of: "-", with: "+")
+                                .replacingOccurrences(of: "_", with: "/")
+                            ) ?? Data()
+                            let deviceResponse = try await keystore.signMdocPresentation(
+                                credentialBytes: credBytes,
+                                disclosedClaims: ref.disclosedClaims,
+                                nonce: nonce,
+                                audience: audience,
+                                responseUri: msg.params.responseUri ?? "",
+                                verifierJwkThumbprint: msg.params.verifierJwkThumbprint
+                            )
+                            vpParts.append(deviceResponse.base64EncodedString()
+                                .replacingOccurrences(of: "+", with: "-")
+                                .replacingOccurrences(of: "/", with: "_")
+                                .replacingOccurrences(of: "=", with: "")
+                            )
+                        } else {
+                            // SD-JWT VP token with KB-JWT
+                            let vp = try await keystore.signVpToken(
+                                credential: cred.raw,
+                                disclosedClaims: ref.disclosedClaims,
+                                nonce: nonce,
+                                audience: audience
+                            )
+                            vpParts.append(vp)
+                        }
                     }
                     let vpToken = vpParts.joined(separator: "\n")
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
