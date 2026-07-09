@@ -20,7 +20,7 @@ struct PresentationConsentView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "checkmark.shield.fill")
                         .font(.system(size: 32))
-                        .foregroundStyle(.accent)
+                        .foregroundColor(.accentColor)
                     VStack(alignment: .leading) {
                         Text("Credential Request")
                             .font(.title2.bold())

@@ -16,7 +16,7 @@ struct LoginView: View {
 
                 Image(systemName: "shield.checkered")
                     .font(.system(size: 56))
-                    .foregroundStyle(.accent)
+                    .foregroundColor(.accentColor)
 
                 Text("SIROS ID")
                     .font(.title.bold())
