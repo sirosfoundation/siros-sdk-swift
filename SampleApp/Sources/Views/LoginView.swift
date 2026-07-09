@@ -14,21 +14,25 @@ struct LoginView: View {
             VStack(spacing: 16) {
                 Spacer().frame(height: 24)
 
-                Image(systemName: "shield.checkered")
-                    .font(.system(size: 56))
-                    .foregroundColor(.accentColor)
+                // Logo — matches Android ic_siros_mark
+                SirosMarkView()
+                    .frame(width: 56, height: 56)
 
-                Text("SIROS ID")
-                    .font(.title.bold())
+                Spacer().frame(height: 8)
 
+                Text("SIROS Wallet")
+                    .font(.title)
+                    .fontWeight(.bold)
+
+                // Info toggle — matches Android: tap to reveal backend URL
                 Button(action: { showBackendInfo.toggle() }) {
                     HStack(spacing: 4) {
                         Image(systemName: "info.circle")
                             .font(.caption2)
-                        Text(showBackendInfo ? viewModel.backendUrl : "Sample Wallet App")
-                            .font(.subheadline)
+                        Text(showBackendInfo ? viewModel.backendUrl : "Digital Identity For Humans")
+                            .font(.caption)
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(Color(SirosTheme.onSurfaceVariant))
                 }
                 .buttonStyle(.plain)
 
@@ -54,11 +58,13 @@ struct LoginView: View {
                 .padding(20)
                 .background(
                     RoundedRectangle(cornerRadius: 16)
-                        .fill(.regularMaterial)
+                        .fill(Color(SirosTheme.surface))
+                        .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
                 )
             }
             .padding(.horizontal, 32)
         }
+        .background(Color(SirosTheme.background))
     }
 
     @ViewBuilder
@@ -67,6 +73,7 @@ struct LoginView: View {
             // Mode C: Registration
             Text("Create Account")
                 .font(.headline)
+                .fontWeight(.semibold)
 
             TextField("Display name", text: $registerName)
                 .textFieldStyle(.roundedBorder)
@@ -89,9 +96,11 @@ struct LoginView: View {
                     Text("Sign up with passkey")
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(height: 48)
             }
             .buttonStyle(.borderedProminent)
+            .tint(Color(SirosTheme.brand))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(viewModel.isLoading || registerName.isEmpty || registerName.utf8.count > 64)
 
             Button("Already have an account? Login") {
@@ -103,6 +112,7 @@ struct LoginView: View {
             // Mode A: Cached accounts picker
             Text("Welcome back")
                 .font(.headline)
+                .fontWeight(.semibold)
 
             ForEach(viewModel.cachedAccounts, id: \.accountId) { account in
                 HStack(spacing: 8) {
@@ -118,9 +128,11 @@ struct LoginView: View {
                                 .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                        .frame(height: 48)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(Color(SirosTheme.brand))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .disabled(viewModel.isLoading)
 
                     Button(action: {
@@ -146,12 +158,14 @@ struct LoginView: View {
                         ProgressView()
                             .tint(.white)
                     }
-                    Text("Sign In with Passkey")
+                    Text("Log in with Passkey")
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(height: 48)
             }
             .buttonStyle(.borderedProminent)
+            .tint(Color(SirosTheme.brand))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(viewModel.isLoading)
 
             Button("New here? Sign up") {
@@ -165,6 +179,25 @@ struct LoginView: View {
                 }
                 .font(.subheadline)
             }
+        }
+    }
+}
+
+// MARK: - SIROS Mark (brand logo)
+
+/// SwiftUI rendering of the SIROS mark (ic_siros_mark).
+/// Uses the same path data as the Android vector drawable.
+struct SirosMarkView: View {
+    var body: some View {
+        ZStack {
+            // Navy background circle
+            Circle()
+                .fill(Color(SirosTheme.brand))
+
+            // Simplified SIROS star/compass mark in white
+            Image(systemName: "sparkle")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundColor(.white)
         }
     }
 }
