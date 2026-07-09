@@ -22,6 +22,8 @@ struct ContentView: View {
                     QRScannerView()
                 } else if viewModel.showAddCredential {
                     AddCredentialView()
+                } else if viewModel.showWscaDeveloper {
+                    WscaDeveloperView()
                 } else {
                     MainTabView()
                 }
@@ -49,15 +51,18 @@ struct FlowActiveView: View {
         VStack(spacing: 16) {
             ProgressView()
                 .scaleEffect(1.5)
+                .tint(SirosTheme.brand)
             Text(message)
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundColor(SirosTheme.onSurfaceVariant)
             Button("Cancel") {
                 viewModel.cancelCurrentFlow()
             }
             .buttonStyle(.bordered)
+            .tint(SirosTheme.brand)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SirosTheme.background)
     }
 }
 
@@ -71,20 +76,22 @@ struct ErrorView: View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
-                .foregroundStyle(.red)
+                .foregroundColor(SirosTheme.error)
             Text("Something went wrong")
                 .font(.title2.bold())
             Text(message)
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundColor(SirosTheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
-            Button("Disconnect") {
+            Button("Retry") {
                 viewModel.disconnect()
             }
             .buttonStyle(.borderedProminent)
+            .tint(SirosTheme.brand)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SirosTheme.background)
     }
 }
 
@@ -95,38 +102,92 @@ struct MainTabView: View {
     @State private var selectedTab = 0
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            CredentialsView()
-                .tabItem {
-                    Label("Credentials", systemImage: "wallet.pass")
-                }
-                .tag(0)
-
-            Button(action: { viewModel.openAddCredential() }) {
-                VStack(spacing: 12) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 48))
-                    Text("Add Credential")
-                        .font(.headline)
-                }
-            }
-            .tabItem {
-                Label("Add", systemImage: "plus")
-            }
-            .tag(1)
-
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
-                .tag(2)
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+        VStack(spacing: 0) {
+            // Top bar matching Android
+            HStack {
+                SirosMarkView()
+                    .frame(width: 28, height: 28)
+                Spacer().frame(width: 10)
+                Text("SIROS Wallet")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                Spacer()
                 Button(action: { viewModel.openQrScanner() }) {
                     Image(systemName: "qrcode.viewfinder")
+                        .font(.title3)
+                        .foregroundColor(SirosTheme.onSurface)
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(SirosTheme.surface)
+
+            Divider()
+
+            // Content area
+            Group {
+                switch selectedTab {
+                case 0:
+                    CredentialsView()
+                case 2:
+                    SettingsView()
+                default:
+                    EmptyView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+
+            // Bottom tab bar matching Android
+            HStack {
+                tabButton(
+                    icon: "wallet.pass",
+                    label: "Credentials",
+                    tag: 0
+                )
+                Spacer()
+                tabButton(
+                    icon: "plus",
+                    label: "Add",
+                    tag: 1,
+                    action: {
+                        selectedTab = 1
+                        viewModel.openAddCredential()
+                    }
+                )
+                Spacer()
+                tabButton(
+                    icon: "gear",
+                    label: "Settings",
+                    tag: 2
+                )
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 8)
+            .background(SirosTheme.surfaceVariant)
         }
+        .background(SirosTheme.background)
+    }
+
+    @ViewBuilder
+    private func tabButton(icon: String, label: String, tag: Int, action: (() -> Void)? = nil) -> some View {
+        let isSelected = selectedTab == tag
+        Button(action: {
+            if let action {
+                action()
+            } else {
+                selectedTab = tag
+            }
+        }) {
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                Text(label)
+                    .font(.caption2)
+            }
+            .foregroundColor(isSelected ? SirosTheme.brand : SirosTheme.onSurfaceVariant)
+        }
+        .buttonStyle(.plain)
     }
 }

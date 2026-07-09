@@ -61,7 +61,6 @@ enum R2psTransportError: Error, LocalizedError {
         }
     }
 }
-}
 
 /// OPAQUE PAKE client implementation.
 ///

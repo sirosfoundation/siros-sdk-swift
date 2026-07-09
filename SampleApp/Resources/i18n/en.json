@@ -1,0 +1,108 @@
+{
+  "app": {
+    "name": "SIROS Wallet",
+    "tagline": "Digital Identity For Humans"
+  },
+  "login": {
+    "title": "SIROS Wallet",
+    "signInButton": "Log in with Passkey",
+    "signUpButton": "Sign up with passkey",
+    "createAccount": "Create Account",
+    "displayNameLabel": "Display name",
+    "displayNameCount": "%1$d/64",
+    "alreadyHaveAccount": "Already have an account? Login",
+    "newHere": "New here? Sign up",
+    "useOtherAccount": "Use other account",
+    "backToSavedAccounts": "Back to saved accounts",
+    "welcomeBack": "Welcome back"
+  },
+  "credentials": {
+    "welcome": "Welcome, %1$s",
+    "countZero": "No credentials yet",
+    "countOne": "1 credential",
+    "countOther": "%1$d credentials",
+    "emptyTitle": "No credentials yet",
+    "emptySubtitle": "Tap to add your first credential",
+    "addTitle": "Add Credential",
+    "addLoading": "Loading available credentials...",
+    "addEmpty": "No credentials available"
+  },
+  "presentation": {
+    "title": "Credential Request",
+    "requestingCredentials": "%1$s is requesting the following credentials:",
+    "requestingCredentialsUnknown": "A verifier is requesting the following credentials:",
+    "dataFieldsRequested": "%1$d data fields requested",
+    "selectData": "Select which data to share:",
+    "required": "Required",
+    "readyToShare": "Ready to share",
+    "sharingSummary": "You will share the following with %1$s:",
+    "shareButton": "Share",
+    "declineButton": "Decline",
+    "nextButton": "Next",
+    "backButton": "Back"
+  },
+  "settings": {
+    "title": "Settings",
+    "accountSection": "Account",
+    "signedInAs": "Signed in as",
+    "backendUrl": "Backend URL",
+    "tenantId": "Tenant ID",
+    "credentialsStored": "Credentials stored",
+    "passkeysSection": "Passkeys",
+    "noPasskeys": "No passkeys registered",
+    "otherAccounts": "Other Accounts",
+    "activitySection": "Activity",
+    "presentationHistory": "Presentation History",
+    "wscdSection": "WSCD Lifecycle",
+    "wscdStateLabel": "State",
+    "wscdNotEnrolled": "Not enrolled",
+    "wscdEnroll": "Enroll WSCD",
+    "wscdDeveloper": "WSCA Developer",
+    "disconnectButton": "Disconnect"
+  },
+  "wscd": {
+    "title": "WSCA Developer",
+    "buildInfo": "Build Info",
+    "appVersion": "App Version",
+    "platform": "Platform",
+    "wscdManager": "siros-wscd-manager (UniFFI)",
+    "pluginSection": "Plugin",
+    "lifecycleStatus": "Lifecycle Status",
+    "stateLabel": "State",
+    "contextId": "Context ID",
+    "pluginLabel": "Plugin",
+    "factorKind": "Factor Kind",
+    "updatedLabel": "Updated",
+    "enrollButton": "Enroll (%1$s)",
+    "rotateButton": "Rotate Keys",
+    "destroyLocal": "Destroy (Local)",
+    "destroyRevoke": "Destroy + Revoke",
+    "refreshButton": "Refresh",
+    "storedKeys": "Stored Keys (%1$d)",
+    "noKeys": "No keys stored"
+  },
+  "error": {
+    "title": "Something went wrong",
+    "retryButton": "Retry"
+  },
+  "flow": {
+    "cancelButton": "Cancel"
+  },
+  "nav": {
+    "credentials": "Credentials",
+    "add": "Add",
+    "settings": "Settings",
+    "qrScan": "Scan QR Code",
+    "back": "Back"
+  },
+  "qr": {
+    "title": "Scan QR Code",
+    "manualInput": "Or paste a credential offer URL:",
+    "pasteButton": "Submit",
+    "unrecognised": "Unrecognised QR code"
+  },
+  "history": {
+    "title": "Presentation History",
+    "empty": "No presentation history"
+  }
+}

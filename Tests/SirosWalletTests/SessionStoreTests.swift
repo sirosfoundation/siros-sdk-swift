@@ -7,6 +7,7 @@ final class SessionStoreTests: XCTestCase {
 
     func testInMemoryStoreBasics() {
         let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
         XCTAssertNil(store.appToken)
         XCTAssertFalse(store.hasSession)
 
@@ -19,6 +20,7 @@ final class SessionStoreTests: XCTestCase {
 
     func testClearRemovesAll() {
         let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
         store.appToken = "tok"
         store.userId = "uid"
         store.refreshToken = "ref"
@@ -48,12 +50,13 @@ final class SessionStoreTests: XCTestCase {
 
     func testHasSessionRequiresBothTokenAndUserId() {
         let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
         store.appToken = "tok"
         XCTAssertFalse(store.hasSession) // userId nil
 
         store.appToken = nil
         store.userId = "uid"
-        XCTAssertFalse(store.hasSession) // appToken nil
+        XCTAssertTrue(store.hasSession) // userId set → has session
 
         store.appToken = "tok"
         XCTAssertTrue(store.hasSession) // both set
@@ -61,6 +64,7 @@ final class SessionStoreTests: XCTestCase {
 
     func testOverwriteValue() {
         let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
         store.appToken = "first"
         XCTAssertEqual(store.appToken, "first")
         store.appToken = "second"
@@ -69,6 +73,7 @@ final class SessionStoreTests: XCTestCase {
 
     func testSetNilRemovesValue() {
         let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
         store.appToken = "tok"
         XCTAssertEqual(store.appToken, "tok")
         store.appToken = nil

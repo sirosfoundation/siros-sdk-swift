@@ -40,12 +40,22 @@ final class WalletViewModel: ObservableObject {
     @Published var walletState: WalletViewState = .disconnected
     @Published var credentials: [StoredCredential] = []
     @Published var displayName: String?
+    @Published var userId: String?
+
+    // MARK: - Multi-account
+
+    @Published var cachedAccounts: [CachedAccount] = []
+
+    // MARK: - Passkeys
+
+    @Published var passkeys: [CachedPasskey] = []
 
     // MARK: - Navigation state
 
     @Published var showAddCredential = false
     @Published var showHistory = false
     @Published var showQrScanner = false
+    @Published var showWscaDeveloper = false
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
 
@@ -58,6 +68,15 @@ final class WalletViewModel: ObservableObject {
 
     @Published var presentationHistory: [PresentationRecord] = []
 
+    // MARK: - WSCD lifecycle
+
+    @Published var selectedPluginId: String = "softkey"
+    @Published var lifecycleState: LifecycleState?
+    @Published var lifecycleStatus: LifecycleStatus?
+    @Published var enrollmentInProgress = false
+    @Published var wscdKeys: [SignerKeyInfo] = []
+    @Published var wscdKeySecurityProps: [String: SignerSecurityProperties] = [:]
+
     // MARK: - Loading / error
 
     @Published var isLoading = false
@@ -69,6 +88,10 @@ final class WalletViewModel: ObservableObject {
     private var wallet: SirosWallet?
     private var stateTask: Task<Void, Never>?
     private var pendingAuthFlowId: String?
+    #if canImport(SirosWscdFFI)
+    private var wscdSigner: UniFFISigner?
+    #endif
+    private var lifecycleContextId: String?
 
     init() {}
 
@@ -88,18 +111,46 @@ final class WalletViewModel: ObservableObject {
         }
     }
 
-    func register() {
+    func loginWithAccount(_ account: CachedAccount) {
         rebuildWalletIfNeeded()
         guard let wallet else { return }
         isLoading = true
         Task {
             do {
-                try await wallet.register(displayName: "Sample User")
+                try await wallet.login()
             } catch {
                 setError(error.localizedDescription)
             }
             isLoading = false
         }
+    }
+
+    func register(displayName: String) {
+        rebuildWalletIfNeeded()
+        guard let wallet else { return }
+        isLoading = true
+        Task {
+            do {
+                try await wallet.register(displayName: displayName)
+            } catch {
+                setError(error.localizedDescription)
+            }
+            isLoading = false
+        }
+    }
+
+    func forgetAccount(_ accountId: String) {
+        wallet?.forgetAccount(accountId: accountId)
+        cachedAccounts.removeAll { $0.accountId == accountId }
+    }
+
+    func listPasskeysForUI() {
+        passkeys = wallet?.listPasskeys() ?? []
+    }
+
+    func renamePasskey(credentialId: String, nickname: String) {
+        wallet?.renamePasskey(credentialId: credentialId, nickname: nickname)
+        listPasskeysForUI()
     }
 
     func disconnect() {
@@ -109,10 +160,148 @@ final class WalletViewModel: ObservableObject {
         selectedCredential = nil
         showHistory = false
         showQrScanner = false
+        showWscaDeveloper = false
     }
 
     func cancelCurrentFlow() {
         wallet?.cancelCurrentFlow()
+    }
+
+    // MARK: - WSCD lifecycle actions
+
+    func selectPlugin(_ pluginId: String) {
+        selectedPluginId = pluginId
+        if pluginId == "r2ps" {
+            r2psEnabled = true
+        } else if selectedPluginId == "r2ps" {
+            r2psEnabled = false
+        }
+    }
+
+    func enrollWscd() {
+        #if canImport(SirosWscdFFI)
+        guard let signer = wscdSigner else {
+            setError("WSCD signer not initialized")
+            return
+        }
+        enrollmentInProgress = true
+        Task {
+            do {
+                let pluginId = selectedPluginId
+                let contextId = "ctx-\(Int(Date().timeIntervalSince1970 * 1000))"
+                let factorKind: FactorKind = pluginId == "r2ps" ? .opaque : .rawSign
+
+                let regOutcome = try await signer.registerLifecycle(
+                    request: RegisterLifecycleRequest(
+                        pluginId: pluginId,
+                        contextId: contextId,
+                        factorKind: factorKind
+                    )
+                )
+                lifecycleState = regOutcome.state
+
+                let actOutcome = try await signer.activateLifecycle(
+                    request: ActivateLifecycleRequest(
+                        pluginId: pluginId,
+                        contextId: contextId
+                    )
+                )
+                lifecycleState = actOutcome.state
+                lifecycleContextId = contextId
+            } catch {
+                setError("Enrollment failed: \(error.localizedDescription)")
+            }
+            enrollmentInProgress = false
+        }
+        #else
+        setError("WSCD not available (SirosWscdFFI not linked)")
+        #endif
+    }
+
+    func rotateLifecycle() {
+        #if canImport(SirosWscdFFI)
+        guard let signer = wscdSigner, let ctxId = lifecycleContextId else {
+            setError("WSCD not enrolled")
+            return
+        }
+        Task {
+            do {
+                let outcome = try await signer.rotateLifecycle(
+                    request: RotateLifecycleRequest(
+                        pluginId: selectedPluginId,
+                        contextId: ctxId
+                    )
+                )
+                lifecycleState = outcome.state
+                refreshWscdInfo()
+            } catch {
+                setError("Rotation failed: \(error.localizedDescription)")
+            }
+        }
+        #endif
+    }
+
+    func destroyLifecycle(mode: DestroyMode) {
+        #if canImport(SirosWscdFFI)
+        guard let signer = wscdSigner, let ctxId = lifecycleContextId else {
+            setError("WSCD not enrolled")
+            return
+        }
+        Task {
+            do {
+                let outcome = try await signer.destroyLifecycle(
+                    request: DestroyLifecycleRequest(
+                        pluginId: selectedPluginId,
+                        contextId: ctxId,
+                        mode: mode
+                    )
+                )
+                lifecycleState = outcome.state
+                lifecycleContextId = nil
+                refreshWscdInfo()
+            } catch {
+                setError("Destruction failed: \(error.localizedDescription)")
+            }
+        }
+        #endif
+    }
+
+    func openWscaDeveloper() {
+        showWscaDeveloper = true
+        refreshWscdInfo()
+    }
+
+    func closeWscaDeveloper() {
+        showWscaDeveloper = false
+    }
+
+    func refreshWscdInfo() {
+        #if canImport(SirosWscdFFI)
+        Task {
+            guard let signer = wscdSigner else { return }
+            do {
+                let keys = try await signer.listKeys()
+                wscdKeys = keys
+                var props: [String: SignerSecurityProperties] = [:]
+                for key in keys {
+                    if let p = try? await signer.securityProperties(keyId: key.keyId) {
+                        props[key.keyId] = p
+                    }
+                }
+                wscdKeySecurityProps = props
+            } catch {
+                print("Failed to list keys: \(error)")
+            }
+            guard let ctxId = lifecycleContextId else { return }
+            do {
+                let status = try await signer.lifecycleStatus(pluginId: selectedPluginId, contextId: ctxId)
+                lifecycleStatus = status
+                lifecycleState = status.state
+            } catch {
+                print("Failed to get lifecycle status: \(error)")
+            }
+        }
+        #endif
     }
 
     /// Start issuance from a credential offer URI (for testing/automation).
@@ -143,21 +332,40 @@ final class WalletViewModel: ObservableObject {
         showAddCredential = true
         isLoadingOffers = true
         Task {
-            // TODO: getAvailableCredentials() not yet in Swift SDK — will be added for parity
-            availableCredentials = []
+            do {
+                availableCredentials = try await wallet?.getAvailableCredentials() ?? []
+            } catch {
+                print("Failed to load available credentials: \(error)")
+                availableCredentials = []
+            }
             isLoadingOffers = false
         }
     }
 
     func closeAddCredential() {
         showAddCredential = false
+        pendingIssuanceOffer = nil
     }
 
+    // MARK: - Issuance consent
+
+    @Published var pendingIssuanceOffer: CredentialOffer?
+
     func selectCredentialOffer(_ offer: CredentialOffer) {
+        pendingIssuanceOffer = offer
+    }
+
+    func confirmIssuance() {
+        guard let offer = pendingIssuanceOffer else { return }
+        pendingIssuanceOffer = nil
         showAddCredential = false
         Task {
             try? await wallet?.startIssuanceByOffer(offer)
         }
+    }
+
+    func cancelIssuance() {
+        pendingIssuanceOffer = nil
     }
 
     func openCredentialDetail(_ credential: StoredCredential) {
@@ -290,13 +498,15 @@ final class WalletViewModel: ObservableObject {
 
         guard needsRebuild else { return }
 
-        // Build WSCD-backed keystore when R2PS is enabled
+        // Build WSCD-backed keystore with selected plugin
         var keystore: KeystoreManager?
         #if canImport(SirosWscdFFI)
-        if r2psEnabled {
-            do {
-                let wscdConfig = FfiWscdConfig(defaultPlugin: "r2ps")
-                let signer = try UniFFISigner(config: wscdConfig)
+        do {
+            let wscdConfig = FfiWscdConfig(defaultPlugin: selectedPluginId)
+            let signer = try UniFFISigner(config: wscdConfig)
+
+            // Register R2PS plugin if selected
+            if selectedPluginId == "r2ps" || r2psEnabled {
                 let r2psConfig = FfiR2psConfig(
                     serverUrl: r2psServerUrl,
                     clientId: "sample-app",
@@ -304,23 +514,26 @@ final class WalletViewModel: ObservableObject {
                     authMode: "opaque",
                     rpId: "",
                     allowedCredentialIds: [],
-                    clientKeyPem: "", // Populated from device enrollment in production
-                    serverPublicKeyPem: "" // Populated from R2PS server discovery
+                    clientKeyPem: "",
+                    serverPublicKeyPem: ""
                 )
                 let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
                 let pake = SamplePakeClient()
                 try signer.registerR2psPlugin(config: r2psConfig, transport: transport, pake: pake)
-                keystore = WscdKeystoreAdapter(signer: signer)
-            } catch {
-                // Fall back to default keystore if R2PS setup fails
-                print("R2PS setup failed: \(error). Falling back to default keystore.")
-                keystore = nil
             }
+
+            self.wscdSigner = signer
+            keystore = WscdKeystoreAdapter(signer: signer)
+        } catch {
+            print("WSCD setup failed: \(error). Falling back to default keystore.")
+            keystore = nil
         }
         #endif
 
         #if os(iOS)
-        let authProvider = ASAuthorizationAuthProvider()
+        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        let anchor = windowScene?.windows.first ?? UIWindow()
+        let authProvider = ASAuthorizationAuthProvider(presentationAnchor: anchor)
         #else
         let authProvider = LocalAuthProvider()
         #endif
@@ -347,16 +560,21 @@ final class WalletViewModel: ObservableObject {
 
     private func updateState(_ state: WalletState) {
         switch state {
-        case .disconnected:
+        case .disconnected(let accounts):
             walletState = .disconnected
             credentials = []
             displayName = nil
+            userId = nil
+            cachedAccounts = accounts
         case .connecting:
             walletState = .connecting
-        case .ready(_, let name, let creds):
+        case .ready(let uid, let name, let creds, let accounts):
             walletState = .ready
             credentials = creds
             displayName = name
+            userId = uid
+            cachedAccounts = accounts
+            listPasskeysForUI()
         case .keystoreLocked(_, let name):
             walletState = .connecting
             displayName = name

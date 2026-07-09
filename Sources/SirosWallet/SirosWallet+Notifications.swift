@@ -62,7 +62,7 @@ extension SirosWallet {
 
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),
-             .ready(let userId, let displayName, _):
+             .ready(let userId, let displayName, _, _):
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
         default:

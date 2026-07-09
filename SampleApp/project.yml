@@ -31,9 +31,11 @@ targets:
         SWIFT_VERSION: "5.10"
         INFOPLIST_FILE: Resources/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: org.sirosfoundation.sdk.sample
+        PRODUCT_NAME: SirosSampleApp
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: 1
         CODE_SIGN_STYLE: Automatic
+        ALWAYS_SEARCH_USER_PATHS: "NO"
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG

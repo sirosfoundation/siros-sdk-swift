@@ -1,0 +1,43 @@
+name: Screenshot Tests
+
+on:
+  pull_request:
+    paths:
+      - 'SampleApp/Sources/**'
+  workflow_dispatch:
+
+# Placeholder workflow — enable when swift-snapshot-testing is added:
+#   .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.17.0")
+#
+# Snapshot test example:
+#   func testLoginView_light() {
+#     let view = LoginView().environmentObject(WalletViewModel())
+#     assertSnapshot(of: view, as: .image(layout: .device(config: .iPhone13)))
+#   }
+#   func testLoginView_dark() {
+#     let view = LoginView().environmentObject(WalletViewModel())
+#       .preferredColorScheme(.dark)
+#     assertSnapshot(of: view, as: .image(layout: .device(config: .iPhone13)))
+#   }
+#
+# To set up:
+# 1. Add swift-snapshot-testing to Package.swift test dependencies
+# 2. Create SampleApp/Tests/ScreenshotTests.swift
+# 3. Run tests once to generate __Snapshots__/ reference images
+# 4. Commit snapshots
+# 5. Enable this workflow
+
+jobs:
+  screenshot-test:
+    if: false  # Enable when swift-snapshot-testing is configured
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run snapshot tests
+        run: swift test --filter ScreenshotTests
+      - name: Upload diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs
+          path: SampleApp/Tests/__Snapshots__/

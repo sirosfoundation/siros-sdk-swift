@@ -39,7 +39,7 @@ public final class SirosWallet: @unchecked Sendable {
     // MARK: - Public state
 
     let lock = NSLock()
-    private var _state: WalletState = .disconnected
+    private var _state: WalletState = .disconnected()
     private var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
     /// Current wallet state (thread-safe read).
@@ -66,6 +66,38 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
+    /// All known accounts across all tenants. Survives logout.
+    public func listAccounts() -> [CachedAccount] { accountRegistry.listAccounts() }
+
+    /// Accounts that have passkeys and can log in.
+    public func listLoginableAccounts() -> [CachedAccount] { accountRegistry.listLoginableAccounts() }
+
+    /// Remove a cached account (forgets it from the login screen).
+    public func forgetAccount(accountId: String) {
+        accountRegistry.removeAccount(accountId: accountId)
+        if accountRegistry.activeAccountId == accountId {
+            logout()
+        }
+    }
+
+    // MARK: - Passkey Management
+
+    /// Passkeys registered for the active account.
+    public func listPasskeys() -> [CachedPasskey] {
+        guard let active = accountRegistry.activeAccountId else { return [] }
+        return accountRegistry.findAccount(accountId: active)?.passkeys ?? []
+    }
+
+    /// Rename a passkey (local AccountRegistry only).
+    public func renamePasskey(credentialId: String, nickname: String) {
+        guard let active = accountRegistry.activeAccountId,
+              var account = accountRegistry.findAccount(accountId: active) else { return }
+        account.passkeys = account.passkeys.map {
+            $0.credentialId == credentialId ? CachedPasskey(credentialId: $0.credentialId, prfSalt: $0.prfSalt, nickname: nickname) : $0
+        }
+        accountRegistry.upsertAccount(account)
+    }
+
     // MARK: - Configuration & dependencies
 
     private let config: WalletConfig
@@ -74,6 +106,7 @@ public final class SirosWallet: @unchecked Sendable {
     private let keystore: KeystoreManager
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
+    private let accountRegistry: AccountRegistry
 
     private var apiClient: BackendApiClient?
     var engineSession: WalletEngineSession?
@@ -153,6 +186,8 @@ public final class SirosWallet: @unchecked Sendable {
         #endif
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
+
+        self.accountRegistry = AccountRegistry()
 
         self.vctmFetcher = VctmFetcher { url in
             guard let u = URL(string: url) else { return nil }
@@ -267,6 +302,25 @@ public final class SirosWallet: @unchecked Sendable {
 
             let encryptedContainer = try await keystore.exportEncryptedContainer()
 
+            // Register account in the persistent registry (survives logout)
+            let accountId = "\(config.tenantId):\(session.uuid)"
+            let credIdStr = Self.b64UrlEncode(result.credentialId)
+            accountRegistry.upsertAccount(CachedAccount(
+                userId: session.uuid,
+                tenantId: config.tenantId,
+                displayName: displayName,
+                backendUrl: config.backendUrl,
+                passkeys: [CachedPasskey(
+                    credentialId: credIdStr,
+                    prfSalt: Self.b64Encode(prfSalt)
+                )],
+                hkdfSalt: Self.b64Encode(hkdfSalt),
+                hkdfInfo: Self.b64Encode(hkdfInfo)
+            ))
+            accountRegistry.activeAccountId = accountId
+
+            // Scope session store to this account
+            sessionStore.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
@@ -366,6 +420,10 @@ public final class SirosWallet: @unchecked Sendable {
                 hkdfInfo: hkdfInfo
             )
 
+            // Scope session store to this account
+            let accountId = "\(config.tenantId):\(session.uuid)"
+            sessionStore.activeAccountId = accountId
+            accountRegistry.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
@@ -404,18 +462,23 @@ public final class SirosWallet: @unchecked Sendable {
         engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
-        sessionStore.clear()
+        sessionStore.clear()  // clears active account's session only
+        accountRegistry.activeAccountId = nil
         authTokens?.clear()
         Task {
             try? await authServerClient?.logout()
         }
-        setState(.disconnected)
+        setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
     }
 
     // MARK: - Session resume
 
     /// Resume a previous session without requiring a new WebAuthn assertion.
     public func resumeSession() async {
+        // Restore the active account ID so the session store reads the right data
+        if let activeId = accountRegistry.activeAccountId {
+            sessionStore.activeAccountId = activeId
+        }
         guard let userId = sessionStore.userId, let tokens = authTokens else { return }
         setState(.connecting)
         do {
@@ -429,7 +492,7 @@ public final class SirosWallet: @unchecked Sendable {
             } catch {
                 sessionStore.clear()
                 lock.lock(); apiClient = nil; lock.unlock()
-                setState(.disconnected)
+                setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
                 return
             }
 
@@ -445,7 +508,7 @@ public final class SirosWallet: @unchecked Sendable {
                 setState(.ready(userId: userId, displayName: displayName, credentials: []))
             }
         } catch {
-            setState(.disconnected)
+            setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
     }
 
@@ -532,7 +595,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// Delete a credential by ID and sync to backend.
     public func deleteCredential(_ credentialId: String) async {
         await credentialStore.delete(credentialId)
-        if case .ready(let userId, let displayName, _) = state {
+        if case .ready(let userId, let displayName, _, _) = state {
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
         }
@@ -540,6 +603,69 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     // MARK: - Issuance
+
+    /// Discover all available credentials across all visible issuers.
+    ///
+    /// Returns a flat list of `CredentialOffer` items ready for display in a
+    /// picker UI. Each item can be passed to `startIssuanceByOffer`.
+    public func getAvailableCredentials() async throws -> [CredentialOffer] {
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else {
+            throw SirosError.wallet(message: "Not connected")
+        }
+
+        // Step 1: Get issuers from backend
+        let rawIssuers = try await client.getIssuers()
+        let issuersData: Data
+        if let dict = rawIssuers as? [[String: Any]] {
+            issuersData = try JSONSerialization.data(withJSONObject: dict)
+        } else if let obj = rawIssuers as? [String: Any],
+                  let arr = obj["issuers"] as? [[String: Any]] ?? obj["data"] as? [[String: Any]] {
+            issuersData = try JSONSerialization.data(withJSONObject: arr)
+        } else {
+            issuersData = try JSONSerialization.data(withJSONObject: rawIssuers)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let issuers = (try? decoder.decode([IssuerEntry].self, from: issuersData))?.filter { $0.visible } ?? []
+
+        // Step 2: For each issuer, fetch metadata and build offers
+        var offers: [CredentialOffer] = []
+        for issuer in issuers {
+            do {
+                let metaDict = try await client.getIssuerMetadata(id: Int(issuer.id))
+                let metaData = try JSONSerialization.data(withJSONObject: metaDict)
+                let metaDecoder = JSONDecoder()
+                let metadata = try metaDecoder.decode(IssuerMetadata.self, from: metaData)
+
+                let issuerDisplay = metadata.display?.first
+                let issuerName = issuerDisplay?.name
+                    ?? URL(string: issuer.credentialIssuerIdentifier)?.host
+                    ?? issuer.credentialIssuerIdentifier
+
+                for (configId, config) in metadata.credentialConfigurationsSupported {
+                    let credDisplay = config.credentialMetadata?.display?.first
+                    let credName = credDisplay?.name ?? configId
+
+                    offers.append(CredentialOffer(
+                        credentialConfigurationId: configId,
+                        credentialIssuerIdentifier: issuer.credentialIssuerIdentifier,
+                        credentialName: credName,
+                        credentialDescription: credDisplay?.description,
+                        issuerName: issuerName,
+                        backgroundColor: credDisplay?.backgroundColor ?? issuerDisplay?.backgroundColor,
+                        textColor: credDisplay?.textColor ?? issuerDisplay?.textColor,
+                        logoUri: credDisplay?.logo?.uri,
+                        issuerLogoUri: issuerDisplay?.logo?.uri
+                    ))
+                }
+            } catch {
+                // Skip issuers that fail metadata fetch
+                continue
+            }
+        }
+        return offers
+    }
 
     /// Start issuance with a credential offer object.
     public func startIssuanceByOffer(_ offer: CredentialOffer) async throws {
@@ -960,7 +1086,7 @@ public final class SirosWallet: @unchecked Sendable {
 
         // Transition to FlowActive state
         switch state {
-        case .ready(let userId, let displayName, let creds),
+        case .ready(let userId, let displayName, let creds, _),
              .flowActive(let userId, let displayName, _, _, _, let creds):
             setState(.flowActive(
                 userId: userId,
@@ -1028,7 +1154,7 @@ public final class SirosWallet: @unchecked Sendable {
 
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),
-             .ready(let userId, let displayName, _):
+             .ready(let userId, let displayName, _, _):
             Task {
                 let creds = await credentialStore.getAll()
                 setState(.ready(userId: userId, displayName: displayName, credentials: creds))

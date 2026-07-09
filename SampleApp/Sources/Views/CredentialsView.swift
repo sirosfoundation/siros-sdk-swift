@@ -7,44 +7,43 @@ struct CredentialsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Welcome, \(viewModel.displayName ?? "User")")
-                    .font(.title2.bold())
-                    .padding(.horizontal)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Welcome, \(viewModel.displayName ?? "User")")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 16)
 
-                Text(credentialCountText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
+            Text(credentialCountText)
+                .font(.subheadline)
+                .foregroundColor(SirosTheme.onSurfaceVariant)
+                .padding(.horizontal, 16)
 
-                if viewModel.credentials.isEmpty {
-                    emptyState
-                } else if viewModel.credentials.count == 1 {
-                    CredentialCardView(credential: viewModel.credentials[0])
-                        .onTapGesture {
-                            viewModel.openCredentialDetail(viewModel.credentials[0])
-                        }
-                        .padding(.horizontal)
-                } else {
-                    TabView {
-                        ForEach(viewModel.credentials, id: \.id) { credential in
-                            CredentialCardView(credential: credential)
-                                .onTapGesture {
-                                    viewModel.openCredentialDetail(credential)
-                                }
-                                .padding(.horizontal)
-                        }
+            Spacer().frame(height: 16)
+
+            if viewModel.credentials.isEmpty {
+                emptyState
+            } else if viewModel.credentials.count == 1 {
+                CredentialCardView(credential: viewModel.credentials[0])
+                    .onTapGesture {
+                        viewModel.openCredentialDetail(viewModel.credentials[0])
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .always))
+                    .padding(.horizontal, 16)
+            } else {
+                TabView {
+                    ForEach(viewModel.credentials, id: \.id) { credential in
+                        CredentialCardView(credential: credential)
+                            .onTapGesture {
+                                viewModel.openCredentialDetail(credential)
+                            }
+                            .padding(.horizontal, 16)
+                    }
                 }
-
-                Spacer()
+                .tabViewStyle(.page(indexDisplayMode: .always))
             }
-            .padding(.top, 12)
-            .navigationTitle("Credentials")
-            .navigationBarTitleDisplayMode(.inline)
+
+            Spacer()
         }
+        .padding(.top, 12)
     }
 
     private var credentialCountText: String {
@@ -57,24 +56,29 @@ struct CredentialsView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Spacer()
-            Image(systemName: "wallet.pass")
+            Image(systemName: "plus.circle.fill")
                 .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+                .foregroundColor(SirosTheme.brand)
             Text("No credentials yet")
                 .font(.headline)
-            Text("Add your first credential to get started.")
+                .fontWeight(.medium)
+            Text("Tap to add your first credential")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundColor(SirosTheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
-            Button("Add Credential") {
-                viewModel.openAddCredential()
-            }
-            .buttonStyle(.borderedProminent)
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .padding()
+        .padding(32)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(SirosTheme.surfaceVariant)
+        )
+        .padding(.horizontal, 16)
+        .onTapGesture {
+            viewModel.openAddCredential()
+        }
     }
 }

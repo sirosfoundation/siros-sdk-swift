@@ -94,7 +94,7 @@ struct CredentialDetailView: View {
     private var claimsTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                let claims = CredentialUtils.extractClaims(from: credential)
+                let claims = CredentialUtils.extractClaims(credential)
                 if claims.isEmpty {
                     Text("No claims available")
                         .foregroundStyle(.secondary)

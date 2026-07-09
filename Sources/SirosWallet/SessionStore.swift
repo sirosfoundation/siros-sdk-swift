@@ -4,9 +4,13 @@ import Foundation
 
 /// Protocol for persisting session tokens and key material across app launches.
 ///
-/// On iOS/macOS, implement using the Keychain. On other platforms, use any
-/// secure storage appropriate for the environment.
+/// All reads/writes are scoped to the ``activeAccountId``. When set,
+/// keys are prefixed with `{accountId}/` so multiple accounts coexist.
+/// When nil, reads return nil and writes are no-ops.
 public protocol SessionStoreProtocol: AnyObject, Sendable {
+    /// The currently active account ID (`tenantId:userId`).
+    var activeAccountId: String? { get set }
+
     var appToken: String? { get set }
     var refreshToken: String? { get set }
     var userId: String? { get set }
@@ -20,23 +24,37 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     var privateDataJwe: String? { get set }
     var privateDataEtag: String? { get set }
     var hasSession: Bool { get }
+
+    /// Clear the active account's session data only.
+    func clearAccount()
+    /// Clear all accounts' session data (factory reset).
+    func clearAll()
+    /// Legacy alias for ``clearAccount()``.
     func clear()
 }
 
-/// Simple in-memory session store for testing and Linux.
+/// Account-keyed in-memory session store for testing and Linux.
 public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var store: [String: String] = [:]
 
+    public var activeAccountId: String?
+
     public init() {}
 
+    private func scopedKey(_ key: String) -> String? {
+        guard let id = activeAccountId else { return nil }
+        return "\(id)/\(key)"
+    }
     private func get(_ key: String) -> String? {
+        guard let k = scopedKey(key) else { return nil }
         lock.lock(); defer { lock.unlock() }
-        return store[key]
+        return store[k]
     }
     private func set(_ key: String, _ value: String?) {
+        guard let k = scopedKey(key) else { return }
         lock.lock(); defer { lock.unlock() }
-        if let value { store[key] = value } else { store.removeValue(forKey: key) }
+        if let value { store[k] = value } else { store.removeValue(forKey: k) }
     }
 
     public var appToken: String? { get { get("appToken") } set { set("appToken", newValue) } }
@@ -54,8 +72,18 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
 
     public var hasSession: Bool { userId != nil }
 
-    public func clear() {
+    public func clearAccount() {
+        guard let id = activeAccountId else { return }
+        let prefix = "\(id)/"
+        lock.lock(); defer { lock.unlock() }
+        store = store.filter { !$0.key.hasPrefix(prefix) }
+    }
+
+    public func clearAll() {
         lock.lock(); defer { lock.unlock() }
         store.removeAll()
+        activeAccountId = nil
     }
+
+    public func clear() { clearAccount() }
 }

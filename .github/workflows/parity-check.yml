@@ -1,0 +1,57 @@
+name: UX Parity Check
+
+on:
+  pull_request:
+    paths:
+      - 'SampleApp/Sources/**'
+      - 'SampleApp/Resources/**'
+  workflow_dispatch:
+
+jobs:
+  parity-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify screen inventory coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          MISSING=0
+          echo "## UX Parity Check — Swift" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Screen | Pattern | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|---------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          # Screen inventory patterns (must match in SampleApp source)
+          declare -A SCREENS
+          SCREENS[login_screen]="LoginView|cachedAccounts.*showOtherLogin"
+          SCREENS[credentials_view]="CredentialsView|Welcome,"
+          SCREENS[credential_card]="CredentialCardView|EXPIRED"
+          SCREENS[credential_detail]="CredentialDetailView|claimsTab"
+          SCREENS[add_credential]="AddCredentialView|pendingIssuanceOffer|confirmIssuance"
+          SCREENS[presentation_consent]="PresentationConsentView|claimSelectionStep|summaryStep"
+          SCREENS[presentation_history]="PresentationHistoryView|filterCredentialId"
+          SCREENS[settings]="SettingsView|renamePasskey"
+          SCREENS[wscd_developer]="WscaDeveloperView|enrollWscd|rotateLifecycle"
+          SCREENS[qr_scanner]="QRScannerView|handleQrResult"
+          SCREENS[dark_mode]="SirosBackground.colorset|luminosity.*dark"
+          SCREENS[i18n_source]="i18n/en.json"
+
+          for screen in "${!SCREENS[@]}"; do
+            pattern="${SCREENS[$screen]}"
+            if grep -rqE "$pattern" SampleApp/Sources/ SampleApp/Resources/ .github/workflows/ 2>/dev/null; then
+              echo "| $screen | \`$pattern\` | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $screen | \`$pattern\` | ❌ MISSING |" >> "$GITHUB_STEP_SUMMARY"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          if [ "$MISSING" -gt 0 ]; then
+            echo ""
+            echo "::error::$MISSING screen(s) missing from parity inventory"
+            exit 1
+          fi
+          echo ""
+          echo "All screens present ✅" >> "$GITHUB_STEP_SUMMARY"

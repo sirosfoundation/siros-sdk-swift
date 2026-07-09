@@ -7,7 +7,7 @@ import SirosCredentials
 final class WalletStateTests: XCTestCase {
 
     func testDisconnectedEquality() {
-        XCTAssertEqual(WalletState.disconnected, WalletState.disconnected)
+        XCTAssertEqual(WalletState.disconnected(), WalletState.disconnected())
     }
 
     func testReadyEquality() {
@@ -57,9 +57,9 @@ final class WalletStateTests: XCTestCase {
     }
 
     func testDifferentCasesNotEqual() {
-        XCTAssertNotEqual(WalletState.disconnected, WalletState.connecting)
+        XCTAssertNotEqual(WalletState.disconnected(), WalletState.connecting)
         XCTAssertNotEqual(
-            WalletState.disconnected,
+            WalletState.disconnected(),
             WalletState.error(message: "err")
         )
     }
