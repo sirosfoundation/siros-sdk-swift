@@ -24,16 +24,10 @@ struct WscaDeveloperView: View {
                     sectionHeader("Plugin")
                     HStack(spacing: 8) {
                         ForEach(["softkey", "r2ps", "fido2"], id: \.self) { pluginId in
-                            Button(action: { viewModel.selectPlugin(pluginId) }) {
-                                Text(pluginId)
-                                    .font(.subheadline)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                            }
-                            .buttonStyle(
-                                viewModel.selectedPluginId == pluginId
-                                    ? .borderedProminent
-                                    : .bordered
+                            PluginChip(
+                                label: pluginId,
+                                isSelected: viewModel.selectedPluginId == pluginId,
+                                action: { viewModel.selectPlugin(pluginId) }
                             )
                         }
                     }
@@ -230,5 +224,32 @@ struct WscaDeveloperView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.string(from: date)
+    }
+}
+
+// MARK: - Plugin selection chip
+
+private struct PluginChip: View {
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isSelected ? Color.accentColor : Color.clear)
+                )
+                .foregroundColor(isSelected ? .white : .accentColor)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.accentColor, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
