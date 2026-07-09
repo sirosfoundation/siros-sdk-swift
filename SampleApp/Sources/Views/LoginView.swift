@@ -4,6 +4,10 @@ import SwiftUI
 
 struct LoginView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    @State private var showRegister = false
+    @State private var showOtherLogin = false
+    @State private var registerName = ""
+    @State private var showBackendInfo = false
 
     var body: some View {
         ScrollView {
@@ -17,60 +21,35 @@ struct LoginView: View {
                 Text("SIROS ID")
                     .font(.title.bold())
 
-                Text("Sample Wallet App")
-                    .font(.subheadline)
+                Button(action: { showBackendInfo.toggle() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "info.circle")
+                            .font(.caption2)
+                        Text(showBackendInfo ? viewModel.backendUrl : "Sample Wallet App")
+                            .font(.subheadline)
+                    }
                     .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
 
                 Spacer().frame(height: 20)
 
                 VStack(spacing: 12) {
-                    TextField("Backend URL", text: $viewModel.backendUrl)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .disabled(viewModel.isLoading)
+                    if showBackendInfo {
+                        TextField("Backend URL", text: $viewModel.backendUrl)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .disabled(viewModel.isLoading)
 
-                    TextField("Tenant ID", text: $viewModel.tenantId)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .disabled(viewModel.isLoading)
-
-                    // R2PS remote signing toggle
-                    Toggle("R2PS Remote Signing", isOn: $viewModel.r2psEnabled)
-                        .disabled(viewModel.isLoading)
-
-                    if viewModel.r2psEnabled {
-                        TextField("R2PS Server URL", text: $viewModel.r2psServerUrl)
+                        TextField("Tenant ID", text: $viewModel.tenantId)
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                             .disabled(viewModel.isLoading)
                     }
 
-                    Spacer().frame(height: 4)
-
-                    Button(action: viewModel.login) {
-                        HStack {
-                            if viewModel.isLoading {
-                                ProgressView()
-                                    .tint(.white)
-                            }
-                            Text("Sign In with Passkey")
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isLoading)
-
-                    Button(action: viewModel.register) {
-                        Text("Create Account")
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(viewModel.isLoading)
+                    loginContent
                 }
                 .padding(20)
                 .background(
@@ -79,6 +58,113 @@ struct LoginView: View {
                 )
             }
             .padding(.horizontal, 32)
+        }
+    }
+
+    @ViewBuilder
+    private var loginContent: some View {
+        if showRegister {
+            // Mode C: Registration
+            Text("Create Account")
+                .font(.headline)
+
+            TextField("Display name", text: $registerName)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .disabled(viewModel.isLoading)
+
+            Text("\(registerName.utf8.count)/64")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            Button(action: {
+                viewModel.register(displayName: registerName)
+            }) {
+                HStack {
+                    if viewModel.isLoading {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text("Sign up with passkey")
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(viewModel.isLoading || registerName.isEmpty || registerName.utf8.count > 64)
+
+            Button("Already have an account? Login") {
+                showRegister = false
+            }
+            .font(.subheadline)
+
+        } else if !viewModel.cachedAccounts.isEmpty && !showOtherLogin {
+            // Mode A: Cached accounts picker
+            Text("Welcome back")
+                .font(.headline)
+
+            ForEach(viewModel.cachedAccounts, id: \.accountId) { account in
+                HStack(spacing: 8) {
+                    Button(action: {
+                        viewModel.loginWithAccount(account)
+                    }) {
+                        HStack {
+                            if viewModel.isLoading {
+                                ProgressView()
+                                    .tint(.white)
+                            }
+                            Text(account.displayName)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.isLoading)
+
+                    Button(action: {
+                        viewModel.forgetAccount(account.accountId)
+                    }) {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+
+            Button("Use other account") {
+                showOtherLogin = true
+            }
+            .font(.subheadline)
+
+        } else {
+            // Mode B: Generic passkey login
+            Button(action: viewModel.login) {
+                HStack {
+                    if viewModel.isLoading {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text("Sign In with Passkey")
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(viewModel.isLoading)
+
+            Button("New here? Sign up") {
+                showRegister = true
+            }
+            .font(.subheadline)
+
+            if !viewModel.cachedAccounts.isEmpty {
+                Button("Back to saved accounts") {
+                    showOtherLogin = false
+                }
+                .font(.subheadline)
+            }
         }
     }
 }

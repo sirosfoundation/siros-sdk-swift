@@ -22,6 +22,8 @@ struct ContentView: View {
                     QRScannerView()
                 } else if viewModel.showAddCredential {
                     AddCredentialView()
+                } else if viewModel.showWscaDeveloper {
+                    WscaDeveloperView()
                 } else {
                     MainTabView()
                 }
