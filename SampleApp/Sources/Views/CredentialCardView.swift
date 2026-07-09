@@ -52,6 +52,25 @@ struct CredentialCardView: View {
                 .fill(bgColor)
         )
         .shadow(color: bgColor.opacity(0.3), radius: 8, y: 4)
+        .overlay(alignment: .topTrailing) {
+            if isExpired {
+                Text("EXPIRED")
+                    .font(.caption2.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(SirosTheme.error)
+                    )
+                    .padding(8)
+            }
+        }
+    }
+
+    private var isExpired: Bool {
+        guard let expiresAt = credential.expiresAt, expiresAt > 0 else { return false }
+        return Date(timeIntervalSince1970: Double(expiresAt) / 1000.0) < Date()
     }
 
     @ViewBuilder
