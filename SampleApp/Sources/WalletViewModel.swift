@@ -344,13 +344,28 @@ final class WalletViewModel: ObservableObject {
 
     func closeAddCredential() {
         showAddCredential = false
+        pendingIssuanceOffer = nil
     }
 
+    // MARK: - Issuance consent
+
+    @Published var pendingIssuanceOffer: CredentialOffer?
+
     func selectCredentialOffer(_ offer: CredentialOffer) {
+        pendingIssuanceOffer = offer
+    }
+
+    func confirmIssuance() {
+        guard let offer = pendingIssuanceOffer else { return }
+        pendingIssuanceOffer = nil
         showAddCredential = false
         Task {
             try? await wallet?.startIssuanceByOffer(offer)
         }
+    }
+
+    func cancelIssuance() {
+        pendingIssuanceOffer = nil
     }
 
     func openCredentialDetail(_ credential: StoredCredential) {

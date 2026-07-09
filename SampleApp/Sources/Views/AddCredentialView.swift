@@ -41,7 +41,22 @@ struct AddCredentialView: View {
                     Button("Back") { viewModel.closeAddCredential() }
                 }
             }
+            .alert("Add Credential?", isPresented: showIssuanceConsent) {
+                Button("Accept") { viewModel.confirmIssuance() }
+                Button("Cancel", role: .cancel) { viewModel.cancelIssuance() }
+            } message: {
+                if let offer = viewModel.pendingIssuanceOffer {
+                    Text("You are about to request \"\(offer.credentialName)\" from \(offer.issuerName).")
+                }
+            }
         }
+    }
+
+    private var showIssuanceConsent: Binding<Bool> {
+        Binding(
+            get: { viewModel.pendingIssuanceOffer != nil },
+            set: { if !$0 { viewModel.cancelIssuance() } }
+        )
     }
 }
 
