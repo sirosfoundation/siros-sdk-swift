@@ -332,8 +332,12 @@ final class WalletViewModel: ObservableObject {
         showAddCredential = true
         isLoadingOffers = true
         Task {
-            // TODO: getAvailableCredentials() not yet in Swift SDK — will be added for parity
-            availableCredentials = []
+            do {
+                availableCredentials = try await wallet?.getAvailableCredentials() ?? []
+            } catch {
+                print("Failed to load available credentials: \(error)")
+                availableCredentials = []
+            }
             isLoadingOffers = false
         }
     }
