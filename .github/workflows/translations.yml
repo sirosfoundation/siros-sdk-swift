@@ -1,0 +1,45 @@
+name: Translations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'SampleApp/Resources/i18n/en.json'
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  push-source:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sirosfoundation/.github/actions/transifex-push@feat/transifex-workflows
+        with:
+          tx-token: ${{ secrets.TX_TOKEN }}
+          source-file: SampleApp/Resources/i18n/en.json
+          tx-organization: sirosfoundation
+          tx-project: siros-wallet
+          tx-resource: ios-sample-app
+          tx-file-format: STRUCTURED_JSON
+
+  pull-translations:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sirosfoundation/.github/actions/transifex-pull@feat/transifex-workflows
+        with:
+          tx-token: ${{ secrets.TX_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          source-file: SampleApp/Resources/i18n/en.json
+          tx-organization: sirosfoundation
+          tx-project: siros-wallet
+          tx-resource: ios-sample-app
+          tx-file-format: STRUCTURED_JSON
+          minimum-percentage: '80'

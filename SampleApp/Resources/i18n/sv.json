@@ -1,0 +1,108 @@
+{
+  "app": {
+    "name": "SIROS Plånbok",
+    "tagline": "Digital Identitet För Människor"
+  },
+  "login": {
+    "title": "SIROS Plånbok",
+    "signInButton": "Logga in med Passkey",
+    "signUpButton": "Registrera med passkey",
+    "createAccount": "Skapa Konto",
+    "displayNameLabel": "Visningsnamn",
+    "displayNameCount": "%1$d/64",
+    "alreadyHaveAccount": "Har du redan ett konto? Logga in",
+    "newHere": "Ny här? Registrera dig",
+    "useOtherAccount": "Använd annat konto",
+    "backToSavedAccounts": "Tillbaka till sparade konton",
+    "welcomeBack": "Välkommen tillbaka"
+  },
+  "credentials": {
+    "welcome": "Välkommen, %1$s",
+    "countZero": "Inga intyg ännu",
+    "countOne": "1 intyg",
+    "countOther": "%1$d intyg",
+    "emptyTitle": "Inga intyg ännu",
+    "emptySubtitle": "Tryck för att lägga till ditt första intyg",
+    "addTitle": "Lägg till Intyg",
+    "addLoading": "Laddar tillgängliga intyg...",
+    "addEmpty": "Inga intyg tillgängliga"
+  },
+  "presentation": {
+    "title": "Intygsbegäran",
+    "requestingCredentials": "%1$s begär följande intyg:",
+    "requestingCredentialsUnknown": "En verifierare begär följande intyg:",
+    "dataFieldsRequested": "%1$d datafält begärda",
+    "selectData": "Välj vilka uppgifter att dela:",
+    "required": "Obligatorisk",
+    "readyToShare": "Redo att dela",
+    "sharingSummary": "Du kommer att dela följande med %1$s:",
+    "shareButton": "Dela",
+    "declineButton": "Avböj",
+    "nextButton": "Nästa",
+    "backButton": "Tillbaka"
+  },
+  "settings": {
+    "title": "Inställningar",
+    "accountSection": "Konto",
+    "signedInAs": "Inloggad som",
+    "backendUrl": "Serveradress",
+    "tenantId": "Klient-ID",
+    "credentialsStored": "Sparade intyg",
+    "passkeysSection": "Passkeys",
+    "noPasskeys": "Inga passkeys registrerade",
+    "otherAccounts": "Andra konton",
+    "activitySection": "Aktivitet",
+    "presentationHistory": "Presentationshistorik",
+    "wscdSection": "WSCD-livscykel",
+    "wscdStateLabel": "Status",
+    "wscdNotEnrolled": "Ej registrerad",
+    "wscdEnroll": "Registrera WSCD",
+    "wscdDeveloper": "WSCA Utvecklare",
+    "disconnectButton": "Koppla från"
+  },
+  "wscd": {
+    "title": "WSCA Utvecklare",
+    "buildInfo": "Bygginfo",
+    "appVersion": "Appversion",
+    "platform": "Plattform",
+    "wscdManager": "siros-wscd-manager (UniFFI)",
+    "pluginSection": "Plugin",
+    "lifecycleStatus": "Livscykelstatus",
+    "stateLabel": "Status",
+    "contextId": "Kontext-ID",
+    "pluginLabel": "Plugin",
+    "factorKind": "Faktortyp",
+    "updatedLabel": "Uppdaterad",
+    "enrollButton": "Registrera (%1$s)",
+    "rotateButton": "Rotera Nycklar",
+    "destroyLocal": "Förstör (Lokal)",
+    "destroyRevoke": "Förstör + Revokera",
+    "refreshButton": "Uppdatera",
+    "storedKeys": "Lagrade nycklar (%1$d)",
+    "noKeys": "Inga nycklar lagrade"
+  },
+  "error": {
+    "title": "Något gick fel",
+    "retryButton": "Försök igen"
+  },
+  "flow": {
+    "cancelButton": "Avbryt"
+  },
+  "nav": {
+    "credentials": "Intyg",
+    "add": "Lägg till",
+    "settings": "Inställningar",
+    "qrScan": "Skanna QR-kod",
+    "back": "Tillbaka"
+  },
+  "qr": {
+    "title": "Skanna QR-kod",
+    "manualInput": "Eller klistra in en URL för intygsutfärdande:",
+    "pasteButton": "Skicka",
+    "unrecognised": "Okänd QR-kod"
+  },
+  "history": {
+    "title": "Presentationshistorik",
+    "empty": "Ingen presentationshistorik"
+  }
+}
