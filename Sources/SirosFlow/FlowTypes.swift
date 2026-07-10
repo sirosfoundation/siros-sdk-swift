@@ -32,6 +32,7 @@ public struct SignParams: Sendable {
     public var nonce: String?
     public var issuer: String?
     public var responseUri: String?
+    public var verifierJwkThumbprint: String?
     public var count: Int?
     public var proofTypesSupported: [String: Any]?
     public var credentialsToInclude: [[String: Any]]?
@@ -41,6 +42,7 @@ public struct SignParams: Sendable {
         nonce: String? = nil,
         issuer: String? = nil,
         responseUri: String? = nil,
+        verifierJwkThumbprint: String? = nil,
         count: Int? = nil,
         proofTypesSupported: [String: Any]? = nil,
         credentialsToInclude: [[String: Any]]? = nil
@@ -49,6 +51,7 @@ public struct SignParams: Sendable {
         self.nonce = nonce
         self.issuer = issuer
         self.responseUri = responseUri
+        self.verifierJwkThumbprint = verifierJwkThumbprint
         self.count = count
         self.proofTypesSupported = proofTypesSupported
         self.credentialsToInclude = credentialsToInclude

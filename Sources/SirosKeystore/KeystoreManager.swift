@@ -49,6 +49,16 @@ public protocol KeystoreManager: AnyObject, Sendable {
         audience: String
     ) async throws -> String
 
+    /// Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation.
+    func signMdocPresentation(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        nonce: String,
+        audience: String,
+        responseUri: String,
+        verifierJwkThumbprint: String?
+    ) async throws -> Data
+
     /// Export the encrypted container for backend sync.
     func exportEncryptedContainer() async throws -> Data
 
@@ -85,6 +95,16 @@ public protocol KeystoreManager: AnyObject, Sendable {
 /// Default implementation for optional methods.
 public extension KeystoreManager {
     func securityProperties() async -> SignerSecurityProperties? { nil }
+    func signMdocPresentation(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        nonce: String,
+        audience: String,
+        responseUri: String,
+        verifierJwkThumbprint: String?
+    ) async throws -> Data {
+        throw KeystoreError.invalidParameter("mDoc presentation not supported by this keystore")
+    }
 }
 
 /// Result of a generateKeypairs call.

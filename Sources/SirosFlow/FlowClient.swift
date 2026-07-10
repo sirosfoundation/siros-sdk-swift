@@ -199,6 +199,7 @@ public final class FlowClient: CredentialNotifier, @unchecked Sendable {
             nonce: payload["nonce"]?.stringValue,
             issuer: payload["issuer"]?.stringValue,
             responseUri: payload["response_uri"]?.stringValue,
+            verifierJwkThumbprint: payload["verifier_jwk_thumbprint"]?.stringValue,
             count: payload["count"]?.intValue,
             proofTypesSupported: proofTypesSupported,
             credentialsToInclude: payload["credentials_to_include"]?.arrayValue?.compactMap {
