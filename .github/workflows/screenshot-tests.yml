@@ -32,7 +32,7 @@ jobs:
     if: false  # Enable when swift-snapshot-testing is configured
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run snapshot tests
         run: swift test --filter ScreenshotTests
       - name: Upload diffs on failure
