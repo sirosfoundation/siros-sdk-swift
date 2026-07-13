@@ -119,6 +119,8 @@ public final class SirosWallet: @unchecked Sendable {
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
     private var lastTrustResults: [String: TrustResult] = [:]
+    /// Persistent trust cache for degraded-mode operation.
+    private let trustCache = TrustCache()
 
     // New AS-based auth
     private var authServerClient: AuthServerClient?
@@ -1209,9 +1211,21 @@ public final class SirosWallet: @unchecked Sendable {
             lastTrustResults[flowId] = trustResult
             lock.unlock()
 
+            // Populate trust cache (only positive results are stored)
+            trustCache.put(identifier: subjectId, result: trustResult)
+
             engine.sendTrustResult(flowId: flowId, trusted: decision)
         } catch {
-            engine.sendTrustResult(flowId: flowId, trusted: false, reason: error.localizedDescription)
+            // Degraded mode: check cache for a recent positive result
+            if let cached = trustCache.get(identifier: subjectId) {
+                print("[SirosWallet] ⚠️ Using cached trust result for \(subjectId) (backend unreachable)")
+                lock.lock()
+                lastTrustResults[flowId] = cached
+                lock.unlock()
+                engine.sendTrustResult(flowId: flowId, trusted: true)
+            } else {
+                engine.sendTrustResult(flowId: flowId, trusted: false, reason: error.localizedDescription)
+            }
         }
     }
 
