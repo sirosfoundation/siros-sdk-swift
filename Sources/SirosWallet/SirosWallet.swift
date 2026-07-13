@@ -1086,6 +1086,23 @@ public final class SirosWallet: @unchecked Sendable {
             }
         }
 
+        // Handle server-side issuer trust result (informational, no response needed)
+        if msg.step == "trust_evaluated",
+           let payloadDict,
+           payloadDict["issuer_trust_evaluated"]?.boolValue == true {
+            let trustResult = TrustResult(
+                trusted: payloadDict["trusted"]?.boolValue ?? false,
+                framework: payloadDict["framework"]?.stringValue,
+                reason: payloadDict["reason"]?.stringValue,
+                identifier: payloadDict["issuer"]?.stringValue
+            )
+            lock.lock()
+            lastTrustResults[msg.flowId] = trustResult
+            lock.unlock()
+            trustCache.put(identifier: trustResult.identifier ?? "", result: trustResult)
+            print("[SirosWallet] Server-side issuer trust: trusted=\(trustResult.trusted) for \(trustResult.identifier ?? "?")")
+        }
+
         // Handle authorization required
         if msg.step == "authorization_required" {
             if let payloadDict {
