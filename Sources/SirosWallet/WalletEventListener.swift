@@ -6,11 +6,14 @@ import SirosCredentials
 /// Context provided when a verifier requests credential presentation.
 public struct PresentationRequest: Sendable {
     public var verifierName: String?
+    /// Trust evaluation result with full metadata. Nil if trust was not evaluated.
+    public var trustResult: TrustResult?
     public var candidates: [StoredCredential]
     public var requestedClaims: [[String]]
 
-    public init(verifierName: String? = nil, candidates: [StoredCredential], requestedClaims: [[String]] = []) {
+    public init(verifierName: String? = nil, trustResult: TrustResult? = nil, candidates: [StoredCredential], requestedClaims: [[String]] = []) {
         self.verifierName = verifierName
+        self.trustResult = trustResult
         self.candidates = candidates
         self.requestedClaims = requestedClaims
     }
