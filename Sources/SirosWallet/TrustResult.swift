@@ -51,4 +51,10 @@ public struct TrustResult: Sendable {
         self.identifier = identifier
         self.domain = domain
     }
+
+    /// Parsed client_id_scheme providing type-safe access to the verifier identity.
+    public var parsedScheme: ClientIdScheme? {
+        guard let identifier else { return nil }
+        return ClientIdScheme.parse(identifier)
+    }
 }
