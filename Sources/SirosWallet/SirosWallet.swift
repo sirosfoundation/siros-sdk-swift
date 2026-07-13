@@ -117,6 +117,8 @@ public final class SirosWallet: @unchecked Sendable {
     var activeVctm: Vctm?
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
+    /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
+    private var lastTrustResults: [String: TrustResult] = [:]
 
     // New AS-based auth
     private var authServerClient: AuthServerClient?
@@ -1026,12 +1028,19 @@ public final class SirosWallet: @unchecked Sendable {
 
     private func handleMatchRequest(engine: WalletEngineSession, msg: MatchRequestMessage) async {
         let allCreds = await credentialStore.getAll()
-        lock.lock(); let listener = eventListener; lock.unlock()
+        lock.lock()
+        let listener = eventListener
+        let trustResult = lastTrustResults.removeValue(forKey: msg.flowId)
+        lock.unlock()
 
         let selectedIds: [String]
         if let listener, !allCreds.isEmpty {
             selectedIds = await listener.onCredentialSelectionRequired(
-                request: PresentationRequest(candidates: allCreds)
+                request: PresentationRequest(
+                    verifierName: trustResult?.entityName,
+                    trustResult: trustResult,
+                    candidates: allCreds
+                )
             )
         } else {
             selectedIds = allCreds.map(\.id)
@@ -1164,6 +1173,26 @@ public final class SirosWallet: @unchecked Sendable {
         do {
             let response = try await client.evaluateTrust(evaluationRequest)
             let decision = response["decision"] as? Bool ?? false
+            let context = response["context"] as? [String: Any]
+            let reqContext = request["context"] as? [String: Any]
+
+            // Build typed TrustResult from the PDP response
+            let trustResult = TrustResult(
+                trusted: decision,
+                framework: context?["framework"] as? String,
+                reason: (context?["reason"] as? String) ?? (context?["message"] as? String),
+                entityName: context?["entity_name"] as? String,
+                entityLogo: context?["logo_uri"] as? String,
+                clientIdScheme: reqContext?["client_id_scheme"] as? String,
+                identifier: subjectId,
+                domain: context?["domain"] as? String
+            )
+
+            // Store for use in credential selection UI
+            lock.lock()
+            lastTrustResults[flowId] = trustResult
+            lock.unlock()
+
             engine.sendTrustResult(flowId: flowId, trusted: decision)
         } catch {
             engine.sendTrustResult(flowId: flowId, trusted: false, reason: error.localizedDescription)
