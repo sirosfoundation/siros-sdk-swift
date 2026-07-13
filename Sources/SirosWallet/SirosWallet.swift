@@ -971,6 +971,9 @@ public final class SirosWallet: @unchecked Sendable {
                 let audience = msg.params.audience ?? ""
                 let credsToInclude = msg.params.credentialsToInclude
 
+                // Validate audience matches trusted verifier identity
+                validateAudience(flowId: msg.flowId, audience: audience)
+
                 if let credsToInclude, !credsToInclude.isEmpty {
                     let allCreds = await credentialStore.getAll()
                     var vpParts: [String] = []
@@ -1130,6 +1133,19 @@ public final class SirosWallet: @unchecked Sendable {
             ))
         default:
             break
+        }
+    }
+
+    /// Validates that the audience for VP signing matches the trusted verifier identity.
+    /// Logs a warning if there's a mismatch (defense-in-depth against MITM).
+    private func validateAudience(flowId: String, audience: String) {
+        lock.lock()
+        let trustResult = lastTrustResults[flowId]
+        lock.unlock()
+
+        guard let trustResult, let expectedId = trustResult.identifier else { return }
+        if !audience.isEmpty && !expectedId.isEmpty && audience != expectedId {
+            print("[SirosWallet] ⚠️ Audience mismatch for flow \(flowId): sign_request audience='\(audience)' != trusted identifier='\(expectedId)'")
         }
     }
 
