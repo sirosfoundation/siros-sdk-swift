@@ -459,11 +459,14 @@ public final class SirosWallet: @unchecked Sendable {
     public func logout() {
         lock.lock()
         let engine = engineSession
+        let peer = wmpPeer
         engineSession = nil
+        wmpPeer = nil
         credentialNotifier = nil
         apiClient = nil
         lock.unlock()
         engine?.disconnect()
+        if let peer { Task { try? await peer.close() } }
         cancelEngineTasks()
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
@@ -907,11 +910,156 @@ public final class SirosWallet: @unchecked Sendable {
     /// Connect engine using an anonymous token from the AS.
     private func connectEngineWithToken(_ tokens: AuthTokens) async throws {
         let token = try await tokens.ensureAnonymousToken()
-        try await connectEngine(appToken: token.raw)
+        if config.useWmpProtocol {
+            try await connectViaWmp(appToken: token.raw)
+        } else {
+            try await connectEngine(appToken: token.raw)
+        }
     }
 
+    // MARK: - WMP Protocol Path
+
+    private var wmpPeer: WmpPeer?
+
+    private func connectViaWmp(appToken: String) async throws {
+        // Resolve engine base URL
+        let engineBase: String
+        if !config.engineUrl.isEmpty {
+            engineBase = config.engineUrl
+        } else if let discovered = await WalletConfig.discoverEngineUrl(backendUrl: config.backendUrl) {
+            engineBase = discovered
+        } else {
+            engineBase = config.backendUrl
+        }
+
+        let wsUrl = engineBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .replacingOccurrences(of: "http://", with: "ws://")
+            .replacingOccurrences(of: "https://", with: "wss://")
+            + "/api/v2/wallet?tenant_id=\(config.tenantId)"
+
+        let transport = WmpWebSocketTransport(url: URL(string: wsUrl)!)
+        let session = WmpSession(transport: transport)
+        let peer = WmpPeer(session: session)
+
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { [weak self] flowId, params in
+                guard let self else { throw SirosError.auth(message: "Wallet deallocated") }
+                return try await self.handleWmpSignRequest(flowId: flowId, params: params)
+            },
+            onMatchRequest: { [weak self] flowId, payload in
+                guard let self else { throw SirosError.auth(message: "Wallet deallocated") }
+                return await self.handleWmpMatchRequest(flowId: flowId, payload: payload)
+            },
+            onTrustEvaluation: { [weak self] flowId, payload in
+                guard let self else { return SirosTransport.TrustResult(trusted: false, reason: "Wallet deallocated") }
+                return await self.handleWmpTrustEvaluation(flowId: flowId, payload: payload)
+            },
+            onComplete: { [weak self] flowId, _ in
+                self?.eventListener?.onFlowComplete(flowId: flowId)
+            },
+            onError: { [weak self] flowId, code, message in
+                self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")")
+            }
+        ))
+        peer.use(profile)
+        try await peer.connect(authToken: appToken)
+        lock.lock(); wmpPeer = peer; lock.unlock()
+
+        #if canImport(os)
+        logger.info("Connected via WMP protocol to \(wsUrl)")
+        #endif
+    }
+
+    private func handleWmpSignRequest(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
+        switch params.action {
+        case "generate_proof":
+            let count = params.count ?? 1
+            var proofs: [ProofObject] = []
+            for _ in 0..<count {
+                let jwt = try await keystore.generateProof(
+                    audience: params.audience,
+                    nonce: params.nonce
+                )
+                proofs.append(ProofObject(proofType: "jwt", jwt: jwt))
+            }
+            return SignSubFlowResult(proofs: proofs)
+
+        case "sign_presentation":
+            let vpToken = try await keystore.signPresentation(
+                nonce: params.nonce,
+                audience: params.audience,
+                credentialIds: []
+            )
+            return SignSubFlowResult(vpToken: vpToken)
+
+        default:
+            throw SirosError.auth(message: "Unknown sign action: \(params.action)")
+        }
+    }
+
+    private func handleWmpMatchRequest(flowId: String, payload: AnyCodable?) async -> MatchResult {
+        let allCreds = await credentialStore.getAll()
+        let matches = allCreds.map { cred in
+            CredentialMatch(
+                credentialQueryId: nil,
+                credentialId: cred.id,
+                format: cred.format,
+                vct: cred.metadata?.vct,
+                availableClaims: nil
+            )
+        }
+        return MatchResult(matches: matches)
+    }
+
+    private func handleWmpTrustEvaluation(flowId: String, payload: AnyCodable?) async -> SirosTransport.TrustResult {
+        // Extract subject_id from the payload
+        guard case .object_(let payloadDict) = payload,
+              case .object_(let request) = payloadDict["request"],
+              case .string(let subjectId) = request["subject_id"],
+              !subjectId.isEmpty else {
+            return SirosTransport.TrustResult(trusted: false, reason: "Missing subject_id")
+        }
+
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else {
+            return SirosTransport.TrustResult(trusted: false, reason: "No API client")
+        }
+
+        do {
+            let kmType: String
+            if case .object_(let km) = request["key_material"],
+               case .string(let t) = km["type"] {
+                kmType = t
+            } else {
+                kmType = "x5c"
+            }
+
+            let evaluationRequest: [String: Any] = [
+                "subject": ["type": "key", "id": subjectId],
+                "resource": ["type": kmType, "id": subjectId],
+                "action": ["name": "credential-issuer"],
+            ]
+            let response = try await client.evaluateTrust(evaluationRequest)
+            let decision = response["decision"] as? Bool ?? false
+            return SirosTransport.TrustResult(trusted: decision)
+        } catch {
+            return SirosTransport.TrustResult(trusted: false, reason: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Legacy Engine Path
+
     func connectEngine(appToken: String) async throws {
-        let engine = Self.createEngineSession(config.backendUrl, config.tenantId)
+        // Resolve engine base URL: explicit config > discovery > same as backend
+        let engineBase: String
+        if !config.engineUrl.isEmpty {
+            engineBase = config.engineUrl
+        } else if let discovered = await WalletConfig.discoverEngineUrl(backendUrl: config.backendUrl) {
+            engineBase = discovered
+        } else {
+            engineBase = config.backendUrl
+        }
+        let engine = Self.createEngineSession(engineBase, config.tenantId)
         lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
         engine.connect(appToken: appToken)
         try await engine.awaitConnected()

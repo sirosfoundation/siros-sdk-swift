@@ -1,6 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import SirosCredentials
 
 /// Configuration for ``SirosWallet``.
@@ -10,6 +13,12 @@ public struct WalletConfig: Sendable {
 
     /// Tenant identifier. Defaults to "default".
     public var tenantId: String
+
+    /// Engine base URL (e.g. "https://engine.sirosid.dev"). The SDK appends
+    /// the WebSocket path (`/api/v2/wallet?...`) automatically. When empty,
+    /// the SDK auto-discovers it from `/.well-known/wallet-configuration`
+    /// or falls back to `backendUrl`.
+    public var engineUrl: String
 
     /// OAuth redirect URI for authorization code flows.
     public var redirectUri: String
@@ -31,6 +40,7 @@ public struct WalletConfig: Sendable {
     public init(
         backendUrl: String,
         tenantId: String = "default",
+        engineUrl: String = "",
         redirectUri: String = "",
         credentialStore: (any CredentialStore)? = nil,
         urlRewriter: (@Sendable (String) -> String)? = nil,
@@ -39,10 +49,35 @@ public struct WalletConfig: Sendable {
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
+        self.engineUrl = engineUrl
         self.redirectUri = redirectUri
         self.credentialStore = credentialStore
         self.urlRewriter = urlRewriter
         self.requireUserAuth = requireUserAuth
         self.useWmpProtocol = useWmpProtocol
+    }
+
+    /// Discover the engine base URL from the backend's
+    /// `/.well-known/wallet-configuration` endpoint.
+    ///
+    /// Returns `nil` if discovery fails — the caller should fall back
+    /// to `backendUrl` (single-port deployment).
+    public static func discoverEngineUrl(backendUrl: String) async -> String? {
+        let urlString = backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            + "/.well-known/wallet-configuration"
+        guard let url = URL(string: urlString) else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let engine = json["engine_url"] as? String,
+                  !engine.isEmpty else {
+                return nil
+            }
+            return engine
+        } catch {
+            return nil
+        }
     }
 }

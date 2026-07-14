@@ -104,12 +104,14 @@ public final class WmpWebSocketTransport: TransportProtocol, @unchecked Sendable
 /// Transport errors.
 public enum TransportError: Error, Sendable {
     case notConnected
+    case sendFailed(String)
 }
 
 extension TransportError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .notConnected: return "Transport is not connected"
+        case .sendFailed(let message): return "Send failed: \(message)"
         }
     }
 }
