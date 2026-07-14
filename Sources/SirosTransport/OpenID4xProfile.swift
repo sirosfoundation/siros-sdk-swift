@@ -264,9 +264,6 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
     private let config: OpenID4xConfig
     private weak var peer: WmpPeerContext?
 
-    private let flowTypeLock = NSLock()
-    private var flowTypeMap: [String: String] = [:]
-
     public init(config: OpenID4xConfig = OpenID4xConfig()) {
         self.config = config
     }
@@ -280,9 +277,6 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
     // MARK: - WmpFlowHandler
 
     public func startFlow(params: FlowStartParams) async throws -> FlowStartResult {
-        flowTypeLock.lock()
-        flowTypeMap[params.flowId] = params.flowType
-        flowTypeLock.unlock()
         return FlowStartResult(flowId: params.flowId, flowType: params.flowType)
     }
 

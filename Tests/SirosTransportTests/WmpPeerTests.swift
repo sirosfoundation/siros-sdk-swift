@@ -87,8 +87,9 @@ private extension WmpPeerTests {
 final class WmpPeerTests: XCTestCase {
 
     func testProfileInitializeCalledOnUse() {
-        let (_, _, profile) = makePeer()
+        let (peer, _, profile) = makePeer()
         XCTAssertNotNil(profile.ctx, "initialize(ctx:) should be called by use(_:)")
+        withExtendedLifetime(peer) {}
     }
 
     func testDispatchFlowStartRoutesToHandler() async throws {
