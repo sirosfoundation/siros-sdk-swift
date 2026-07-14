@@ -7,7 +7,21 @@ import Foundation
 /// Implements ``BiometricCaptureDelegate`` by wrapping the FaceTec mobile SDK.
 /// The actual HTTP communication is handled by ``RemoteIDVClient``.
 ///
-/// ## Setup
+/// ## FaceTec SDK Dependency
+///
+/// Add the FaceTec SDK from the private vendor Swift Package:
+///
+/// ```swift
+/// // Package.swift or Xcode SPM:
+/// .package(url: "https://github.com/sirosfoundation/vendor-swift-packages.git", from: "10.1.6")
+///
+/// // Then depend on the target:
+/// .product(name: "FaceTecSDK", package: "vendor-swift-packages")
+/// // Or for development (mock mode):
+/// .product(name: "FaceTecSDKForDevelopment", package: "vendor-swift-packages")
+/// ```
+///
+/// ## Usage
 ///
 /// ```swift
 /// let client = RemoteIDVClient(config: .init(serverUrl: "...", authToken: "..."))
