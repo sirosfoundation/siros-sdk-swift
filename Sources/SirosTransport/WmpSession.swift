@@ -301,6 +301,7 @@ public struct WmpSessionConfig: Sendable {
 public enum WmpSessionError: Error, Sendable {
     case sessionCreationFailed(String)
     case resumeFailed(String)
+    case flowFailed(String)
     case missingResult
     case noSession
     case noResumptionToken
@@ -312,6 +313,7 @@ extension WmpSessionError: LocalizedError {
         switch self {
         case .sessionCreationFailed(let msg): return "Session creation failed: \(msg)"
         case .resumeFailed(let msg): return "Session resume failed: \(msg)"
+        case .flowFailed(let msg): return "Flow request failed: \(msg)"
         case .missingResult: return "Missing result in WMP response"
         case .noSession: return "No active WMP session"
         case .noResumptionToken: return "No resumption token available"

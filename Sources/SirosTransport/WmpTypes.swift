@@ -13,6 +13,7 @@ public struct WmpMeta: Codable, Sendable, Equatable {
     public var sender: String?
     public var timestamp: String?
     public var traceId: String?
+    // swiftlint:disable:next discouraged_optional_boolean
     public var encrypted: Bool?
 
     public init(
@@ -21,6 +22,7 @@ public struct WmpMeta: Codable, Sendable, Equatable {
         sender: String? = nil,
         timestamp: String? = nil,
         traceId: String? = nil,
+        // swiftlint:disable:next discouraged_optional_boolean
         encrypted: Bool? = nil
     ) {
         self.version = version
