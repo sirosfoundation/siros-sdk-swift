@@ -459,11 +459,14 @@ public final class SirosWallet: @unchecked Sendable {
     public func logout() {
         lock.lock()
         let engine = engineSession
+        let peer = wmpPeer
         engineSession = nil
+        wmpPeer = nil
         credentialNotifier = nil
         apiClient = nil
         lock.unlock()
         engine?.disconnect()
+        if let peer { Task { try? await peer.close() } }
         cancelEngineTasks()
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
@@ -929,7 +932,7 @@ public final class SirosWallet: @unchecked Sendable {
             engineBase = config.backendUrl
         }
 
-        let wsUrl = engineBase
+        let wsUrl = engineBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .replacingOccurrences(of: "http://", with: "ws://")
             .replacingOccurrences(of: "https://", with: "wss://")
             + "/api/v2/wallet?tenant_id=\(config.tenantId)"
@@ -960,7 +963,7 @@ public final class SirosWallet: @unchecked Sendable {
         ))
         peer.use(profile)
         try await peer.connect(authToken: appToken)
-        wmpPeer = peer
+        lock.lock(); wmpPeer = peer; lock.unlock()
 
         #if canImport(os)
         logger.info("Connected via WMP protocol to \(wsUrl)")

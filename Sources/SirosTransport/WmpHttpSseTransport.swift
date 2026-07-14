@@ -26,6 +26,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
 
     private let incomingCont: AsyncStream<Data>.Continuation
     private let _incoming: AsyncStream<Data>
+    private var sseTask: Task<Void, Never>?
 
     public init(
         sendUrl: URL,
@@ -57,7 +58,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
-        Task { [weak self] in
+        sseTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let (bytes, response) = try await self.urlSession.bytes(for: request)
@@ -109,6 +110,8 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     public func incoming() -> AsyncStream<Data> { _incoming }
 
     public func disconnect() async {
+        sseTask?.cancel()
+        sseTask = nil
         setState(.disconnected)
         incomingCont.finish()
         stateCont.finish()
