@@ -68,6 +68,34 @@ try await wallet.register(userName: "alice")
 try await wallet.login()
 ```
 
+## Key Features
+
+### WMP (Wallet Messaging Protocol) Support
+
+Full WMP implementation as an alternative to the legacy WebSocket engine protocol:
+
+- **`WmpPeer`** — JSON-RPC 2.0 dispatch with profile-based routing
+- **`OpenID4xProfile`** — OID4VCI/OID4VP flow handling (sign, match, trust evaluation)
+- **`WmpHttpSseTransport`** — HTTP+SSE transport (Apple platforms)
+- **`WmpWebSocketTransport`** — WebSocket transport with `wmp.v1` subprotocol
+
+Enable via `WalletConfig(useWmpProtocol: true)`. Requires backend with WMP endpoint.
+
+### Engine URL Auto-Discovery
+
+The SDK auto-discovers the engine WebSocket URL from `/.well-known/wallet-configuration`:
+
+```swift
+let config = WalletConfig(
+    backendUrl: "https://wallet.example.com"
+    // engineUrl defaults to "" → auto-discovered at runtime
+)
+```
+
+### Batch Credential Issuance
+
+`KeystoreManager.generateProof(freshKey:)` supports batch VCI conformance — each credential in a batch is bound to a unique key to prevent verifier linkability.
+
 ## Architecture
 
 ```
