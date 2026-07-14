@@ -9,6 +9,7 @@ final class WalletConfigTests: XCTestCase {
         let config = WalletConfig(backendUrl: "https://wallet.example.com")
         XCTAssertEqual(config.backendUrl, "https://wallet.example.com")
         XCTAssertEqual(config.tenantId, "default")
+        XCTAssertEqual(config.engineUrl, "")
         XCTAssertEqual(config.redirectUri, "")
         XCTAssertNil(config.credentialStore)
         XCTAssertNil(config.urlRewriter)
@@ -44,5 +45,18 @@ final class WalletConfigTests: XCTestCase {
 
         let wmpConfig = WalletConfig(backendUrl: "https://wallet.example.com", useWmpProtocol: true)
         XCTAssertTrue(wmpConfig.useWmpProtocol)
+    }
+
+    func testEngineUrlDefaultsToEmpty() {
+        let config = WalletConfig(backendUrl: "https://wallet.example.com")
+        XCTAssertEqual(config.engineUrl, "")
+    }
+
+    func testEngineUrlExplicit() {
+        let config = WalletConfig(
+            backendUrl: "https://wallet.example.com",
+            engineUrl: "https://engine.example.com"
+        )
+        XCTAssertEqual(config.engineUrl, "https://engine.example.com")
     }
 }

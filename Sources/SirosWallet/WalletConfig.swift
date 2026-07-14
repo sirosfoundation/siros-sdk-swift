@@ -14,8 +14,10 @@ public struct WalletConfig: Sendable {
     /// Tenant identifier. Defaults to "default".
     public var tenantId: String
 
-    /// WebSocket engine URL. When empty, the SDK auto-discovers it from
-    /// `/.well-known/wallet-configuration` or falls back to `backendUrl`.
+    /// Engine base URL (e.g. "https://engine.sirosid.dev"). The SDK appends
+    /// the WebSocket path (`/api/v2/wallet?...`) automatically. When empty,
+    /// the SDK auto-discovers it from `/.well-known/wallet-configuration`
+    /// or falls back to `backendUrl`.
     public var engineUrl: String
 
     /// OAuth redirect URI for authorization code flows.
@@ -55,7 +57,7 @@ public struct WalletConfig: Sendable {
         self.useWmpProtocol = useWmpProtocol
     }
 
-    /// Discover the engine WebSocket URL from the backend's
+    /// Discover the engine base URL from the backend's
     /// `/.well-known/wallet-configuration` endpoint.
     ///
     /// Returns `nil` if discovery fails — the caller should fall back
@@ -64,21 +66,18 @@ public struct WalletConfig: Sendable {
         let urlString = backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             + "/.well-known/wallet-configuration"
         guard let url = URL(string: urlString) else { return nil }
-        return await withCheckedContinuation { continuation in
-            let task = URLSession.shared.dataTask(with: url) { data, response, error in
-                guard error == nil,
-                      let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200,
-                      let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let engine = json["engine_url"] as? String,
-                      !engine.isEmpty else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: engine)
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let engine = json["engine_url"] as? String,
+                  !engine.isEmpty else {
+                return nil
             }
-            task.resume()
+            return engine
+        } catch {
+            return nil
         }
     }
 }

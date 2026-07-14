@@ -911,7 +911,7 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     func connectEngine(appToken: String) async throws {
-        // Resolve engine URL: explicit config > discovery > same as backend
+        // Resolve engine base URL: explicit config > discovery > same as backend
         let engineBase: String
         if !config.engineUrl.isEmpty {
             engineBase = config.engineUrl
