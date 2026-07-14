@@ -16,6 +16,7 @@ struct SettingsView: View {
                     LabeledContent("Backend", value: viewModel.backendUrl)
                     LabeledContent("Tenant", value: viewModel.tenantId)
                     LabeledContent("Credentials", value: "\(viewModel.credentials.count)")
+                    LabeledContent("Transport", value: viewModel.useWmpProtocol ? "WMP (JSON-RPC 2.0)" : "Legacy")
                 }
 
                 // Passkeys section

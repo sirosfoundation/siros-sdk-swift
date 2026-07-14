@@ -24,13 +24,18 @@ public struct WalletConfig: Sendable {
     /// When true, biometric/device authentication is required for passkey operations.
     public var requireUserAuth: Bool
 
+    /// Use the WMP (Wallet Messaging Protocol) JSON-RPC 2.0 transport instead
+    /// of the legacy engine protocol. Requires go-wallet-backend with WMP support.
+    public var useWmpProtocol: Bool
+
     public init(
         backendUrl: String,
         tenantId: String = "default",
         redirectUri: String = "",
         credentialStore: (any CredentialStore)? = nil,
         urlRewriter: (@Sendable (String) -> String)? = nil,
-        requireUserAuth: Bool = true
+        requireUserAuth: Bool = true,
+        useWmpProtocol: Bool = false
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -38,5 +43,6 @@ public struct WalletConfig: Sendable {
         self.credentialStore = credentialStore
         self.urlRewriter = urlRewriter
         self.requireUserAuth = requireUserAuth
+        self.useWmpProtocol = useWmpProtocol
     }
 }

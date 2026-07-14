@@ -144,6 +144,10 @@ public final class AuthTokens: @unchecked Sendable {
     public func registerTokenRejection(_ name: String) {
         lock.lock()
         let now = Date()
+
+        // Clear the rejected token from cache so it won't be re-served
+        tokens.removeValue(forKey: name)
+
         var list = rejections[name, default: []]
         list.append(now)
 

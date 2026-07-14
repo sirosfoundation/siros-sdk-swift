@@ -8,7 +8,7 @@ import Foundation
 /// and automatic reconnection with session resumption.
 public final class WmpSession: @unchecked Sendable {
     private let transport: any TransportProtocol
-    private let codec: WmpCodec
+    internal let codec: WmpCodec
     private let config: WmpSessionConfig
 
     private var sessionId: String?
@@ -177,6 +177,24 @@ public final class WmpSession: @unchecked Sendable {
         try await sendSerializer.send(message, via: transport)
     }
 
+    /// Send a JSON-RPC response for an incoming request.
+    public func sendResponse(id: String, result: AnyCodable?) async throws {
+        let resultDict: [String: AnyCodable]?
+        if case .object_(let dict) = result {
+            resultDict = dict
+        } else {
+            resultDict = nil
+        }
+        let message = try codec.encodeResponse(id: id, result: resultDict)
+        try await sendSerializer.send(message, via: transport)
+    }
+
+    /// Send a JSON-RPC error response for an incoming request.
+    public func sendErrorResponse(id: String, code: Int, message: String) async throws {
+        let msg = try codec.encodeErrorResponse(id: id, code: code, message: message)
+        try await sendSerializer.send(msg, via: transport)
+    }
+
     // MARK: - Private
 
     private func startMessageLoop() {
@@ -301,6 +319,7 @@ public struct WmpSessionConfig: Sendable {
 public enum WmpSessionError: Error, Sendable {
     case sessionCreationFailed(String)
     case resumeFailed(String)
+    case flowFailed(String)
     case missingResult
     case noSession
     case noResumptionToken
@@ -312,6 +331,7 @@ extension WmpSessionError: LocalizedError {
         switch self {
         case .sessionCreationFailed(let msg): return "Session creation failed: \(msg)"
         case .resumeFailed(let msg): return "Session resume failed: \(msg)"
+        case .flowFailed(let msg): return "Flow request failed: \(msg)"
         case .missingResult: return "Missing result in WMP response"
         case .noSession: return "No active WMP session"
         case .noResumptionToken: return "No resumption token available"
