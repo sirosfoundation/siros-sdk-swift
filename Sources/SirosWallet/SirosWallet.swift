@@ -978,7 +978,8 @@ public final class SirosWallet: @unchecked Sendable {
             for _ in 0..<count {
                 let jwt = try await keystore.generateProof(
                     audience: params.audience,
-                    nonce: params.nonce
+                    nonce: params.nonce,
+                    freshKey: count > 1
                 )
                 proofs.append(ProofObject(proofType: "jwt", jwt: jwt))
             }
@@ -1106,13 +1107,15 @@ public final class SirosWallet: @unchecked Sendable {
         do {
             switch msg.action {
             case "generate_proof":
-                let proofJwt = try await keystore.generateProof(
-                    audience: msg.params.audience ?? "",
-                    nonce: msg.params.nonce ?? ""
-                )
                 let count = msg.params.count ?? 1
-                let proofs = (0..<count).map { _ in
-                    ProofObject(proofType: "jwt", jwt: proofJwt)
+                var proofs: [ProofObject] = []
+                for _ in 0..<count {
+                    let proofJwt = try await keystore.generateProof(
+                        audience: msg.params.audience ?? "",
+                        nonce: msg.params.nonce ?? "",
+                        freshKey: count > 1
+                    )
+                    proofs.append(ProofObject(proofType: "jwt", jwt: proofJwt))
                 }
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 

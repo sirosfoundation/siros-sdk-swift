@@ -170,7 +170,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         return Data(jws.utf8)
     }
 
-    public func generateProof(audience: String, nonce: String) async throws -> String {
+    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
@@ -638,7 +638,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     public func sign(keyId: String, payload: Data, algorithm: String = "ES256") async throws -> Data {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func generateProof(audience: String, nonce: String) async throws -> String {
+    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {

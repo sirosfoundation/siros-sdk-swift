@@ -84,9 +84,17 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         return try await signer.sign(keyId: keyId, data: payload)
     }
 
-    public func generateProof(audience: String, nonce: String) async throws -> String {
+    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
         try checkUnlocked()
-        let keys = try await signer.listKeys()
+        var keys = try await signer.listKeys()
+        if keys.isEmpty || freshKey {
+            // Auto-generate a key for VCI proof-of-possession
+            let newKeyId = try await signer.generateKey(algorithm: "ES256")
+            keys = try await signer.listKeys()
+            if freshKey {
+                keys = keys.filter { $0.keyId == newKeyId }
+            }
+        }
         guard let key = keys.first else {
             throw KeystoreError.keyNotFound("no keys available")
         }
