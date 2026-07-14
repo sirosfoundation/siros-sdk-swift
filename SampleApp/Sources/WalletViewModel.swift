@@ -30,8 +30,15 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Configuration
 
-    @Published var backendUrl: String = defaultBackendUrl
-    @Published var tenantId: String = defaultTenantId
+    @Published var backendUrl: String {
+        didSet { UserDefaults.standard.set(backendUrl, forKey: "siros_backend_url") }
+    }
+    @Published var tenantId: String {
+        didSet { UserDefaults.standard.set(tenantId, forKey: "siros_tenant_id") }
+    }
+    @Published var useWmpProtocol: Bool {
+        didSet { UserDefaults.standard.set(useWmpProtocol, forKey: "siros_use_wmp_protocol") }
+    }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
 
@@ -93,7 +100,12 @@ final class WalletViewModel: ObservableObject {
     #endif
     private var lifecycleContextId: String?
 
-    init() {}
+    init() {
+        let defaults = UserDefaults.standard
+        self.backendUrl = defaults.string(forKey: "siros_backend_url") ?? Self.defaultBackendUrl
+        self.tenantId = defaults.string(forKey: "siros_tenant_id") ?? Self.defaultTenantId
+        self.useWmpProtocol = defaults.bool(forKey: "siros_use_wmp_protocol")
+    }
 
     // MARK: - Public actions
 
@@ -478,7 +490,8 @@ final class WalletViewModel: ObservableObject {
         let config = WalletConfig(
             backendUrl: backendUrl,
             tenantId: tenantId,
-            redirectUri: "\(redirectScheme)://callback"
+            redirectUri: "\(redirectScheme)://callback",
+            useWmpProtocol: useWmpProtocol
         )
 
         // Rebuild if wallet doesn't exist or is in Disconnected/Error state

@@ -8,8 +8,23 @@ struct LoginView: View {
     @State private var showOtherLogin = false
     @State private var registerName = ""
     @State private var showBackendInfo = false
+    @State private var showSettingsSheet = false
+
+    /// Whether pre-login settings are available. Set via build config.
+    var showPreLoginSettings: Bool = true
 
     var body: some View {
+        ZStack(alignment: .topTrailing) {
+            // Settings gear icon
+            if showPreLoginSettings {
+                Button(action: { showSettingsSheet = true }) {
+                    Image(systemName: "gearshape")
+                        .foregroundColor(SirosTheme.onSurfaceVariant)
+                        .padding(16)
+                }
+                .zIndex(1)
+            }
+
         ScrollView {
             VStack(spacing: 16) {
                 Spacer().frame(height: 24)
@@ -178,6 +193,48 @@ struct LoginView: View {
                     showOtherLogin = false
                 }
                 .font(.subheadline)
+            }
+        }
+    }
+    } // ZStack
+    .sheet(isPresented: $showSettingsSheet) {
+        PreLoginSettingsView()
+            .environmentObject(viewModel)
+    }
+    }
+}
+
+// MARK: - Pre-Login Settings Sheet
+
+struct PreLoginSettingsView: View {
+    @EnvironmentObject var viewModel: WalletViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Connection") {
+                    TextField("Backend URL", text: $viewModel.backendUrl)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    TextField("Tenant ID", text: $viewModel.tenantId)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+
+                Section("Transport Protocol") {
+                    Toggle("WMP Protocol", isOn: $viewModel.useWmpProtocol)
+                    Text(viewModel.useWmpProtocol ? "JSON-RPC 2.0 (WMP)" : "Legacy engine protocol")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Connection Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
     }
