@@ -26,17 +26,21 @@ public final class FaceTecCaptureDelegate: @unchecked Sendable, BiometricCapture
     }
 
     public func captureLiveness(presentingViewController: Any, sessionToken: String) async throws -> [String: Any] {
-        // TODO: Implement with FaceTec SDK
-        // 1. Initialize FaceTec SDK if needed
-        // 2. Create FaceTecSession, capture FaceScan
+        // FaceTec SDK integration point:
+        // 1. Initialize FaceTec SDK (FaceTec.sdk.initializeInProductionMode(...))
+        // 2. Create FaceTecSession, capture FaceScan via delegate
         // 3. Return: ["faceScan": ..., "auditTrailImage": ..., "lowQualityAuditTrailImage": ...]
-        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add FaceTec framework and implement captureLiveness().")
+        //
+        // To implement: link FaceTecSDK.xcframework and replace this throw.
+        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add FaceTecSDK.xcframework to your app target.")
     }
 
     public func captureDocument(presentingViewController: Any, sessionToken: String, livenessSessionId: String) async throws -> [String: Any] {
-        // TODO: Implement with FaceTec SDK
-        // 1. Create FaceTecIDScanSession, capture document
+        // FaceTec SDK integration point:
+        // 1. Create FaceTecIDScanSession, capture document via delegate
         // 2. Return: ["idScanFrontImage": ..., "livenessSessionId": livenessSessionId]
-        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add FaceTec framework and implement captureDocument().")
+        //
+        // To implement: link FaceTecSDK.xcframework and replace this throw.
+        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add FaceTecSDK.xcframework to your app target.")
     }
 }
