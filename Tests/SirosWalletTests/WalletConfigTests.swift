@@ -13,6 +13,7 @@ final class WalletConfigTests: XCTestCase {
         XCTAssertNil(config.credentialStore)
         XCTAssertNil(config.urlRewriter)
         XCTAssertTrue(config.requireUserAuth)
+        XCTAssertFalse(config.useWmpProtocol)
     }
 
     func testCustomConfig() {
@@ -35,5 +36,13 @@ final class WalletConfigTests: XCTestCase {
         }
         let rewritten = config.urlRewriter?("https://internal.example.com")
         XCTAssertEqual(rewritten, "https://external.example.com")
+    }
+
+    func testUseWmpProtocol() {
+        let legacyConfig = WalletConfig(backendUrl: "https://wallet.example.com")
+        XCTAssertFalse(legacyConfig.useWmpProtocol, "legacy mode is the default")
+
+        let wmpConfig = WalletConfig(backendUrl: "https://wallet.example.com", useWmpProtocol: true)
+        XCTAssertTrue(wmpConfig.useWmpProtocol)
     }
 }

@@ -275,6 +275,32 @@ final class OpenID4xProfileTests: XCTestCase {
         XCTAssertTrue(profile.flowTypes.contains(OID4FlowTypes.oid4vci))
         XCTAssertTrue(profile.flowTypes.contains(OID4FlowTypes.oid4vp))
     }
+
+    func testHandleProgressSignRequestNilPayloadSendsFlowError() async throws {
+        let ctx = MockPeerContext()
+
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, _ in
+                XCTFail("handler should not be called when payload is nil")
+                return SignSubFlowResult()
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        await profile.handleProgress(params: FlowProgressParams(
+            flowId: "flow-nil",
+            step: "sign_request",
+            payload: nil
+        ))
+
+        XCTAssertEqual(ctx.notifications.count, 1)
+        XCTAssertEqual(ctx.notifications[0].method, WmpMethods.flowError)
+        if case .string(let code) = ctx.notifications[0].params?["code"] {
+            XCTAssertEqual(code, "INVALID_PARAMS")
+        } else {
+            XCTFail("Expected code = INVALID_PARAMS in flow error")
+        }
+    }
 }
 
 // MARK: - Helpers

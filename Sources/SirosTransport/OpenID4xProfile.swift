@@ -217,7 +217,9 @@ public struct TrustResult: Sendable {
 
 // MARK: - OpenID4x Profile Configuration
 
-public struct OpenID4xConfig {
+// @unchecked because the stored async closures are not automatically @Sendable,
+// but the struct is immutable after construction and only called from async contexts.
+public struct OpenID4xConfig: @unchecked Sendable {
     public var onProgress: ((String, String, AnyCodable?) async -> Void)?
     public var onSignRequest: ((String, SignSubFlowParams) async throws -> SignSubFlowResult)?
     public var onMatchRequest: ((String, AnyCodable?) async throws -> MatchResult)?
@@ -318,12 +320,16 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
     private func handleSignRequest(flowId: String, payload: AnyCodable?) async {
         guard let handler = config.onSignRequest else { return }
 
-        guard let payload else { return }
+        guard let payload else {
+            await sendFlowError(flowId: flowId, code: "INVALID_PARAMS", message: "sign_request missing payload")
+            return
+        }
         let signParams: SignSubFlowParams
         do {
             let data = try JSONEncoder().encode(payload)
             signParams = try JSONDecoder().decode(SignSubFlowParams.self, from: data)
         } catch {
+            await sendFlowError(flowId: flowId, code: "INVALID_PARAMS", message: "sign_request payload decode failed: \(error.localizedDescription)")
             return
         }
 
