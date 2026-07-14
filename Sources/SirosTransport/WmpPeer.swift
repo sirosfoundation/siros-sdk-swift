@@ -1,0 +1,244 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import Foundation
+
+#if canImport(OSLog)
+import OSLog
+#endif
+
+/// WMP Peer — the central dispatch node for the Wallet Messaging Protocol.
+///
+/// Wraps a ``WmpSession`` and adds profile-based routing for flows, methods,
+/// and resolve requests. Profiles are registered via ``use(_:)`` before connecting.
+///
+/// Usage:
+/// ```swift
+/// let peer = WmpPeer(session: session)
+/// peer.use(OpenID4xProfile(config: config))
+/// try await peer.connect(authToken: token)
+///
+/// for await event in peer.flowEvents() {
+///     switch event {
+///     case .progress(let flowId, let step, _): ...
+///     case .complete(let flowId, _): ...
+///     ...
+///     }
+/// }
+/// ```
+public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
+    private let session: WmpSession
+    private let registry = WmpRegistry()
+    public var codec: WmpCodec { session.codec }
+
+    #if canImport(OSLog)
+    private let logger = Logger(subsystem: "org.sirosfoundation.sdk", category: "WmpPeer")
+    private func logWarning(_ msg: String) { logger.warning("\(msg)") }
+    private func logError(_ msg: String) { logger.error("\(msg)") }
+    #else
+    private func logWarning(_ msg: String) { print("[WmpPeer WARNING] \(msg)") }
+    private func logError(_ msg: String) { print("[WmpPeer ERROR] \(msg)") }
+    #endif
+
+    // Flow event stream
+    private let eventContinuation: AsyncStream<FlowEvent>.Continuation
+    private let _flowEvents: AsyncStream<FlowEvent>
+
+    // Flow type tracking
+    private nonisolated(unsafe) var flowTypeMap: [String: String] = [:]
+    private let flowTypeLock = NSLock()
+
+    public init(session: WmpSession) {
+        self.session = session
+
+        var cont: AsyncStream<FlowEvent>.Continuation!
+        self._flowEvents = AsyncStream { cont = $0 }
+        self.eventContinuation = cont
+    }
+
+    /// Observable stream of flow lifecycle events dispatched by profiles.
+    public func flowEvents() -> AsyncStream<FlowEvent> { _flowEvents }
+
+    /// Session state stream.
+    public var stateStream: AsyncStream<WmpSessionState> { session.stateStream }
+
+    // MARK: - Profile Registration
+
+    /// Register a ``WmpProfile``. The profile may also conform to
+    /// ``WmpFlowHandler``, ``WmpMethodHandler``, or ``WmpResolveHandler``.
+    ///
+    /// Must be called before ``connect(authToken:sender:)``.
+    public func use(_ profile: WmpProfile) {
+        registry.register(profile)
+        profile.initialize(ctx: self)
+    }
+
+    // MARK: - Lifecycle
+
+    /// Connect and create a WMP session. Starts the dispatch loop.
+    public func connect(authToken: String, sender: String? = nil) async throws {
+        try await session.create(authToken: authToken, sender: sender)
+        startDispatch()
+    }
+
+    /// Close the session and stop dispatching.
+    public func close(reason: String = "complete") async throws {
+        try await session.close(reason: reason)
+        eventContinuation.finish()
+    }
+
+    // MARK: - PeerContext (outgoing)
+
+    public func notify(method: String, params: [String: AnyCodable]?) async throws {
+        try await session.sendNotification(method: method, params: params)
+    }
+
+    public func call(method: String, params: [String: AnyCodable]?) async throws -> JsonRpcResponse {
+        try await session.sendRequest(method: method, params: params)
+    }
+
+    // MARK: - Flow Convenience Methods
+
+    /// Start a flow via wmp.flow.start.
+    public func startFlow(flowType: String, flowId: String, params: AnyCodable? = nil) async throws -> FlowStartResult {
+        let reqParams = try codec.encodeParams(
+            FlowStartParams(wmp: WmpMeta(), flowId: flowId, flowType: flowType, params: params)
+        )
+        let response = try await call(method: WmpMethods.flowStart, params: reqParams)
+        if let error = response.error {
+            throw WmpSessionError.sessionCreationFailed(error.message)
+        }
+        guard let result = response.result else {
+            throw WmpSessionError.missingResult
+        }
+        let data = try JSONEncoder().encode(result)
+        return try JSONDecoder().decode(FlowStartResult.self, from: data)
+    }
+
+    /// Send a flow action via wmp.flow.action.
+    public func sendFlowAction(flowId: String, action: String, params: AnyCodable? = nil) async throws -> FlowActionResult {
+        let reqParams = try codec.encodeParams(
+            FlowActionParams(wmp: WmpMeta(), flowId: flowId, action: action, params: params)
+        )
+        let response = try await call(method: WmpMethods.flowAction, params: reqParams)
+        if let error = response.error {
+            throw WmpSessionError.sessionCreationFailed(error.message)
+        }
+        guard let result = response.result else {
+            throw WmpSessionError.missingResult
+        }
+        let data = try JSONEncoder().encode(result)
+        return try JSONDecoder().decode(FlowActionResult.self, from: data)
+    }
+
+    /// Send a flow cancel notification.
+    public func cancelFlow(flowId: String, reason: String? = nil) async throws {
+        let params = try codec.encodeParams(
+            FlowCancelParams(wmp: WmpMeta(), flowId: flowId, reason: reason)
+        )
+        try await notify(method: WmpMethods.flowCancel, params: params)
+    }
+
+    // MARK: - Dispatch Loop
+
+    private func startDispatch() {
+        Task { [weak self] in
+            guard let self else { return }
+            for await msg in self.session.notifications() {
+                do {
+                    try await self.dispatch(msg)
+                } catch {
+                    self.logError("WmpPeer dispatch error for \(msg.method): \(error)")
+                }
+            }
+        }
+    }
+
+    private func dispatch(_ msg: JsonRpcRequest) async throws {
+        let params = msg.params
+        let paramsWrapped: AnyCodable? = params.map { .object_($0) }
+
+        switch msg.method {
+        case WmpMethods.flowProgress:
+            let p: FlowProgressParams = try decode(paramsWrapped)
+            if let handler = registry.flowHandler(for: lookupFlowType(p.flowId)) {
+                await handler.handleProgress(params: p)
+            }
+            eventContinuation.yield(.progress(flowId: p.flowId, step: p.step, payload: p.payload))
+
+        case WmpMethods.flowComplete:
+            let p: FlowCompleteParams = try decode(paramsWrapped)
+            if let handler = registry.flowHandler(for: lookupFlowType(p.flowId)) {
+                await handler.handleComplete(params: p)
+            }
+            eventContinuation.yield(.complete(flowId: p.flowId, result: p.result))
+
+        case WmpMethods.flowError:
+            let p: FlowErrorParams = try decode(paramsWrapped)
+            if let handler = registry.flowHandler(for: lookupFlowType(p.flowId)) {
+                await handler.handleError(params: p)
+            }
+            eventContinuation.yield(.error(flowId: p.flowId, code: p.code, message: p.message))
+
+        case WmpMethods.flowStart:
+            let p: FlowStartParams = try decode(paramsWrapped)
+            if let handler = registry.flowHandler(for: p.flowType) {
+                trackFlowType(flowId: p.flowId, flowType: p.flowType)
+                _ = try await handler.startFlow(params: p)
+            }
+            eventContinuation.yield(.started(flowId: p.flowId, flowType: p.flowType, params: p.params))
+
+        case WmpMethods.flowAction:
+            let p: FlowActionParams = try decode(paramsWrapped)
+            if let handler = registry.flowHandler(for: lookupFlowType(p.flowId)) {
+                _ = try await handler.handleAction(params: p)
+            }
+            eventContinuation.yield(.action(flowId: p.flowId, action: p.action, params: p.params))
+
+        case WmpMethods.flowCancel:
+            let p: FlowCancelParams = try decode(paramsWrapped)
+            if let handler = registry.flowHandler(for: lookupFlowType(p.flowId)) {
+                await handler.handleCancel(params: p)
+            }
+            eventContinuation.yield(.cancelled(flowId: p.flowId, reason: p.reason))
+
+        default:
+            if let handler = registry.methodHandler(for: msg.method) {
+                _ = try await handler.handleMethod(method: msg.method, params: paramsWrapped)
+            } else {
+                logWarning("Unhandled WMP method: \(msg.method)")
+            }
+        }
+    }
+
+    private func decode<T: Decodable>(_ params: AnyCodable?) throws -> T {
+        guard let params else {
+            throw WmpSessionError.missingResult
+        }
+        let data = try JSONEncoder().encode(params)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    // MARK: - Flow Type Tracking
+
+    private func trackFlowType(flowId: String, flowType: String) {
+        flowTypeLock.lock()
+        flowTypeMap[flowId] = flowType
+        flowTypeLock.unlock()
+    }
+
+    private func lookupFlowType(_ flowId: String) -> String {
+        flowTypeLock.lock()
+        defer { flowTypeLock.unlock() }
+        return flowTypeMap[flowId] ?? "unknown"
+    }
+}
+
+/// Flow lifecycle events emitted by ``WmpPeer/flowEvents()``.
+public enum FlowEvent: Sendable {
+    case started(flowId: String, flowType: String, params: AnyCodable?)
+    case progress(flowId: String, step: String, payload: AnyCodable?)
+    case action(flowId: String, action: String, params: AnyCodable?)
+    case complete(flowId: String, result: AnyCodable?)
+    case error(flowId: String, code: String?, message: String?)
+    case cancelled(flowId: String, reason: String?)
+}

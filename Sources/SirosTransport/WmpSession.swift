@@ -8,7 +8,7 @@ import Foundation
 /// and automatic reconnection with session resumption.
 public final class WmpSession: @unchecked Sendable {
     private let transport: any TransportProtocol
-    private let codec: WmpCodec
+    internal let codec: WmpCodec
     private let config: WmpSessionConfig
 
     private var sessionId: String?

@@ -202,3 +202,209 @@ public struct SessionCloseParams: Codable, Sendable {
         self.reason = reason
     }
 }
+
+// MARK: - WMP Method Constants
+
+public enum WmpMethods {
+    public static let sessionCreate = "wmp.session.create"
+    public static let sessionResume = "wmp.session.resume"
+    public static let sessionClose = "wmp.session.close"
+    public static let sessionAuthenticate = "wmp.session.authenticate"
+
+    public static let flowStart = "wmp.flow.start"
+    public static let flowProgress = "wmp.flow.progress"
+    public static let flowAction = "wmp.flow.action"
+    public static let flowComplete = "wmp.flow.complete"
+    public static let flowError = "wmp.flow.error"
+    public static let flowCancel = "wmp.flow.cancel"
+
+    public static let messageDeliver = "wmp.message.deliver"
+    public static let messageAck = "wmp.message.ack"
+
+    public static let capabilityUpdate = "wmp.capability.update"
+
+    public static let resolve = "wmp.resolve"
+
+    public static let credentialNotification = "wmp.credential.notification"
+}
+
+/// Standard JSON-RPC error codes used by WMP.
+public enum WmpErrorCodes {
+    public static let parseError = -32700
+    public static let invalidRequest = -32600
+    public static let methodNotFound = -32601
+    public static let invalidParams = -32602
+    public static let internalError = -32603
+
+    // WMP-specific error codes
+    public static let sessionError = -32000
+    public static let authRequired = -32001
+    public static let authFailed = -32002
+    public static let flowError = -32010
+    public static let flowNotFound = -32011
+    public static let flowCancelled = -32012
+    public static let capabilityError = -32020
+    public static let relayError = -32030
+    public static let encryptionError = -32040
+    public static let resolveError = -32050
+}
+
+// MARK: - Flow Types
+
+/// Parameters for wmp.flow.start.
+public struct FlowStartParams: Codable, Sendable {
+    public var wmp: WmpMeta
+    public var flowId: String
+    public var flowType: String
+    public var params: AnyCodable?
+
+    public init(wmp: WmpMeta, flowId: String, flowType: String, params: AnyCodable? = nil) {
+        self.wmp = wmp; self.flowId = flowId; self.flowType = flowType; self.params = params
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, params
+        case flowId = "flow_id"
+        case flowType = "flow_type"
+    }
+}
+
+/// Result for wmp.flow.start.
+public struct FlowStartResult: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var flowType: String
+
+    public init(wmp: WmpMeta? = nil, flowId: String, flowType: String) {
+        self.wmp = wmp; self.flowId = flowId; self.flowType = flowType
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp
+        case flowId = "flow_id"
+        case flowType = "flow_type"
+    }
+}
+
+/// Parameters for wmp.flow.progress (notification).
+public struct FlowProgressParams: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var step: String
+    public var payload: AnyCodable?
+
+    public init(wmp: WmpMeta? = nil, flowId: String, step: String, payload: AnyCodable? = nil) {
+        self.wmp = wmp; self.flowId = flowId; self.step = step; self.payload = payload
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, step, payload
+        case flowId = "flow_id"
+    }
+}
+
+/// Parameters for wmp.flow.action (request).
+public struct FlowActionParams: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var action: String
+    public var params: AnyCodable?
+
+    public init(wmp: WmpMeta? = nil, flowId: String, action: String, params: AnyCodable? = nil) {
+        self.wmp = wmp; self.flowId = flowId; self.action = action; self.params = params
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, action, params
+        case flowId = "flow_id"
+    }
+}
+
+/// Result for wmp.flow.action.
+public struct FlowActionResult: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var accepted: Bool
+
+    public init(wmp: WmpMeta? = nil, flowId: String, accepted: Bool = true) {
+        self.wmp = wmp; self.flowId = flowId; self.accepted = accepted
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, accepted
+        case flowId = "flow_id"
+    }
+}
+
+/// Parameters for wmp.flow.complete (notification).
+public struct FlowCompleteParams: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var result: AnyCodable?
+
+    public init(wmp: WmpMeta? = nil, flowId: String, result: AnyCodable? = nil) {
+        self.wmp = wmp; self.flowId = flowId; self.result = result
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, result
+        case flowId = "flow_id"
+    }
+}
+
+/// Parameters for wmp.flow.error (notification).
+public struct FlowErrorParams: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var code: String?
+    public var message: String?
+    public var data: AnyCodable?
+
+    public init(wmp: WmpMeta? = nil, flowId: String, code: String? = nil, message: String? = nil, data: AnyCodable? = nil) {
+        self.wmp = wmp; self.flowId = flowId; self.code = code; self.message = message; self.data = data
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, code, message, data
+        case flowId = "flow_id"
+    }
+}
+
+/// Parameters for wmp.flow.cancel.
+public struct FlowCancelParams: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var flowId: String
+    public var reason: String?
+
+    public init(wmp: WmpMeta? = nil, flowId: String, reason: String? = nil) {
+        self.wmp = wmp; self.flowId = flowId; self.reason = reason
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wmp, reason
+        case flowId = "flow_id"
+    }
+}
+
+/// Parameters for wmp.resolve.
+public struct ResolveParams: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var type: String
+    public var identifier: String
+    public var params: AnyCodable?
+
+    public init(wmp: WmpMeta? = nil, type: String, identifier: String, params: AnyCodable? = nil) {
+        self.wmp = wmp; self.type = type; self.identifier = identifier; self.params = params
+    }
+}
+
+/// Result for wmp.resolve.
+public struct ResolveResult: Codable, Sendable {
+    public var wmp: WmpMeta?
+    public var type: String
+    public var data: AnyCodable?
+
+    public init(wmp: WmpMeta? = nil, type: String, data: AnyCodable? = nil) {
+        self.wmp = wmp; self.type = type; self.data = data
+    }
+}
