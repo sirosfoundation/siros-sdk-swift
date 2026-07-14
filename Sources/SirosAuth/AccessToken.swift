@@ -35,17 +35,23 @@ public enum TacPermission: Character, Sendable, CaseIterable {
 public enum Acr: String, Sendable, Codable {
     case passkey = "urn:siros:acr:passkey"
     case oidc = "urn:siros:acr:oidc"
+    case unknown = ""
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = Acr(rawValue: value) ?? .unknown
+    }
 }
 
 // MARK: - Access Token
 
 /// JWT payload from the AS token endpoint.
 private struct AccessTokenPayload: Decodable {
-    let sub: String
+    let sub: String?
     let aud: String
     let tenantId: String
     let tac: String
-    let acr: String
+    let acr: String?
     let exp: Int
 
     private enum CodingKeys: String, CodingKey {
@@ -89,14 +95,11 @@ public struct AccessToken: Sendable {
         let payload = try JSONDecoder().decode(AccessTokenPayload.self, from: payloadData)
 
         self.raw = jwt
-        self.sub = payload.sub
+        self.sub = payload.sub ?? ""
         self.aud = payload.aud
         self.tenantId = payload.tenantId
         self.tac = TacPermission.parse(payload.tac)
-        guard let acr = Acr(rawValue: payload.acr) else {
-            throw SirosError.auth(message: "Unknown ACR value: \(payload.acr)")
-        }
-        self.acr = acr
+        self.acr = Acr(rawValue: payload.acr ?? "") ?? .unknown
         self.expiresAt = Date(timeIntervalSince1970: TimeInterval(payload.exp))
     }
 
