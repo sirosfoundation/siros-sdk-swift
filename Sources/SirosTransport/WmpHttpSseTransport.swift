@@ -20,6 +20,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     private let extraHeaders: [String: String]
 
     private var _state: TransportState = .disconnected
+    public var currentState: TransportState { _state }
     private let stateCont: AsyncStream<TransportState>.Continuation
     public let stateStream: AsyncStream<TransportState>
 
@@ -56,7 +57,6 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
-        #if canImport(Darwin)
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -87,10 +87,6 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 }
             }
         }
-        #else
-        // Linux fallback: not yet implemented
-        setState(.failed)
-        #endif
     }
 
     public func send(_ message: Data) async throws {
@@ -115,6 +111,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     public func disconnect() async {
         setState(.disconnected)
         incomingCont.finish()
+        stateCont.finish()
     }
 
     private func setState(_ state: TransportState) {
