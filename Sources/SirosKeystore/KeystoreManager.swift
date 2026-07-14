@@ -36,7 +36,8 @@ public protocol KeystoreManager: AnyObject, Sendable {
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data
 
     /// Generate a proof JWT for credential issuance (c_nonce binding).
-    func generateProof(audience: String, nonce: String) async throws -> String
+    /// When `freshKey` is true, a new key is generated for this proof (batch issuance).
+    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String
 
     /// Sign a verifiable presentation for OID4VP.
     func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String
@@ -94,6 +95,11 @@ public protocol KeystoreManager: AnyObject, Sendable {
 
 /// Default implementation for optional methods.
 public extension KeystoreManager {
+    /// Default: freshKey=false for backward compatibility.
+    func generateProof(audience: String, nonce: String) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: false)
+    }
+
     func securityProperties() async -> SignerSecurityProperties? { nil }
     func signMdocPresentation(
         credentialBytes: Data,
