@@ -177,6 +177,24 @@ public final class WmpSession: @unchecked Sendable {
         try await sendSerializer.send(message, via: transport)
     }
 
+    /// Send a JSON-RPC response for an incoming request.
+    public func sendResponse(id: String, result: AnyCodable?) async throws {
+        let resultDict: [String: AnyCodable]?
+        if case .object_(let dict) = result {
+            resultDict = dict
+        } else {
+            resultDict = nil
+        }
+        let message = try codec.encodeResponse(id: id, result: resultDict)
+        try await sendSerializer.send(message, via: transport)
+    }
+
+    /// Send a JSON-RPC error response for an incoming request.
+    public func sendErrorResponse(id: String, code: Int, message: String) async throws {
+        let msg = try codec.encodeErrorResponse(id: id, code: code, message: message)
+        try await sendSerializer.send(msg, via: transport)
+    }
+
     // MARK: - Private
 
     private func startMessageLoop() {

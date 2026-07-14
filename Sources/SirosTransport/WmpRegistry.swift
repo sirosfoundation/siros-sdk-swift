@@ -20,19 +20,19 @@ final class WmpRegistry: @unchecked Sendable {
 
         if let fh = profile as? WmpFlowHandler {
             for ft in fh.flowTypes {
-                precondition(flowHandlers[ft] == nil, "Flow type '\(ft)' already registered")
+                assert(flowHandlers[ft] == nil, "Flow type '\(ft)' already registered")
                 flowHandlers[ft] = fh
             }
         }
         if let mh = profile as? WmpMethodHandler {
             for m in mh.methods {
-                precondition(methodHandlers[m] == nil, "Method '\(m)' already registered")
+                assert(methodHandlers[m] == nil, "Method '\(m)' already registered")
                 methodHandlers[m] = mh
             }
         }
         if let rh = profile as? WmpResolveHandler {
             for rt in rh.resolveTypes {
-                precondition(resolveHandlers[rt] == nil, "Resolve type '\(rt)' already registered")
+                assert(resolveHandlers[rt] == nil, "Resolve type '\(rt)' already registered")
                 resolveHandlers[rt] = rh
             }
         }

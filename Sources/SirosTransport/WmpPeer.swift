@@ -2,8 +2,8 @@
 
 import Foundation
 
-#if canImport(OSLog)
-import OSLog
+#if canImport(os)
+import os
 #endif
 
 /// WMP Peer — the central dispatch node for the Wallet Messaging Protocol.
@@ -30,7 +30,7 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     private let registry = WmpRegistry()
     public var codec: WmpCodec { session.codec }
 
-    #if canImport(OSLog)
+    #if canImport(os)
     private let logger = Logger(subsystem: "org.sirosfoundation.sdk", category: "WmpPeer")
     private func logWarning(_ msg: String) { logger.warning("\(msg)") }
     private func logError(_ msg: String) { logger.error("\(msg)") }
@@ -111,7 +111,9 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
             throw WmpSessionError.missingResult
         }
         let data = try JSONEncoder().encode(result)
-        return try JSONDecoder().decode(FlowStartResult.self, from: data)
+        let parsed = try JSONDecoder().decode(FlowStartResult.self, from: data)
+        trackFlowType(flowId: parsed.flowId, flowType: parsed.flowType)
+        return parsed
     }
 
     /// Send a flow action via wmp.flow.action.
@@ -160,14 +162,20 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
         case WmpMethods.flowProgress:   try await dispatchFlowProgress(paramsWrapped)
         case WmpMethods.flowComplete:   try await dispatchFlowComplete(paramsWrapped)
         case WmpMethods.flowError:      try await dispatchFlowError(paramsWrapped)
-        case WmpMethods.flowStart:      try await dispatchFlowStart(paramsWrapped)
-        case WmpMethods.flowAction:     try await dispatchFlowAction(paramsWrapped)
+        case WmpMethods.flowStart:      try await dispatchFlowStart(paramsWrapped, requestId: msg.id)
+        case WmpMethods.flowAction:     try await dispatchFlowAction(paramsWrapped, requestId: msg.id)
         case WmpMethods.flowCancel:     try await dispatchFlowCancel(paramsWrapped)
         case WmpMethods.resolve:        try await dispatchResolve(paramsWrapped)
         default:
             if let handler = registry.methodHandler(for: msg.method) {
-                _ = try await handler.handleMethod(method: msg.method, params: paramsWrapped)
+                let result = try await handler.handleMethod(method: msg.method, params: paramsWrapped)
+                if let id = msg.id {
+                    try await session.sendResponse(id: id, result: result)
+                }
             } else {
+                if let id = msg.id {
+                    try await session.sendErrorResponse(id: id, code: WmpErrorCodes.methodNotFound, message: "Method not found: \(msg.method)")
+                }
                 logWarning("Unhandled WMP method: \(msg.method)")
             }
         }
@@ -199,19 +207,27 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
         eventContinuation.yield(.error(flowId: p.flowId, code: p.code, message: p.message))
     }
 
-    private func dispatchFlowStart(_ paramsWrapped: AnyCodable?) async throws {
+    private func dispatchFlowStart(_ paramsWrapped: AnyCodable?, requestId: String? = nil) async throws {
         let p: FlowStartParams = try decode(paramsWrapped)
         if let handler = registry.flowHandler(for: p.flowType) {
             trackFlowType(flowId: p.flowId, flowType: p.flowType)
-            _ = try await handler.startFlow(params: p)
+            let result = try await handler.startFlow(params: p)
+            if let id = requestId {
+                let resultParams = try codec.encodeParams(result)
+                try await session.sendResponse(id: id, result: .object_(resultParams))
+            }
         }
         eventContinuation.yield(.started(flowId: p.flowId, flowType: p.flowType, params: p.params))
     }
 
-    private func dispatchFlowAction(_ paramsWrapped: AnyCodable?) async throws {
+    private func dispatchFlowAction(_ paramsWrapped: AnyCodable?, requestId: String? = nil) async throws {
         let p: FlowActionParams = try decode(paramsWrapped)
         if let handler = registry.flowHandler(for: lookupFlowType(p.flowId)) {
-            _ = try await handler.handleAction(params: p)
+            let result = try await handler.handleAction(params: p)
+            if let id = requestId {
+                let resultParams = try codec.encodeParams(result)
+                try await session.sendResponse(id: id, result: .object_(resultParams))
+            }
         }
         eventContinuation.yield(.action(flowId: p.flowId, action: p.action, params: p.params))
     }

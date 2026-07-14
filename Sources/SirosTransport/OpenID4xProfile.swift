@@ -388,8 +388,12 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
     private func sendMatchResponse(flowId: String, result: MatchResult) async {
         guard let peer else { return }
         let matchArray = result.matches.map { match -> [String: AnyCodable] in
-            var dict: [String: AnyCodable] = ["credential_id": .string(match.credentialId)]
+            var dict: [String: AnyCodable] = [
+                "credential_id": .string(match.credentialId),
+                "format": .string(match.format),
+            ]
             if let qid = match.credentialQueryId { dict["credential_query_id"] = .string(qid) }
+            if let vct = match.vct { dict["vct"] = .string(vct) }
             if let claims = match.availableClaims { dict["available_claims"] = .array(claims.map { .string($0) }) }
             return dict
         }

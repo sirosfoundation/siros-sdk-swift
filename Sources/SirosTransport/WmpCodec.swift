@@ -34,6 +34,18 @@ public final class WmpCodec: Sendable {
         return try encodeRequest(method: method, params: params, id: nil, omitId: true)
     }
 
+    /// Encode a JSON-RPC success response.
+    public func encodeResponse(id: String, result: [String: AnyCodable]?) throws -> Data {
+        let response = JsonRpcResponse(id: id, result: result, error: nil)
+        return try encoder.encode(response)
+    }
+
+    /// Encode a JSON-RPC error response.
+    public func encodeErrorResponse(id: String, code: Int, message: String) throws -> Data {
+        let response = JsonRpcResponse(id: id, result: nil, error: JsonRpcError(code: code, message: message, data: nil))
+        return try encoder.encode(response)
+    }
+
     /// Decode a JSON-RPC response.
     public func decodeResponse(_ data: Data) throws -> JsonRpcResponse {
         return try decoder.decode(JsonRpcResponse.self, from: data)
