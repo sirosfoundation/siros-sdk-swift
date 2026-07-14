@@ -9,17 +9,9 @@ import Foundation
 ///
 /// ## FaceTec SDK Dependency
 ///
-/// Add the FaceTec SDK from the private vendor Swift Package:
-///
-/// ```swift
-/// // Package.swift or Xcode SPM:
-/// .package(url: "https://github.com/sirosfoundation/vendor-swift-packages.git", from: "10.1.6")
-///
-/// // Then depend on the target:
-/// .product(name: "FaceTecSDK", package: "vendor-swift-packages")
-/// // Or for development (mock mode):
-/// .product(name: "FaceTecSDKForDevelopment", package: "vendor-swift-packages")
-/// ```
+/// The FaceTec SDK XCFramework is distributed via a private SPM package
+/// configured in CI secrets (`FACETEC_PACKAGE_URL`).
+/// See the project's Package.swift for dependency setup.
 ///
 /// ## Usage
 ///
