@@ -6,6 +6,7 @@ import SirosCredentials
 /// Credential picker list — shows available credentials from all issuers.
 struct AddCredentialView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    @State private var showIDVPreparation = false
 
     var body: some View {
         NavigationStack {
@@ -24,12 +25,44 @@ struct AddCredentialView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
-                        CredentialOfferRow(offer: offer)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                viewModel.selectCredentialOffer(offer)
+                    List {
+                        // Scan Physical ID card
+                        Section {
+                            Button(action: { showIDVPreparation = true }) {
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.accentColor.opacity(0.15))
+                                            .frame(width: 40, height: 40)
+                                        Image(systemName: "camera")
+                                            .foregroundColor(.accentColor)
+                                    }
+                                    VStack(alignment: .leading) {
+                                        Text("Digital ID (scanned passport)")
+                                            .font(.body)
+                                            .fontWeight(.medium)
+                                        Text("Scan your face and passport")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundColor(.secondary)
+                                }
                             }
+                            .buttonStyle(.plain)
+                        }
+
+                        // Credential offers
+                        Section {
+                            ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
+                                CredentialOfferRow(offer: offer)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        viewModel.selectCredentialOffer(offer)
+                                    }
+                            }
+                        }
                     }
                     .listStyle(.plain)
                 }
@@ -49,6 +82,15 @@ struct AddCredentialView: View {
                     Text("You are about to request \"\(offer.credentialName)\" from \(offer.issuerName).")
                 }
             }
+        }
+        .sheet(isPresented: $showIDVPreparation) {
+            IDVPreparationView(
+                onStartScan: {
+                    showIDVPreparation = false
+                    viewModel.startIDV()
+                },
+                onDismiss: { showIDVPreparation = false }
+            )
         }
     }
 
