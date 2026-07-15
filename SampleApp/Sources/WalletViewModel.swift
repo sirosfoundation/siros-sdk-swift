@@ -380,6 +380,25 @@ final class WalletViewModel: ObservableObject {
         pendingIssuanceOffer = nil
     }
 
+    // MARK: - Identity Verification (FaceTec IDV)
+
+    func startIDV() {
+        Task {
+            do {
+                let delegate = FaceTecCaptureDelegate()
+                let client = RemoteIDVClient(config: RemoteIDVClient.Config(
+                    serverUrl: backendUrl + "/idv",
+                    authToken: "" // Token obtained from AS
+                ))
+                let provider = RemoteIDVProvider(client: client, delegate: delegate)
+                // The wallet handles the full flow: liveness → document → issuance
+                try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: nil)
+            } catch {
+                errorMessage = "IDV failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
     func openCredentialDetail(_ credential: StoredCredential) {
         selectedCredential = credential
     }
