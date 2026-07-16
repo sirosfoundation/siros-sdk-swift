@@ -382,20 +382,25 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Identity Verification (FaceTec IDV)
 
+    /// IDV server URL — defaults to facetec-api co-hosted behind /idv path.
+    var idvServerUrl: String { backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/idv" }
+
     func startIDV() {
         Task {
             do {
+                isLoading = true
+                let token = try await wallet.getAccessToken()
                 let delegate = FaceTecCaptureDelegate()
                 let client = RemoteIDVClient(config: RemoteIDVClient.Config(
-                    serverUrl: backendUrl + "/idv",
-                    authToken: "" // Token obtained from AS
+                    serverUrl: idvServerUrl,
+                    authToken: "Bearer \(token)"
                 ))
                 let provider = RemoteIDVProvider(client: client, delegate: delegate)
-                // The wallet handles the full flow: liveness → document → issuance
                 try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: nil)
             } catch {
                 errorMessage = "IDV failed: \(error.localizedDescription)"
             }
+            isLoading = false
         }
     }
 

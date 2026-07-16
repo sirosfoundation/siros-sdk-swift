@@ -72,6 +72,17 @@ public final class SirosWallet: @unchecked Sendable {
     /// Accounts that have passkeys and can log in.
     public func listLoginableAccounts() -> [CachedAccount] { accountRegistry.listLoginableAccounts() }
 
+    /// Get a valid access token for authenticated API calls (e.g., IDV backend).
+    /// Returns the raw JWT string. Throws if no session is active.
+    public func getAccessToken() async throws -> String {
+        lock.lock()
+        let tokens = authTokens
+        lock.unlock()
+        guard let tokens else { throw SirosError.auth(message: "No active session") }
+        let token = try await tokens.ensureBackendToken()
+        return token.raw
+    }
+
     /// Remove a cached account (forgets it from the login screen).
     public func forgetAccount(accountId: String) {
         accountRegistry.removeAccount(accountId: accountId)
