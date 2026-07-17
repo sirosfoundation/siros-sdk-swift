@@ -26,29 +26,17 @@ jobs:
       - name: Run tests
         run: swift test
 
-      - name: Build iOS framework
-        run: |
-          xcodebuild archive \
-            -scheme SirosSDK \
-            -destination "generic/platform=iOS" \
-            -archivePath archives/ios \
-            -derivedDataPath DerivedData \
-            SKIP_INSTALL=NO \
-            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            2>&1 | tail -20 || echo "XCFramework build requires Xcode project — using SPM artifacts"
-
       - name: Collect SDK artifacts
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release-artifacts
-          # SPM build products
+          # Package source for SPM consumers (Package.swift + Sources/)
+          tar czf "release-artifacts/siros-sdk-swift-${VERSION}-source.tar.gz" \
+            Package.swift Sources/ README.md LICENSE
+          # SPM build products (if available)
           if [ -d ".build/release" ]; then
-            tar czf release-artifacts/siros-sdk-swift-${{ github.ref_name }}.tar.gz \
+            tar czf "release-artifacts/siros-sdk-swift-${VERSION}-build.tar.gz" \
               -C .build/release . 2>/dev/null || true
-          fi
-          # Archive if available
-          if [ -d "archives" ]; then
-            tar czf release-artifacts/siros-sdk-ios-${{ github.ref_name }}.tar.gz \
-              -C archives . 2>/dev/null || true
           fi
 
       - uses: actions/upload-artifact@v4
@@ -81,15 +69,21 @@ jobs:
             -scheme SirosSampleApp \
             -destination "generic/platform=iOS Simulator" \
             -configuration Debug \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tail -20
 
       - name: Collect sample app artifacts
         run: |
           mkdir -p release-artifacts
-          find SampleApp -name "*.app" -path "*/Debug-*" | head -1 | while read app; do
-            zip -r release-artifacts/SirosSampleApp-${{ github.ref_name }}.zip "$app"
-          done
+          # Find the .app in DerivedData build output
+          APP_PATH=$(find SampleApp/build -name "*.app" -path "*Debug*" | head -1)
+          if [ -n "$APP_PATH" ]; then
+            zip -r "release-artifacts/SirosSampleApp-${{ github.ref_name }}.zip" "$APP_PATH"
+          else
+            echo "Warning: No .app found in build output"
+            find SampleApp/build -name "*.app" 2>/dev/null || echo "No .app files at all"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
