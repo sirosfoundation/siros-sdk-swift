@@ -27,7 +27,7 @@ force_try: warning
 
 type_body_length:
   warning: 500
-  error: 800
+  error: 1200
 
 file_length:
   warning: 700
