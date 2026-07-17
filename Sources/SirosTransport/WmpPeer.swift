@@ -31,7 +31,7 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     public var codec: WmpCodec { session.codec }
 
     #if canImport(os)
-    private let logger = Logger(subsystem: "org.sirosfoundation.sdk", category: "WmpPeer")
+    private let logger = Logger(subsystem: "org.siros.sdk", category: "WmpPeer")
     private func logWarning(_ msg: String) { logger.warning("\(msg)") }
     private func logError(_ msg: String) { logger.error("\(msg)") }
     #else

@@ -3,7 +3,7 @@
 import Foundation
 #if canImport(os)
 import os
-private let logger = Logger(subsystem: "org.sirosfoundation.sdk", category: "CredentialUtils")
+private let logger = Logger(subsystem: "org.siros.sdk", category: "CredentialUtils")
 #endif
 
 /// A user-facing claim extracted from a credential payload.

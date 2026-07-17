@@ -39,6 +39,10 @@
         </dict>
     </array>
     <key>NSCameraUsageDescription</key>
-    <string>Camera is used to scan QR codes for credential offers and presentation requests.</string>
+    <string>Camera is used to scan QR codes and for identity verification via 3D liveness detection.</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>NSFaceIDUsageDescription</key>
+    <string>Face ID is used to authenticate and protect your credentials.</string>
 </dict>
 </plist>
