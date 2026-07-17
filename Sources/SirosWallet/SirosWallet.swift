@@ -14,7 +14,7 @@ import os
 #endif
 
 #if canImport(os)
-private let logger = Logger(subsystem: "org.sirosfoundation.sdk", category: "SirosWallet")
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 #endif
 
 /// Main entry point for the SIROS Wallet SDK (cross-platform).

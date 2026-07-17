@@ -55,7 +55,7 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     let ffi: FfiWscdManager
     private weak var authProvider: AuthProvider?
     /// Serial queue for ordered access to FFI bindings.
-    private let ffiQueue = DispatchQueue(label: "org.sirosfoundation.UniFFISigner.ffi")
+    private let ffiQueue = DispatchQueue(label: "org.siros.UniFFISigner.ffi")
     /// Cache of key ID → JWK JSON Data, populated at generateKey time.
     private var publicKeyCache: [String: Data] = [:]
     private let cacheLock = NSLock()

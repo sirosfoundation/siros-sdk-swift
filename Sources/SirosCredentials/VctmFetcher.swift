@@ -6,7 +6,7 @@ import FoundationNetworking
 #endif
 #if canImport(os)
 import os
-private let logger = Logger(subsystem: "org.sirosfoundation.sdk", category: "VctmFetcher")
+private let logger = Logger(subsystem: "org.siros.sdk", category: "VctmFetcher")
 #endif
 
 /// Fetches SD-JWT VC Type Metadata from issuer endpoints.
