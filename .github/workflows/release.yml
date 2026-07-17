@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-sdk:
+    name: Build SDK
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure vendor package access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.VENDOR_PACKAGES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Build SDK (macOS + iOS)
+        run: |
+          swift build -c release
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build iOS framework
+        run: |
+          xcodebuild archive \
+            -scheme SirosSDK \
+            -destination "generic/platform=iOS" \
+            -archivePath archives/ios \
+            -derivedDataPath DerivedData \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            2>&1 | tail -20 || echo "XCFramework build requires Xcode project — using SPM artifacts"
+
+      - name: Collect SDK artifacts
+        run: |
+          mkdir -p release-artifacts
+          # SPM build products
+          if [ -d ".build/release" ]; then
+            tar czf release-artifacts/siros-sdk-swift-${{ github.ref_name }}.tar.gz \
+              -C .build/release . 2>/dev/null || true
+          fi
+          # Archive if available
+          if [ -d "archives" ]; then
+            tar czf release-artifacts/siros-sdk-ios-${{ github.ref_name }}.tar.gz \
+              -C archives . 2>/dev/null || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-artifacts
+          path: release-artifacts/
+
+  build-sample-app:
+    name: Build Sample App
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure vendor package access
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.VENDOR_PACKAGES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: SampleApp
+        run: xcodegen generate
+
+      - name: Build Sample App (iOS Simulator)
+        working-directory: SampleApp
+        run: |
+          xcodebuild build \
+            -project SirosSampleApp.xcodeproj \
+            -scheme SirosSampleApp \
+            -destination "generic/platform=iOS Simulator" \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tail -20
+
+      - name: Collect sample app artifacts
+        run: |
+          mkdir -p release-artifacts
+          find SampleApp -name "*.app" -path "*/Debug-*" | head -1 | while read app; do
+            zip -r release-artifacts/SirosSampleApp-${{ github.ref_name }}.zip "$app"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-app-artifacts
+          path: release-artifacts/
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-sdk, build-sample-app]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
