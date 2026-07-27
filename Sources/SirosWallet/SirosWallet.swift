@@ -88,6 +88,9 @@ public final class SirosWallet: @unchecked Sendable {
         accountRegistry.removeAccount(accountId: accountId)
         if accountRegistry.activeAccountId == accountId {
             logout()
+        } else {
+            // Re-emit state so UI reflects the removed account
+            setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
     }
 
@@ -354,11 +357,13 @@ public final class SirosWallet: @unchecked Sendable {
             #if canImport(os)
             logger.error("Registration failed: \(e.localizedDescription)")
             #endif
+            rollbackLocalCredential()
             setState(.error(message: e.localizedDescription))
         } catch {
             #if canImport(os)
             logger.error("Registration failed: \(error.localizedDescription)")
             #endif
+            rollbackLocalCredential()
             setState(.error(message: error.localizedDescription))
             throw SirosError.wallet(message: "Registration failed: \(error.localizedDescription)")
         }
@@ -809,6 +814,14 @@ public final class SirosWallet: @unchecked Sendable {
         engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
+    }
+
+    /// Roll back a locally-stored credential after a failed registration.
+    /// Prevents orphaned passkeys from appearing in the login picker.
+    private func rollbackLocalCredential() {
+        if let local = authProvider as? LocalAuthProvider {
+            local.rollbackLastRegistration()
+        }
     }
 
     // MARK: - Private helpers

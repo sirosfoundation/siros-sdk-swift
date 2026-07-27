@@ -43,6 +43,17 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     /// The PRF output from the most recent register or authenticate call.
     public private(set) var lastPrfOutput: PrfOutput?
 
+    /// Remove the most recently registered credential from local storage.
+    /// Call this when the backend rejects the registration to avoid orphaned passkeys.
+    public func rollbackLastRegistration() {
+        lock.withLock {
+            guard let credId = lastCredentialId else { return }
+            credentials.removeValue(forKey: credId)
+            lastCredentialId = nil
+            lastPrfOutput = nil
+        }
+    }
+
     public init() {}
 
     #if canImport(Security)
