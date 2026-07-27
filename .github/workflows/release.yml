@@ -13,7 +13,7 @@ jobs:
     name: Build SDK
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure vendor package access
         run: |
@@ -48,7 +48,7 @@ jobs:
     name: Build Sample App
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure vendor package access
         run: |
