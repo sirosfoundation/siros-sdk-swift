@@ -39,7 +39,7 @@ jobs:
               -C .build/release . 2>/dev/null || true
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdk-artifacts
           path: release-artifacts/
@@ -85,7 +85,7 @@ jobs:
             find SampleApp/build -name "*.app" 2>/dev/null || echo "No .app files at all"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sample-app-artifacts
           path: release-artifacts/
