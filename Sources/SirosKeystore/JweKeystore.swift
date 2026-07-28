@@ -466,12 +466,38 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     private func buildWalletStateV3() -> [String: Any] {
-        // Preserve existing state if available, otherwise initialize fresh
-        if let existingState = preservedWalletState {
-            return existingState
-        }
+        // Preserve existing state if available, otherwise initialize fresh.
+        // NOTE: this must NOT short-circuit and return existingState verbatim -
+        // credentials/keys added via saveCredential()/generateKey() since unlock()
+        // only live in the `keys`/`credentials` dictionaries below, not in
+        // preservedWalletState, so an early return here would silently drop any
+        // credential added by a returning user (preservedWalletState is only
+        // ever non-nil when unlock() loaded an existing container).
+        let existingState = preservedWalletState
+        let existingS = existingState?["S"] as? [String: Any]
 
-        // First-time or missing state: build minimal valid state
+        let originalKeypairsByKid: [String: [String: Any]] = {
+            guard let arr = existingS?["keypairs"] as? [[String: Any]] else { return [:] }
+            var result: [String: [String: Any]] = [:]
+            for entry in arr {
+                if let kid = (entry["keypair"] as? [String: Any])?["kid"] as? String {
+                    result[kid] = entry
+                }
+            }
+            return result
+        }()
+
+        let originalCredsById: [String: [String: Any]] = {
+            guard let arr = existingS?["credentials"] as? [[String: Any]] else { return [:] }
+            var result: [String: [String: Any]] = [:]
+            for entry in arr {
+                if let credId = entry["credentialId"] as? String {
+                    result[credId] = entry
+                }
+            }
+            return result
+        }()
+
         let keypairs: [[String: Any]] = keys.map { (kid, ecKey) in
             let publicKey = ecKey.publicKey
             let x963 = publicKey.x963Representation
@@ -492,11 +518,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
                 "y": EncryptedContainer.base64UrlEncode(y),
                 "d": EncryptedContainer.base64UrlEncode(d),
             ]
+            // Preserve DID from original state if available; only compute for fresh keys
+            let originalKeypair = originalKeypairsByKid[kid]?["keypair"] as? [String: Any]
+            let did = originalKeypair?["did"] as? String ?? ""
             return [
                 "kid": kid,
                 "keypair": [
                     "kid": kid,
-                    "did": "",
+                    "did": did,
                     "alg": "ES256",
                     "publicKey": pubJwk,
                     "privateKey": privJwk,
@@ -504,31 +533,49 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             ]
         }
 
+        // Preserve all metadata fields from the original entry (if this credential
+        // already existed in the loaded container); only fall back to defaults for
+        // genuinely new credentials.
         let creds: [[String: Any]] = credentials.map { (id, data) in
-            [
+            let original = originalCredsById[id]
+            let format: String = original?["format"] as? String ?? ""
+            let kid: String = original?["kid"] as? String ?? ""
+            let instanceId: Any = original?["instanceId"] ?? 0
+            let batchId: Any = original?["batchId"] ?? 0
+            let issuerIdent: String = original?["credentialIssuerIdentifier"] as? String ?? ""
+            let configId: String = original?["credentialConfigurationId"] as? String ?? ""
+            let credData: String = original?["data"] as? String ?? data
+            let entry: [String: Any] = [
                 "credentialId": id,
-                "format": "",
-                "data": data,
-                "kid": "",
-                "instanceId": 0,
-                "batchId": 0,
-                "credentialIssuerIdentifier": "",
-                "credentialConfigurationId": "",
-            ] as [String: Any]
+                "format": format,
+                "data": credData,
+                "kid": kid,
+                "instanceId": instanceId,
+                "batchId": batchId,
+                "credentialIssuerIdentifier": issuerIdent,
+                "credentialConfigurationId": configId,
+            ]
+            return entry
         }
 
+        let lastEventHash = existingState?["lastEventHash"] as? String ?? ""
+        let events = existingState?["events"] as? [Any] ?? []
+        let presentations = existingS?["presentations"] as? [Any] ?? []
+        let settings = existingS?["settings"] as? [String: Any] ?? [
+            "openidRefreshTokenMaxAgeInSeconds": "0",
+        ]
+        let credentialIssuanceSessions = existingS?["credentialIssuanceSessions"] as? [Any] ?? []
+
         return [
-            "lastEventHash": "",
-            "events": [] as [Any],
+            "lastEventHash": lastEventHash,
+            "events": events,
             "S": [
                 "schemaVersion": 3,
                 "keypairs": keypairs,
                 "credentials": creds,
-                "presentations": [] as [Any],
-                "settings": [
-                    "openidRefreshTokenMaxAgeInSeconds": "0",
-                ],
-                "credentialIssuanceSessions": [] as [Any],
+                "presentations": presentations,
+                "settings": settings,
+                "credentialIssuanceSessions": credentialIssuanceSessions,
             ] as [String: Any],
         ]
     }

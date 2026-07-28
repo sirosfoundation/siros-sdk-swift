@@ -64,7 +64,8 @@ let package = Package(
         .testTarget(
             name: "SirosKeystoreTests",
             dependencies: ["SirosKeystore"],
-            path: "Tests/SirosKeystoreTests"
+            path: "Tests/SirosKeystoreTests",
+            resources: [.copy("Resources")]
         ),
 
         // --- Flow: OID4VCI / OID4VP flow orchestration ---
