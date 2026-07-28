@@ -228,6 +228,13 @@ struct PreLoginSettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+
+                Section("Developer") {
+                    Toggle("Credential Details", isOn: $viewModel.showCredentialDetails)
+                    Text("Whether tapping a credential opens the detail screen (raw credential, claims, disclosures).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .navigationTitle("Connection Settings")
             .navigationBarTitleDisplayMode(.inline)

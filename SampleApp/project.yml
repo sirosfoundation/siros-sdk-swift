@@ -8,6 +8,9 @@ options:
 packages:
   SirosSDK:
     path: ../
+  SVGView:
+    url: https://github.com/exyte/SVGView
+    from: 1.0.6
 
 targets:
   SirosSampleApp:
@@ -27,6 +30,8 @@ targets:
         product: SirosAuth
       - package: SirosSDK
         product: SirosKeystore
+      - package: SVGView
+        product: SVGView
     settings:
       base:
         SWIFT_VERSION: "5.10"

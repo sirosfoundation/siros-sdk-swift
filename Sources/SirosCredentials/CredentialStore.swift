@@ -59,6 +59,8 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
     public let textColor: String?
     public let logo: LogoInfo?
     public let claims: [ClaimMeta]?
+    /// VCTM SVG rendering templates, if the issuer's VCTM published any.
+    public let svgTemplates: [SvgTemplateInfo]?
 
     public init(
         name: String? = nil,
@@ -69,7 +71,8 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
         backgroundColor: String? = nil,
         textColor: String? = nil,
         logo: LogoInfo? = nil,
-        claims: [ClaimMeta]? = nil
+        claims: [ClaimMeta]? = nil,
+        svgTemplates: [SvgTemplateInfo]? = nil
     ) {
         self.name = name
         self.description = description
@@ -80,12 +83,35 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
         self.textColor = textColor
         self.logo = logo
         self.claims = claims
+        self.svgTemplates = svgTemplates
     }
 
     enum CodingKeys: String, CodingKey {
         case name, description, issuer, vct, doctype, logo, claims
         case backgroundColor = "background_color"
         case textColor = "text_color"
+        case svgTemplates = "svg_templates"
+    }
+}
+
+/// A VCTM SVG rendering template reference (VCTM section 6, `rendering.svg_templates`).
+public struct SvgTemplateInfo: Codable, Sendable, Equatable {
+    public let uri: String
+    public let colorScheme: String?
+    public let contrast: String?
+    public let orientation: String?
+
+    public init(uri: String, colorScheme: String? = nil, contrast: String? = nil, orientation: String? = nil) {
+        self.uri = uri
+        self.colorScheme = colorScheme
+        self.contrast = contrast
+        self.orientation = orientation
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case uri, contrast
+        case colorScheme = "color_scheme"
+        case orientation
     }
 }
 
@@ -101,19 +127,28 @@ public struct ClaimMeta: Codable, Sendable, Equatable {
     public let sd: String?
     /// Whether this claim must be present in a presentation.
     public let mandatory: Bool
+    /// VCTM SVG template placeholder ID this claim fills, if any.
+    public let svgId: String?
 
     public init(
         path: [String],
         label: String? = nil,
         description: String? = nil,
         sd: String? = nil,
-        mandatory: Bool = false
+        mandatory: Bool = false,
+        svgId: String? = nil
     ) {
         self.path = path
         self.label = label
         self.description = description
         self.sd = sd
         self.mandatory = mandatory
+        self.svgId = svgId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path, label, description, sd, mandatory
+        case svgId = "svg_id"
     }
 }
 

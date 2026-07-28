@@ -102,13 +102,11 @@ struct CredentialDetailView: View {
                         .padding(.top, 32)
                 } else {
                     ForEach(claims, id: \.key) { claim in
-                        HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(claim.label)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .frame(width: 100, alignment: .trailing)
-                            Text(claim.value)
-                                .font(.body)
+                            CopyableTextBlock(text: claim.value)
                         }
                         Divider()
                     }
@@ -122,10 +120,22 @@ struct CredentialDetailView: View {
 
     private var rawTab: some View {
         ScrollView {
-            Text(credential.raw)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                .padding()
+            VStack(alignment: .leading, spacing: 16) {
+                let parts = CredentialUtils.parseSdJwtParts(credential.raw)
+                if let header = parts.header {
+                    CopyableTextBlock(text: header, label: "Header")
+                }
+                if let payload = parts.payload {
+                    CopyableTextBlock(text: payload, label: "Payload")
+                }
+                ForEach(Array(parts.disclosures.enumerated()), id: \.offset) { index, disclosure in
+                    CopyableTextBlock(text: disclosure, label: "Disclosure \(index + 1)")
+                }
+                if parts.header == nil && parts.payload == nil && parts.disclosures.isEmpty {
+                    CopyableTextBlock(text: credential.raw)
+                }
+            }
+            .padding()
         }
     }
 

@@ -84,6 +84,67 @@ final class CredentialUtilsTests: XCTestCase {
         XCTAssertTrue(CredentialUtils.extractClaims(cred).isEmpty)
     }
 
+    func testExtractClaimsResolvesDeeplyNestedVctmPath() {
+        let header = base64Url(#"{"alg":"ES256","typ":"vc+sd-jwt"}"#)
+        let payload = base64Url("""
+        {"iss":"https://issuer.example.com","exp":1800000000,"vct":"urn:example:diploma",
+         "credentialSubject":{"hasClaim":{"awardedBy":{"institution":"ArtEZ"}},"givenName":"Alice"}}
+        """)
+        let raw = "\(header).\(payload).fakesig"
+        let cred = StoredCredential(
+            id: "nested", format: "vc+sd-jwt", raw: raw,
+            metadata: CredentialMetadata(claims: [
+                ClaimMeta(path: ["credentialSubject", "hasClaim", "awardedBy", "institution"], label: "Institution"),
+            ])
+        )
+        let claims = CredentialUtils.extractClaims(cred)
+        let institution = claims.first(where: { $0.key == "credentialSubject.hasClaim.awardedBy.institution" })
+        XCTAssertEqual(institution?.label, "Institution")
+        XCTAssertEqual(institution?.value, "ArtEZ")
+        // The ancestor top-level key must not also be dumped raw as its own claim.
+        XCTAssertFalse(claims.contains(where: { $0.key == "credentialSubject" }))
+    }
+
+    func testExtractClaimsSkipsVctmClaimMissingFromCredential() {
+        let cred = StoredCredential(
+            id: "test-id", format: "vc+sd-jwt", raw: sampleJwt,
+            metadata: CredentialMetadata(claims: [
+                ClaimMeta(path: ["credentialSubject", "nonexistent"], label: "Nope"),
+            ])
+        )
+        let claims = CredentialUtils.extractClaims(cred)
+        XCTAssertFalse(claims.contains(where: { $0.label == "Nope" }))
+    }
+
+    func testParseSdJwtPartsDecodesHeaderPayloadAndDisclosures() {
+        let disclosure = base64Url(#"["salt123","given_name","Alice"]"#)
+        let raw = "\(sampleJwt)~\(disclosure)~"
+        let parts = CredentialUtils.parseSdJwtParts(raw)
+        XCTAssertNotNil(parts.header)
+        XCTAssertTrue(parts.header?.contains("ES256") ?? false)
+        XCTAssertNotNil(parts.payload)
+        XCTAssertTrue(parts.payload?.contains("Alice") ?? false)
+        XCTAssertEqual(parts.disclosures.count, 1)
+        XCTAssertTrue(parts.disclosures[0].contains("given_name"))
+    }
+
+    func testPrettyPrintJsonIndentsValidJson() {
+        let pretty = CredentialUtils.prettyPrintJson(#"{"a":1,"b":2}"#)
+        XCTAssertTrue(pretty.contains("\n"))
+        XCTAssertTrue(pretty.contains("\"a\""))
+    }
+
+    func testPrettyPrintJsonReturnsInputUnchangedForNonJson() {
+        XCTAssertEqual(CredentialUtils.prettyPrintJson("not json"), "not json")
+    }
+
+    func testPrettyPrintXmlIndentsNestedElements() {
+        let pretty = CredentialUtils.prettyPrintXml("<svg><text>{{name}}</text></svg>")
+        XCTAssertTrue(pretty.contains("\n"))
+        XCTAssertTrue(pretty.contains("<text>"))
+        XCTAssertTrue(pretty.contains("{{name}}"))
+    }
+
     func testFormatClaimKey() {
         XCTAssertEqual(CredentialUtils.formatClaimKey("given_name"), "Given Name")
         XCTAssertEqual(CredentialUtils.formatClaimKey("family-name"), "Family Name")
