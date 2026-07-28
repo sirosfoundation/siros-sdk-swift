@@ -11,15 +11,23 @@ import CommonCrypto
 import Security
 #endif
 
+#if canImport(LocalAuthentication)
+import LocalAuthentication
+#endif
+
 /// A fully local `AuthProvider` for development and testing.
 ///
-/// Generates EC P-256 keys in memory and performs WebAuthn-style
-/// register/authenticate flows without requiring system credential
-/// manager UI (ASAuthorization). This is the Swift equivalent of
-/// `LocalAuthProvider` on Android.
+/// Generates EC P-256 keys and performs WebAuthn-style register/authenticate
+/// flows without requiring system credential manager UI (ASAuthorization).
+/// This is the Swift equivalent of `LocalAuthProvider` on Android.
 ///
-/// - Important: This provider stores keys in memory only.
-///   It is NOT intended for production use.
+/// - Important: This provider is documented as dev/test-only, not for
+///   production use. That said, on Apple platforms (where `Security` is
+///   available) it still gates its signing key behind real device
+///   authentication (`kSecAttrAccessControl` + `LAContext`/
+///   `kSecUseAuthenticationContext`) rather than providing none at all, in
+///   case it's ever exercised as a real fallback. Where `Security` is
+///   unavailable (e.g. Linux), it throws rather than silently signing.
 public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     /// Stored credential metadata.
     public struct CredentialEntry: Sendable {
@@ -30,9 +38,22 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
         public var signCount: UInt32
 
         #if canImport(Security)
-        let privateKey: SecKey
+        /// Keychain `kSecAttrApplicationTag` used to re-fetch a context-bound
+        /// `SecKey` reference at sign time (see `signWithKey`), rather than
+        /// holding a bare in-memory `SecKey`, so the access-control gate set
+        /// at creation time is actually enforced on every signing operation.
+        let keyTag: Data
         #endif
     }
+
+    #if canImport(Security)
+    /// Deterministic keychain tag for a given credential ID. Shared between
+    /// `register()` (which creates the item) and tests (which verify its
+    /// access-control attributes) to avoid duplicating the format.
+    static func keyTag(for credentialId: Data) -> Data {
+        Data("org.siros.sdk.localauth.\(credentialId.base64EncodedString())".utf8)
+    }
+    #endif
 
     private let lock = NSLock()
     private var credentials: [Data: CredentialEntry] = [:]
@@ -46,12 +67,18 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     /// Remove the most recently registered credential from local storage.
     /// Call this when the backend rejects the registration to avoid orphaned passkeys.
     public func rollbackLastRegistration() {
-        lock.withLock {
-            guard let credId = lastCredentialId else { return }
-            credentials.removeValue(forKey: credId)
+        let removed: CredentialEntry? = lock.withLock {
+            guard let credId = lastCredentialId else { return nil }
+            let entry = credentials.removeValue(forKey: credId)
             lastCredentialId = nil
             lastPrfOutput = nil
+            return entry
         }
+        #if canImport(Security)
+        if let tag = removed?.keyTag {
+            deleteKey(tag: tag)
+        }
+        #endif
     }
 
     public init() {}
@@ -64,10 +91,38 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, ptr.baseAddress!)
         }
 
-        // Generate EC P-256 key pair
+        // Require device authentication (biometry or passcode) before this
+        // key can ever be used to sign. A bare `SecKeyCreateRandomKey` key
+        // (the previous behavior) has no such gate at all — signing always
+        // succeeds unconditionally, with zero device-authentication
+        // guarantee. `.userPresence` (rather than `.biometryCurrentSet`) is
+        // used so the key isn't invalidated by biometry re-enrollment and
+        // still allows passcode fallback.
+        var acError: Unmanaged<CFError>?
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            kCFAllocatorDefault,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .userPresence,
+            &acError
+        ) else {
+            throw SirosError.auth(message: "Failed to create access control: \(String(describing: acError))")
+        }
+
+        let keyTag = Self.keyTag(for: credentialId)
+
+        // Generate EC P-256 key pair. It must be persisted
+        // (`kSecAttrIsPermanent: true`) for the access-control gate to be
+        // enforceable at all — enforcement happens via the keychain item,
+        // not the bare in-memory key reference — and so `signWithKey` can
+        // re-fetch it through `SecItemCopyMatching`/`kSecUseAuthenticationContext`.
         let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
             kSecAttrKeySizeInBits as String: 256,
+            kSecPrivateKeyAttrs as String: [
+                kSecAttrIsPermanent as String: true,
+                kSecAttrApplicationTag as String: keyTag,
+                kSecAttrAccessControl as String: accessControl,
+            ],
         ]
 
         var error: Unmanaged<CFError>?
@@ -133,7 +188,7 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             userHandle: options.userId,
             userName: options.userName,
             signCount: 0,
-            privateKey: privateKey
+            keyTag: keyTag
         )
         lock.withLock {
             credentials[credentialId] = entry
@@ -194,7 +249,7 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
         var signedData = authData
         signedData.append(clientDataHash)
 
-        let signature = try signWithKey(found.privateKey, data: signedData)
+        let signature = try signWithKey(tag: found.keyTag, data: signedData)
 
         // PRF output if salt provided
         var prfOutput: PrfOutput?
@@ -273,7 +328,36 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
     }
 
     #if canImport(Security)
-    private func signWithKey(_ key: SecKey, data: Data) throws -> Data {
+    /// Fetch the persisted, access-control-gated `SecKey` for `tag` and sign
+    /// `data` with it. Re-fetching via `SecItemCopyMatching` (rather than
+    /// reusing an in-memory reference) is what actually threads device
+    /// authentication through the operation: `kSecUseAuthenticationContext`
+    /// only applies to `SecItem*` queries, and is the only way to plug in an
+    /// explicit `LAContext` (e.g. a caller-supplied, pre-evaluated context
+    /// with a custom prompt reason) rather than relying on the system's
+    /// default authentication UI.
+    private func signWithKey(tag: Data, data: Data, context: LAContext? = nil) throws -> Data {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: tag,
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecReturnRef as String: true,
+        ]
+        #if canImport(LocalAuthentication)
+        query[kSecUseAuthenticationContext as String] = context ?? LAContext()
+        #endif
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let item else {
+            throw SirosError.auth(
+                message: "Failed to retrieve signing key (status \(status)) " +
+                    "— device authentication may have failed, been cancelled, or wasn't available"
+            )
+        }
+        // Bridged CFTypeRef -> SecKey (Security framework CF/Swift toll-free bridging).
+        let key = item as! SecKey // swiftlint:disable:this force_cast
+
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(
             key,
@@ -284,6 +368,17 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
             throw SirosError.auth(message: "Signing failed")
         }
         return signature
+    }
+
+    /// Remove the persisted keychain item for `tag`, so a dev/test-only
+    /// provider doesn't leave real keychain entries behind after a rolled
+    /// back or otherwise abandoned registration.
+    private func deleteKey(tag: Data) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: tag,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
     #endif
 

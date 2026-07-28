@@ -39,6 +39,9 @@ final class WalletViewModel: ObservableObject {
     @Published var useWmpProtocol: Bool {
         didSet { UserDefaults.standard.set(useWmpProtocol, forKey: "siros_use_wmp_protocol") }
     }
+    @Published var showCredentialDetails: Bool {
+        didSet { UserDefaults.standard.set(showCredentialDetails, forKey: "siros_show_credential_details") }
+    }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
 
@@ -102,9 +105,29 @@ final class WalletViewModel: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
-        self.backendUrl = defaults.string(forKey: "siros_backend_url") ?? Self.defaultBackendUrl
-        self.tenantId = defaults.string(forKey: "siros_tenant_id") ?? Self.defaultTenantId
+        var backendUrl = defaults.string(forKey: "siros_backend_url") ?? Self.defaultBackendUrl
+        var tenantId = defaults.string(forKey: "siros_tenant_id") ?? Self.defaultTenantId
+        #if DEBUG
+        // Debug-only test-environment override, the closest Swift/iOS analog
+        // to Android's `adb shell am start --es backend_url ... --es tenant_id ...`:
+        // set via `SIMCTL_CHILD_SIROS_BACKEND_URL=... xcrun simctl launch <udid> <bundle-id>`.
+        // Session-scoped only - not persisted to UserDefaults.
+        let env = ProcessInfo.processInfo.environment
+        if let overrideBackendUrl = env["SIROS_BACKEND_URL"] { backendUrl = overrideBackendUrl }
+        if let overrideTenantId = env["SIROS_TENANT_ID"] { tenantId = overrideTenantId }
+        #endif
+        self.backendUrl = backendUrl
+        self.tenantId = tenantId
         self.useWmpProtocol = defaults.bool(forKey: "siros_use_wmp_protocol")
+        if let storedShowDetails = defaults.object(forKey: "siros_show_credential_details") as? Bool {
+            self.showCredentialDetails = storedShowDetails
+        } else {
+            #if DEBUG
+            self.showCredentialDetails = true
+            #else
+            self.showCredentialDetails = false
+            #endif
+        }
     }
 
     // MARK: - Public actions
@@ -405,6 +428,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     func openCredentialDetail(_ credential: StoredCredential) {
+        guard showCredentialDetails else { return }
         selectedCredential = credential
     }
 
@@ -567,9 +591,18 @@ final class WalletViewModel: ObservableObject {
         }
         #endif
 
+        // ASAuthorizationAuthProvider is the real, OS-backed passkey provider
+        // (Face ID/Touch ID/roaming security keys) and is used on every
+        // platform it supports (iOS 16+ and macOS 13+, matching Package.swift's
+        // declared platforms). LocalAuthProvider is an explicit, clearly
+        // labeled dev/test-only fallback for anything else — never a silent
+        // per-platform default for a "supported" platform.
         #if os(iOS)
         let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
         let anchor = windowScene?.windows.first ?? UIWindow()
+        let authProvider = ASAuthorizationAuthProvider(presentationAnchor: anchor)
+        #elseif os(macOS)
+        let anchor = NSApplication.shared.windows.first ?? NSWindow()
         let authProvider = ASAuthorizationAuthProvider(presentationAnchor: anchor)
         #else
         let authProvider = LocalAuthProvider()

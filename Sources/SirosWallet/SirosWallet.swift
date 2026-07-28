@@ -17,6 +17,17 @@ import os
 private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 #endif
 
+/// Authorization context captured at `authorization_required` time, needed to
+/// resume an OID4VCI issuance flow via a fresh `flow_start` once the OAuth
+/// browser redirect returns. See `SirosWallet.completeAuthorization`.
+private struct PendingAuthorization: Sendable {
+    let offer: String?
+    let credentialOfferUri: String?
+    let redirectUri: String?
+    let codeVerifier: String?
+    let state: String
+}
+
 /// Main entry point for the SIROS Wallet SDK (cross-platform).
 ///
 /// Provides a single, self-contained API for wallet apps:
@@ -133,6 +144,12 @@ public final class SirosWallet: @unchecked Sendable {
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
     private var lastTrustResults: [String: TrustResult] = [:]
+    /// Authorization context captured from a flow's `authorization_required`
+    /// progress message, keyed by flow ID - needed to resume issuance via a
+    /// fresh `flow_start` once the OAuth browser redirect returns, since the
+    /// original flow_id's WebSocket context isn't guaranteed to survive the
+    /// round-trip. See `completeAuthorization`.
+    private var pendingAuthorizations: [String: PendingAuthorization] = [:]
     /// Persistent trust cache for degraded-mode operation.
     private let trustCache = TrustCache()
 
@@ -309,7 +326,16 @@ public final class SirosWallet: @unchecked Sendable {
                 displayName: displayName
             )
 
-            let prfOutput = try await authProvider.getPrfOutput(credentialId: Data(), salt: prfSalt)
+            // Prefer the PRF output already produced by the register() ceremony
+            // itself (e.g. LocalAuthProvider computes it locally); only fall back
+            // to a separate getPrfOutput() ceremony — and always pass the real
+            // credential ID, never an empty placeholder — when it isn't present.
+            let prfOutput: PrfOutput
+            if let resultPrf = result.prfOutput {
+                prfOutput = resultPrf
+            } else {
+                prfOutput = try await authProvider.getPrfOutput(credentialId: result.credentialId, salt: prfSalt)
+            }
 
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
@@ -424,7 +450,20 @@ public final class SirosWallet: @unchecked Sendable {
                 credential: credential
             )
 
-            let prfOutput = try await authProvider.getPrfOutput(credentialId: Data(), salt: storedPrfSalt ?? Self.randomBytes(32))
+            // Prefer the PRF output already produced by the authenticate()
+            // ceremony itself (real ASAuthorization PRF assertion, when
+            // supported) to avoid a redundant second device-authentication
+            // prompt; fall back to a separate getPrfOutput() call — with the
+            // real credential ID, never an empty placeholder — otherwise.
+            let prfOutput: PrfOutput
+            if let resultPrf = result.prfOutput {
+                prfOutput = resultPrf
+            } else {
+                prfOutput = try await authProvider.getPrfOutput(
+                    credentialId: result.credentialId,
+                    salt: storedPrfSalt ?? Self.randomBytes(32)
+                )
+            }
 
             setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
@@ -578,10 +617,19 @@ public final class SirosWallet: @unchecked Sendable {
             ]
             _ = try await asClient.loginFinish(challengeId: challengeId, credential: credential)
 
-            let prfOutput = try await authProvider.getPrfOutput(
-                credentialId: Data(),
-                salt: storedPrfSalt ?? Self.randomBytes(32)
-            )
+            // Prefer the PRF output already produced by the authenticate()
+            // ceremony itself; fall back to a separate getPrfOutput() call —
+            // with the real credential ID, never an empty placeholder —
+            // otherwise. See login() for the same pattern.
+            let prfOutput: PrfOutput
+            if let resultPrf = result.prfOutput {
+                prfOutput = resultPrf
+            } else {
+                prfOutput = try await authProvider.getPrfOutput(
+                    credentialId: result.credentialId,
+                    salt: storedPrfSalt ?? Self.randomBytes(32)
+                )
+            }
 
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")
@@ -791,16 +839,63 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     /// Complete an OAuth authorization flow.
+    ///
+    /// If a pending authorization context was captured from this flow's
+    /// `authorization_required` progress message, resumes issuance via a
+    /// brand-new `flow_start` (not a `flow_action` on the original flow_id,
+    /// which isn't guaranteed to survive the OAuth browser round-trip) -
+    /// mirrors the wallet-backend's `resumeWithAuthCode` contract already
+    /// used by the web client. The engine WebSocket is force-reconnected
+    /// first in case it silently went stale ("zombie") during the redirect.
+    /// Falls back to the legacy `flow_action`-based completion if no pending
+    /// context was captured (e.g. an older backend that doesn't send it).
     public func completeAuthorization(flowId: String, code: String, state: String) {
-        guard let engine = engineSession else { return }
-        engine.sendFlowAction(
-            flowId: flowId,
-            action: "authorization_complete",
-            payload: [
-                "code": .string(code),
-                "state": .string(state),
-            ]
-        )
+        lock.lock()
+        let engine = engineSession
+        let pending = pendingAuthorizations.removeValue(forKey: flowId)
+        let tokens = authTokens
+        let listener = eventListener
+        lock.unlock()
+
+        guard let engine else { return }
+
+        guard let pending else {
+            engine.sendFlowAction(
+                flowId: flowId,
+                action: "authorization_complete",
+                payload: ["code": .string(code), "state": .string(state)]
+            )
+            return
+        }
+
+        guard pending.state == state else {
+            listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch")
+            return
+        }
+
+        Task {
+            do {
+                guard let tokens else {
+                    throw SirosError.wallet(message: "Not connected")
+                }
+                let token = try await tokens.ensureAnonymousToken()
+                engine.forceReconnect(appToken: token.raw)
+                try await engine.awaitConnected()
+                engine.resumeIssuance(
+                    offer: pending.offer,
+                    credentialOfferUri: pending.credentialOfferUri,
+                    redirectUri: pending.redirectUri,
+                    authCode: code,
+                    codeVerifier: pending.codeVerifier
+                )
+            } catch {
+                lock.lock(); let listener = eventListener; lock.unlock()
+                listener?.onFlowError(
+                    flowId: flowId,
+                    errorMessage: "Failed to resume issuance: \(error.localizedDescription)"
+                )
+            }
+        }
     }
 
     /// Release all resources. Instance must not be reused after this.
@@ -1301,6 +1396,22 @@ public final class SirosWallet: @unchecked Sendable {
                         let effectiveState = payloadDict["state"]?.stringValue
                             ?? URLComponents(string: authUrl)?.queryItems?.first(where: { $0.name == "state" })?.value
                             ?? ""
+
+                        // Capture enough context to resume issuance via a fresh
+                        // flow_start once the OAuth redirect returns - the
+                        // original flow_id's WebSocket context may not survive
+                        // the browser round-trip. See completeAuthorization.
+                        let pending = PendingAuthorization(
+                            offer: payloadDict["credential_offer"]?.stringValue,
+                            credentialOfferUri: payloadDict["credential_offer_uri"]?.stringValue,
+                            redirectUri: redirectUri,
+                            codeVerifier: payloadDict["code_verifier"]?.stringValue,
+                            state: effectiveState
+                        )
+                        lock.lock()
+                        pendingAuthorizations[msg.flowId] = pending
+                        lock.unlock()
+
                         let rewrittenUrl = config.urlRewriter?(authUrl) ?? authUrl
                         lock.lock(); let listener = eventListener; lock.unlock()
                         listener?.onAuthorizationRequired(
@@ -1391,7 +1502,9 @@ public final class SirosWallet: @unchecked Sendable {
             let trustResult = TrustResult(
                 trusted: decision,
                 framework: context?["framework"] as? String,
-                reason: (context?["reason"] as? String) ?? (context?["message"] as? String),
+                reason: (context?["reason"] as? String)
+                    ?? (context?["message"] as? String)
+                    ?? context?["reason"].map { String(describing: $0) },
                 entityName: context?["entity_name"] as? String,
                 entityLogo: context?["logo_uri"] as? String,
                 clientIdScheme: reqContext?["client_id_scheme"] as? String,

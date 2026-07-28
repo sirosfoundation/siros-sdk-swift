@@ -401,6 +401,48 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         }
     }
 
+    /// Force-cancel the current WebSocket - even if it still looks "connected"
+    /// (`isConnected`/`currentState` don't detect a "zombie" socket that has
+    /// silently stopped delivering messages) - and reconnect.
+    ///
+    /// Unlike `disconnect()`, this does NOT call `.finish()` on any of the
+    /// flow/message `AsyncStream` continuations, so existing `for await`
+    /// collectors set up before the reconnect keep working afterward. Callers
+    /// resuming a flow after an OAuth redirect should call this (then
+    /// `awaitConnected()`) before sending a fresh `flow_start`, since the
+    /// original socket may have gone stale during the browser round-trip.
+    public func forceReconnect(appToken: String) {
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = nil
+        sessionId = nil
+        lastAppToken = appToken
+        reconnectAttempts = 0
+        setState(.connecting)
+        doConnect(appToken: appToken)
+    }
+
+    /// Resume an OID4VCI credential issuance flow after an OAuth authorization
+    /// redirect, via a brand-new `flow_start` message - NOT a `flow_action` on
+    /// the original flow_id, which is not guaranteed to still be alive after
+    /// the redirect round-trip. Mirrors the wallet-backend's
+    /// `resumeWithAuthCode` contract already used by the web client.
+    public func resumeIssuance(
+        offer: String? = nil,
+        credentialOfferUri: String? = nil,
+        redirectUri: String? = nil,
+        authCode: String,
+        codeVerifier: String? = nil
+    ) {
+        send(FlowStartMessage(
+            protocol: "oid4vci",
+            offer: offer,
+            credentialOfferUri: credentialOfferUri,
+            redirectUri: redirectUri,
+            authCode: authCode,
+            codeVerifier: codeVerifier
+        ))
+    }
+
     /// Disconnect the WebSocket session.
     public func disconnect() {
         lastAppToken = nil
