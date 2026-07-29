@@ -390,6 +390,51 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         return result
     }
 
+    /// Generate `count` fresh keypairs and self-attest them in a single OID4VCI
+    /// Key Attestation JWT. This is a pure in-memory software keystore with no
+    /// hardware backing or user-authentication gate, so the only truthful
+    /// claim is the baseline "basic" attack-potential level.
+    public func generateKeyAttestation(nonce: String, count: Int) async throws -> String {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+        guard count >= 1 else {
+            throw KeystoreError.invalidParameter("count must be >= 1")
+        }
+
+        // Inlined key generation (not generateKeypairs(), which also takes
+        // this lock - NSLock isn't reentrant).
+        var generated: [(keyId: String, privateKey: P256.Signing.PrivateKey)] = []
+        for _ in 0..<count {
+            let keyId = UUID().uuidString.lowercased()
+            let privateKey = P256.Signing.PrivateKey()
+            keys[keyId] = privateKey
+            generated.append((keyId: keyId, privateKey: privateKey))
+        }
+
+        let signingKey = generated[0]
+        let signingJwk = JwtHelpers.publicKeyJwk(signingKey.privateKey)
+
+        let header = JwtHelpers.jsonBase64Url([
+            "alg": "ES256",
+            "typ": "key-attestation+jwt",
+            "jwk": signingJwk,
+        ] as [String: Any])
+
+        let attestedKeys = generated.map { JwtHelpers.publicKeyJwk($0.privateKey) }
+        let claims = JwtHelpers.jsonBase64Url([
+            "iat": Int(Date().timeIntervalSince1970),
+            "nonce": nonce,
+            "attested_keys": attestedKeys,
+            "key_storage": ["iso_18045_basic"],
+        ] as [String: Any])
+
+        let signingInput = "\(header).\(claims)"
+        let signature = try signingKey.privateKey.signature(for: Data(signingInput.utf8))
+        let sigB64 = EncryptedContainer.base64UrlEncode(signature.rawRepresentation)
+        return "\(signingInput).\(sigB64)"
+    }
+
     // MARK: - Private helpers
 
     private func requireUnlocked() throws {

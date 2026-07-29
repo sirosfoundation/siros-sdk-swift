@@ -19,16 +19,23 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.3"),
+        .package(url: "https://github.com/valpackett/SwiftCBOR", from: "0.5.0"),
     ],
     targets: [
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
+            dependencies: [
+                .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+            ],
             path: "Sources/SirosCredentials"
         ),
         .testTarget(
             name: "SirosCredentialsTests",
-            dependencies: ["SirosCredentials"],
+            dependencies: [
+                "SirosCredentials",
+                .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+            ],
             path: "Tests/SirosCredentialsTests"
         ),
 
@@ -58,12 +65,18 @@ let package = Package(
         // --- Keystore: JWE-encrypted key management ---
         .target(
             name: "SirosKeystore",
-            dependencies: ["SirosCredentials"],
+            dependencies: [
+                "SirosCredentials",
+                .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+            ],
             path: "Sources/SirosKeystore"
         ),
         .testTarget(
             name: "SirosKeystoreTests",
-            dependencies: ["SirosKeystore"],
+            dependencies: [
+                "SirosKeystore",
+                .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+            ],
             path: "Tests/SirosKeystoreTests",
             resources: [.copy("Resources")]
         ),

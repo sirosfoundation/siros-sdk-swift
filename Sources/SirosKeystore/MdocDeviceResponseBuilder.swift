@@ -1,6 +1,8 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+@preconcurrency import SwiftCBOR
+import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
@@ -8,21 +10,29 @@ import CryptoKit
 /// Builds an ISO 18013-5 DeviceResponse for mDoc credential presentation
 /// via OID4VP (OpenID for Verifiable Presentations).
 ///
-/// Constructs a CBOR-encoded DeviceResponse containing:
-/// - version: "1.0"
-/// - documents: array of Document objects with IssuerSigned + DeviceSigned
-/// - DeviceAuth with COSE_Sign1 over the OpenID4VPHandover session transcript
+/// The credential's raw bytes are a full DeviceResponse-shaped envelope as
+/// issued (`{documents: [{docType, issuerSigned}], ...}` - confirmed via
+/// `sirosfoundation/wallet-frontend#191`), not a bare IssuerSigned blob; this
+/// builder parses that envelope with `MdocCbor`, applies real selective
+/// disclosure by filtering `issuerSigned.nameSpaces` down to `disclosedClaims`
+/// (preserving each kept item's original tag-24-wrapped bytes so the issuer's
+/// MSO digests remain valid - disclosure selects a subset of already-digested
+/// items, it never re-hashes), and signs a fresh device authentication over
+/// the OpenID4VPHandover session transcript.
 public final class MdocDeviceResponseBuilder: @unchecked Sendable {
 
-    /// Raw credential bytes (IssuerSigned CBOR).
-    private let issuerSignedBytes: Data
-
-    /// Signing algorithm (ES256, ES384, EdDSA).
+    /// Raw credential bytes: a full DeviceResponse-shaped envelope as issued.
+    private let credentialBytes: [UInt8]
+    /// Algorithm for signing (ES256, ES384, or EdDSA).
     private let algorithm: String
 
-    public init(issuerSignedBytes: Data, algorithm: String = "ES256") {
-        self.issuerSignedBytes = issuerSignedBytes
+    public init(credentialBytes: [UInt8], algorithm: String = "ES256") {
+        self.credentialBytes = credentialBytes
         self.algorithm = algorithm
+    }
+
+    public convenience init(issuerSignedBytes: Data, algorithm: String = "ES256") {
+        self.init(credentialBytes: [UInt8](issuerSignedBytes), algorithm: algorithm)
     }
 
     /// Build the CBOR-encoded DeviceResponse.
@@ -32,8 +42,8 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
     ///   - audience: Verifier client ID.
     ///   - responseUri: Response endpoint URI.
     ///   - verifierJwkThumbprint: Optional JWK thumbprint of the verifier key.
-    ///   - disclosedClaims: Claim names to disclose (nil = all).
-    ///   - signer: Function that signs raw bytes. Returns raw signature bytes.
+    ///   - disclosedClaims: Element identifiers to disclose (nil = disclose all namespaces/elements).
+    ///   - signer: Function that signs raw bytes with the device key; must return a raw (not DER) signature.
     /// - Returns: CBOR-encoded DeviceResponse bytes.
     public func build(
         nonce: String,
@@ -41,232 +51,197 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         responseUri: String,
         verifierJwkThumbprint: String?,
         disclosedClaims: [String]?,
-        signer: (Data) async throws -> Data
+        signer: @Sendable @escaping (Data) async throws -> Data
     ) async throws -> Data {
-        // Step 1: Build the OpenID4VPHandover session transcript
+        let disclosedDocument = try parseAndFilter(disclosedClaims)
         let sessionTranscript = buildSessionTranscript(
             clientId: audience,
             nonce: nonce,
             responseUri: responseUri,
             verifierJwkThumbprint: verifierJwkThumbprint
         )
+        let deviceAuthBytes = buildDeviceAuthentication(docType: disclosedDocument.docType, sessionTranscript: sessionTranscript)
+        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, externalAad: deviceAuthBytes) { bytes in
+            try await Array(signer(Data(bytes)))
+        }
+        return Data(assembleFinalResponse(document: disclosedDocument, coseSign1: coseSign1))
+    }
 
-        // Step 2: Extract docType
-        let docType = extractDocType(from: issuerSignedBytes) ?? "org.iso.18013.5.1.mDL"
+    /// Build the CBOR-encoded DeviceResponse for a W3C Digital Credentials API
+    /// (DC API) presentation, using the `OpenID4VPDCAPIHandover` session
+    /// transcript (OpenID4VP 1.0 Appendix B.2.6) instead of the redirect
+    /// flow's `OpenID4VPHandover` - there is no `responseUri`/`clientId` in
+    /// this flow (the response is returned via the browser's synchronous
+    /// `navigator.credentials.get()` callback, not an HTTP POST), and the
+    /// handover binds to the verified browser origin instead.
+    ///
+    /// - Parameters:
+    ///   - nonce: Verifier nonce from the request.
+    ///   - origin: The verified browser/page origin that called `navigator.credentials.get()`.
+    ///   - encryptionPublicJwkThumbprint: JWK thumbprint of the verifier's
+    ///     response-encryption key (present when `response_mode=dc_api.jwt`), nil otherwise.
+    ///   - disclosedClaims: Element identifiers to disclose (nil = disclose all namespaces/elements).
+    ///   - signer: Function that signs raw bytes with the device key; must return a raw (not DER) signature.
+    /// - Returns: CBOR-encoded DeviceResponse bytes.
+    public func buildForDCAPI(
+        nonce: String,
+        origin: String,
+        encryptionPublicJwkThumbprint: String?,
+        disclosedClaims: [String]?,
+        signer: @Sendable @escaping (Data) async throws -> Data
+    ) async throws -> Data {
+        let disclosedDocument = try parseAndFilter(disclosedClaims)
+        let sessionTranscript = buildDCAPISessionTranscript(
+            origin: origin,
+            nonce: nonce,
+            encryptionPublicJwkThumbprint: encryptionPublicJwkThumbprint
+        )
+        let deviceAuthBytes = buildDeviceAuthentication(docType: disclosedDocument.docType, sessionTranscript: sessionTranscript)
+        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, externalAad: deviceAuthBytes) { bytes in
+            try await Array(signer(Data(bytes)))
+        }
+        return Data(assembleFinalResponse(document: disclosedDocument, coseSign1: coseSign1))
+    }
 
-        // Step 3: Build DeviceAuthentication
-        let deviceAuth = buildDeviceAuthentication(docType: docType, sessionTranscript: sessionTranscript)
-
-        // Step 4: Sign with COSE_Sign1
-        let coseSign1 = try await buildCoseSign1(deviceAuthBytes: deviceAuth, signer: signer)
-
-        // Step 5: Assemble DeviceResponse
-        return assembleFinalResponse(
-            docType: docType,
-            issuerSigned: issuerSignedBytes,
-            coseSign1: coseSign1,
-            disclosedClaims: disclosedClaims
+    private func parseAndFilter(_ disclosedClaims: [String]?) throws -> DocumentMdoc {
+        let document = try MdocCbor.parseStoredCredential(credentialBytes)
+        guard let disclosedClaims else { return document }
+        let filteredNameSpaces = filterNamespaces(document.issuerSigned.nameSpaces, disclosedClaims: disclosedClaims)
+        return DocumentMdoc(
+            docType: document.docType,
+            issuerSigned: IssuerSignedMdoc(nameSpaces: filteredNameSpaces, issuerAuth: document.issuerSigned.issuerAuth)
         )
     }
 
-    // MARK: - Session Transcript
+    /// Filter each namespace's items down to those whose `elementIdentifier`
+    /// is in `disclosedClaims`, preserving each kept item's ORIGINAL
+    /// tag-24-wrapped `CBOR` (never re-encoded from the parsed model - the
+    /// issuer's MSO digests were computed over those exact bytes). Namespaces
+    /// with no disclosed elements are dropped entirely.
+    private func filterNamespaces(
+        _ nameSpaces: [String: [NamespaceItem]],
+        disclosedClaims: [String]
+    ) -> [String: [NamespaceItem]] {
+        let disclosed = Set(disclosedClaims)
+        var result: [String: [NamespaceItem]] = [:]
+        for (namespace, items) in nameSpaces {
+            let kept = items.filter { disclosed.contains($0.item.elementIdentifier) }
+            if !kept.isEmpty { result[namespace] = kept }
+        }
+        return result
+    }
 
-    /// Build the OpenID4VPHandover session transcript per OID4VP §7.3.1.
+    /// Build the OpenID4VPHandover session transcript per OID4VP mdoc profile.
+    ///
+    /// SessionTranscript = [
+    ///   null,  // reserved
+    ///   null,  // reserved
+    ///   [
+    ///     "OpenID4VPHandover",
+    ///     SHA-256([clientId, nonce, verifierJwkThumbprint, responseUri])
+    ///   ]
+    /// ]
     private func buildSessionTranscript(
         clientId: String,
         nonce: String,
         responseUri: String,
         verifierJwkThumbprint: String?
-    ) -> Data {
-        let handoverInfoItems: [Data]
-        if let thumbprint = verifierJwkThumbprint {
-            handoverInfoItems = [
-                encodeCborTextString(clientId),
-                encodeCborTextString(nonce),
-                encodeCborTextString(thumbprint),
-                encodeCborTextString(responseUri),
-            ]
-        } else {
-            handoverInfoItems = [
-                encodeCborTextString(clientId),
-                encodeCborTextString(nonce),
-                encodeCborNull(),
-                encodeCborTextString(responseUri),
-            ]
+    ) -> [UInt8] {
+        let handoverInfo: CBOR = .array([
+            .utf8String(clientId),
+            .utf8String(nonce),
+            verifierJwkThumbprint.map { CBOR.utf8String($0) } ?? .null,
+            .utf8String(responseUri),
+        ])
+        let handoverHash = sha256(handoverInfo.encode())
+
+        let handover: CBOR = .array([
+            .utf8String("OpenID4VPHandover"),
+            .byteString(handoverHash),
+        ])
+
+        return CBOR.array([.null, .null, handover]).encode()
+    }
+
+    /// Build the OpenID4VPDCAPIHandover session transcript per OID4VP 1.0
+    /// Appendix B.2.6 (Digital Credentials API).
+    ///
+    /// SessionTranscript = [
+    ///   null,  // reserved
+    ///   null,  // reserved
+    ///   [
+    ///     "OpenID4VPDCAPIHandover",
+    ///     SHA-256([origin, nonce, encryptionPublicJwkThumbprint])
+    ///   ]
+    /// ]
+    ///
+    /// Unlike `buildSessionTranscript` (the redirect flow's OpenID4VPHandover),
+    /// there is no clientId or responseUri here - the handover binds to the
+    /// browser-verified origin instead, since the response never travels over
+    /// HTTP to a responseUri.
+    private func buildDCAPISessionTranscript(
+        origin: String,
+        nonce: String,
+        encryptionPublicJwkThumbprint: String?
+    ) -> [UInt8] {
+        let handoverInfo: CBOR = .array([
+            .utf8String(origin),
+            .utf8String(nonce),
+            encryptionPublicJwkThumbprint.map { CBOR.utf8String($0) } ?? .null,
+        ])
+        let handoverHash = sha256(handoverInfo.encode())
+
+        let handover: CBOR = .array([
+            .utf8String("OpenID4VPDCAPIHandover"),
+            .byteString(handoverHash),
+        ])
+
+        return CBOR.array([.null, .null, handover]).encode()
+    }
+
+    /// DeviceAuthentication = ["DeviceAuthentication", SessionTranscript, DocType]
+    private func buildDeviceAuthentication(docType: String, sessionTranscript: [UInt8]) -> [UInt8] {
+        // sessionTranscript is already CBOR-encoded; decode it back to embed
+        // as a nested CBOR item rather than a byte string.
+        let decodedTranscript: CBOR = (try? CBOR.decode(sessionTranscript)).flatMap { $0 } ?? .null
+        let deviceAuth: CBOR = .array([
+            .utf8String("DeviceAuthentication"),
+            decodedTranscript,
+            .utf8String(docType),
+        ])
+        return deviceAuth.encode()
+    }
+
+    /// Assemble the final DeviceResponse CBOR structure.
+    ///
+    /// DeviceResponse = { "version": "1.0", "documents": [Document], "status": 0 }
+    /// Document = { "docType", "issuerSigned" (filtered), "deviceSigned" }
+    private func assembleFinalResponse(document: DocumentMdoc, coseSign1: CBOR) -> [UInt8] {
+        guard case .map(var documentMap) = MdocCbor.encodeDocument(document) else {
+            preconditionFailure("MdocCbor.encodeDocument always returns a map")
         }
-        let handoverInfoBytes = encodeCborArray(handoverInfoItems)
-        let handoverHash = sha256(handoverInfoBytes)
 
-        let handoverArray = encodeCborArray([
-            encodeCborTextString("OpenID4VPHandover"),
-            encodeCborByteString(handoverHash),
+        let deviceSignatureMap: CBOR = .map([.utf8String("deviceSignature"): coseSign1])
+        let emptyMapTag24: CBOR = .tagged(.encodedCBORDataItem, .byteString(CBOR.map([:]).encode()))
+        let deviceSignedMap: CBOR = .map([
+            .utf8String("nameSpaces"): emptyMapTag24,
+            .utf8String("deviceAuth"): deviceSignatureMap,
         ])
+        documentMap[.utf8String("deviceSigned")] = deviceSignedMap
 
-        return encodeCborArray([
-            encodeCborNull(),
-            encodeCborNull(),
-            handoverArray,
+        let response: CBOR = .map([
+            .utf8String("version"): .utf8String("1.0"),
+            .utf8String("documents"): .array([.map(documentMap)]),
+            .utf8String("status"): .unsignedInt(0),
         ])
+        return response.encode()
     }
 
-    // MARK: - DeviceAuthentication
-
-    private func buildDeviceAuthentication(docType: String, sessionTranscript: Data) -> Data {
-        encodeCborArray([
-            encodeCborTextString("DeviceAuthentication"),
-            sessionTranscript,
-            encodeCborTextString(docType),
-        ])
-    }
-
-    // MARK: - COSE_Sign1
-
-    private func buildCoseSign1(deviceAuthBytes: Data, signer: (Data) async throws -> Data) async throws -> Data {
-        let algValue: Int
-        switch algorithm.uppercased() {
-        case "ES256": algValue = -7
-        case "ES384": algValue = -35
-        case "EDDSA", "ED25519": algValue = -8
-        default: algValue = -7
-        }
-
-        let protectedHeader = encodeCborIntMap([1: algValue])
-
-        let sigStructure = encodeCborArray([
-            encodeCborTextString("Signature1"),
-            encodeCborByteString(protectedHeader),
-            encodeCborByteString(deviceAuthBytes),
-            encodeCborByteString(Data()),
-        ])
-
-        let signature = try await signer(sigStructure)
-
-        return encodeCborArray([
-            encodeCborByteString(protectedHeader),
-            encodeCborEmptyMap(),
-            encodeCborNull(),
-            encodeCborByteString(signature),
-        ])
-    }
-
-    // MARK: - Final Assembly
-
-    private func assembleFinalResponse(
-        docType: String,
-        issuerSigned: Data,
-        coseSign1: Data,
-        disclosedClaims: [String]?
-    ) -> Data {
-        let deviceSignatureMap = encodeCborStringMap([
-            "deviceSignature": coseSign1,
-        ])
-        let deviceSignedMap = encodeCborStringMap([
-            "nameSpaces": encodeCborTag(24, encodeCborEmptyMap()),
-            "deviceAuth": deviceSignatureMap,
-        ])
-        let document = encodeCborStringMap([
-            "docType": encodeCborTextString(docType),
-            "issuerSigned": issuerSigned,
-            "deviceSigned": deviceSignedMap,
-        ])
-        return encodeCborStringMap([
-            "version": encodeCborTextString("1.0"),
-            "documents": encodeCborArray([document]),
-            "status": encodeCborUnsignedInt(0),
-        ])
-    }
-
-    // MARK: - CBOR Encoding Primitives
-
-    private func encodeCborTextString(_ s: String) -> Data {
-        let bytes = Data(s.utf8)
-        return encodeCborMajor(3, bytes.count) + bytes
-    }
-
-    private func encodeCborByteString(_ b: Data) -> Data {
-        encodeCborMajor(2, b.count) + b
-    }
-
-    private func encodeCborUnsignedInt(_ v: Int) -> Data {
-        encodeCborMajor(0, v)
-    }
-
-    private func encodeCborNull() -> Data { Data([0xF6]) }
-
-    private func encodeCborEmptyMap() -> Data { Data([0xA0]) }
-
-    private func encodeCborArray(_ items: [Data]) -> Data {
-        var out = encodeCborMajor(4, items.count)
-        items.forEach { out.append($0) }
-        return out
-    }
-
-    private func encodeCborIntMap(_ entries: [Int: Int]) -> Data {
-        var out = encodeCborMajor(5, entries.count)
-        for (k, v) in entries {
-            if k >= 0 { out.append(encodeCborMajor(0, k)) }
-            else { out.append(encodeCborMajor(1, -1 - k)) }
-            if v >= 0 { out.append(encodeCborMajor(0, v)) }
-            else { out.append(encodeCborMajor(1, -1 - v)) }
-        }
-        return out
-    }
-
-    private func encodeCborStringMap(_ entries: [(key: String, value: Data)]) -> Data {
-        var out = encodeCborMajor(5, entries.count)
-        for (k, v) in entries {
-            out.append(encodeCborTextString(k))
-            out.append(v)
-        }
-        return out
-    }
-
-    /// Helper for ordered string map using array of tuples.
-    private func encodeCborStringMap(_ entries: [String: Data]) -> Data {
-        let sorted = entries.sorted { $0.key < $1.key }
-        return encodeCborStringMap(sorted.map { (key: $0.key, value: $0.value) })
-    }
-
-    private func encodeCborTag(_ tag: Int, _ content: Data) -> Data {
-        encodeCborMajor(6, tag) + content
-    }
-
-    private func encodeCborMajor(_ majorType: Int, _ argument: Int) -> Data {
-        let major = majorType << 5
-        if argument < 24 {
-            return Data([UInt8(major | argument)])
-        } else if argument < 256 {
-            return Data([UInt8(major | 24), UInt8(argument)])
-        } else if argument < 65536 {
-            return Data([UInt8(major | 25), UInt8(argument >> 8), UInt8(argument & 0xFF)])
-        } else {
-            return Data([
-                UInt8(major | 26),
-                UInt8((argument >> 24) & 0xFF),
-                UInt8((argument >> 16) & 0xFF),
-                UInt8((argument >> 8) & 0xFF),
-                UInt8(argument & 0xFF),
-            ])
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func sha256(_ data: Data) -> Data {
+    private func sha256(_ data: [UInt8]) -> [UInt8] {
         #if canImport(CryptoKit)
-        Data(SHA256.hash(data: data))
+        return Array(SHA256.hash(data: data))
         #else
         fatalError("CryptoKit required for mDoc DeviceResponse. Not available on this platform.")
         #endif
-    }
-
-    private func extractDocType(from issuerSigned: Data) -> String? {
-        let knownDoctypes = [
-            "org.iso.18013.5.1.mDL",
-            "eu.europa.ec.eudi.pid.1",
-            "org.iso.23220.1",
-        ]
-        let text = String(data: issuerSigned, encoding: .utf8) ?? ""
-        return knownDoctypes.first { text.contains($0) }
     }
 }

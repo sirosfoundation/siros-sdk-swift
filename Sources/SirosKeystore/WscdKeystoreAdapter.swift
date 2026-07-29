@@ -276,6 +276,33 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         )
     }
 
+    public func signMdocPresentationForDCAPI(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        nonce: String,
+        origin: String,
+        encryptionPublicJwkThumbprint: String?
+    ) async throws -> Data {
+        try checkUnlocked()
+        let keys = try await signer.listKeys()
+        guard let key = keys.first else {
+            throw KeystoreError.keyNotFound("no keys available for mDoc DC API signing")
+        }
+
+        let builder = MdocDeviceResponseBuilder(
+            issuerSignedBytes: credentialBytes,
+            algorithm: key.algorithm
+        )
+
+        return try await builder.buildForDCAPI(
+            nonce: nonce,
+            origin: origin,
+            encryptionPublicJwkThumbprint: encryptionPublicJwkThumbprint,
+            disclosedClaims: disclosedClaims,
+            signer: { data in try await self.signer.sign(keyId: key.keyId, data: data) }
+        )
+    }
+
     public func exportEncryptedContainer() async throws -> Data {
         // WSCD keys are not exportable as a JWE container —
         // they live in the hardware/remote HSM.
@@ -387,6 +414,53 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         return result
     }
 
+    /// Generate `count` fresh keypairs and self-attest them in a single OID4VCI
+    /// Key Attestation JWT (Appendix F.3, "attestation" proof type) - signed
+    /// by the first freshly generated key itself, matching the spec's
+    /// "issued... by the Wallet's key storage component itself" option, since
+    /// this WSCD plugin has no separate wallet-provider/hardware attestation
+    /// authority.
+    public func generateKeyAttestation(nonce: String, count: Int) async throws -> String {
+        try checkUnlocked()
+        let keypairs = try await generateKeypairs(count: count)
+        guard let signingKey = keypairs.first else {
+            throw KeystoreError.invalidParameter("no keys generated for attestation")
+        }
+
+        let securityProps = try? await signer.securityProperties(keyId: signingKey.keyId)
+
+        let header = JwtHelpers.jsonBase64Url([
+            "alg": algorithmJoseId("ES256"),
+            "typ": "key-attestation+jwt",
+            "jwk": signingKey.publicKeyJWK,
+        ] as [String: Any])
+
+        var claims: [String: Any] = [
+            "iat": Int(Date().timeIntervalSince1970),
+            "nonce": nonce,
+            "attested_keys": keypairs.map { $0.publicKeyJWK },
+        ]
+
+        if let keyStorage = securityProps?.keyStorage, !keyStorage.isEmpty {
+            claims["key_storage"] = orderedUnique(keyStorage.map { toIso18045AttackPotential($0) ?? "iso_18045_basic" })
+        } else {
+            claims["key_storage"] = ["iso_18045_basic"]
+        }
+
+        if let userAuthentication = securityProps?.userAuthentication, !userAuthentication.isEmpty {
+            let mapped = orderedUnique(userAuthentication.compactMap { toIso18045AttackPotential($0, omitIfNone: true) })
+            if !mapped.isEmpty {
+                claims["user_authentication"] = mapped
+            }
+        }
+
+        let claimsB64 = JwtHelpers.jsonBase64Url(claims)
+        let signingInput = "\(header).\(claimsB64)"
+        let signature = try await signer.sign(keyId: signingKey.keyId, data: Data(signingInput.utf8))
+        let sigB64 = EncryptedContainer.base64UrlEncode(signature)
+        return "\(signingInput).\(sigB64)"
+    }
+
     // MARK: - Private helpers
 
     private func checkUnlocked() throws {
@@ -395,6 +469,34 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         guard _isUnlocked else {
             throw KeystoreError.locked
         }
+    }
+
+    /// Translate SIROS's internal WSCD key-storage/user-authentication
+    /// vocabulary (`software`/`hardware`/`trusted_execution`/`remote_hsm`,
+    /// see `SignerSecurityProperties`) into the OID4VCI Key Attestation JWT's
+    /// registered `iso_18045_*` attack-potential-resistance values.
+    ///
+    /// Confirmed via a real conformance-test issuer that passing the raw
+    /// internal string through unmapped (e.g. `"software"`) produces a
+    /// `key_storage`/`user_authentication` value the issuer doesn't
+    /// recognize. Mappings are necessarily approximate (SIROS's vocabulary is
+    /// coarser than the ISO 18045 scale) - conservative/lower tiers are
+    /// preferred over overclaiming resistance we can't actually back up.
+    private func toIso18045AttackPotential(_ raw: String, omitIfNone: Bool = false) -> String? {
+        if raw.hasPrefix("iso_18045_") { return raw }
+        switch raw.lowercased() {
+        case "none": return omitIfNone ? nil : "iso_18045_basic"
+        case "software": return "iso_18045_basic"
+        case "hardware": return "iso_18045_moderate"
+        case "trusted_execution": return "iso_18045_enhanced-basic"
+        case "remote_hsm": return "iso_18045_high"
+        default: return "iso_18045_basic"
+        }
+    }
+
+    private func orderedUnique(_ items: [String]) -> [String] {
+        var seen = Set<String>()
+        return items.filter { seen.insert($0).inserted }
     }
 
     private func algorithmJoseId(_ algorithm: String) -> String {

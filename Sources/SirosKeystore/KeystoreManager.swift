@@ -60,6 +60,28 @@ public protocol KeystoreManager: AnyObject, Sendable {
         verifierJwkThumbprint: String?
     ) async throws -> Data
 
+    /// Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation via
+    /// the W3C Digital Credentials API, using the `OpenID4VPDCAPIHandover`
+    /// session transcript (OpenID4VP 1.0 Appendix B.2.6) instead of
+    /// ``signMdocPresentation(credentialBytes:disclosedClaims:nonce:audience:responseUri:verifierJwkThumbprint:)``'s
+    /// redirect-flow `OpenID4VPHandover`.
+    ///
+    /// - Parameters:
+    ///   - credentialBytes: Raw CBOR bytes of the IssuerSigned structure.
+    ///   - disclosedClaims: Claim names to disclose (nil = all).
+    ///   - nonce: Verifier-provided nonce.
+    ///   - origin: The verified browser/page origin that called `navigator.credentials.get()`.
+    ///   - encryptionPublicJwkThumbprint: JWK thumbprint of the verifier's
+    ///     response-encryption key (present when `response_mode=dc_api.jwt`), nil otherwise.
+    /// - Returns: Base64url-encoded DeviceResponse CBOR bytes.
+    func signMdocPresentationForDCAPI(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        nonce: String,
+        origin: String,
+        encryptionPublicJwkThumbprint: String?
+    ) async throws -> Data
+
     /// Export the encrypted container for backend sync.
     func exportEncryptedContainer() async throws -> Data
 
@@ -91,6 +113,20 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Used to populate KA JWT claims (CS-04 §7.1.3, Annex C §C.3.1).
     /// Returns nil if security properties are not available.
     func securityProperties() async -> SignerSecurityProperties?
+
+    /// Generate `count` fresh keypairs and build a single OID4VCI `attestation`
+    /// proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",
+    /// proof type Appendix "attestation Proof Type") covering all of them via
+    /// the `attested_keys` claim.
+    ///
+    /// Unlike the `jwt` proof type (one proof of possession per credential in
+    /// the batch), the spec requires exactly one Key Attestation JWT per
+    /// request regardless of `count` - the issuer is expected to mint one
+    /// credential per entry in `attested_keys`.
+    ///
+    /// Default implementation throws so existing implementations continue to
+    /// compile without attestation support.
+    func generateKeyAttestation(nonce: String, count: Int) async throws -> String
 }
 
 /// Default implementation for optional methods.
@@ -110,6 +146,20 @@ public extension KeystoreManager {
         verifierJwkThumbprint: String?
     ) async throws -> Data {
         throw KeystoreError.invalidParameter("mDoc presentation not supported by this keystore")
+    }
+
+    func signMdocPresentationForDCAPI(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        nonce: String,
+        origin: String,
+        encryptionPublicJwkThumbprint: String?
+    ) async throws -> Data {
+        throw KeystoreError.invalidParameter("mDoc DC API presentation not supported by this keystore")
+    }
+
+    func generateKeyAttestation(nonce: String, count: Int) async throws -> String {
+        throw KeystoreError.invalidParameter("generateKeyAttestation not supported by this keystore")
     }
 }
 

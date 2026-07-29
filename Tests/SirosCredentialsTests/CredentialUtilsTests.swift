@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+@preconcurrency import SwiftCBOR
 @testable import SirosCredentials
 
 final class CredentialUtilsTests: XCTestCase {
@@ -205,6 +206,120 @@ final class CredentialUtilsTests: XCTestCase {
         let metadata = CredentialUtils.buildMetadata(offer: offer)
         XCTAssertEqual(metadata.name, "Diploma (offer)")
         XCTAssertEqual(metadata.backgroundColor, "#000000")
+        XCTAssertNil(metadata.claims)
+    }
+
+    // MARK: - mdoc (mso_mdoc)
+
+    private let mdocDocType = "org.iso.18013.5.1.mDL"
+    private let mdocNamespace = "org.iso.18013.5.1"
+
+    private func buildTaggedItem(digestId: UInt64, elementIdentifier: String, elementValue: String) -> CBOR {
+        let item: CBOR = .map([
+            .utf8String("digestID"): .unsignedInt(digestId),
+            .utf8String("random"): .byteString([UInt8](repeating: 0, count: 16)),
+            .utf8String("elementIdentifier"): .utf8String(elementIdentifier),
+            .utf8String("elementValue"): .utf8String(elementValue),
+        ])
+        return .tagged(.encodedCBORDataItem, .byteString(item.encode()))
+    }
+
+    /// Build a synthetic mdoc credential's raw (base64url) bytes: a DeviceResponse-shaped envelope.
+    private func buildMdocRaw() -> String {
+        let items: CBOR = .array([
+            buildTaggedItem(digestId: 0, elementIdentifier: "family_name", elementValue: "Doe"),
+            buildTaggedItem(digestId: 1, elementIdentifier: "given_name", elementValue: "Jane"),
+        ])
+        let nameSpaces: CBOR = .map([.utf8String(mdocNamespace): items])
+        let issuerAuth: CBOR = .array(Array(repeating: .byteString([]), count: 4))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): nameSpaces,
+            .utf8String("issuerAuth"): issuerAuth,
+        ])
+        let document: CBOR = .map([
+            .utf8String("docType"): .utf8String(mdocDocType),
+            .utf8String("issuerSigned"): issuerSigned,
+        ])
+        let envelope: CBOR = .map([
+            .utf8String("documents"): .array([document]),
+            .utf8String("status"): .unsignedInt(0),
+        ])
+        return Data(envelope.encode()).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    func testExtractClaimsDispatchesToMdocParsingForMsoMdocFormat() {
+        let cred = StoredCredential(
+            id: "cred-1",
+            format: "mso_mdoc",
+            raw: buildMdocRaw(),
+            metadata: CredentialMetadata(
+                doctype: mdocDocType,
+                claims: [
+                    ClaimMeta(path: [mdocNamespace, "family_name"], label: "Family Name", mandatory: true),
+                ]
+            )
+        )
+
+        let claims = CredentialUtils.extractClaims(cred)
+        XCTAssertEqual(claims.count, 2)
+        let familyName = claims.first { $0.key == "\(mdocNamespace).family_name" }
+        XCTAssertEqual(familyName?.label, "Family Name")
+        XCTAssertEqual(familyName?.value, "Doe")
+        XCTAssertEqual(familyName?.mandatory, true)
+
+        let givenName = claims.first { $0.key == "\(mdocNamespace).given_name" }
+        // No ClaimMeta entry for given_name - falls back to formatted key.
+        XCTAssertEqual(givenName?.label, "Given Name")
+        XCTAssertEqual(givenName?.value, "Jane")
+    }
+
+    func testBuildMdocMetadataPopulatesDoctypeAndClaimsFromMddlSchema() {
+        let offer = CredentialOffer(
+            credentialConfigurationId: "mdl",
+            credentialIssuerIdentifier: "https://issuer.example.com",
+            credentialName: "Driving Licence (offer)",
+            issuerName: "Test Issuer"
+        )
+        let locale = Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
+        let schema = MddlSchema(
+            format: "mso_mdoc",
+            doctype: mdocDocType,
+            display: [MddlDisplay(locale: locale, name: "Driving Licence")],
+            claims: [
+                mdocNamespace: [
+                    "family_name": MddlClaimMeta(
+                        display: [MddlClaimDisplay(locale: locale, name: "Family Name")],
+                        mandatory: true,
+                        valueType: "tstr"
+                    ),
+                ],
+            ]
+        )
+
+        let metadata = CredentialUtils.buildMdocMetadata(offer: offer, mddlSchema: schema)
+        XCTAssertEqual(metadata.name, "Driving Licence")
+        XCTAssertEqual(metadata.doctype, mdocDocType)
+        XCTAssertNil(metadata.vct)
+        XCTAssertEqual(metadata.claims?.count, 1)
+        XCTAssertEqual(metadata.claims?.first?.path, [mdocNamespace, "family_name"])
+        XCTAssertEqual(metadata.claims?.first?.label, "Family Name")
+        XCTAssertEqual(metadata.claims?.first?.mandatory, true)
+    }
+
+    func testBuildMdocMetadataFallsBackToOfferWhenNoMddlSchema() {
+        let offer = CredentialOffer(
+            credentialConfigurationId: "mdl",
+            credentialIssuerIdentifier: "https://issuer.example.com",
+            credentialName: "Driving Licence (offer)",
+            issuerName: "Test Issuer",
+            backgroundColor: "#1a365d"
+        )
+        let metadata = CredentialUtils.buildMdocMetadata(offer: offer)
+        XCTAssertEqual(metadata.name, "Driving Licence (offer)")
+        XCTAssertEqual(metadata.backgroundColor, "#1a365d")
         XCTAssertNil(metadata.claims)
     }
 }

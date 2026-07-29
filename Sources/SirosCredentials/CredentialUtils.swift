@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+@preconcurrency import SwiftCBOR
 #if canImport(os)
 import os
 private let logger = Logger(subsystem: "org.siros.sdk", category: "CredentialUtils")
@@ -159,6 +160,7 @@ public enum CredentialUtils {
     /// walking its own full path, not just matched by its first segment
     /// against a top-level key.
     public static func extractClaims(_ credential: StoredCredential) -> [DisplayClaim] {
+        if credential.format == "mso_mdoc" { return extractMdocClaims(credential) }
         guard let payload = parseJwtPayload(credential.raw) else { return [] }
         let vctmClaims = credential.metadata?.claims ?? []
 
@@ -200,6 +202,107 @@ public enum CredentialUtils {
             current = next
         }
         return current
+    }
+
+    /// mdoc analogue of ``extractClaims(_:)``: parse a stored mdoc credential's
+    /// REAL disclosed namespace/element values (via `MdocCbor`, not
+    /// `parseJwtPayload` which assumes a JWT-shaped `raw`) into `DisplayClaim`s,
+    /// using MDDL claim metadata (`credential.metadata.claims`, populated by
+    /// ``buildMdocMetadata(offer:mddlSchema:)``) for labels/descriptions when available.
+    ///
+    /// Claim keys/paths use the `["namespace", "elementIdentifier"]` shape,
+    /// consistent with how ``buildMdocMetadata(offer:mddlSchema:)`` populates `ClaimMeta.path`.
+    /// Decode and parse a stored mdoc credential's raw base64url CBOR into its
+    /// `DocumentMdoc` shape (unwrapping the `DeviceResponse`-style envelope
+    /// per wallet-frontend#191). Returns nil if the raw string isn't
+    /// valid base64url or doesn't parse as an mdoc document.
+    public static func parseMdocDocument(_ rawCredential: String) -> DocumentMdoc? {
+        guard let bytes = base64UrlDecode(rawCredential) else { return nil }
+        do {
+            return try MdocCbor.parseStoredCredential([UInt8](bytes))
+        } catch {
+            #if canImport(os)
+            logger.warning("Failed to parse mdoc credential: \(error.localizedDescription)")
+            #endif
+            return nil
+        }
+    }
+
+    public static func extractMdocClaims(_ credential: StoredCredential) -> [DisplayClaim] {
+        guard let document = parseMdocDocument(credential.raw) else { return [] }
+
+        var claimMetaByPath: [String: ClaimMeta] = [:]
+        for claim in credential.metadata?.claims ?? [] {
+            claimMetaByPath[claim.path.joined(separator: "/")] = claim
+        }
+
+        return document.issuerSigned.nameSpaces.flatMap { namespace, items in
+            items.map { entry -> DisplayClaim in
+                let elementId = entry.item.elementIdentifier
+                let meta = claimMetaByPath["\(namespace)/\(elementId)"]
+                return DisplayClaim(
+                    key: "\(namespace).\(elementId)",
+                    label: meta?.label ?? formatClaimKey(elementId),
+                    value: formatCborValue(entry.item.elementValue),
+                    description: meta?.description,
+                    mandatory: meta?.mandatory ?? false
+                )
+            }
+        }
+    }
+
+    /// Build `CredentialMetadata` for an mdoc credential from its MDDL schema -
+    /// the mdoc analogue of ``buildMetadata(offer:vctm:rawCredential:)``.
+    /// Populates `CredentialMetadata.doctype` (unused for SD-JWT credentials)
+    /// instead of `CredentialMetadata.vct`.
+    public static func buildMdocMetadata(offer: CredentialOffer, mddlSchema: MddlSchema? = nil) -> CredentialMetadata {
+        let locale = Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
+        let display = mddlSchema?.display.flatMap { displays in
+            displays.first(where: { $0.locale == locale })
+                ?? displays.first(where: { $0.locale.hasPrefix(String(locale.prefix(2))) })
+                ?? displays.first
+        }
+
+        let claims: [ClaimMeta]? = mddlSchema?.claims?.flatMap { namespace, elements in
+            elements.map { elementId, meta -> ClaimMeta in
+                let claimDisplay = meta.display.flatMap { displays in
+                    displays.first(where: { $0.locale == locale })
+                        ?? displays.first(where: { $0.locale.hasPrefix(String(locale.prefix(2))) })
+                        ?? displays.first
+                }
+                return ClaimMeta(
+                    path: [namespace, elementId],
+                    label: claimDisplay?.name,
+                    mandatory: meta.mandatory
+                )
+            }
+        }
+
+        return CredentialMetadata(
+            name: display?.name ?? offer.credentialName,
+            description: display?.description ?? offer.credentialDescription,
+            issuer: IssuerInfo(name: offer.issuerName, url: offer.credentialIssuerIdentifier),
+            doctype: mddlSchema?.doctype,
+            backgroundColor: display?.backgroundColor ?? offer.backgroundColor,
+            textColor: display?.textColor ?? offer.textColor,
+            logo: display?.logo.map { LogoInfo(uri: $0.uri, altText: $0.altText) }
+                ?? offer.logoUri.map { LogoInfo(uri: $0) },
+            claims: claims
+        )
+    }
+
+    /// Format a decoded CBOR element value for display.
+    private static func formatCborValue(_ value: CBOR) -> String {
+        switch value {
+        case .utf8String(let s): return s
+        case .byteString(let b): return "<\(b.count) bytes>"
+        case .unsignedInt(let n): return String(n)
+        case .negativeInt(let n): return String(-1 - Int64(n))
+        case .boolean(let b): return b ? "true" : "false"
+        case .double(let d): return String(d)
+        case .float(let f): return String(f)
+        default: return String(describing: value)
+        }
     }
 
     /// Build credential metadata from an offer, optional VCTM, and raw credential.

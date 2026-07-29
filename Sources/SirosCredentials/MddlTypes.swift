@@ -1,0 +1,120 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import Foundation
+
+/// MDDL (mso_mdoc) schema type: the mdoc analogue of `Vctm`, mirroring
+/// `sirosfoundation/vc`'s `pkg/mdoc/schema.go` `MDDLSchema` field-for-field.
+/// Drives mdoc issuance server-side and, here, gives the wallet a uniform way
+/// to get display labels/claim metadata for mdoc credentials regardless of
+/// format - the same role VCTM plays for SD-JWT.
+public struct MddlSchema: Codable, Sendable, Equatable {
+    public let format: String
+    public let doctype: String
+    public let display: [MddlDisplay]?
+    public let claims: [String: [String: MddlClaimMeta]]?
+
+    public init(
+        format: String,
+        doctype: String,
+        display: [MddlDisplay]? = nil,
+        claims: [String: [String: MddlClaimMeta]]? = nil
+    ) {
+        self.format = format
+        self.doctype = doctype
+        self.display = display
+        self.claims = claims
+    }
+}
+
+/// Localized display info for an MDDL schema, mirroring `MDDLSchema.Display`.
+public struct MddlDisplay: Codable, Sendable, Equatable {
+    public let locale: String
+    public let name: String
+    public let description: String?
+    public let logo: MddlLogo?
+    public let backgroundColor: String?
+    public let textColor: String?
+
+    public init(
+        locale: String,
+        name: String,
+        description: String? = nil,
+        logo: MddlLogo? = nil,
+        backgroundColor: String? = nil,
+        textColor: String? = nil
+    ) {
+        self.locale = locale
+        self.name = name
+        self.description = description
+        self.logo = logo
+        self.backgroundColor = backgroundColor
+        self.textColor = textColor
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case locale, name, description, logo
+        case backgroundColor = "background_color"
+        case textColor = "text_color"
+    }
+}
+
+public struct MddlLogo: Codable, Sendable, Equatable {
+    public let uri: String?
+    public let altText: String?
+
+    public init(uri: String? = nil, altText: String? = nil) {
+        self.uri = uri
+        self.altText = altText
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case uri
+        case altText = "alt_text"
+    }
+}
+
+/// Metadata for a single mdoc data element within a namespace, mirroring
+/// `ClaimMetadata` in `pkg/mdoc/schema.go`. `elements` describes nested
+/// item/field shape for container (`array`/`map`) claims like
+/// `driving_privileges`.
+public struct MddlClaimMeta: Codable, Sendable, Equatable {
+    public let display: [MddlClaimDisplay]?
+    public let mandatory: Bool
+    public let valueType: String?
+    public let elements: [String: MddlClaimMeta]?
+
+    public init(
+        display: [MddlClaimDisplay]? = nil,
+        mandatory: Bool = false,
+        valueType: String? = nil,
+        elements: [String: MddlClaimMeta]? = nil
+    ) {
+        self.display = display
+        self.mandatory = mandatory
+        self.valueType = valueType
+        self.elements = elements
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case display, mandatory, elements
+        case valueType = "value_type"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        display = try container.decodeIfPresent([MddlClaimDisplay].self, forKey: .display)
+        mandatory = try container.decodeIfPresent(Bool.self, forKey: .mandatory) ?? false
+        valueType = try container.decodeIfPresent(String.self, forKey: .valueType)
+        elements = try container.decodeIfPresent([String: MddlClaimMeta].self, forKey: .elements)
+    }
+}
+
+public struct MddlClaimDisplay: Codable, Sendable, Equatable {
+    public let locale: String
+    public let name: String
+
+    public init(locale: String, name: String) {
+        self.locale = locale
+        self.name = name
+    }
+}
