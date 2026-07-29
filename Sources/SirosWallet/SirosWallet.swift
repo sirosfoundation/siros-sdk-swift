@@ -131,6 +131,7 @@ public final class SirosWallet: @unchecked Sendable {
     private let keystore: KeystoreManager
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
+    let mddlSchemaFetcher: MddlSchemaFetcher
     private let accountRegistry: AccountRegistry
 
     private var apiClient: BackendApiClient?
@@ -234,6 +235,7 @@ public final class SirosWallet: @unchecked Sendable {
                 return nil
             }
         }
+        self.mddlSchemaFetcher = MddlSchemaFetcher()
 
         // Set up new AS-based auth
         let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
@@ -743,6 +745,7 @@ public final class SirosWallet: @unchecked Sendable {
         guard let engine = engineSession else {
             throw SirosError.wallet(message: "Not connected")
         }
+        try await ensureEngineConnected(engine)
         lock.lock(); activeOffer = offer; lock.unlock()
 
         // Try to fetch VCTM
@@ -785,23 +788,59 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     /// Start issuance with a raw offer URI or JSON.
-    public func startIssuance(offerUri: String) throws {
+    public func startIssuance(offerUri: String) async throws {
         guard let engine = engineSession else {
             throw SirosError.wallet(message: "Not connected")
         }
-        if offerUri.hasPrefix("openid-credential-offer://") || !offerUri.hasPrefix("http") {
+        try await ensureEngineConnected(engine)
+        if offerUri.hasPrefix("openid-credential-offer://") {
+            // Deep-link URI with inline offer - send as "offer" so the engine
+            // extracts the credential_offer query parameter instead of HTTP-fetching.
             engine.startIssuance(offer: offerUri)
+        } else if offerUri.hasPrefix("http") {
+            // Universal-link-style offer: the credential_offer/credential_offer_uri
+            // live in the URI's own query string (e.g. an issuer's wallet-redirect
+            // page), so the URI itself is not fetchable as the offer JSON - unlike
+            // the engine's openid-credential-offer:// handling, it only strips
+            // that query param for that exact scheme, so it must be extracted here.
+            let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
+            func queryValue(_ name: String) -> String? {
+                queryItems.first(where: { $0.name == name })?.value
+            }
+            if let credentialOffer = queryValue("credential_offer") {
+                engine.startIssuance(offer: credentialOffer)
+            } else if let credentialOfferUri = queryValue("credential_offer_uri") {
+                engine.startIssuance(credentialOfferUri: credentialOfferUri)
+            } else {
+                engine.startIssuance(credentialOfferUri: offerUri)
+            }
         } else {
-            engine.startIssuance(credentialOfferUri: offerUri)
+            engine.startIssuance(offer: offerUri)
         }
     }
 
     /// Start a presentation flow.
-    public func startPresentation(requestUri: String) throws {
+    public func startPresentation(requestUri: String) async throws {
         guard let engine = engineSession else {
             throw SirosError.wallet(message: "Not connected")
         }
+        try await ensureEngineConnected(engine)
         engine.startPresentation(requestUri: requestUri)
+    }
+
+    /// Force a fresh engine WebSocket connection before starting a new flow,
+    /// rather than trusting a connection that may have gone idle since the
+    /// last one - mirrors `completeAuthorization`'s existing zombie-connection
+    /// handling. A connection left open across a backend restart or any other
+    /// silent network drop can look connected while actually discarding every
+    /// send, and that failure mode isn't unique to the post-OAuth-redirect gap.
+    private func ensureEngineConnected(_ engine: WalletEngineSession) async throws {
+        guard let tokens = authTokens else {
+            throw SirosError.wallet(message: "Not connected")
+        }
+        let token = try await tokens.ensureAnonymousToken()
+        engine.forceReconnect(appToken: token.raw)
+        try await engine.awaitConnected()
     }
 
     /// Cancel the current flow.
@@ -835,7 +874,7 @@ public final class SirosWallet: @unchecked Sendable {
         let result = try await provider.startVerification(
             presentingViewController: presentingViewController
         )
-        try startIssuance(offerUri: result.credentialOfferURI)
+        try await startIssuance(offerUri: result.credentialOfferURI)
     }
 
     /// Complete an OAuth authorization flow.

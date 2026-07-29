@@ -343,7 +343,7 @@ final class WalletViewModel: ObservableObject {
     func startIssuance(_ offerUri: String) {
         Task {
             do {
-                try wallet?.startIssuance(offerUri: offerUri)
+                try await wallet?.startIssuance(offerUri: offerUri)
             } catch {
                 setError(error.localizedDescription)
             }
@@ -354,7 +354,7 @@ final class WalletViewModel: ObservableObject {
     func startPresentation(_ requestUri: String) {
         Task {
             do {
-                try wallet?.startPresentation(requestUri: requestUri)
+                try await wallet?.startPresentation(requestUri: requestUri)
             } catch {
                 setError(error.localizedDescription)
             }
@@ -483,9 +483,9 @@ final class WalletViewModel: ObservableObject {
         let linkType = DeepLinkClassifier.classify(code)
         switch linkType {
         case .credentialOffer(let uri):
-            Task { try? wallet?.startIssuance(offerUri: uri) }
+            Task { try? await wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
-            Task { try? wallet?.startPresentation(requestUri: uri) }
+            Task { try? await wallet?.startPresentation(requestUri: uri) }
         case .authCallback(let authCode, let state):
             handleAuthRedirect(code: authCode, state: state)
         case .unknown:
@@ -501,9 +501,9 @@ final class WalletViewModel: ObservableObject {
         case .authCallback(let code, let state):
             handleAuthRedirect(code: code, state: state)
         case .credentialOffer(let uri):
-            Task { try? wallet?.startIssuance(offerUri: uri) }
+            Task { try? await wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
-            Task { try? wallet?.startPresentation(requestUri: uri) }
+            Task { try? await wallet?.startPresentation(requestUri: uri) }
         case .unknown:
             break
         }
