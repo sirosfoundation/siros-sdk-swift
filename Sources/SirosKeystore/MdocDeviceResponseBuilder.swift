@@ -61,7 +61,7 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
             verifierJwkThumbprint: verifierJwkThumbprint
         )
         let deviceAuthBytes = buildDeviceAuthentication(docType: disclosedDocument.docType, sessionTranscript: sessionTranscript)
-        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, externalAad: deviceAuthBytes) { bytes in
+        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, payload: deviceAuthBytes) { bytes in
             try await Array(signer(Data(bytes)))
         }
         return Data(assembleFinalResponse(document: disclosedDocument, coseSign1: coseSign1))
@@ -97,7 +97,7 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
             encryptionPublicJwkThumbprint: encryptionPublicJwkThumbprint
         )
         let deviceAuthBytes = buildDeviceAuthentication(docType: disclosedDocument.docType, sessionTranscript: sessionTranscript)
-        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, externalAad: deviceAuthBytes) { bytes in
+        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, payload: deviceAuthBytes) { bytes in
             try await Array(signer(Data(bytes)))
         }
         return Data(assembleFinalResponse(document: disclosedDocument, coseSign1: coseSign1))
@@ -199,7 +199,17 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         return CBOR.array([.null, .null, handover]).encode()
     }
 
-    /// DeviceAuthentication = ["DeviceAuthentication", SessionTranscript, DocType]
+    /// DeviceAuthentication = ["DeviceAuthentication", SessionTranscript,
+    /// DocType, DeviceNameSpacesBytes], the whole 4-element array itself
+    /// tag-24-wrapped (an "encoded CBOR data item"), per ISO 18013-5 §9.1.3.4
+    /// and matching Google's reference wallet's `generateDeviceResponse()`
+    /// (https://github.com/digitalcredentialsdev/CMWallet). This was
+    /// previously a bare, untagged 3-element array (missing the namespaces
+    /// element entirely and never tag-24-wrapped) - since deviceAuth's
+    /// signature is computed over these exact bytes, a verifier
+    /// reconstructing the correct 4-element tag-24 form (as Google's own
+    /// https://digital-credentials.dev/ demo does) would always disagree
+    /// with a signature computed over the old, different bytes.
     private func buildDeviceAuthentication(docType: String, sessionTranscript: [UInt8]) -> [UInt8] {
         // sessionTranscript is already CBOR-encoded; decode it back to embed
         // as a nested CBOR item rather than a byte string.
@@ -208,8 +218,20 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
             .utf8String("DeviceAuthentication"),
             decodedTranscript,
             .utf8String(docType),
+            emptyDeviceNameSpacesTag(),
         ])
-        return deviceAuth.encode()
+        let tagged: CBOR = .tagged(.encodedCBORDataItem, .byteString(deviceAuth.encode()))
+        return tagged.encode()
+    }
+
+    /// Tag-24-wrapped empty map: this SDK never discloses claims via
+    /// `deviceSigned.nameSpaces` (everything comes from `issuerSigned`
+    /// instead), so this is always empty - but it must be the SAME bytes
+    /// both here (embedded in the signed DeviceAuthentication) and in
+    /// `assembleFinalResponse`'s actual `deviceSigned.nameSpaces` field,
+    /// since a verifier reconstructs DeviceAuthentication from the latter.
+    private func emptyDeviceNameSpacesTag() -> CBOR {
+        .tagged(.encodedCBORDataItem, .byteString(CBOR.map([:]).encode()))
     }
 
     /// Assemble the final DeviceResponse CBOR structure.
@@ -222,9 +244,8 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         }
 
         let deviceSignatureMap: CBOR = .map([.utf8String("deviceSignature"): coseSign1])
-        let emptyMapTag24: CBOR = .tagged(.encodedCBORDataItem, .byteString(CBOR.map([:]).encode()))
         let deviceSignedMap: CBOR = .map([
-            .utf8String("nameSpaces"): emptyMapTag24,
+            .utf8String("nameSpaces"): emptyDeviceNameSpacesTag(),
             .utf8String("deviceAuth"): deviceSignatureMap,
         ])
         documentMap[.utf8String("deviceSigned")] = deviceSignedMap

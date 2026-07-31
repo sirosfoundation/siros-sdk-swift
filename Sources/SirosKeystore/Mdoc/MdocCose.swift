@@ -21,7 +21,6 @@ public enum MdocCose {
     private static let algEdDSA: Int64 = -8
 
     private static let headerAlgorithm: UInt64 = 1
-    private static let coseSign1Tag = CBOR.Tag(rawValue: 18)
 
     private static func algorithmValue(_ algorithm: String) -> Int64 {
         switch algorithm.uppercased() {
@@ -33,16 +32,31 @@ public enum MdocCose {
         }
     }
 
-    /// Build a detached COSE_Sign1 over `externalAad` (the ISO 18013-5
+    /// Build a detached COSE_Sign1 over `payload` (the ISO 18013-5
     /// DeviceAuthentication bytes, for a DeviceResponse device signature).
-    /// Returns the CBOR-encoded tag-18 4-element array
+    /// Returns the CBOR-encoded, bare (untagged) 4-element array
     /// `[protected, unprotected, null, signature]`.
+    ///
+    /// "Detached" describes the OUTPUT wire format only (the 3rd element of
+    /// the returned array is CBOR null, since the verifier reconstructs
+    /// DeviceAuthentication itself from context rather than needing it
+    /// embedded) - the signature is still computed over the real `payload`
+    /// bytes in the Sig_structure's `payload` position, with `external_aad`
+    /// left empty (`h''`). This was previously inverted (payload hardcoded
+    /// empty, the real content passed as external_aad instead) and the
+    /// result was wrapped in CBOR tag 18 - both real bugs matching Google's
+    /// own reference wallet's construction
+    /// (https://github.com/digitalcredentialsdev/CMWallet's
+    /// `generateDeviceResponse()`, which uses a bare untagged array with the
+    /// real content as `payload`), found and fixed in the Kotlin SDK first
+    /// (see MdocCose.kt) after Google's public digital-credentials.dev demo
+    /// rejected mdocs built with the inverted/tagged shape.
     ///
     /// - Parameter signer: signs raw bytes with the device key; must return a
     ///   raw (not DER) signature for ECDSA algorithms.
     public static func sign1Detached(
         algorithm: String,
-        externalAad: [UInt8],
+        payload: [UInt8],
         signer: (@Sendable ([UInt8]) async throws -> [UInt8])
     ) async throws -> CBOR {
         let algValue = algorithmValue(algorithm)
@@ -51,25 +65,23 @@ public enum MdocCose {
         let protectedBytes = protectedHeaders.encode()
 
         // Sig_structure = ["Signature1", protected, external_aad, payload]
-        // Detached: payload is an empty byte string.
         let sigStructure: CBOR = .array([
             .utf8String("Signature1"),
             .byteString(protectedBytes),
-            .byteString(externalAad),
             .byteString([]),
+            .byteString(payload),
         ])
         let toBeSigned = sigStructure.encode()
 
         let signature = try await signer(toBeSigned)
 
-        let coseSign1: CBOR = .array([
+        // Bare 4-element array, NOT wrapped in COSE tag 18 - see doc comment.
+        return .array([
             .byteString(protectedBytes),
             .map([:]),
             .null,
             .byteString(signature),
         ])
-
-        return .tagged(coseSign1Tag, coseSign1)
     }
 
     /// COSE algorithm identifiers (RFC 8152 §8.1/§8.2) are CBOR major-type-1
