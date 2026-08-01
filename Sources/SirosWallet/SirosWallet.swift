@@ -1128,19 +1128,102 @@ public final class SirosWallet: @unchecked Sendable {
         #endif
     }
 
+    /// Select the proof type to generate, shared by both transports (WMP and
+    /// the legacy WS engine) so a real external issuer that lists only
+    /// "attestation" in proof_types_supported gets the same treatment
+    /// regardless of which transport carried the request. `proofTypesSupported`
+    /// (from the issuer's metadata) takes precedence when present; `proofTypeHint`
+    /// is a fallback for WMP, whose wire format only carries a single hint string,
+    /// not the full supported-types set the legacy engine path receives.
+    private func selectProofType(proofTypesSupported: [String: AnyCodable]?, proofTypeHint: String?) -> String {
+        if let supported = proofTypesSupported, !supported.isEmpty {
+            if supported["jwt"] != nil { return "jwt" }
+            if supported["attestation"] != nil { return "attestation" }
+            return supported.keys.first ?? "jwt"
+        }
+        if let hint = proofTypeHint, !hint.isEmpty { return hint }
+        return "jwt"
+    }
+
+    /// Generate proofs for a `generate_proof` sign request - shared by both
+    /// transports so proof generation (including real backend Key Attestation
+    /// with a self-signed fallback) behaves identically regardless of which
+    /// transport carried the request.
+    private func generateProofs(
+        audience: String,
+        nonce: String,
+        count: Int,
+        proofTypesSupported: [String: AnyCodable]?,
+        proofTypeHint: String?
+    ) async throws -> [ProofObject] {
+        let chosen = selectProofType(proofTypesSupported: proofTypesSupported, proofTypeHint: proofTypeHint)
+        if chosen == "attestation" {
+            let backendAttestation = await requestBackendKeyAttestation(audience: audience, nonce: nonce, count: count)
+            let attestationJwt: String
+            if let backendAttestation {
+                attestationJwt = backendAttestation
+            } else {
+                attestationJwt = try await keystore.generateKeyAttestation(nonce: nonce, count: count)
+            }
+            return [ProofObject(proofType: "attestation", attestation: attestationJwt)]
+        }
+        var proofs: [ProofObject] = []
+        for _ in 0..<count {
+            let jwt = try await keystore.generateProof(audience: audience, nonce: nonce, freshKey: count > 1)
+            proofs.append(ProofObject(proofType: "jwt", jwt: jwt))
+        }
+        return proofs
+    }
+
+    /// Ask go-wallet-backend's real, x5c-chained Key Attestation endpoint
+    /// (`POST /wallet-provider/key-attestation/generate`) to attest freshly
+    /// generated keys, instead of `KeystoreManager.generateKeyAttestation`'s
+    /// self-signed fallback (a bare `jwk` header - cryptographically valid
+    /// but no trust anchor a real issuer can validate against).
+    ///
+    /// Private keys never leave the device: only the public JWKs (from
+    /// `KeystoreManager.generateKeypairs`) and security properties are sent -
+    /// the backend signs an attestation *over* them with its own,
+    /// operator-provisioned x5c-chained key.
+    ///
+    /// Returns nil (caller falls back to the self-signed path) when there's
+    /// no backend session, the keystore can't produce raw keypairs, or the
+    /// backend doesn't support/expose the endpoint.
+    private func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async -> String? {
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else { return nil }
+        do {
+            let keypairs = try await keystore.generateKeypairs(count: count)
+            var secDict: [String: Any]?
+            if let keyId = keypairs.first?.keyId, let props = await keystore.securityProperties(keyId: keyId) {
+                secDict = [
+                    "key_storage": props.keyStorage,
+                    "user_authentication": props.userAuthentication,
+                    "certification": props.certification.toJsonValue(),
+                ]
+            }
+            return try await client.requestKeyAttestation(
+                jwks: keypairs.map { $0.publicKeyJWK },
+                nonce: nonce,
+                securityProperties: secDict,
+                credentialIssuer: audience.isEmpty ? nil : audience
+            )
+        } catch {
+            return nil
+        }
+    }
+
     private func handleWmpSignRequest(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
         switch params.action {
         case "generate_proof":
             let count = params.count ?? 1
-            var proofs: [ProofObject] = []
-            for _ in 0..<count {
-                let jwt = try await keystore.generateProof(
-                    audience: params.audience,
-                    nonce: params.nonce,
-                    freshKey: count > 1
-                )
-                proofs.append(ProofObject(proofType: "jwt", jwt: jwt))
-            }
+            let proofs = try await generateProofs(
+                audience: params.audience,
+                nonce: params.nonce,
+                count: count,
+                proofTypesSupported: nil,
+                proofTypeHint: params.proofType
+            )
             return SignSubFlowResult(proofs: proofs)
 
         case "sign_presentation":
@@ -1266,15 +1349,13 @@ public final class SirosWallet: @unchecked Sendable {
             switch msg.action {
             case "generate_proof":
                 let count = msg.params.count ?? 1
-                var proofs: [ProofObject] = []
-                for _ in 0..<count {
-                    let proofJwt = try await keystore.generateProof(
-                        audience: msg.params.audience ?? "",
-                        nonce: msg.params.nonce ?? "",
-                        freshKey: count > 1
-                    )
-                    proofs.append(ProofObject(proofType: "jwt", jwt: proofJwt))
-                }
+                let proofs = try await generateProofs(
+                    audience: msg.params.audience ?? "",
+                    nonce: msg.params.nonce ?? "",
+                    count: count,
+                    proofTypesSupported: msg.params.proofTypesSupported,
+                    proofTypeHint: msg.params.proofType
+                )
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
             case "sign_presentation":
