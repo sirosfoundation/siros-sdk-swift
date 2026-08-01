@@ -57,6 +57,45 @@ final class BackendApiClientTests: XCTestCase {
         }
     }
 
+    func testRequestKeyAttestationSendsJwksNonceAndCredentialIssuer() async throws {
+        let server = MockHttpServer()
+        server.enqueue("{\"key_attestation\": \"signed-jwt\"}")
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: server.httpFunction)
+
+        let result = try await client.requestKeyAttestation(
+            jwks: [["kty": "EC"]],
+            nonce: "nonce-1",
+            securityProperties: ["key_storage": ["iso_18045_high"]],
+            credentialIssuer: "https://issuer.example.com"
+        )
+
+        XCTAssertEqual(result, "signed-jwt")
+        let req = server.requests[0]
+        XCTAssertEqual(req.path, "/wallet-provider/key-attestation/generate")
+        let body = try XCTUnwrap(req.body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let jwks = try XCTUnwrap(json["jwks"] as? [[String: Any]])
+        XCTAssertEqual(jwks.count, 1)
+        let openid4vci = try XCTUnwrap(json["openid4vci"] as? [String: Any])
+        XCTAssertEqual(openid4vci["nonce"] as? String, "nonce-1")
+        XCTAssertEqual(openid4vci["credential_issuer"] as? String, "https://issuer.example.com")
+        let securityProperties = try XCTUnwrap(json["security_properties"] as? [String: Any])
+        XCTAssertEqual(securityProperties["key_storage"] as? [String], ["iso_18045_high"])
+    }
+
+    func testRequestKeyAttestationOmitsCredentialIssuerWhenNotProvided() async throws {
+        let server = MockHttpServer()
+        server.enqueue("{\"key_attestation\": \"signed-jwt\"}")
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: server.httpFunction)
+
+        let _ = try await client.requestKeyAttestation(jwks: [["kty": "EC"]], nonce: "nonce-1")
+
+        let body = try XCTUnwrap(server.requests[0].body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let openid4vci = try XCTUnwrap(json["openid4vci"] as? [String: Any])
+        XCTAssertNil(openid4vci["credential_issuer"])
+    }
+
     func testEvaluateTrustPostsToExpectedEndpoint() async throws {
         let server = MockHttpServer()
         server.enqueue("{\"decision\":true}")

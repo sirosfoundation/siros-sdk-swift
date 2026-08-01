@@ -212,26 +212,31 @@ public final class FlowClient: CredentialNotifier, @unchecked Sendable {
                 let response: SignResponse
                 switch action {
                 case .generateProof:
-                    // Select proof type: prefer attestation if supported and apiClient is available
+                    // Select proof type: prefer attestation if supported
                     let selectedProofType = selectProofType(proofTypesSupported: proofTypesSupported)
 
-                    if selectedProofType == "attestation", let api = apiClient {
+                    if selectedProofType == "attestation" {
                         let count = signParams.count ?? 1
-                        let keypairs = try await keystore.generateKeypairs(count: count)
-                        let secProps = await keystore.securityProperties()
-                        var secDict: [String: Any]?
-                        if let props = secProps {
-                            secDict = [
-                                "key_storage": props.keyStorage,
-                                "user_authentication": props.userAuthentication,
-                                "certification": props.certification.toJsonValue(),
-                            ]
-                        }
-                        let keyAttestation = try await api.requestKeyAttestation(
-                            jwks: keypairs.map { $0.publicKeyJWK },
-                            nonce: signParams.nonce ?? "",
-                            securityProperties: secDict
+                        let nonce = signParams.nonce ?? ""
+                        // A real external issuer (the motivating case) may
+                        // list ONLY "attestation" in proof_types_supported -
+                        // falling through to a "jwt" proof here (as this used
+                        // to, whenever apiClient was nil) would be rejected.
+                        // Try the backend's real, x5c-chained Key Attestation
+                        // endpoint first; fall back to the self-signed path
+                        // (bare jwk header, no trust anchor, but still the
+                        // correct proof TYPE) for any failure - no session,
+                        // keystore can't produce raw keypairs, network error,
+                        // or the backend not exposing/supporting the endpoint.
+                        let backendAttestation = await requestBackendKeyAttestation(
+                            audience: signParams.audience, nonce: nonce, count: count
                         )
+                        let keyAttestation: String
+                        if let backendAttestation {
+                            keyAttestation = backendAttestation
+                        } else {
+                            keyAttestation = try await keystore.generateKeyAttestation(nonce: nonce, count: count)
+                        }
                         response = SignResponse(attestation: keyAttestation, proofType: "attestation")
                     } else {
                         let proof = try await keystore.generateProof(
@@ -265,6 +270,43 @@ public final class FlowClient: CredentialNotifier, @unchecked Sendable {
     private func selectProofType(proofTypesSupported: [String: Any]?) -> String? {
         guard let supported = proofTypesSupported else { return "jwt" }
         return proofTypePrecedence.first { supported[$0] != nil }
+    }
+
+    /// Ask go-wallet-backend's real, x5c-chained Key Attestation endpoint
+    /// (`POST /wallet-provider/key-attestation/generate`) to attest freshly
+    /// generated keys, instead of `KeystoreManager.generateKeyAttestation`'s
+    /// self-signed fallback (a bare `jwk` header - cryptographically valid
+    /// but no trust anchor a real issuer can validate against).
+    ///
+    /// Private keys never leave the device: only the public JWKs (from
+    /// `KeystoreManager.generateKeypairs`) and security properties are sent -
+    /// the backend signs an attestation *over* them with its own,
+    /// operator-provisioned x5c-chained key.
+    ///
+    /// Returns nil (caller falls back to the self-signed path) when there's
+    /// no backend session, the keystore can't produce raw keypairs, or the
+    /// backend doesn't support/expose the endpoint.
+    private func requestBackendKeyAttestation(audience: String?, nonce: String, count: Int) async -> String? {
+        guard let api = apiClient else { return nil }
+        do {
+            let keypairs = try await keystore.generateKeypairs(count: count)
+            var secDict: [String: Any]?
+            if let keyId = keypairs.first?.keyId, let props = await keystore.securityProperties(keyId: keyId) {
+                secDict = [
+                    "key_storage": props.keyStorage,
+                    "user_authentication": props.userAuthentication,
+                    "certification": props.certification.toJsonValue(),
+                ]
+            }
+            return try await api.requestKeyAttestation(
+                jwks: keypairs.map { $0.publicKeyJWK },
+                nonce: nonce,
+                securityProperties: secDict,
+                credentialIssuer: audience
+            )
+        } catch {
+            return nil
+        }
     }
 
     private func handleMatchRequest(flowId: String, params: [String: AnyCodable]) async {

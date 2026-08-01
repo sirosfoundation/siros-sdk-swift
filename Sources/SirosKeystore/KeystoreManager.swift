@@ -114,6 +114,14 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Returns nil if security properties are not available.
     func securityProperties() async -> SignerSecurityProperties?
 
+    /// Get the security properties for a specific key, as reported by the
+    /// underlying WSCD/signer. Used to populate a real backend-issued Key
+    /// Attestation request's `security_properties` (CS-04 §7.1.3, Annex C
+    /// §C.3.1) with the properties of the actual freshly-generated
+    /// attestation keys, rather than the batch-agnostic [securityProperties]
+    /// above. Returns nil if not available.
+    func securityProperties(keyId: String) async -> SignerSecurityProperties?
+
     /// Generate `count` fresh keypairs and build a single OID4VCI `attestation`
     /// proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",
     /// proof type Appendix "attestation Proof Type") covering all of them via
@@ -137,6 +145,7 @@ public extension KeystoreManager {
     }
 
     func securityProperties() async -> SignerSecurityProperties? { nil }
+    func securityProperties(keyId: String) async -> SignerSecurityProperties? { nil }
     func signMdocPresentation(
         credentialBytes: Data,
         disclosedClaims: [String]?,

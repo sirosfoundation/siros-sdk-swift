@@ -155,15 +155,22 @@ public final class BackendApiClient: @unchecked Sendable {
     ///   - jwks: Array of JWK dictionaries for the keys to attest.
     ///   - nonce: OpenID4VCI nonce from the issuer.
     ///   - securityProperties: Optional security properties dictionary for KA claims (CS-04 §7.1.3).
+    ///   - credentialIssuer: Optional target issuer URL - binds the KA's `aud` claim,
+    ///     preventing a KA minted for one issuer from being replayed against another.
     /// - Returns: Key attestation JWT string.
     public func requestKeyAttestation(
         jwks: [[String: Any]],
         nonce: String,
-        securityProperties: [String: Any]? = nil
+        securityProperties: [String: Any]? = nil,
+        credentialIssuer: String? = nil
     ) async throws -> String {
+        var openid4vci: [String: Any] = ["nonce": nonce]
+        if let issuer = credentialIssuer, !issuer.isEmpty {
+            openid4vci["credential_issuer"] = issuer
+        }
         var body: [String: Any] = [
             "jwks": jwks,
-            "openid4vci": ["nonce": nonce],
+            "openid4vci": openid4vci,
         ]
         if let props = securityProperties {
             body["security_properties"] = props

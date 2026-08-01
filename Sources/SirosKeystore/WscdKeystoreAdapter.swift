@@ -354,9 +354,9 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         return try await signer.migrateKey(keyId: keyId, targetPlugin: targetPlugin)
     }
 
-    /// Return the security properties for a key.
-    public func securityProperties(keyId: String) async throws -> SignerSecurityProperties {
-        return try await signer.securityProperties(keyId: keyId)
+    /// Return the security properties for a key, or nil if unavailable.
+    public func securityProperties(keyId: String) async -> SignerSecurityProperties? {
+        return try? await signer.securityProperties(keyId: keyId)
     }
 
     // MARK: - Credential storage (local in-memory)
