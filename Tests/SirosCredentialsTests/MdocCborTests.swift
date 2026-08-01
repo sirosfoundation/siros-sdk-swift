@@ -32,10 +32,19 @@ final class MdocCborTests: XCTestCase {
         return .map([.utf8String(namespace): items])
     }
 
-    /// Build a COSE_Sign1 array whose payload is a tag-24-wrapped MSO carrying `docType`.
+    /// Build a COSE_Sign1 array whose payload carries an MSO with `docType`,
+    /// matching the REAL wire encoding (ISO 18013-5 §9.1.2.4): the payload
+    /// slot is a `byteString` whose content decodes to a tag-24-wrapped
+    /// byteString, which itself decodes to the actual MSO map - two nested
+    /// decode steps, not one. (An earlier version of this fixture built the
+    /// payload as an in-memory tagged CBOR value directly instead of a real
+    /// double-encoded byte string, which matched a bug in the
+    /// implementation instead of catching it - confirmed broken against a
+    /// real geneva2026.mdoc.online credential.)
     private func buildIssuerAuth(docType: String) -> CBOR {
         let mso: CBOR = .map([.utf8String("docType"): .utf8String(docType)])
-        let payload: CBOR = .tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let taggedMso: CBOR = .tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let payload: CBOR = .byteString(taggedMso.encode())
         return .array([
             .byteString([]), // protected headers (opaque to the wallet)
             .map([:]), // unprotected headers

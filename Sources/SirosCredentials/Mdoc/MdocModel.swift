@@ -155,23 +155,53 @@ public enum MdocCbor {
         guard case .array(let coseSign1) = issuerAuth, coseSign1.count >= 3 else {
             throw MdocError.malformed("issuerAuth is not a COSE_Sign1 array")
         }
-        let payload = coseSign1[2]
-        let msoBytes: [UInt8]
-        switch payload {
-        case .tagged(let tag, let content) where tag == .encodedCBORDataItem:
-            guard case .byteString(let b) = content else {
-                throw MdocError.malformed("issuerAuth payload tag-24 content is not a byte string")
-            }
-            msoBytes = b
-        case .byteString(let b):
-            msoBytes = b
-        default:
-            throw MdocError.malformed("unexpected issuerAuth payload encoding")
-        }
-        guard let mso = try CBOR.decode(msoBytes), case .utf8String(let docType)? = mso["docType"] else {
+        let mso = try decodeMso(fromPayload: coseSign1[2])
+        guard case .utf8String(let docType)? = mso["docType"] else {
             throw MdocError.malformed("MSO missing docType")
         }
         return docType
+    }
+
+    /// Decode the MSO from a COSE_Sign1 `issuerAuth`'s payload slot.
+    ///
+    /// Per ISO 18013-5 §9.1.2.4, this slot is itself a `bstr` (COSE_Sign1's
+    /// payload is always a byte string) whose CONTENT decodes to
+    /// `MobileSecurityObjectBytes = #6.24(bstr .cbor MobileSecurityObject)` -
+    /// i.e. two nested CBOR decode steps are required: one to get from the
+    /// payload bytes to the tag-24 wrapper, and a second to unwrap it and
+    /// reach the actual MSO map. A single decode step (as this previously
+    /// did, checking the payload slot itself for a tag) yields the tag-24
+    /// wrapper, not the MSO - confirmed via a real credential from
+    /// geneva2026.mdoc.online's OID4VCI conformance suite, which threw
+    /// "Not an array or map" (the Kotlin SDK's equivalent error) trying to
+    /// read `docType` off that wrapper. Also tolerates issuers that skip the
+    /// tag-24 wrapper entirely and emit the MSO map directly.
+    private static func decodeMso(fromPayload payload: CBOR) throws -> CBOR {
+        guard case .byteString(let outerBytes) = payload else {
+            throw MdocError.malformed("issuerAuth payload is not a byte string")
+        }
+        guard let decoded = try CBOR.decode(outerBytes) else {
+            throw MdocError.malformed("empty MSO payload")
+        }
+        switch decoded {
+        case .tagged(let tag, let content) where tag == .encodedCBORDataItem:
+            guard case .byteString(let msoBytes) = content else {
+                throw MdocError.malformed("issuerAuth payload tag-24 content is not a byte string")
+            }
+            guard let mso = try CBOR.decode(msoBytes) else {
+                throw MdocError.malformed("empty MSO")
+            }
+            return mso
+        case .map:
+            return decoded
+        case .byteString(let msoBytes):
+            guard let mso = try CBOR.decode(msoBytes) else {
+                throw MdocError.malformed("empty MSO")
+            }
+            return mso
+        default:
+            throw MdocError.malformed("unexpected MSO payload encoding")
+        }
     }
 
     /// Unwrap a tag-24 (encoded-CBOR-data-item) bstr and decode the IssuerSignedItem map inside it.
