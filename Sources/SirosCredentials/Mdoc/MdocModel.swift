@@ -16,10 +16,19 @@
 /// builder (`MdocDeviceResponseBuilder`, `SirosKeystore`, which depends on
 /// this module) need it.
 ///
-/// Confirmed via `sirosfoundation/wallet-frontend#191`: a stored mdoc
-/// credential's raw bytes are a full `DeviceResponseMdoc`-shaped envelope
-/// (`{documents: [{docType, issuerSigned}], ...}`), not a bare IssuerSigned
-/// blob - `MdocCbor.parseStoredCredential` unwraps this down to the first document.
+/// A stored mdoc credential's raw bytes can be either of two shapes,
+/// depending on the issuer:
+/// - A full `DeviceResponseMdoc`-shaped envelope (`{documents: [{docType,
+///   issuerSigned}], ...}`) - `sirosfoundation/vc`'s own issuer convention,
+///   confirmed via `sirosfoundation/wallet-frontend#191`.
+/// - A bare `IssuerSigned` structure (`{nameSpaces, issuerAuth}`) directly,
+///   per OID4VCI's mso_mdoc credential response as issued by real-world/
+///   interop issuers (confirmed against geneva2026.mdoc.online's conformance
+///   suite) - no outer envelope, and no docType field of its own (ISO
+///   18013-5's IssuerSigned has none); docType is read from the MSO embedded
+///   in issuerAuth's COSE_Sign1 payload instead.
+///
+/// `MdocCbor.parseStoredCredential` detects and handles both.
 
 public enum MdocError: Error, CustomStringConvertible {
     case malformed(String)
@@ -89,16 +98,23 @@ public struct DocumentMdoc: Sendable {
 
 public enum MdocCbor {
 
-    /// Parse a stored mdoc credential's raw bytes (a full DeviceResponseMdoc
-    /// envelope, per wallet-frontend#191) and return its first document.
+    /// Parse a stored mdoc credential's raw bytes and return its first
+    /// document - see the file-level doc comment for the two shapes handled.
     public static func parseStoredCredential(_ bytes: [UInt8]) throws -> DocumentMdoc {
         guard let root = try CBOR.decode(bytes) else {
             throw MdocError.malformed("mdoc credential envelope: empty CBOR")
         }
-        guard case .array(let documents)? = root["documents"], let first = documents.first else {
-            throw MdocError.malformed("mdoc credential envelope missing documents[]")
+        if case .array(let documents)? = root["documents"], let first = documents.first {
+            return try parseDocument(first)
         }
-        return try parseDocument(first)
+
+        guard case .map(let nameSpacesMap)? = root["nameSpaces"], let issuerAuth = root["issuerAuth"] else {
+            throw MdocError.malformed(
+                "mdoc credential envelope missing documents[] (and not a bare IssuerSigned structure either)"
+            )
+        }
+        let docType = try extractDocType(fromIssuerAuth: issuerAuth)
+        return DocumentMdoc(docType: docType, issuerSigned: try parseIssuerSigned(nameSpacesMap, issuerAuth))
     }
 
     private static func parseDocument(_ doc: CBOR) throws -> DocumentMdoc {
@@ -111,7 +127,13 @@ public enum MdocCbor {
         guard case .map(let nameSpacesMap)? = issuerSignedObj["nameSpaces"] else {
             throw MdocError.malformed("issuerSigned missing nameSpaces")
         }
+        guard let issuerAuth = issuerSignedObj["issuerAuth"] else {
+            throw MdocError.malformed("issuerSigned missing issuerAuth")
+        }
+        return DocumentMdoc(docType: docType, issuerSigned: try parseIssuerSigned(nameSpacesMap, issuerAuth))
+    }
 
+    private static func parseIssuerSigned(_ nameSpacesMap: [CBOR: CBOR], _ issuerAuth: CBOR) throws -> IssuerSignedMdoc {
         var nameSpaces: [String: [NamespaceItem]] = [:]
         for (key, value) in nameSpacesMap {
             guard case .utf8String(let ns) = key else { continue }
@@ -122,11 +144,34 @@ public enum MdocCbor {
             }
             nameSpaces[ns] = items
         }
+        return IssuerSignedMdoc(nameSpaces: nameSpaces, issuerAuth: issuerAuth)
+    }
 
-        guard let issuerAuth = issuerSignedObj["issuerAuth"] else {
-            throw MdocError.malformed("issuerSigned missing issuerAuth")
+    /// Extract `docType` from the MSO (MobileSecurityObject) embedded in a
+    /// bare IssuerSigned structure's `issuerAuth` COSE_Sign1 payload (index 2
+    /// of the 4-element array) - the only place docType is available when
+    /// there's no enclosing `{docType, issuerSigned}` document wrapper.
+    private static func extractDocType(fromIssuerAuth issuerAuth: CBOR) throws -> String {
+        guard case .array(let coseSign1) = issuerAuth, coseSign1.count >= 3 else {
+            throw MdocError.malformed("issuerAuth is not a COSE_Sign1 array")
         }
-        return DocumentMdoc(docType: docType, issuerSigned: IssuerSignedMdoc(nameSpaces: nameSpaces, issuerAuth: issuerAuth))
+        let payload = coseSign1[2]
+        let msoBytes: [UInt8]
+        switch payload {
+        case .tagged(let tag, let content) where tag == .encodedCBORDataItem:
+            guard case .byteString(let b) = content else {
+                throw MdocError.malformed("issuerAuth payload tag-24 content is not a byte string")
+            }
+            msoBytes = b
+        case .byteString(let b):
+            msoBytes = b
+        default:
+            throw MdocError.malformed("unexpected issuerAuth payload encoding")
+        }
+        guard let mso = try CBOR.decode(msoBytes), case .utf8String(let docType)? = mso["docType"] else {
+            throw MdocError.malformed("MSO missing docType")
+        }
+        return docType
     }
 
     /// Unwrap a tag-24 (encoded-CBOR-data-item) bstr and decode the IssuerSignedItem map inside it.
