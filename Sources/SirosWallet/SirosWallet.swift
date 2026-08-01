@@ -711,26 +711,14 @@ public final class SirosWallet: @unchecked Sendable {
                 let metaDecoder = JSONDecoder()
                 let metadata = try metaDecoder.decode(IssuerMetadata.self, from: metaData)
 
-                let issuerDisplay = metadata.display?.first
-                let issuerName = issuerDisplay?.name
-                    ?? URL(string: issuer.credentialIssuerIdentifier)?.host
-                    ?? issuer.credentialIssuerIdentifier
-
-                for (configId, config) in metadata.credentialConfigurationsSupported {
-                    let credDisplay = config.credentialMetadata?.display?.first
-                    let credName = credDisplay?.name ?? configId
-
-                    offers.append(CredentialOffer(
-                        credentialConfigurationId: configId,
-                        credentialIssuerIdentifier: issuer.credentialIssuerIdentifier,
-                        credentialName: credName,
-                        credentialDescription: credDisplay?.description,
-                        issuerName: issuerName,
-                        backgroundColor: credDisplay?.backgroundColor ?? issuerDisplay?.backgroundColor,
-                        textColor: credDisplay?.textColor ?? issuerDisplay?.textColor,
-                        logoUri: credDisplay?.logo?.uri,
-                        issuerLogoUri: issuerDisplay?.logo?.uri
-                    ))
+                for configId in metadata.credentialConfigurationsSupported.keys {
+                    if let offer = Self.buildCredentialOffer(
+                        issuerUrl: issuer.credentialIssuerIdentifier,
+                        configId: configId,
+                        metadata: metadata
+                    ) {
+                        offers.append(offer)
+                    }
                 }
             } catch {
                 // Skip issuers that fail metadata fetch
@@ -738,6 +726,64 @@ public final class SirosWallet: @unchecked Sendable {
             }
         }
         return offers
+    }
+
+    /// Build a `CredentialOffer` (display name/logo/colors) for one credential
+    /// configuration from an issuer's already-fetched `IssuerMetadata`, reading
+    /// the standard OID4VCI `credential_metadata.display` field (falling back
+    /// to the issuer's own top-level `display`). Shared by
+    /// `getAvailableCredentials` (lists every configuration a registered
+    /// issuer supports) and `startIssuance` (resolves display metadata for the
+    /// single configuration named in a scanned/deep-linked offer, including
+    /// from issuers - e.g. interop test issuers - never registered with this
+    /// wallet).
+    ///
+    /// Returns `nil` if `configId` isn't actually offered by this issuer.
+    ///
+    /// `static` (takes no wallet state) so it's unit-testable without
+    /// constructing a full `SirosWallet`, which requires a keystore -
+    /// unavailable in a plain Linux test run (see `KeystoreManager`'s
+    /// CryptoKit-gated default).
+    static func buildCredentialOffer(
+        issuerUrl: String,
+        configId: String,
+        metadata: IssuerMetadata
+    ) -> CredentialOffer? {
+        guard let config = metadata.credentialConfigurationsSupported[configId] else { return nil }
+        let issuerDisplay = metadata.display?.first
+        let issuerName = issuerDisplay?.name
+            ?? URL(string: issuerUrl)?.host
+            ?? issuerUrl
+        let credDisplay = config.credentialMetadata?.display?.first
+        let credName = credDisplay?.name ?? configId
+
+        return CredentialOffer(
+            credentialConfigurationId: configId,
+            credentialIssuerIdentifier: issuerUrl,
+            credentialName: credName,
+            credentialDescription: credDisplay?.description,
+            issuerName: issuerName,
+            backgroundColor: credDisplay?.backgroundColor ?? issuerDisplay?.backgroundColor,
+            textColor: credDisplay?.textColor ?? issuerDisplay?.textColor,
+            logoUri: credDisplay?.logo?.uri,
+            issuerLogoUri: issuerDisplay?.logo?.uri
+        )
+    }
+
+    /// Fetch an issuer's standard OID4VCI metadata directly by its URL (not
+    /// via `apiClient`, which only knows issuers registered with this
+    /// wallet's own backend) - needed to resolve display metadata for
+    /// arbitrary/third-party issuers named in a scanned credential offer.
+    private func fetchIssuerMetadata(issuerUrl: String) async throws -> IssuerMetadata {
+        let trimmed = issuerUrl.hasSuffix("/") ? String(issuerUrl.dropLast()) : issuerUrl
+        guard let url = URL(string: trimmed + "/.well-known/openid-credential-issuer") else {
+            throw SirosError.wallet(message: "Invalid issuer URL: \(issuerUrl)")
+        }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw SirosError.wallet(message: "Metadata fetch failed for \(issuerUrl)")
+        }
+        return try JSONDecoder().decode(IssuerMetadata.self, from: data)
     }
 
     /// Start issuance with a credential offer object.
@@ -793,6 +839,14 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
+        if let offer = await resolveOfferForDisplay(offerUri) {
+            lock.lock(); activeOffer = offer; lock.unlock()
+            let vctm = try? await vctmFetcher.fetch(
+                issuerUrl: offer.credentialIssuerIdentifier,
+                scope: offer.credentialConfigurationId
+            )
+            lock.lock(); activeVctm = vctm; lock.unlock()
+        }
         if offerUri.hasPrefix("openid-credential-offer://") {
             // Deep-link URI with inline offer - send as "offer" so the engine
             // extracts the credential_offer query parameter instead of HTTP-fetching.
@@ -816,6 +870,78 @@ public final class SirosWallet: @unchecked Sendable {
             }
         } else {
             engine.startIssuance(offer: offerUri)
+        }
+    }
+
+    /// Just enough of a raw `credential_offer` JSON object to resolve display
+    /// metadata - `credential_issuer` and the first `credential_configuration_ids`
+    /// entry.
+    private struct RawCredentialOfferHeader: Decodable {
+        let credentialIssuer: String
+        let credentialConfigurationIds: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case credentialIssuer = "credential_issuer"
+            case credentialConfigurationIds = "credential_configuration_ids"
+        }
+    }
+
+    /// Resolve display metadata (name/logo/colors) for a scanned/deep-linked
+    /// credential offer, ahead of forwarding it to the engine.
+    ///
+    /// `activeOffer` was previously only ever set by `startIssuanceByOffer`
+    /// (the picker-driven path from `getAvailableCredentials`) - the QR/
+    /// deep-link entry point here never populated it, so every credential
+    /// issued that way (mdoc or SD-JWT, ours or a third-party issuer's) was
+    /// stored with no display metadata AND no recorded issuer/config
+    /// identifiers at all (both derive from `activeOffer` at storage time),
+    /// confirmed against a real geneva2026.mdoc.online mDL credential offer.
+    ///
+    /// Best-effort: returns `nil` on any failure (unparseable offer,
+    /// unreachable issuer, issuer doesn't support the offered configuration)
+    /// rather than throwing - a missing display must never block issuance
+    /// itself.
+    private func resolveOfferForDisplay(_ offerUri: String) async -> CredentialOffer? {
+        guard let header = await extractOfferHeader(offerUri),
+              let configId = header.credentialConfigurationIds.first else { return nil }
+        do {
+            let metadata = try await fetchIssuerMetadata(issuerUrl: header.credentialIssuer)
+            return Self.buildCredentialOffer(issuerUrl: header.credentialIssuer, configId: configId, metadata: metadata)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Extract the raw `credential_offer` JSON object from any of the shapes
+    /// `startIssuance` accepts.
+    private func extractOfferHeader(_ offerUri: String) async -> RawCredentialOfferHeader? {
+        if offerUri.hasPrefix("openid-credential-offer://") || offerUri.hasPrefix("http") {
+            let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
+            func queryValue(_ name: String) -> String? {
+                queryItems.first(where: { $0.name == name })?.value
+            }
+            if let credentialOffer = queryValue("credential_offer"),
+               let data = credentialOffer.data(using: .utf8) {
+                return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
+            } else if let credentialOfferUri = queryValue("credential_offer_uri") {
+                return await fetchOfferHeader(credentialOfferUri)
+            }
+            return nil
+        } else {
+            // Not a URI at all - offerUri is itself the raw offer JSON.
+            guard let data = offerUri.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
+        }
+    }
+
+    private func fetchOfferHeader(_ uri: String) async -> RawCredentialOfferHeader? {
+        guard let url = URL(string: uri) else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
+        } catch {
+            return nil
         }
     }
 
