@@ -205,6 +205,47 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         return "\(signingInput).\(sigB64)"
     }
 
+    public func generateKeyProof(
+        keyId: String,
+        typ: String,
+        audience: String,
+        extraClaims: [String: String]
+    ) async throws -> String {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+
+        guard let key = keys[keyId] else {
+            throw KeystoreError.keyNotFound("Key not found: \(keyId)")
+        }
+        let pubJwk = JwtHelpers.publicKeyJwk(key)
+        guard let jkt = JwtHelpers.jwkThumbprint(pubJwk) else {
+            throw KeystoreError.invalidParameter("Failed to compute JWK thumbprint")
+        }
+
+        let header = JwtHelpers.jsonBase64Url([
+            "alg": "ES256",
+            "typ": typ,
+            "jwk": pubJwk,
+        ] as [String: Any])
+
+        let now = Int(Date().timeIntervalSince1970)
+        var claimsDict: [String: Any] = [
+            "iss": jkt,
+            "aud": audience,
+            "iat": now,
+            "exp": now + 5 * 60,
+            "jti": UUID().uuidString.lowercased(),
+        ]
+        for (k, v) in extraClaims { claimsDict[k] = v }
+        let claims = JwtHelpers.jsonBase64Url(claimsDict)
+
+        let signingInput = "\(header).\(claims)"
+        let signature = try key.signature(for: Data(signingInput.utf8))
+        let sigB64 = EncryptedContainer.base64UrlEncode(signature.rawRepresentation)
+        return "\(signingInput).\(sigB64)"
+    }
+
     public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {
         mutex.lock()
         defer { mutex.unlock() }

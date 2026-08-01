@@ -81,6 +81,10 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         get { read("privateDataEtag") }
         set { write("privateDataEtag", newValue) }
     }
+    public var instanceKeyId: String? {
+        get { read("instanceKeyId") }
+        set { write("instanceKeyId", newValue) }
+    }
 
     public var hasSession: Bool { userId != nil }
 
@@ -91,7 +95,8 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         // we delete each known key individually
         let keys = ["appToken", "refreshToken", "userId", "displayName",
                     "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
-                    "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag"]
+                    "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag",
+                    "instanceKeyId"]
         lock.lock(); defer { lock.unlock() }
         for key in keys {
             let scopedKey = "\(id)/\(key)"

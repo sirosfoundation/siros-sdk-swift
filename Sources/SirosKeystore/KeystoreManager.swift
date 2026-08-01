@@ -135,6 +135,35 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Default implementation throws so existing implementations continue to
     /// compile without attestation support.
     func generateKeyAttestation(nonce: String, count: Int) async throws -> String
+
+    /// Build a self-signed JWT proof for an existing key: header `{typ, jwk =
+    /// that key's own public JWK}`, claims `{iss = JWK thumbprint of that
+    /// key, aud, iat, exp, jti, ...extraClaims}`.
+    ///
+    /// Used for OAuth Client Attestation PoP JWTs
+    /// (draft-ietf-oauth-attestation-based-client-auth-04 §3.1) - both the
+    /// one-time proof sent to this wallet's own backend to obtain a Wallet
+    /// Instance Attestation (WIA) (`audience` = the wallet provider/backend,
+    /// `extraClaims = ["nonce": <challenge>]`), and the per-issuance-flow
+    /// proof sent (via the backend, forwarded as an HTTP header) to a
+    /// credential issuer's authorization server alongside that WIA
+    /// (`audience` = the issuer's AS, no extra claims).
+    ///
+    /// Deliberately takes an existing `keyId` rather than managing "the
+    /// instance key" internally - callers are responsible for generating one
+    /// persistent key (via `generateKey`) and remembering its ID across app
+    /// restarts (the backend's WIA tracks/revokes wallet instances by this
+    /// key's JWK thumbprint, so reusing a different key each time would
+    /// silently register a new "instance" every call).
+    ///
+    /// Default implementation throws so existing implementations continue to
+    /// compile without attestation support.
+    func generateKeyProof(
+        keyId: String,
+        typ: String,
+        audience: String,
+        extraClaims: [String: String]
+    ) async throws -> String
 }
 
 /// Default implementation for optional methods.
@@ -169,6 +198,15 @@ public extension KeystoreManager {
 
     func generateKeyAttestation(nonce: String, count: Int) async throws -> String {
         throw KeystoreError.invalidParameter("generateKeyAttestation not supported by this keystore")
+    }
+
+    func generateKeyProof(
+        keyId: String,
+        typ: String,
+        audience: String,
+        extraClaims: [String: String]
+    ) async throws -> String {
+        throw KeystoreError.invalidParameter("generateKeyProof not supported by this keystore")
     }
 }
 

@@ -23,6 +23,15 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     var credentialId: String? { get set }
     var privateDataJwe: String? { get set }
     var privateDataEtag: String? { get set }
+
+    /// The keystore key ID used as this wallet installation's persistent
+    /// OAuth Client Attestation instance key (draft-ietf-oauth-attestation-based-client-auth-04
+    /// §3.1) - generated once, reused for the account's lifetime. The
+    /// backend's Wallet Instance Attestation tracks/revokes instances by this
+    /// key's JWK thumbprint, so a different key each time would silently
+    /// register a new "instance" on every flow.
+    var instanceKeyId: String? { get set }
+
     var hasSession: Bool { get }
 
     /// Clear the active account's session data only.
@@ -69,6 +78,7 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public var credentialId: String? { get { get("credentialId") } set { set("credentialId", newValue) } }
     public var privateDataJwe: String? { get { get("privateDataJwe") } set { set("privateDataJwe", newValue) } }
     public var privateDataEtag: String? { get { get("privateDataEtag") } set { set("privateDataEtag", newValue) } }
+    public var instanceKeyId: String? { get { get("instanceKeyId") } set { set("instanceKeyId", newValue) } }
 
     public var hasSession: Bool { userId != nil }
 

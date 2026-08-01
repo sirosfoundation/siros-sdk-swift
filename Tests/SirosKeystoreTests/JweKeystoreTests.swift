@@ -97,6 +97,41 @@ final class JweKeystoreTests: XCTestCase {
         XCTAssertEqual(payload?["nonce"] as? String, "test-nonce-123")
     }
 
+    func testGenerateKeyProofBuildsValidPopJwt() async throws {
+        let keystore = JweKeystore()
+        try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+        let keyId = try await keystore.generateKey()
+
+        let jwt = try await keystore.generateKeyProof(
+            keyId: keyId,
+            typ: "oauth-client-attestation-pop+jwt",
+            audience: "https://wallet-backend.example.com",
+            extraClaims: ["nonce": "challenge-abc"]
+        )
+
+        let header = JwtHelpers.parseJwtHeader(jwt)
+        XCTAssertEqual(header?["typ"] as? String, "oauth-client-attestation-pop+jwt")
+        XCTAssertNotNil(header?["jwk"])
+
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertEqual(claims?["aud"] as? String, "https://wallet-backend.example.com")
+        XCTAssertEqual(claims?["nonce"] as? String, "challenge-abc")
+        XCTAssertNotNil(claims?["iss"])
+        XCTAssertNotNil(claims?["exp"])
+    }
+
+    func testGenerateKeyProofThrowsForUnknownKeyId() async throws {
+        let keystore = JweKeystore()
+        try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+
+        do {
+            _ = try await keystore.generateKeyProof(keyId: "does-not-exist", typ: "x", audience: "aud", extraClaims: [:])
+            XCTFail("expected keyNotFound")
+        } catch KeystoreError.keyNotFound {
+            // expected
+        }
+    }
+
     func testSignPresentationProducesJwt() async throws {
         let keystore = JweKeystore()
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)

@@ -283,16 +283,27 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     // MARK: - Client → Server messages
 
     /// Start an OID4VCI credential issuance flow.
+    ///
+    /// - Parameters:
+    ///   - clientAttestation: optional Wallet Instance Attestation JWT (OAuth
+    ///     Client Attestation, draft-ietf-oauth-attestation-based-client-auth-04
+    ///     §3.1) - see `FlowStartMessage.clientAttestation`.
+    ///   - clientAttestationPoP: the matching per-flow PoP JWT, required
+    ///     whenever `clientAttestation` is set.
     public func startIssuance(
         offer: String? = nil,
         credentialOfferUri: String? = nil,
-        redirectUri: String? = nil
+        redirectUri: String? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil
     ) {
         send(FlowStartMessage(
             protocol: "oid4vci",
             offer: offer,
             credentialOfferUri: credentialOfferUri,
-            redirectUri: redirectUri
+            redirectUri: redirectUri,
+            clientAttestation: clientAttestation,
+            clientAttestationPoP: clientAttestationPoP
         ))
     }
 

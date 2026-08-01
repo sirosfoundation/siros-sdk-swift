@@ -139,6 +139,59 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertNil(claims?["user_authentication"])
     }
 
+    // MARK: - generateKeyProof
+
+    func testGenerateKeyProofBuildsValidPopJwt() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+
+        let jwt = try await adapter.generateKeyProof(
+            keyId: "test-key-1",
+            typ: "oauth-client-attestation-pop+jwt",
+            audience: "https://wallet-backend.example.com",
+            extraClaims: ["nonce": "challenge-abc"]
+        )
+
+        let header = JwtHelpers.parseJwtHeader(jwt)
+        XCTAssertEqual(header?["typ"] as? String, "oauth-client-attestation-pop+jwt")
+        XCTAssertEqual(header?["alg"] as? String, "ES256")
+        XCTAssertNotNil(header?["jwk"])
+
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertEqual(claims?["aud"] as? String, "https://wallet-backend.example.com")
+        XCTAssertEqual(claims?["nonce"] as? String, "challenge-abc")
+        XCTAssertNotNil(claims?["iss"])
+        XCTAssertNotNil(claims?["iat"])
+        XCTAssertNotNil(claims?["exp"])
+        XCTAssertNotNil(claims?["jti"])
+    }
+
+    func testGenerateKeyProofOmitsExtraClaimsWhenNoneGiven() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+
+        let jwt = try await adapter.generateKeyProof(
+            keyId: "test-key-1",
+            typ: "oauth-client-attestation-pop+jwt",
+            audience: "https://issuer.example.com",
+            extraClaims: [:]
+        )
+
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertNil(claims?["nonce"])
+    }
+
+    func testGenerateKeyProofThrowsForUnknownKeyId() async throws {
+        let adapter = try await unlockedAdapter()
+
+        do {
+            _ = try await adapter.generateKeyProof(keyId: "does-not-exist", typ: "x", audience: "aud", extraClaims: [:])
+            XCTFail("expected keyNotFound")
+        } catch KeystoreError.keyNotFound {
+            // expected
+        }
+    }
+
     // MARK: - signMdocPresentationForDCAPI
 
     private func buildTaggedItem(digestId: UInt64, elementIdentifier: String, elementValue: String) -> CBOR {

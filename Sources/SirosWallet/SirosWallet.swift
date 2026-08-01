@@ -786,6 +786,99 @@ public final class SirosWallet: @unchecked Sendable {
         return try JSONDecoder().decode(IssuerMetadata.self, from: data)
     }
 
+    /// In-memory cache for this session's Wallet Instance Attestation (WIA) -
+    /// refetched when missing or close to expiry (see
+    /// `ensureWalletInstanceAttestation`). Not persisted across app restarts:
+    /// cheap to reissue given a challenge round trip, unlike the instance KEY
+    /// itself (`SessionStoreProtocol.instanceKeyId`), which must stay stable.
+    private var cachedWia: String?
+    private var cachedWiaExpiresAt: Int = 0
+
+    /// Get (creating once, on first use) this wallet installation's persistent
+    /// OAuth Client Attestation instance key ID - see
+    /// `SessionStoreProtocol.instanceKeyId`.
+    private func ensureInstanceKeyId() async throws -> String {
+        if let existing = sessionStore.instanceKeyId {
+            return existing
+        }
+        let keyId = try await keystore.generateKey(algorithm: "ES256")
+        sessionStore.instanceKeyId = keyId
+        return keyId
+    }
+
+    /// Obtain (fetching + caching, refreshing before expiry) a Wallet
+    /// Instance Attestation for this wallet instance from this wallet's own
+    /// backend (draft-ietf-oauth-attestation-based-client-auth-04 §3.1 /
+    /// CS-04 §7.1.2): request a single-use challenge, sign a PoP JWT over it
+    /// with the instance key, and exchange both for a WIA JWT.
+    ///
+    /// Best-effort: returns nil on any failure (network, backend not
+    /// configured for WIA, etc.) rather than throwing - a missing/unavailable
+    /// client attestation must never block issuance, since not every backend
+    /// deployment enables this feature.
+    private func ensureWalletInstanceAttestation() async -> String? {
+        let now = Int(Date().timeIntervalSince1970)
+        if let wia = cachedWia, cachedWiaExpiresAt - now > 60 {
+            return wia
+        }
+        guard let client = apiClient else { return nil }
+        do {
+            let keyId = try await ensureInstanceKeyId()
+            let challengeResponse = try await client.requestWIAChallenge()
+            guard let challenge = challengeResponse["challenge"] as? String else { return nil }
+            let pop = try await keystore.generateKeyProof(
+                keyId: keyId,
+                typ: "oauth-client-attestation-pop+jwt",
+                // Must match the backend's configured wallet_provider_uri, if
+                // it enforces one (WIAService.validatePop only checks aud
+                // when that's non-empty) - the base backend URL is the only
+                // value discoverable client-side without a dedicated endpoint.
+                audience: config.backendUrl,
+                extraClaims: ["nonce": challenge]
+            )
+            let wia = try await client.generateWIA(pop: pop, challenge: challenge)
+            cachedWia = wia
+            cachedWiaExpiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
+            return wia
+        } catch {
+            return nil
+        }
+    }
+
+    /// Resolve OAuth Client Attestation (a WIA plus a fresh per-flow PoP) for
+    /// an issuance flow targeting `issuerUrl` - the pair the engine forwards
+    /// as `OAuth-Client-Attestation`/`OAuth-Client-Attestation-PoP` headers to
+    /// the credential issuer.
+    ///
+    /// The PoP's `aud` targets the issuer's own authorization server if
+    /// discoverable from its metadata, falling back to the credential issuer
+    /// URL itself for issuers that self-host their AS at the same origin.
+    ///
+    /// Best-effort: returns nil on any failure - missing/misconfigured WIA
+    /// support must never block issuance itself.
+    private func resolveClientAttestation(issuerUrl: String) async -> (String, String)? {
+        guard let wia = await ensureWalletInstanceAttestation() else { return nil }
+        do {
+            let asUrl: String
+            if let metadata = try? await fetchIssuerMetadata(issuerUrl: issuerUrl),
+               let server = metadata.authorizationServers?.first(where: { !$0.isEmpty }) {
+                asUrl = server
+            } else {
+                asUrl = issuerUrl
+            }
+            let keyId = try await ensureInstanceKeyId()
+            let pop = try await keystore.generateKeyProof(
+                keyId: keyId,
+                typ: "oauth-client-attestation-pop+jwt",
+                audience: asUrl,
+                extraClaims: [:]
+            )
+            return (wia, pop)
+        } catch {
+            return nil
+        }
+    }
+
     /// Start issuance with a credential offer object.
     public func startIssuanceByOffer(_ offer: CredentialOffer) async throws {
         guard let engine = engineSession else {
@@ -827,9 +920,12 @@ public final class SirosWallet: @unchecked Sendable {
             offerJson = "{}"
         }
 
+        let clientAttestation = await resolveClientAttestation(issuerUrl: offer.credentialIssuerIdentifier)
         engine.startIssuance(
             offer: offerJson,
-            redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri
+            redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
+            clientAttestation: clientAttestation?.0,
+            clientAttestationPoP: clientAttestation?.1
         )
     }
 
@@ -847,10 +943,20 @@ public final class SirosWallet: @unchecked Sendable {
             )
             lock.lock(); activeVctm = vctm; lock.unlock()
         }
+        // Resolve OAuth Client Attestation once, independent of whether the
+        // display-metadata resolution above succeeded - a client that can't
+        // be shown a name/logo should still get an attestation attached.
+        var attestation: String?
+        var attestationPoP: String?
+        if let header = await extractOfferHeader(offerUri),
+           let pair = await resolveClientAttestation(issuerUrl: header.credentialIssuer) {
+            attestation = pair.0
+            attestationPoP = pair.1
+        }
         if offerUri.hasPrefix("openid-credential-offer://") {
             // Deep-link URI with inline offer - send as "offer" so the engine
             // extracts the credential_offer query parameter instead of HTTP-fetching.
-            engine.startIssuance(offer: offerUri)
+            engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
         } else if offerUri.hasPrefix("http") {
             // Universal-link-style offer: the credential_offer/credential_offer_uri
             // live in the URI's own query string (e.g. an issuer's wallet-redirect
@@ -862,14 +968,14 @@ public final class SirosWallet: @unchecked Sendable {
                 queryItems.first(where: { $0.name == name })?.value
             }
             if let credentialOffer = queryValue("credential_offer") {
-                engine.startIssuance(offer: credentialOffer)
+                engine.startIssuance(offer: credentialOffer, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
             } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                engine.startIssuance(credentialOfferUri: credentialOfferUri)
+                engine.startIssuance(credentialOfferUri: credentialOfferUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
             } else {
-                engine.startIssuance(credentialOfferUri: offerUri)
+                engine.startIssuance(credentialOfferUri: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
             }
         } else {
-            engine.startIssuance(offer: offerUri)
+            engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
         }
     }
 

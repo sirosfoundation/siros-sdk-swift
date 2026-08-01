@@ -48,5 +48,20 @@ enum JwtHelpers {
         return try? JSONSerialization.jsonObject(with: headerData) as? [String: Any]
     }
 
+    /// Compute the RFC 7638 JWK Thumbprint of an EC public JWK: SHA-256 over
+    /// `{"crv":...,"kty":...,"x":...,"y":...}` in lexicographic member order
+    /// with no insignificant whitespace, base64url-encoded.
+    static func jwkThumbprint(_ jwk: [String: Any]) -> String? {
+        guard let crv = jwk["crv"] as? String,
+              let kty = jwk["kty"] as? String,
+              let x = jwk["x"] as? String,
+              let y = jwk["y"] as? String else {
+            return nil
+        }
+        let canonical = "{\"crv\":\"\(crv)\",\"kty\":\"\(kty)\",\"x\":\"\(x)\",\"y\":\"\(y)\"}"
+        let digest = SHA256.hash(data: Data(canonical.utf8))
+        return EncryptedContainer.base64UrlEncode(Data(digest))
+    }
+
     #endif
 }

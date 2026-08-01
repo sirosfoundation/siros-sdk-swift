@@ -120,6 +120,46 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         return "\(signingInput).\(sigB64)"
     }
 
+    public func generateKeyProof(
+        keyId: String,
+        typ: String,
+        audience: String,
+        extraClaims: [String: String]
+    ) async throws -> String {
+        try checkUnlocked()
+        let keys = try await signer.listKeys()
+        guard let key = keys.first(where: { $0.keyId == keyId }) else {
+            throw KeystoreError.keyNotFound("Key not found: \(keyId)")
+        }
+        let pubKeyData = try await signer.exportPublicKey(keyId: keyId)
+        let pubKeyJwk = try jsonDict(from: pubKeyData)
+        guard let jkt = JwtHelpers.jwkThumbprint(pubKeyJwk) else {
+            throw KeystoreError.invalidParameter("Failed to compute JWK thumbprint")
+        }
+
+        let header = JwtHelpers.jsonBase64Url([
+            "alg": algorithmJoseId(key.algorithm),
+            "typ": typ,
+            "jwk": pubKeyJwk,
+        ] as [String: Any])
+
+        let now = Int(Date().timeIntervalSince1970)
+        var claimsDict: [String: Any] = [
+            "iss": jkt,
+            "aud": audience,
+            "iat": now,
+            "exp": now + 5 * 60,
+            "jti": UUID().uuidString.lowercased(),
+        ]
+        for (k, v) in extraClaims { claimsDict[k] = v }
+        let claims = JwtHelpers.jsonBase64Url(claimsDict)
+
+        let signingInput = "\(header).\(claims)"
+        let signature = try await signer.sign(keyId: keyId, data: Data(signingInput.utf8))
+        let sigB64 = EncryptedContainer.base64UrlEncode(signature)
+        return "\(signingInput).\(sigB64)"
+    }
+
     public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()

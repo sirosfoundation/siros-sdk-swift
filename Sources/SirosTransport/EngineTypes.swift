@@ -69,6 +69,17 @@ public struct FlowStartMessage: Codable, Sendable {
     public var redirectUri: String?
     public var authCode: String?
     public var codeVerifier: String?
+    /// OAuth Client Attestation (draft-ietf-oauth-attestation-based-client-auth-04
+    /// §3.1): a Wallet Instance Attestation JWT (`typ: oauth-client-attestation+jwt`)
+    /// obtained from this wallet's own backend (`/wallet-provider/wia/generate`).
+    /// Forwarded by go-wallet-backend as the `OAuth-Client-Attestation` HTTP
+    /// header on PAR/token requests to the credential issuer.
+    public var clientAttestation: String?
+    /// The matching PoP JWT (`typ: oauth-client-attestation-pop+jwt`), freshly
+    /// signed per flow with `aud` = the credential issuer's own authorization
+    /// server, proving possession of the instance key the WIA above is bound
+    /// to (`cnf.jwk`/`cnf.jkt`). Forwarded as `OAuth-Client-Attestation-PoP`.
+    public var clientAttestationPoP: String?
     public var timestamp: String?
 
     public init(
@@ -82,6 +93,8 @@ public struct FlowStartMessage: Codable, Sendable {
         redirectUri: String? = nil,
         authCode: String? = nil,
         codeVerifier: String? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil,
         timestamp: String? = nil
     ) {
         self.type = type
@@ -94,6 +107,8 @@ public struct FlowStartMessage: Codable, Sendable {
         self.redirectUri = redirectUri
         self.authCode = authCode
         self.codeVerifier = codeVerifier
+        self.clientAttestation = clientAttestation
+        self.clientAttestationPoP = clientAttestationPoP
         self.timestamp = timestamp
     }
 
@@ -105,6 +120,8 @@ public struct FlowStartMessage: Codable, Sendable {
         case redirectUri = "redirect_uri"
         case authCode = "auth_code"
         case codeVerifier = "code_verifier"
+        case clientAttestation = "client_attestation"
+        case clientAttestationPoP = "client_attestation_pop"
     }
 }
 
