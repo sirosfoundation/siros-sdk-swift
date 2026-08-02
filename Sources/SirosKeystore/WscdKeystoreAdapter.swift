@@ -123,6 +123,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
     public func generateKeyProof(
         keyId: String,
         typ: String,
+        issuer: String,
         audience: String,
         extraClaims: [String: String]
     ) async throws -> String {
@@ -133,9 +134,6 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         }
         let pubKeyData = try await signer.exportPublicKey(keyId: keyId)
         let pubKeyJwk = try jsonDict(from: pubKeyData)
-        guard let jkt = JwtHelpers.jwkThumbprint(pubKeyJwk) else {
-            throw KeystoreError.invalidParameter("Failed to compute JWK thumbprint")
-        }
 
         let header = JwtHelpers.jsonBase64Url([
             "alg": algorithmJoseId(key.algorithm),
@@ -145,7 +143,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
 
         let now = Int(Date().timeIntervalSince1970)
         var claimsDict: [String: Any] = [
-            "iss": jkt,
+            "iss": issuer,
             "aud": audience,
             "iat": now,
             "exp": now + 5 * 60,

@@ -194,15 +194,25 @@ public final class BackendApiClient: @unchecked Sendable {
     ///   - challenge: The challenge nonce from requestWIAChallenge().
     ///   - nativeAttestation: Optional platform attestation evidence.
     /// - Returns: WIA JWT string.
+    /// - Parameters:
+    ///   - clientId: this wallet's OAuth client_id (e.g. its redirect_uri, per
+    ///     OID4VCI's unregistered-client convention) - embedded as the WIA JWT's
+    ///     `sub` claim. draft-ietf-oauth-attestation-based-client-auth-10 requires
+    ///     "the sub claim MUST specify client_id value of the OAuth Client";
+    ///     omitting this falls back to the instance identifier (jkt) server-side.
     public func generateWIA(
         pop: String,
         challenge: String,
+        clientId: String? = nil,
         nativeAttestation: [String: Any]? = nil
     ) async throws -> String {
         var body: [String: Any] = [
             "pop": pop,
             "challenge": challenge,
         ]
+        if let clientId, !clientId.isEmpty {
+            body["client_id"] = clientId
+        }
         if let native = nativeAttestation {
             body["native_attestation"] = native
         }

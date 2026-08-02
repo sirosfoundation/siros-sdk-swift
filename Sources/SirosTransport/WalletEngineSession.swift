@@ -437,12 +437,21 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// the original flow_id, which is not guaranteed to still be alive after
     /// the redirect round-trip. Mirrors the wallet-backend's
     /// `resumeWithAuthCode` contract already used by the web client.
+    /// - Parameters:
+    ///   - clientAttestation/clientAttestationPoP: OAuth Client Attestation
+    ///     for the resumed flow - go-wallet-backend's `Execute()` sets up its
+    ///     attestation provider identically regardless of whether this is a
+    ///     fresh flow or a resume (the setup runs before branching on
+    ///     `msg.AuthCode`), so this is just as meaningful here as on the
+    ///     original `startIssuance` call - see `FlowStartMessage.clientAttestation`.
     public func resumeIssuance(
         offer: String? = nil,
         credentialOfferUri: String? = nil,
         redirectUri: String? = nil,
         authCode: String,
-        codeVerifier: String? = nil
+        codeVerifier: String? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil
     ) {
         send(FlowStartMessage(
             protocol: "oid4vci",
@@ -450,7 +459,9 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             credentialOfferUri: credentialOfferUri,
             redirectUri: redirectUri,
             authCode: authCode,
-            codeVerifier: codeVerifier
+            codeVerifier: codeVerifier,
+            clientAttestation: clientAttestation,
+            clientAttestationPoP: clientAttestationPoP
         ))
     }
 

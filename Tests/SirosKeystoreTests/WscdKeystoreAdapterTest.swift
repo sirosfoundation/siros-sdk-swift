@@ -148,6 +148,7 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         let jwt = try await adapter.generateKeyProof(
             keyId: "test-key-1",
             typ: "oauth-client-attestation-pop+jwt",
+            issuer: "siros-sample://callback",
             audience: "https://wallet-backend.example.com",
             extraClaims: ["nonce": "challenge-abc"]
         )
@@ -160,7 +161,7 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         let claims = JwtHelpers.parseJwtPayload(jwt)
         XCTAssertEqual(claims?["aud"] as? String, "https://wallet-backend.example.com")
         XCTAssertEqual(claims?["nonce"] as? String, "challenge-abc")
-        XCTAssertNotNil(claims?["iss"])
+        XCTAssertEqual(claims?["iss"] as? String, "siros-sample://callback")
         XCTAssertNotNil(claims?["iat"])
         XCTAssertNotNil(claims?["exp"])
         XCTAssertNotNil(claims?["jti"])
@@ -173,6 +174,7 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         let jwt = try await adapter.generateKeyProof(
             keyId: "test-key-1",
             typ: "oauth-client-attestation-pop+jwt",
+            issuer: "siros-sample://callback",
             audience: "https://issuer.example.com",
             extraClaims: [:]
         )
@@ -185,7 +187,7 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         let adapter = try await unlockedAdapter()
 
         do {
-            _ = try await adapter.generateKeyProof(keyId: "does-not-exist", typ: "x", audience: "aud", extraClaims: [:])
+            _ = try await adapter.generateKeyProof(keyId: "does-not-exist", typ: "x", issuer: "iss", audience: "aud", extraClaims: [:])
             XCTFail("expected keyNotFound")
         } catch KeystoreError.keyNotFound {
             // expected

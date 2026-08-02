@@ -105,6 +105,7 @@ final class JweKeystoreTests: XCTestCase {
         let jwt = try await keystore.generateKeyProof(
             keyId: keyId,
             typ: "oauth-client-attestation-pop+jwt",
+            issuer: "siros-sample://callback",
             audience: "https://wallet-backend.example.com",
             extraClaims: ["nonce": "challenge-abc"]
         )
@@ -116,7 +117,7 @@ final class JweKeystoreTests: XCTestCase {
         let claims = JwtHelpers.parseJwtPayload(jwt)
         XCTAssertEqual(claims?["aud"] as? String, "https://wallet-backend.example.com")
         XCTAssertEqual(claims?["nonce"] as? String, "challenge-abc")
-        XCTAssertNotNil(claims?["iss"])
+        XCTAssertEqual(claims?["iss"] as? String, "siros-sample://callback")
         XCTAssertNotNil(claims?["exp"])
     }
 
@@ -125,7 +126,7 @@ final class JweKeystoreTests: XCTestCase {
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
 
         do {
-            _ = try await keystore.generateKeyProof(keyId: "does-not-exist", typ: "x", audience: "aud", extraClaims: [:])
+            _ = try await keystore.generateKeyProof(keyId: "does-not-exist", typ: "x", issuer: "iss", audience: "aud", extraClaims: [:])
             XCTFail("expected keyNotFound")
         } catch KeystoreError.keyNotFound {
             // expected

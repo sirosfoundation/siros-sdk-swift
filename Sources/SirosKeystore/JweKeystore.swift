@@ -208,6 +208,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     public func generateKeyProof(
         keyId: String,
         typ: String,
+        issuer: String,
         audience: String,
         extraClaims: [String: String]
     ) async throws -> String {
@@ -219,9 +220,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             throw KeystoreError.keyNotFound("Key not found: \(keyId)")
         }
         let pubJwk = JwtHelpers.publicKeyJwk(key)
-        guard let jkt = JwtHelpers.jwkThumbprint(pubJwk) else {
-            throw KeystoreError.invalidParameter("Failed to compute JWK thumbprint")
-        }
 
         let header = JwtHelpers.jsonBase64Url([
             "alg": "ES256",
@@ -231,7 +229,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
 
         let now = Int(Date().timeIntervalSince1970)
         var claimsDict: [String: Any] = [
-            "iss": jkt,
+            "iss": issuer,
             "aud": audience,
             "iat": now,
             "exp": now + 5 * 60,
