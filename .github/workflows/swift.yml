@@ -18,6 +18,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
       - name: Build & Test with Coverage
         run: swift test --parallel --enable-code-coverage
       - name: Check coverage gate
@@ -61,6 +63,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
       - name: Build for iOS Simulator
         run: |
           swift build \
@@ -85,6 +89,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Run SwiftLint
@@ -95,6 +101,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
       - name: Build DocC documentation
         run: |
           for target in SirosWallet SirosTransport SirosAuth SirosKeystore SirosFlow SirosCredentials; do
