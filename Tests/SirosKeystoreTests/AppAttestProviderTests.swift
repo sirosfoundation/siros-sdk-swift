@@ -32,21 +32,41 @@ private final class FakeAppAttestService: AppAttestServiceProviding, @unchecked 
     }
 }
 
+/// A locked box for `String?` - the `loadPersistedKeyId`/`savePersistedKeyId`
+/// closures injected into `AppAttestProvider` are `@Sendable`, so a plain
+/// captured `var` triggers a real Swift 6 concurrency error (not just a
+/// style nit); this gives the closures a genuinely thread-safe place to
+/// read/write.
+private final class KeyIdBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    func get() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ newValue: String) {
+        lock.lock(); defer { lock.unlock() }
+        value = newValue
+    }
+}
+
 final class AppAttestProviderTests: XCTestCase {
 
     func testGenerateEvidenceGeneratesAndPersistsKeyWhenNoneExists() async throws {
         let service = FakeAppAttestService()
-        var persistedKeyId: String?
+        let persistedKeyId = KeyIdBox()
         let provider = AppAttestProvider(
             service: service,
-            loadPersistedKeyId: { persistedKeyId },
-            savePersistedKeyId: { persistedKeyId = $0 }
+            loadPersistedKeyId: { persistedKeyId.get() },
+            savePersistedKeyId: { persistedKeyId.set($0) }
         )
 
         let evidence = try await provider.generateEvidence(challenge: "chal-1", keyId: "wscd-instance-key-1")
 
         XCTAssertEqual(service.generateKeyCallCount, 1)
-        XCTAssertEqual(persistedKeyId, service.generatedKeyId)
+        XCTAssertEqual(persistedKeyId.get(), service.generatedKeyId)
         XCTAssertEqual(service.attestKeyCalls.count, 1)
         XCTAssertEqual(service.attestKeyCalls[0].keyId, service.generatedKeyId)
         XCTAssertEqual(evidence.type, "apple_app_attest")
@@ -86,11 +106,11 @@ final class AppAttestProviderTests: XCTestCase {
             }
             func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data { Data() }
         }
-        var persistedKeyId: String?
+        let persistedKeyId = KeyIdBox()
         let provider = AppAttestProvider(
             service: FailingService(),
-            loadPersistedKeyId: { persistedKeyId },
-            savePersistedKeyId: { persistedKeyId = $0 }
+            loadPersistedKeyId: { persistedKeyId.get() },
+            savePersistedKeyId: { persistedKeyId.set($0) }
         )
 
         do {
@@ -103,7 +123,7 @@ final class AppAttestProviderTests: XCTestCase {
         // The key was generated and persisted before the attestation step
         // failed - a real App Attest key was actually created, so it must
         // stay persisted for reuse rather than being silently dropped.
-        XCTAssertEqual(persistedKeyId, "some-key-id")
+        XCTAssertEqual(persistedKeyId.get(), "some-key-id")
     }
 }
 
