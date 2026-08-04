@@ -85,6 +85,10 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         get { read("instanceKeyId") }
         set { write("instanceKeyId", newValue) }
     }
+    public var appAttestKeyId: String? {
+        get { read("appAttestKeyId") }
+        set { write("appAttestKeyId", newValue) }
+    }
 
     public var hasSession: Bool { userId != nil }
 
@@ -96,7 +100,7 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         let keys = ["appToken", "refreshToken", "userId", "displayName",
                     "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
                     "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag",
-                    "instanceKeyId"]
+                    "instanceKeyId", "appAttestKeyId"]
         lock.lock(); defer { lock.unlock() }
         for key in keys {
             let scopedKey = "\(id)/\(key)"

@@ -32,6 +32,12 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     /// register a new "instance" on every flow.
     var instanceKeyId: String? { get set }
 
+    /// This install's persisted Apple App Attest key ID (see
+    /// `AppAttestProvider`), if one has been generated - App Attest keys
+    /// are generated exactly once per install and reused forever after, so
+    /// this must persist across app launches the same way `instanceKeyId` does.
+    var appAttestKeyId: String? { get set }
+
     var hasSession: Bool { get }
 
     /// Clear the active account's session data only.
@@ -79,6 +85,7 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public var privateDataJwe: String? { get { get("privateDataJwe") } set { set("privateDataJwe", newValue) } }
     public var privateDataEtag: String? { get { get("privateDataEtag") } set { set("privateDataEtag", newValue) } }
     public var instanceKeyId: String? { get { get("instanceKeyId") } set { set("instanceKeyId", newValue) } }
+    public var appAttestKeyId: String? { get { get("appAttestKeyId") } set { set("appAttestKeyId", newValue) } }
 
     public var hasSession: Bool { userId != nil }
 
