@@ -2,11 +2,13 @@
 
 import Foundation
 
-/// Android-only enrichment fields (flowId/verifierName/credentialNames/
-/// requestedClaims/success) are NOT persisted into the encrypted container -
-/// they mirror StoredCredential's own metadata/issuedAt/expiresAt precedent
-/// of client-local, non-normative data layered on top of the privatedata-spec
-/// shape (id/credentialIds/timestamp, matching S.presentations[]).
+/// The privatedata-spec's own `S.presentations[]` shape only normatively
+/// defines `id`/`credentialIds`/`timestamp`; the remaining fields
+/// (flowId/verifierName/credentialNames/requestedClaims/success) are
+/// client-local enrichment layered on top, mirroring `StoredCredential`'s own
+/// metadata/issuedAt/expiresAt precedent. They ARE persisted (see
+/// `CodingKeys` below) into this client's own encrypted container - other
+/// clients reading the same container simply don't populate or rely on them.
 public struct PresentationRecord: Codable, Sendable, Equatable, Identifiable {
     public let id: Int64
     public let flowId: String

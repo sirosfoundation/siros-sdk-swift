@@ -393,7 +393,11 @@ public enum CredentialUtils {
         }
     }
 
-    private static func base64UrlDecode(_ string: String) -> Data? {
+    /// Decode a base64url (no padding) string, restoring the `=` padding
+    /// `Data(base64Encoded:)` requires - a bare `-`/`_` substitution without
+    /// restoring padding silently returns nil for any input whose length
+    /// isn't already a multiple of 4.
+    public static func base64UrlDecode(_ string: String) -> Data? {
         var base64 = string
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")

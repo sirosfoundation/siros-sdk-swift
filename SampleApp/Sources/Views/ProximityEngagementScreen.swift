@@ -189,27 +189,39 @@ struct ProximityEngagementScreen: View {
             viewModel.filterEligibleForProximity(instances)
         }
 
+        // `onStep`/`onComplete` are invoked from `BlePeripheralServer`/
+        // `BleCentralClient`'s own async Task contexts (kicked off from
+        // CoreBluetooth delegate callbacks), which are NOT MainActor-isolated
+        // - a real Copilot-review finding: after an `await` inside those
+        // Tasks, execution can resume on a background thread, so mutating
+        // `@State` directly here can trigger "Publishing changes from
+        // background threads" and undefined SwiftUI behavior. Hop each
+        // mutation onto the main actor explicitly rather than relying on the
+        // caller's thread.
         peripheralServer = BlePeripheralServer(
             engagement: engagement,
             getCredentials: getCredentials,
             signPresentation: signPresentation,
             requestConsent: requestConsent,
             filterEligible: filterEligible,
-            onStep: { step in currentStep = step },
+            onStep: { step in Task { @MainActor in currentStep = step } },
             onLog: { message in print("[BlePeripheralServer] \(message)") },
             onComplete: { success in
-                peripheralOutcome = success
-                if success {
-                    // Whichever mode the reader actually picked has now
-                    // finished - the other is just wasting radio time
-                    // scanning/advertising for a connection that will never
-                    // come, so stop it.
-                    central?.stop()
-                    result = true
-                } else if centralOutcome != nil {
-                    // Only report terminal failure once the OTHER role has
-                    // also finished/failed - it may yet succeed on its own.
-                    result = false
+                Task { @MainActor in
+                    peripheralOutcome = success
+                    if success {
+                        // Whichever mode the reader actually picked has now
+                        // finished - the other is just wasting radio time
+                        // scanning/advertising for a connection that will
+                        // never come, so stop it.
+                        central?.stop()
+                        result = true
+                    } else if centralOutcome != nil {
+                        // Only report terminal failure once the OTHER role
+                        // has also finished/failed - it may yet succeed on
+                        // its own.
+                        result = false
+                    }
                 }
             }
         )
@@ -219,15 +231,17 @@ struct ProximityEngagementScreen: View {
             signPresentation: signPresentation,
             requestConsent: requestConsent,
             filterEligible: filterEligible,
-            onStep: { step in currentStep = step },
+            onStep: { step in Task { @MainActor in currentStep = step } },
             onLog: { message in print("[BleCentralClient] \(message)") },
             onComplete: { success in
-                centralOutcome = success
-                if success {
-                    peripheralServer?.stop()
-                    result = true
-                } else if peripheralOutcome != nil {
-                    result = false
+                Task { @MainActor in
+                    centralOutcome = success
+                    if success {
+                        peripheralServer?.stop()
+                        result = true
+                    } else if peripheralOutcome != nil {
+                        result = false
+                    }
                 }
             }
         )
@@ -244,17 +258,17 @@ struct ProximityEngagementScreen: View {
     /// Kotlin screen's `suspendCancellableCoroutine` bridge to a Compose
     /// `AlertDialog`.
     ///
-    /// Thread-safety note (Kotlin's fix hopped to `Dispatchers.Main.immediate`
-    /// before touching Compose state, since it's called from BLE coroutines
-    /// running on `Dispatchers.IO`): `BlePeripheralServer`/`BleCentralClient`
-    /// both create their `CBPeripheralManager`/`CBCentralManager` with
-    /// `queue: nil`, so CoreBluetooth's OWN delegate callbacks already
-    /// dispatch on the main queue - there is no background dispatch queue to
-    /// hop off of the way Kotlin's `Dispatchers.IO` requires, and this
-    /// function is always reached via those callbacks (directly, or via a
-    /// plain `Task { ... }` spawned synchronously from one - see
-    /// `BlePeripheralServer.handleDataWrite`), so it already runs on the main
-    /// actor/thread in practice. Nothing further to hop here.
+    /// Thread-safety note: `BlePeripheralServer`/`BleCentralClient` create
+    /// their `CBPeripheralManager`/`CBCentralManager` with `queue: nil`, so
+    /// CoreBluetooth's OWN delegate callbacks are delivered on the main
+    /// queue - but the plain `Task { ... }` spawned from those callbacks
+    /// (see `BlePeripheralServer.handleDataWrite`) is NOT MainActor-isolated,
+    /// so once this function is reached (after several `await`s inside that
+    /// Task - parsing, `getCredentials()`, etc.) execution may already have
+    /// hopped off the main thread, matching a real Copilot-review finding
+    /// against this same pattern in `startProximityEngagement`'s
+    /// `onStep`/`onComplete` closures. Explicitly hop the `@State` mutation
+    /// onto the main actor below rather than assuming thread affinity.
     ///
     /// Cancellation note (Kotlin's fix used `suspendCancellableCoroutine`'s
     /// `invokeOnCancellation` to clear `pendingConsent` and guard `resume()`
@@ -281,21 +295,23 @@ struct ProximityEngagementScreen: View {
         await withCheckedContinuation { (continuation: CheckedContinuation<ProximityConsentResult, Never>) in
             let box = ConsentContinuationBox()
             box.set(continuation)
-            activeConsentBox = box
-            pendingConsent = PendingConsent(
-                docType: docType,
-                requestedClaims: requestedClaims,
-                matchingFamilies: matchingFamilies,
-                respond: { chosen in
-                    // Triggers `.sheet(item:onDismiss:)`'s onDismiss too
-                    // (setting the bound item to nil dismisses the sheet) -
-                    // that's fine: `box.resumeOnce` below already wins the
-                    // race, so onDismiss's own `resumeOnce(.denied)` call is
-                    // a harmless no-op by the time it runs.
-                    pendingConsent = nil
-                    box.resumeOnce(chosen.map { ProximityConsentResult.approved($0) } ?? .denied)
-                }
-            )
+            Task { @MainActor in
+                activeConsentBox = box
+                pendingConsent = PendingConsent(
+                    docType: docType,
+                    requestedClaims: requestedClaims,
+                    matchingFamilies: matchingFamilies,
+                    respond: { chosen in
+                        // Triggers `.sheet(item:onDismiss:)`'s onDismiss too
+                        // (setting the bound item to nil dismisses the sheet) -
+                        // that's fine: `box.resumeOnce` below already wins the
+                        // race, so onDismiss's own `resumeOnce(.denied)` call is
+                        // a harmless no-op by the time it runs.
+                        pendingConsent = nil
+                        box.resumeOnce(chosen.map { ProximityConsentResult.approved($0) } ?? .denied)
+                    }
+                )
+            }
         }
     }
 }

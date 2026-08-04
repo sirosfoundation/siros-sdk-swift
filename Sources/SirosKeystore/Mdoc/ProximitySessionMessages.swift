@@ -44,11 +44,16 @@ public enum ProximitySessionMessages {
         return SessionEstablishment(eReaderKeyBytes: eReaderKey.encode(), encryptedData: data)
     }
 
-    /// Build a `SessionData` message carrying an encrypted mdoc response, optionally with a status code.
+    /// Build a `SessionData` message carrying an encrypted mdoc response,
+    /// optionally with a status code. `status` should be one of the
+    /// non-negative `StatusCode` values below; a negative value can't be
+    /// represented as a CBOR unsigned int and is silently dropped rather
+    /// than trapping (this is a public API - a bad caller-supplied value
+    /// must not crash the process).
     public static func buildSessionData(encryptedData: [UInt8]?, status: Int? = nil) -> [UInt8] {
         var map: [CBOR: CBOR] = [:]
         if let encryptedData { map["data"] = .byteString(encryptedData) }
-        if let status { map["status"] = .unsignedInt(UInt64(status)) }
+        if let status, status >= 0 { map["status"] = .unsignedInt(UInt64(status)) }
         return CBOR.map(map).encode()
     }
 
@@ -115,13 +120,18 @@ public enum BleMessageChunker {
         /// chunks coming" risks an unbounded/garbage reassembly if a
         /// malformed or malicious chunk arrives with e.g. `0xFF` as its
         /// prefix. Do not reintroduce that gap.
+        ///
+        /// `chunk` comes directly off the wire from a BLE peer (reader or
+        /// mdoc), which this process does not control or trust - an empty
+        /// chunk or an invalid prefix byte is discarded and resets the
+        /// in-progress reassembly, rather than trapping the process, since a
+        /// malformed/malicious peer must not be able to crash the app.
         public func feed(_ chunk: [UInt8]) -> [UInt8]? {
-            precondition(!chunk.isEmpty, "chunk must include its continuation-byte prefix")
-            precondition(
-                chunk[0] == 0x00 || chunk[0] == 0x01,
-                "chunk prefix must be 0x00 (last) or 0x01 (more coming), was \(chunk[0])"
-            )
-            let isLast = chunk[0] == 0x00
+            guard let prefix = chunk.first, prefix == 0x00 || prefix == 0x01 else {
+                buffer = []
+                return nil
+            }
+            let isLast = prefix == 0x00
             buffer.append(contentsOf: chunk.dropFirst())
             guard isLast else { return nil }
             let result = buffer

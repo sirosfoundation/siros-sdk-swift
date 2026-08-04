@@ -72,6 +72,22 @@ final class DeepLinkClassifierTests: XCTestCase {
         }
     }
 
+    /// Regression test for a real Copilot-review finding: an OAuth/OIDC
+    /// redirect commonly carries its own `client_id` query param alongside
+    /// `code`/`state` - the auth-callback check must win, or every login
+    /// using such a provider gets misclassified as a presentation request.
+    func testAuthCallbackWinsOverClientIdHeuristic() {
+        let result = DeepLinkClassifier.classify(
+            "https://wallet.example.com/callback?client_id=my-wallet&code=abc&state=xyz"
+        )
+        if case .authCallback(let code, let state) = result {
+            XCTAssertEqual(code, "abc")
+            XCTAssertEqual(state, "xyz")
+        } else {
+            XCTFail("Expected .authCallback, got \(result)")
+        }
+    }
+
     func testUnknownLink() {
         let result = DeepLinkClassifier.classify("https://example.com/")
         if case .unknown = result {

@@ -39,13 +39,18 @@ public enum DeepLinkClassifier {
         if urlString.hasPrefix("openid4vp://") || urlString.hasPrefix("haip://") {
             return .presentationRequest(uri: urlString)
         }
-        if queryValue("request_uri") != nil || queryValue("client_id") != nil {
-            return .presentationRequest(uri: urlString)
-        }
 
-        // Auth callback — has code + state
+        // Auth callback — has code + state. Checked before the broader
+        // client_id/request_uri heuristic below: an OAuth/OIDC redirect URL
+        // commonly carries its own client_id query param, which would
+        // otherwise be misclassified as a presentation request and break
+        // login.
         if let code = queryValue("code"), let state = queryValue("state") {
             return .authCallback(code: code, state: state)
+        }
+
+        if queryValue("request_uri") != nil || queryValue("client_id") != nil {
+            return .presentationRequest(uri: urlString)
         }
 
         return .unknown(uri: urlString)

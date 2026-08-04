@@ -752,10 +752,9 @@ public final class SirosWallet: @unchecked Sendable {
         guard eligible.contains(where: { $0.id == credentialId }) else {
             throw SirosError.wallet(message: "No eligible copies of this credential remain - renew it to get more")
         }
-        let credBytes = Data(base64Encoded: credential.raw
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        ) ?? Data()
+        guard let credBytes = CredentialUtils.base64UrlDecode(credential.raw) else {
+            throw SirosError.wallet(message: "Credential \(credentialId) has malformed base64url raw data")
+        }
         let response = try await keystore.signMdocPresentationForProximity(
             credentialBytes: credBytes,
             disclosedClaims: disclosedClaims,
@@ -1855,10 +1854,9 @@ public final class SirosWallet: @unchecked Sendable {
 
                         if cred.format == "mso_mdoc" {
                             // mDoc DeviceResponse (ISO 18013-5)
-                            let credBytes = Data(base64Encoded: cred.raw
-                                .replacingOccurrences(of: "-", with: "+")
-                                .replacingOccurrences(of: "_", with: "/")
-                            ) ?? Data()
+                            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+                            }
                             let deviceResponse = try await keystore.signMdocPresentation(
                                 credentialBytes: credBytes,
                                 disclosedClaims: ref.disclosedClaims,

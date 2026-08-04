@@ -35,6 +35,16 @@ final class ProximitySessionMessagesTests: XCTestCase {
         XCTAssertEqual(status, 20)
     }
 
+    /// Regression coverage for a real Copilot-review finding: `status` is a
+    /// public-API `Int?`, and `UInt64(status)` traps on a negative value.
+    /// A bad caller-supplied status must be dropped, not crash the process.
+    func testBuildSessionData_negativeStatus_omitsStatusWithoutCrashing() throws {
+        let bytes = ProximitySessionMessages.buildSessionData(encryptedData: nil, status: -1)
+
+        let decoded = try CBOR.decode(bytes)
+        XCTAssertNil(decoded?["status"])
+    }
+
     func testParseSessionEstablishment_extractsEReaderKeyAndData() throws {
         let eReaderKey: CBOR = .tagged(.encodedCBORDataItem, .byteString(CBOR.map([.unsignedInt(1): .unsignedInt(2)]).encode()))
         let map: CBOR = .map([
@@ -157,18 +167,27 @@ final class BleMessageChunkerTests: XCTestCase {
     /// Regression coverage for the Copilot-review fix ported from the
     /// Kotlin SDK (`BleMessageChunker.Reassembler`, commit `e7d8872`):
     /// `feed` must accept exactly the two valid prefix bytes, 0x00 (last)
-    /// and 0x01 (more coming). The invalid-prefix case (anything else)
-    /// traps via `precondition` rather than throwing - this repo's test
-    /// suite has no existing convention for asserting on a precondition
-    /// trap (no crash-testing harness elsewhere in `Tests/`), so that half
-    /// of the fix is verified by code-review parity with Kotlin's
-    /// `require(chunk[0] == 0x00 || chunk[0] == 0x01) { ... }` rather than
-    /// by an executable test here; this test instead locks down the valid
-    /// boundary so a future change can't narrow it by accident.
+    /// and 0x01 (more coming).
     func testReassembler_acceptsBothValidPrefixBytes() {
         let reassembler = BleMessageChunker.Reassembler()
 
         XCTAssertNil(reassembler.feed([0x01, 1, 2, 3]))
         XCTAssertEqual(reassembler.feed([0x00, 4, 5]), [1, 2, 3, 4, 5])
+    }
+
+    /// Regression coverage for a real Copilot-review finding: `chunk` comes
+    /// directly off the wire from an untrusted BLE peer, so an empty chunk
+    /// or an invalid prefix byte must be discarded gracefully (and reset any
+    /// in-progress reassembly) rather than crashing the process.
+    func testReassembler_discardsEmptyOrInvalidPrefixChunkWithoutCrashing() {
+        let reassembler = BleMessageChunker.Reassembler()
+
+        XCTAssertNil(reassembler.feed([]))
+        XCTAssertNil(reassembler.feed([0xFF, 1, 2, 3]))
+
+        // A subsequent well-formed message still reassembles correctly -
+        // the bad input above must not have left corrupt state behind.
+        XCTAssertNil(reassembler.feed([0x01, 9, 9]))
+        XCTAssertEqual(reassembler.feed([0x00, 8]), [9, 9, 8])
     }
 }
