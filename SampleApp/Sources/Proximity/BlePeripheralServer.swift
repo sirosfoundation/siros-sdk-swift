@@ -11,9 +11,10 @@ import SirosKeystore
 /// characteristics (Table 5: `State`, `Client2Server`, `Server2Client`). The
 /// reader connects as GATT client, writes the `SessionEstablishment` message
 /// (chunked) to `Client2Server`, and this class decrypts the mdoc request,
-/// selects a stored credential via `selectCredential`, signs a
-/// `DeviceResponse` over the ISO 18013-5 proximity session transcript, and
-/// notifies the encrypted `SessionData` response back via `Server2Client`.
+/// offers every matching stored credential family to the user via
+/// `requestConsent`, signs a `DeviceResponse` over the ISO 18013-5 proximity
+/// session transcript, and notifies the encrypted `SessionData` response back
+/// via `Server2Client`.
 ///
 /// Ported from the Kotlin SDK sample app's `BlePeripheralServer.kt`, using
 /// `CoreBluetooth`'s `CBPeripheralManager` instead of Android's
@@ -23,24 +24,21 @@ import SirosKeystore
 /// implementation, not just a scoping note.
 ///
 /// "mdoc central client mode" (this device scanning for and connecting to a
-/// reader's own GATT server) is NOT implemented here, matching the Kotlin
-/// SDK's own scope cut - peripheral-server-mode alone is a complete,
-/// spec-valid BLE data-retrieval option.
+/// reader's own GATT server) is implemented separately in `BleCentralClient`,
+/// which runs alongside this class - see `ProximityEngagementScreen`, which
+/// wires both simultaneously since it isn't known in advance which mode a
+/// given reader will pick.
 ///
-/// No consent UI yet: `selectCredential` defaults to
-/// `BlePeripheralServer.autoSelectFirstMatch`, which auto-presents the first
-/// stored mdoc credential whose real docType matches the request, disclosing
-/// exactly the requested element identifiers. This is a real, deliberate
-/// scope cut (matching the Kotlin SDK), not an oversight - kept as its own
-/// small, swappable closure so a real consent UI can replace it later
-/// without touching the surrounding BLE/GATT plumbing.
+/// Every matching credential FAMILY (see `CredentialFamily`) is offered to
+/// the user via `requestConsent` before signing - no auto-selection.
 ///
-/// UNVERIFIED ON REAL HARDWARE: this class has only been verified by code
-/// review and reasoning about the CoreBluetooth API surface - it has not
-/// been compiled (this repo's Linux dev environment cannot build iOS app
-/// targets at all) or exercised against a real mdoc reader. Test on a real
-/// iOS device against a real reader (e.g. `sirosfoundation/siros-verifier-app`,
-/// Google's `multipaz`, or digital-credentials.dev) before relying on this.
+/// UNVERIFIED ON REAL HARDWARE beyond compiling - this class has only been
+/// verified by code review and reasoning about the CoreBluetooth API
+/// surface - it has not been compiled (this repo's Linux dev environment
+/// cannot build iOS app targets at all) or exercised against a real mdoc
+/// reader. Test on a real iOS device against a real reader (e.g.
+/// `sirosfoundation/siros-verifier-app`, Google's `multipaz`, or
+/// digital-credentials.dev) before relying on this.
 final class BlePeripheralServer: NSObject {
 
     static let stateUUID = CBUUID(string: "00000001-A123-48CE-896B-4C76973373E6")
@@ -57,9 +55,12 @@ final class BlePeripheralServer: NSObject {
     private let getCredentials: () async -> [StoredCredential]
     /// Mirrors `SirosWallet.signMdocPresentationForProximity`.
     private let signPresentation: (_ credentialId: Int64, _ disclosedClaims: [String]?, _ sessionTranscriptBytes: Data) async throws -> Data
-    /// Which credential (if any) to present for an incoming request - see
-    /// this type's doc comment for why this is its own swappable closure.
-    private let selectCredential: (_ credentials: [StoredCredential], _ request: DeviceRequestParser.DocRequest) -> StoredCredential?
+    /// See `RequestProximityConsent`'s doc comment.
+    private let requestConsent: RequestProximityConsent
+    /// Reports a canonical step token (see `FlowProgress.swift`'s proximity
+    /// step list) for driving the same progress-bar UI the issuance/
+    /// presentation flows use.
+    private let onStep: (String) -> Void
     private let onLog: (String) -> Void
     private let onComplete: (_ success: Bool) -> Void
 
@@ -68,36 +69,40 @@ final class BlePeripheralServer: NSObject {
     private var server2ClientCharacteristic: CBMutableCharacteristic?
     private var deviceCipher: ProximitySessionCrypto.SessionCipher?
     private var pendingNotifications: [Data] = []
+    private var completed = false
+    /// Guards `onStep("reader_connected")` firing only once per connection -
+    /// see `peripheralManager(_:central:didSubscribeTo:)`'s doc comment for
+    /// why that callback is used as the "reader connected" signal.
+    private var reportedReaderConnected = false
 
     init(
         engagement: DeviceEngagement.Engagement,
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
-        selectCredential: @escaping ([StoredCredential], DeviceRequestParser.DocRequest) -> StoredCredential? = BlePeripheralServer.autoSelectFirstMatch,
+        requestConsent: @escaping RequestProximityConsent,
+        onStep: @escaping (String) -> Void,
         onLog: @escaping (String) -> Void,
         onComplete: @escaping (Bool) -> Void
     ) {
         self.engagement = engagement
         self.getCredentials = getCredentials
         self.signPresentation = signPresentation
-        self.selectCredential = selectCredential
+        self.requestConsent = requestConsent
+        self.onStep = onStep
         self.onLog = onLog
         self.onComplete = onComplete
         super.init()
     }
 
-    /// Default credential-selection policy: auto-select the first stored
-    /// mdoc credential whose real docType (parsed from its own MSO, not
-    /// display metadata - see `CredentialUtils.parseMdocDocument`) matches
-    /// the request. See this type's doc comment for why this exists as its
-    /// own swappable static function.
-    static func autoSelectFirstMatch(
-        _ credentials: [StoredCredential],
-        _ request: DeviceRequestParser.DocRequest
-    ) -> StoredCredential? {
-        credentials.first { cred in
-            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred.raw)?.docType == request.docType
-        }
+    /// Reports the presentation's outcome exactly once - a signed response
+    /// being sent and the reader's STATE_END write can both resolve to
+    /// "complete" and would otherwise double-report (a real bug found via
+    /// Copilot's automated review on the Kotlin SDK this was ported from,
+    /// fixed in commit `e7d8872`).
+    private func completeOnce(_ success: Bool) {
+        guard !completed else { return }
+        completed = true
+        onComplete(success)
     }
 
     /// Start advertising the mdoc GATT service. Actual service registration
@@ -124,7 +129,7 @@ final class BlePeripheralServer: NSObject {
             onLog("Reader signaled End")
             let completedOk = deviceCipher != nil
             stop()
-            onComplete(completedOk)
+            completeOnce(completedOk)
         default:
             break
         }
@@ -141,12 +146,33 @@ final class BlePeripheralServer: NSObject {
                 }
             } catch {
                 onLog("Presentation failed: \(error.localizedDescription)")
-                onComplete(false)
+                completeOnce(false)
             }
         }
     }
 
+    /// Decrypts the incoming `SessionEstablishment`, matches stored
+    /// credential families against the request, asks the user for consent,
+    /// and signs/sends the response.
+    ///
+    /// Unlike the Kotlin SDK's `BlePeripheralServer.kt` (fixed in commit
+    /// `75e4d61` after `e7d8872` initially got it wrong), this does NOT try
+    /// both a QR-handover (`Handover = nil`) and an NFC-static-handover
+    /// SessionTranscript variant when deriving session keys. That retry
+    /// exists on Android because the SAME BLE service is reachable via both
+    /// a scanned QR code and a physical NFC tap served by
+    /// `MdocHostApduService`, and the BLE layer alone can't tell which one a
+    /// given reader used. iOS has no `MdocHostApduService` equivalent -
+    /// third-party apps cannot emulate an NFC Type 4 Tag / act as an HCE
+    /// host (see `NfcHandoverSelect`'s doc comment) - so this engagement is
+    /// NEVER actually reachable via NFC static handover on iOS. There is
+    /// only one possible `Handover` value a real reader could have used
+    /// (`nil`, the QR variant), so there is no ambiguity to retry against.
+    /// This was evaluated deliberately, not missed - do not add a
+    /// multi-candidate retry loop here unless iOS gains a way to actually
+    /// serve NFC static handover.
     private func handleSessionEstablishment(_ message: [UInt8], central: CBCentral) async throws {
+        onStep("parsing_request")
         let established = try ProximitySessionMessages.parseSessionEstablishment(message)
         let eReaderPublicKey = try ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
         let sessionTranscript = try ProximitySessionTranscript.build(
@@ -166,22 +192,48 @@ final class BlePeripheralServer: NSObject {
         let docRequests = try DeviceRequestParser.parse(requestBytes)
         guard let docRequest = docRequests.first else {
             onLog("Request contained no documents")
+            completeOnce(false)
             return
         }
 
+        onStep("match_credentials")
         let credentials = await getCredentials()
-        guard let credential = selectCredential(credentials, docRequest) else {
+        let matches = credentials.filter { cred in
+            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred.raw)?.docType == docRequest.docType
+        }
+        guard !matches.isEmpty else {
             onLog("No stored credential matches requested docType '\(docRequest.docType)'")
-            onComplete(false)
+            completeOnce(false)
             return
         }
+        let families = groupIntoFamilies(matches)
 
+        onStep("awaiting_consent")
+        let consent = await requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
+        let family: CredentialFamily
+        switch consent {
+        case .approved(let approvedFamily):
+            family = approvedFamily
+        case .denied:
+            completeOnce(false)
+            return
+        }
+        // Pick a random instance from the batch rather than always the same
+        // one - each instance is bound to its own device key specifically so
+        // repeated presentations of "the same" credential can't be
+        // correlated by a verifier via a reused public key. Always picking
+        // the representative would quietly throw that unlinkability away.
+        // `instances` is always non-empty by construction (groupIntoFamilies
+        // never produces an empty family), so this fallback never triggers.
+        let credential = family.instances.randomElement() ?? family.representative
+
+        onStep("submitting_response")
         let response = try await signPresentation(credential.id, docRequest.disclosedClaims(), Data(sessionTranscript))
         let encrypted = try cipher.encrypt([UInt8](response))
         let sessionData = ProximitySessionMessages.buildSessionData(encryptedData: encrypted)
         sendNotification(sessionData, to: central)
         onLog("Sent DeviceResponse for \(docRequest.docType)")
-        onComplete(true)
+        completeOnce(true)
     }
 
     private func sendNotification(_ message: [UInt8], to central: CBCentral) {
@@ -223,7 +275,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
         guard peripheral.state == .poweredOn else {
             if peripheral.state == .unauthorized || peripheral.state == .unsupported {
                 onLog("Bluetooth is not available/authorized")
-                onComplete(false)
+                completeOnce(false)
             }
             return
         }
@@ -238,7 +290,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
         // means a real reader never finds it after connecting.
         guard let serviceUuid = engagement.peripheralServerModeUuid else {
             onLog("engagement does not offer peripheral server mode")
-            onComplete(false)
+            completeOnce(false)
             return
         }
 
@@ -274,7 +326,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         if let error {
             onLog("Failed to add GATT service: \(error.localizedDescription)")
-            onComplete(false)
+            completeOnce(false)
             return
         }
         guard let serviceUuid = engagement.peripheralServerModeUuid else { return }
@@ -282,17 +334,31 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
             CBAdvertisementDataServiceUUIDsKey: [CBUUID(nsuuid: serviceUuid)],
         ])
         onLog("Advertising mdoc peripheral service as \(serviceUuid)")
+        onStep("waiting_for_reader")
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
         if let error {
             onLog("BLE advertise failed to start: \(error.localizedDescription)")
-            onComplete(false)
+            completeOnce(false)
         }
     }
 
+    /// CoreBluetooth's `CBPeripheralManagerDelegate` has no direct
+    /// "central connected" callback the way Android's
+    /// `BluetoothGattServerCallback.onConnectionStateChange` does - a
+    /// central's connection is only implicitly observable once it does
+    /// something with the GATT service. A reader subscribing to a
+    /// characteristic's notifications is the earliest such signal
+    /// (reliably happens before it writes SessionEstablishment data), so
+    /// this is used as the `"reader_connected"` progress step trigger,
+    /// guarded to fire only once per session via `reportedReaderConnected`.
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         onLog("Reader subscribed to \(characteristic.uuid)")
+        if !reportedReaderConnected {
+            reportedReaderConnected = true
+            onStep("reader_connected")
+        }
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
