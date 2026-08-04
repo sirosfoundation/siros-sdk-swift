@@ -120,10 +120,13 @@ final class AppAttestProviderTests: XCTestCase {
             // expected
         }
 
-        // The key was generated and persisted before the attestation step
-        // failed - a real App Attest key was actually created, so it must
-        // stay persisted for reuse rather than being silently dropped.
-        XCTAssertEqual(persistedKeyId.get(), "some-key-id")
+        // Real Copilot-review finding, fixed: a key must NOT be persisted
+        // when attestation fails, or every later call would immediately
+        // throw alreadyAttested against a key that was never actually
+        // attested - permanently bricking native attestation for this
+        // install. Generating a throwaway unattested key is harmless; a
+        // permanently stuck install is not.
+        XCTAssertNil(persistedKeyId.get(), "must not persist a key that failed attestation")
     }
 }
 

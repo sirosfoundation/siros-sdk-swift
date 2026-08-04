@@ -165,8 +165,15 @@ public final class AppAttestProvider: NativeAttestationProvider, @unchecked Send
             throw AppAttestError.alreadyAttested
         }
         let appAttestKeyId = try await generateKey()
-        savePersistedKeyId(appAttestKeyId)
+        // Persist only AFTER attest() succeeds (real Copilot-review finding:
+        // persisting first meant a transient attest() failure - network
+        // error, app killed mid-call, etc. - would leave the unattested key
+        // ID persisted forever, permanently throwing alreadyAttested on
+        // every later call and bricking native attestation for this install
+        // until reinstall). Generating a throwaway key that never gets
+        // attested is harmless and cheap; a permanently stuck install is not.
         let attestationObject = try await attest(keyId: appAttestKeyId, challenge: Data(challenge.utf8))
+        savePersistedKeyId(appAttestKeyId)
         return NativeAttestationEvidence(
             type: "apple_app_attest",
             token: attestationObject.base64EncodedString(),
