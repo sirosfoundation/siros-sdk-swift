@@ -967,6 +967,11 @@ public final class SirosWallet: @unchecked Sendable {
                         "challenge": evidence.challenge,
                     ]
                 } catch {
+                    // Best-effort - device capability/entitlement issues are
+                    // common and expected (Simulator, no entitlement, key
+                    // already attested this install) - but silent failures
+                    // here are hard to diagnose in the field, so log them.
+                    print("[SirosWallet] App Attest evidence generation failed, continuing without it: \(error)")
                     nativeAttestation = nil
                 }
             }
