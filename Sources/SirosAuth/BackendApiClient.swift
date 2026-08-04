@@ -157,6 +157,11 @@ public final class BackendApiClient: @unchecked Sendable {
     ///   - securityProperties: Optional security properties dictionary for KA claims (CS-04 §7.1.3).
     ///   - credentialIssuer: Optional target issuer URL - binds the KA's `aud` claim,
     ///     preventing a KA minted for one issuer from being replayed against another.
+    ///   - walletInstanceId: Optional WIA JWK Thumbprint (`cnf.jkt`) identifying this
+    ///     wallet instance, sent as `wallet_instance_id` - lets the backend's KA trust
+    ///     gate look up this instance's recorded `attestation_source` and lift its
+    ///     `security_properties` clamp when it's genuinely native-attested. Omitted
+    ///     when nil/empty.
     /// - Returns: Key attestation JWT string.
     public func requestKeyAttestation(
         jwks: [[String: Any]],

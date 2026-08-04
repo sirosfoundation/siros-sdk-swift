@@ -969,9 +969,19 @@ public final class SirosWallet: @unchecked Sendable {
     /// that won't lift the clamp, and every other failure mode (no WIA, WIA
     /// disabled, non-native tier) must resolve to omitting the field exactly
     /// like today's pre-this-change behavior.
-    func currentWalletInstanceId() async -> String? {
+    ///
+    /// Peeks the existing WIA cache only - deliberately does NOT call
+    /// `ensureWalletInstanceAttestation()` (real Copilot-review finding:
+    /// that would trigger a challenge+generateWIA network round trip, and
+    /// retry it on every backend key-attestation attempt in deployments
+    /// where WIA is unsupported/misconfigured, adding latency for a field
+    /// that's optional in the first place). A WIA obtained earlier this
+    /// session (e.g. during issuance) is still picked up; one that was
+    /// never fetched simply omits the field, exactly like today's behavior.
+    func currentWalletInstanceId() -> String? {
+        let now = Int(Date().timeIntervalSince1970)
         let nativeAttestationSources: Set<String> = ["ios_app_attest", "android_play_integrity"]
-        guard let wia = await ensureWalletInstanceAttestation(),
+        guard let wia = cachedWia, cachedWiaExpiresAt - now > 60,
               let payload = CredentialUtils.parseJwtPayload(wia),
               let source = payload["attestation_source"] as? String,
               nativeAttestationSources.contains(source),
@@ -1684,7 +1694,7 @@ public final class SirosWallet: @unchecked Sendable {
                 nonce: nonce,
                 securityProperties: secDict,
                 credentialIssuer: audience.isEmpty ? nil : audience,
-                walletInstanceId: await currentWalletInstanceId()
+                walletInstanceId: currentWalletInstanceId()
             )
             // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
             // built (jwks preserves list order) - the issuer is expected to

@@ -46,7 +46,7 @@ final class SirosWalletKeyAttestationTests: XCTestCase {
         wallet.cachedWia = fakeWiaJwt(exp: now + 3600, jkt: "test-jkt", attestationSource: "ios_app_attest")
         wallet.cachedWiaExpiresAt = Int(now + 3600)
 
-        let result = await wallet.currentWalletInstanceId()
+        let result = wallet.currentWalletInstanceId()
 
         XCTAssertEqual(result, "test-jkt")
     }
@@ -60,7 +60,7 @@ final class SirosWalletKeyAttestationTests: XCTestCase {
         wallet.cachedWia = fakeWiaJwt(exp: now + 3600, jkt: "test-jkt", attestationSource: "backend_attested")
         wallet.cachedWiaExpiresAt = Int(now + 3600)
 
-        let result = await wallet.currentWalletInstanceId()
+        let result = wallet.currentWalletInstanceId()
 
         XCTAssertNil(result)
     }
@@ -68,10 +68,10 @@ final class SirosWalletKeyAttestationTests: XCTestCase {
     func testCurrentWalletInstanceIdReturnsNilWhenNoWiaAvailable() async {
         let wallet = makeWallet()
 
-        // No cached WIA, no backend session configured to fetch one -
-        // ensureWalletInstanceAttestation() falls into its own best-effort
-        // nil path.
-        let result = await wallet.currentWalletInstanceId()
+        // No cachedWia seeded - currentWalletInstanceId() peeks the cache
+        // only (it must never trigger a WIA fetch of its own), so this must
+        // resolve to nil without any backend interaction at all.
+        let result = wallet.currentWalletInstanceId()
 
         XCTAssertNil(result)
     }
