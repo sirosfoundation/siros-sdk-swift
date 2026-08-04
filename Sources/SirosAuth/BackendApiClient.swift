@@ -157,12 +157,18 @@ public final class BackendApiClient: @unchecked Sendable {
     ///   - securityProperties: Optional security properties dictionary for KA claims (CS-04 §7.1.3).
     ///   - credentialIssuer: Optional target issuer URL - binds the KA's `aud` claim,
     ///     preventing a KA minted for one issuer from being replayed against another.
+    ///   - walletInstanceId: Optional WIA JWK Thumbprint (`cnf.jkt`) identifying this
+    ///     wallet instance, sent as `wallet_instance_id` - lets the backend's KA trust
+    ///     gate look up this instance's recorded `attestation_source` and lift its
+    ///     `security_properties` clamp when it's genuinely native-attested. Omitted
+    ///     when nil/empty.
     /// - Returns: Key attestation JWT string.
     public func requestKeyAttestation(
         jwks: [[String: Any]],
         nonce: String,
         securityProperties: [String: Any]? = nil,
-        credentialIssuer: String? = nil
+        credentialIssuer: String? = nil,
+        walletInstanceId: String? = nil
     ) async throws -> String {
         var openid4vci: [String: Any] = ["nonce": nonce]
         if let issuer = credentialIssuer, !issuer.isEmpty {
@@ -174,6 +180,13 @@ public final class BackendApiClient: @unchecked Sendable {
         ]
         if let props = securityProperties {
             body["security_properties"] = props
+        }
+        // The WIA's JWK-thumbprint identity (`cnf.jkt`) - lets the backend's
+        // KA trust gate look up this wallet instance's own recorded
+        // attestation_source and lift the K3 clamp when it's genuinely
+        // native-attested. Omitted whenever the caller has no such WIA.
+        if let id = walletInstanceId, !id.isEmpty {
+            body["wallet_instance_id"] = id
         }
         let result = try await post("/wallet-provider/key-attestation/generate", body: body)
         guard let attestation = result["key_attestation"] as? String else {
