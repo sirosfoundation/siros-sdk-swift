@@ -39,7 +39,7 @@ public enum DeepLinkClassifier {
         if urlString.hasPrefix("openid4vp://") || urlString.hasPrefix("haip://") {
             return .presentationRequest(uri: urlString)
         }
-        if queryValue("request_uri") != nil {
+        if queryValue("request_uri") != nil || queryValue("client_id") != nil {
             return .presentationRequest(uri: urlString)
         }
 

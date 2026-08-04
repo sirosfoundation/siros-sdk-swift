@@ -12,9 +12,15 @@ public enum CredentialFormat: String, Codable, Sendable {
 
 /// A stored verifiable credential with parsed metadata.
 public struct StoredCredential: Codable, Sendable, Equatable, Identifiable {
-    public let id: String
+    /// A randomly-generated uint32-range identifier, matching wallet-frontend's
+    /// `credentialId: number` (privatedata-spec §6) - not a UUID. Cross-client
+    /// interop (the same encrypted container read by either client) requires
+    /// this to be a genuine JSON number on the wire, not a string.
+    public let id: Int64
     public let format: String
     public let raw: String
+    /// Key ID (JWK thumbprint) of the keypair bound to this credential.
+    public let kid: String?
     public let metadata: CredentialMetadata?
     public let issuedAt: Int64?
     public let expiresAt: Int64?
@@ -22,30 +28,65 @@ public struct StoredCredential: Codable, Sendable, Equatable, Identifiable {
     /// time, if any. Stored client-side only; echoed back to the backend in a
     /// credential_notification message when a lifecycle event occurs.
     public let notificationId: String?
+    /// Issuer identifier this credential was obtained from - part of
+    /// privatedata-spec's normative `S.credentials[]` fields
+    /// (`WalletSessionEventNewCredential` in wallet-frontend), needed to
+    /// re-fetch VCTM display metadata after a fresh login (wallet-frontend
+    /// doesn't persist `metadata` either - it re-fetches/derives display info
+    /// live rather than snapshotting it into the encrypted container).
+    public let credentialIssuerIdentifier: String?
+    /// Credential configuration ID (issuance scope) this credential was
+    /// requested under - part of privatedata-spec's normative fields, needed
+    /// (alongside `credentialIssuerIdentifier`) to re-fetch VCTM after login.
+    public let credentialConfigurationId: String?
+    /// Identifier shared by every copy issued in the same OID4VCI response
+    /// (`batch_credential_issuance`/key-attestation multi-proof issuance) -
+    /// privatedata-spec's normative `S.credentials[].batchId` (`number`).
+    /// Mirrors wallet-frontend exactly: ALWAYS assigned a fresh value per
+    /// issuance response, even for a single-credential issuance - there is no
+    /// "no batch" sentinel on either client, since every issuance response is
+    /// itself a batch of at least one.
+    public let batchId: Int64
+    /// 0-based position of this copy within its `batchId`.
+    public let instanceId: Int
 
     public init(
-        id: String,
+        id: Int64,
         format: String,
         raw: String,
+        kid: String? = nil,
         metadata: CredentialMetadata? = nil,
         issuedAt: Int64? = nil,
         expiresAt: Int64? = nil,
-        notificationId: String? = nil
+        notificationId: String? = nil,
+        credentialIssuerIdentifier: String? = nil,
+        credentialConfigurationId: String? = nil,
+        batchId: Int64,
+        instanceId: Int
     ) {
         self.id = id
         self.format = format
         self.raw = raw
+        self.kid = kid
         self.metadata = metadata
         self.issuedAt = issuedAt
         self.expiresAt = expiresAt
         self.notificationId = notificationId
+        self.credentialIssuerIdentifier = credentialIssuerIdentifier
+        self.credentialConfigurationId = credentialConfigurationId
+        self.batchId = batchId
+        self.instanceId = instanceId
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, format, raw, metadata
+        case id, format, raw, kid, metadata
         case issuedAt = "issued_at"
         case expiresAt = "expires_at"
         case notificationId = "notification_id"
+        case credentialIssuerIdentifier = "credential_issuer_identifier"
+        case credentialConfigurationId = "credential_configuration_id"
+        case batchId = "batch_id"
+        case instanceId = "instance_id"
     }
 }
 

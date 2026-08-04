@@ -238,7 +238,8 @@ final class WscdKeystoreAdapterTest: XCTestCase {
             disclosedClaims: nil,
             nonce: "test-nonce",
             origin: "https://verifier.example.com",
-            encryptionPublicJwkThumbprint: nil
+            encryptionPublicJwkThumbprint: nil,
+            kid: nil
         )
 
         let decoded = try CBOR.decode([UInt8](responseBytes))

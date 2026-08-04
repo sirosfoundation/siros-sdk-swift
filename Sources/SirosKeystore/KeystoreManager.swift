@@ -40,24 +40,45 @@ public protocol KeystoreManager: AnyObject, Sendable {
     func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String
 
     /// Sign a verifiable presentation for OID4VP.
-    func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String
+    ///
+    /// - Parameter kid: the key ID bound to the credential(s) being
+    ///   presented (see `StoredCredential.kid`) - when non-nil, signing MUST
+    ///   use exactly this key (throwing if it isn't available) rather than
+    ///   an arbitrary one, since a wallet holding more than one key (e.g.
+    ///   after a batch issuance where each credential instance is bound to
+    ///   its own device key) would otherwise silently sign with the wrong
+    ///   key for every credential except whichever one happens to be first.
+    ///   nil (the legacy no-credential-context call shape) preserves the old
+    ///   first-available-key behavior.
+    func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String
 
     /// Build a complete SD-JWT VP token with Key Binding JWT.
+    ///
+    /// - Parameter kid: the key ID bound to this credential (see
+    ///   `signPresentation`'s doc comment for why this must be the exact
+    ///   key, not an arbitrary available one).
     func signVpToken(
         credential: String,
         disclosedClaims: [String]?,
         nonce: String,
-        audience: String
+        audience: String,
+        kid: String?
     ) async throws -> String
 
     /// Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation.
+    ///
+    /// - Parameter kid: the key ID bound to this credential (see
+    ///   `signPresentation`'s doc comment) - the DeviceResponse's
+    ///   `deviceSignature` MUST be produced with the exact device key this
+    ///   credential's MSO `deviceKeyInfo.deviceKey` embeds.
     func signMdocPresentation(
         credentialBytes: Data,
         disclosedClaims: [String]?,
         nonce: String,
         audience: String,
         responseUri: String,
-        verifierJwkThumbprint: String?
+        verifierJwkThumbprint: String?,
+        kid: String?
     ) async throws -> Data
 
     /// Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation via
@@ -73,13 +94,15 @@ public protocol KeystoreManager: AnyObject, Sendable {
     ///   - origin: The verified browser/page origin that called `navigator.credentials.get()`.
     ///   - encryptionPublicJwkThumbprint: JWK thumbprint of the verifier's
     ///     response-encryption key (present when `response_mode=dc_api.jwt`), nil otherwise.
+    ///   - kid: the key ID bound to this credential (see `signMdocPresentation`'s doc comment).
     /// - Returns: Base64url-encoded DeviceResponse CBOR bytes.
     func signMdocPresentationForDCAPI(
         credentialBytes: Data,
         disclosedClaims: [String]?,
         nonce: String,
         origin: String,
-        encryptionPublicJwkThumbprint: String?
+        encryptionPublicJwkThumbprint: String?,
+        kid: String?
     ) async throws -> Data
 
     /// Export the encrypted container for backend sync.
@@ -91,19 +114,30 @@ public protocol KeystoreManager: AnyObject, Sendable {
     // MARK: - Credential storage
 
     /// Store a credential's raw JSON inside the encrypted container.
-    func saveCredential(id: String, json: String) async throws
+    func saveCredential(id: Int64, json: String) async throws
 
     /// Get a stored credential's raw JSON by ID.
-    func getCredential(id: String) async throws -> String?
+    func getCredential(id: Int64) async throws -> String?
 
     /// Get all stored credential JSON blobs.
-    func getAllCredentials() async throws -> [String: String]
+    func getAllCredentials() async throws -> [Int64: String]
 
     /// Remove a credential by ID.
-    func deleteCredential(id: String) async throws
+    func deleteCredential(id: Int64) async throws
 
     /// Remove all stored credentials.
     func clearCredentials() async throws
+
+    // MARK: - Presentation history storage
+
+    /// Store a presentation record's raw JSON inside the encrypted container.
+    func savePresentationRecord(id: Int64, json: String) async throws
+
+    /// Get all stored presentation record JSON blobs.
+    func getAllPresentationRecords() async throws -> [Int64: String]
+
+    /// Remove all stored presentation records.
+    func clearPresentationRecords() async throws
 
     /// Generate `count` keypairs and return their public JWKs.
     /// Used for key attestation requests.
@@ -189,7 +223,8 @@ public extension KeystoreManager {
         nonce: String,
         audience: String,
         responseUri: String,
-        verifierJwkThumbprint: String?
+        verifierJwkThumbprint: String?,
+        kid: String?
     ) async throws -> Data {
         throw KeystoreError.invalidParameter("mDoc presentation not supported by this keystore")
     }
@@ -199,7 +234,8 @@ public extension KeystoreManager {
         disclosedClaims: [String]?,
         nonce: String,
         origin: String,
-        encryptionPublicJwkThumbprint: String?
+        encryptionPublicJwkThumbprint: String?,
+        kid: String?
     ) async throws -> Data {
         throw KeystoreError.invalidParameter("mDoc DC API presentation not supported by this keystore")
     }

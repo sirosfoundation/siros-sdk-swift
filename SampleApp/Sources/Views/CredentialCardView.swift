@@ -160,7 +160,7 @@ private enum SvgLoadState: Equatable {
 }
 
 private struct SvgLoadKey: Equatable {
-    let credentialId: String
+    let credentialId: Int64
     let isDark: Bool
 }
 

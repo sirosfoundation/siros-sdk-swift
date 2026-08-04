@@ -27,7 +27,7 @@ public final class KeystoreBackedCredentialStore: CredentialStore, @unchecked Se
         }
     }
 
-    public func getById(_ id: String) async -> StoredCredential? {
+    public func getById(_ id: Int64) async -> StoredCredential? {
         guard keystore.isUnlocked else { return nil }
         guard let raw = try? await keystore.getCredential(id: id) else { return nil }
         return try? decoder.decode(StoredCredential.self, from: Data(raw.utf8))
@@ -44,7 +44,7 @@ public final class KeystoreBackedCredentialStore: CredentialStore, @unchecked Se
         await save(credential)
     }
 
-    public func delete(_ id: String) async {
+    public func delete(_ id: Int64) async {
         guard keystore.isUnlocked else { return }
         try? await keystore.deleteCredential(id: id)
     }

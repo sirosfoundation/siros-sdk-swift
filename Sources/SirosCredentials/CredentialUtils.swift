@@ -403,4 +403,60 @@ public enum CredentialUtils {
         }
         return Data(base64Encoded: base64)
     }
+
+    /// Group stored credentials into display-ready families, mirroring
+    /// wallet-frontend's `CredentialsContextProvider.fetchVcData`: only the
+    /// `instanceId == 0` credential of a batch (see `StoredCredential.batchId`)
+    /// is returned as a visible entry, with every sibling copy's usage count
+    /// attached as `CredentialWithInstances.instances` - the UI derives its
+    /// "remaining copies" badge from `instances.count { $0.sigCount == 0 }`.
+    ///
+    /// Every issuance response - batch of one or of many - shares one
+    /// `batchId`, so grouping is uniform: no separate "standalone" case,
+    /// matching wallet-frontend exactly.
+    public static func groupForDisplay(
+        credentials: [StoredCredential],
+        presentationHistory: [PresentationRecord]
+    ) -> [CredentialWithInstances] {
+        func sigCount(for credentialId: Int64) -> Int {
+            presentationHistory.filter { $0.credentialIds.contains(credentialId) }.count
+        }
+
+        var byBatch: [Int64: [StoredCredential]] = [:]
+        for credential in credentials {
+            byBatch[credential.batchId, default: []].append(credential)
+        }
+
+        let results: [CredentialWithInstances] = byBatch.values.compactMap { members in
+            guard let visible = members.first(where: { $0.instanceId == 0 }) else { return nil }
+            let instances = members
+                .sorted(by: { $0.instanceId < $1.instanceId })
+                .map { CredentialInstance(instanceId: $0.instanceId, sigCount: sigCount(for: $0.id)) }
+            return CredentialWithInstances(credential: visible, instances: instances)
+        }
+
+        return results.sorted(by: { ($0.credential.issuedAt ?? 0) > ($1.credential.issuedAt ?? 0) })
+    }
+}
+
+/// One member of a batch-issued credential family, alongside its usage count.
+public struct CredentialInstance: Sendable, Equatable {
+    public let instanceId: Int
+    public let sigCount: Int
+
+    public init(instanceId: Int, sigCount: Int) {
+        self.instanceId = instanceId
+        self.sigCount = sigCount
+    }
+}
+
+/// A visible credential card plus every instance in its batch (see `CredentialUtils.groupForDisplay`).
+public struct CredentialWithInstances: Sendable, Equatable {
+    public let credential: StoredCredential
+    public let instances: [CredentialInstance]
+
+    public init(credential: StoredCredential, instances: [CredentialInstance]) {
+        self.credential = credential
+        self.instances = instances
+    }
 }

@@ -86,7 +86,32 @@
     "retryButton": "Retry"
   },
   "flow": {
-    "cancelButton": "Cancel"
+    "cancelButton": "Cancel",
+    "steps": {
+      "parsingOffer": "Reading credential offer…",
+      "offerParsed": "Credential offer parsed",
+      "fetchingMetadata": "Fetching issuer information…",
+      "metadataFetched": "Issuer information received",
+      "evaluatingTrust": "Checking issuer trust…",
+      "trustEvaluated": "Issuer trust verified",
+      "awaitingSelection": "Waiting for credential selection…",
+      "authorizationRequired": "Waiting for authorization…",
+      "exchangingToken": "Exchanging authorization for access token…",
+      "tokenObtained": "Access token received",
+      "requestingCredential": "Requesting credential…",
+      "deferred": "Credential issuance deferred…",
+      "parsingRequest": "Reading verifier request…",
+      "requestParsed": "Verifier request parsed",
+      "evaluatingVerifierTrust": "Checking verifier trust…",
+      "matchCredentials": "Matching credentials…",
+      "awaitingConsent": "Waiting for your consent…",
+      "credentialSelection": "Selecting credentials…",
+      "submittingResponse": "Sending response to verifier…",
+      "unknown": "Processing…"
+    },
+    "diagnosticLabel": "Diagnostic: %1$s",
+    "credentialsReceived": "Received %1$d credential(s)",
+    "presentationSent": "Presentation sent successfully"
   },
   "nav": {
     "credentials": "Credentials",

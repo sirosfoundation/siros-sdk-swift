@@ -92,8 +92,8 @@ public enum CredentialMatcher {
         )
     }
 
-    public static func matchedCredentialIds(dcqlQuery: [String: Any], credentials: [StoredCredential]) -> [String] {
-        var seen = Set<String>()
+    public static func matchedCredentialIds(dcqlQuery: [String: Any], credentials: [StoredCredential]) -> [Int64] {
+        var seen = Set<Int64>()
         return match(dcqlQuery: dcqlQuery, credentials: credentials)
             .flatMap { $0.candidates }
             .compactMap { cred in

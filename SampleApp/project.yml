@@ -61,4 +61,5 @@ targets:
               - siros-sample
               - openid-credential-offer
               - openid4vp
+              - haip
         NSCameraUsageDescription: "Camera is used to scan QR codes for credential offers and presentation requests."

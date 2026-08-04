@@ -86,7 +86,32 @@
     "retryButton": "Försök igen"
   },
   "flow": {
-    "cancelButton": "Avbryt"
+    "cancelButton": "Avbryt",
+    "steps": {
+      "parsingOffer": "Läser in intygserbjudande…",
+      "offerParsed": "Intygserbjudande inläst",
+      "fetchingMetadata": "Hämtar utfärdarinformation…",
+      "metadataFetched": "Utfärdarinformation mottagen",
+      "evaluatingTrust": "Kontrollerar utfärdarens tillförlitlighet…",
+      "trustEvaluated": "Utfärdarens tillförlitlighet verifierad",
+      "awaitingSelection": "Väntar på val av intyg…",
+      "authorizationRequired": "Väntar på auktorisering…",
+      "exchangingToken": "Byter auktorisering mot åtkomsttoken…",
+      "tokenObtained": "Åtkomsttoken mottagen",
+      "requestingCredential": "Begär intyg…",
+      "deferred": "Utfärdande av intyg uppskjutet…",
+      "parsingRequest": "Läser in förfrågan från kontrollant…",
+      "requestParsed": "Förfrågan från kontrollant inläst",
+      "evaluatingVerifierTrust": "Kontrollerar kontrollantens tillförlitlighet…",
+      "matchCredentials": "Matchar intyg…",
+      "awaitingConsent": "Väntar på ditt samtycke…",
+      "credentialSelection": "Väljer intyg…",
+      "submittingResponse": "Skickar svar till kontrollant…",
+      "unknown": "Bearbetar…"
+    },
+    "diagnosticLabel": "Diagnostik: %1$s",
+    "credentialsReceived": "Mottog %1$d intyg",
+    "presentationSent": "Presentationen skickades"
   },
   "nav": {
     "credentials": "Intyg",

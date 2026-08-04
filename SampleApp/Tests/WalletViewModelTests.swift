@@ -57,14 +57,14 @@ final class WalletViewModelTests: XCTestCase {
 
     func testOpenCredentialDetailSetsSelection() {
         let vm = makeViewModel()
-        let credential = StoredCredential(id: "test-1", format: "vc+sd-jwt", raw: "{}")
+        let credential = StoredCredential(id: 1, format: "vc+sd-jwt", raw: "{}", batchId: 1, instanceId: 0)
         vm.openCredentialDetail(credential)
-        XCTAssertEqual(vm.selectedCredential?.id, "test-1")
+        XCTAssertEqual(vm.selectedCredential?.id, 1)
     }
 
     func testCloseCredentialDetailClearsSelection() {
         let vm = makeViewModel()
-        vm.selectedCredential = StoredCredential(id: "test-1", format: "vc+sd-jwt", raw: "{}")
+        vm.selectedCredential = StoredCredential(id: 1, format: "vc+sd-jwt", raw: "{}", batchId: 1, instanceId: 0)
         vm.closeCredentialDetail()
         XCTAssertNil(vm.selectedCredential)
     }
@@ -100,7 +100,7 @@ final class WalletViewModelTests: XCTestCase {
     func testDisconnectClearsState() {
         let vm = makeViewModel()
         vm.showAddCredential = true
-        vm.selectedCredential = StoredCredential(id: "x", format: "jwt", raw: "")
+        vm.selectedCredential = StoredCredential(id: 2, format: "jwt", raw: "", batchId: 2, instanceId: 0)
         vm.showHistory = true
         vm.showQrScanner = true
 
@@ -126,11 +126,17 @@ final class WalletViewModelTests: XCTestCase {
 
     // MARK: - QR result routing
 
-    func testHandleQrResultWithUnknownUriSetsError() {
+    /// Unclassified URIs are treated as a presentation-request fallback
+    /// (matches DeepLinkClassifier's own `.unknown` case for plain
+    /// https://...?request_uri= shapes it doesn't recognize) - closes the
+    /// scanner and attempts `startPresentation` rather than surfacing an
+    /// error immediately.
+    func testHandleQrResultWithUnknownUriFallsBackToPresentation() {
         let vm = makeViewModel()
+        vm.showQrScanner = true
         vm.handleQrResult("https://example.com/not-a-wallet-uri")
-        XCTAssertEqual(vm.errorMessage, "Unrecognised QR code")
-        XCTAssertTrue(vm.showError)
+        XCTAssertFalse(vm.showQrScanner)
+        XCTAssertNil(vm.errorMessage)
     }
 
     func testHandleQrResultClosesScanner() {
@@ -146,11 +152,11 @@ final class WalletViewModelTests: XCTestCase {
         let vm = makeViewModel()
         let request = PresentationRequest(
             verifierName: "Test Verifier",
-            candidates: [StoredCredential(id: "c1", format: "jwt", raw: "")]
+            candidates: [StoredCredential(id: 3, format: "jwt", raw: "", batchId: 3, instanceId: 0)]
         )
         vm.pendingPresentation = request
 
-        vm.acceptPresentation(["c1"])
+        vm.acceptPresentation([3])
 
         XCTAssertNil(vm.pendingPresentation)
     }
@@ -159,7 +165,7 @@ final class WalletViewModelTests: XCTestCase {
         let vm = makeViewModel()
         let request = PresentationRequest(
             verifierName: "Test Verifier",
-            candidates: [StoredCredential(id: "c1", format: "jwt", raw: "")]
+            candidates: [StoredCredential(id: 3, format: "jwt", raw: "", batchId: 3, instanceId: 0)]
         )
         vm.pendingPresentation = request
 

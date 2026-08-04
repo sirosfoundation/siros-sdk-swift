@@ -204,20 +204,26 @@ final class PrivateDataSpecConformanceTests: XCTestCase {
         try await keystore.unlock(prfOutput: prfOutput, encryptedContainer: containerBytes, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
         XCTAssertTrue(keystore.isUnlocked)
 
-        // metadata: the credential's raw payload survives decrypt via the
-        // credential store. NOTE: unlike Kotlin's JweKeystore, Swift's
-        // getCredential() currently returns ONLY the S.credentials[].data
-        // raw string (not a reconstructed JSON blob with format/kid/issuer/
-        // configId as separate keys) - that's a known, separate parity gap,
-        // not something this test papers over. The full per-field
-        // preservation (format/kid/credentialIssuerIdentifier/
-        // credentialConfigurationId) is verified below via the independently
-        // decrypted container's S.credentials[] entries, which IS what
-        // buildWalletStateV3()/loadFromWalletStateV3() operate on.
+        // metadata: per-credential fields survive into the publicly-queryable
+        // credential store - JweKeystore reconstructs a StoredCredential-shaped
+        // JSON blob (format/kid/credential_issuer_identifier/
+        // credential_configuration_id as separate keys) on load, not just the
+        // bare raw data string.
         let credentialsArray = (plaintextState["S"] as! [String: Any])["credentials"] as! [[String: Any]]
         let expectedCred = credentialsArray[0]
-        let restoredCredData = try await keystore.getCredential(id: "cred-001")
-        XCTAssertEqual(expectedCred["data"] as? String, restoredCredData, "expected credential cred-001's raw data to survive decrypt")
+        let restoredCredJson = try await keystore.getCredential(id: 1)
+        XCTAssertNotNil(restoredCredJson, "expected credential 1 to survive decrypt")
+        let restoredCred = try JSONSerialization.jsonObject(with: Data(restoredCredJson!.utf8)) as! [String: Any]
+        XCTAssertEqual(expectedCred["format"] as? String, restoredCred["format"] as? String)
+        XCTAssertEqual(expectedCred["kid"] as? String, restoredCred["kid"] as? String)
+        XCTAssertEqual(
+            expectedCred["credentialIssuerIdentifier"] as? String,
+            restoredCred["credential_issuer_identifier"] as? String
+        )
+        XCTAssertEqual(
+            expectedCred["credentialConfigurationId"] as? String,
+            restoredCred["credential_configuration_id"] as? String
+        )
 
         // roundTrip: export -> independently decrypt -> compare (excluding keypairs, see class doc).
         let exported = try await keystore.exportEncryptedContainer()
@@ -258,8 +264,10 @@ final class PrivateDataSpecConformanceTests: XCTestCase {
         let keystore = JweKeystore()
         try await keystore.unlock(prfOutput: prfOutput, encryptedContainer: containerBytes, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
 
-        let newCredentialJson = "{\"id\":\"cred-999\",\"format\":\"vc+sd-jwt\",\"raw\":\"header.payload.sig\"}"
-        try await keystore.saveCredential(id: "cred-999", json: newCredentialJson)
+        let newCredentialJson = """
+        {"id":999,"format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-999","credential_issuer_identifier":"https://issuer2.example.com","credential_configuration_id":"other-diploma"}
+        """
+        try await keystore.saveCredential(id: 999, json: newCredentialJson)
 
         let exported = try await keystore.exportEncryptedContainer()
         let redecrypted = try independentlyDecrypt(exported, prfOutput: prfOutput, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
@@ -268,12 +276,14 @@ final class PrivateDataSpecConformanceTests: XCTestCase {
         XCTAssertTrue(jsonEqual(plaintextState["events"], redecrypted["events"]))
 
         let redecryptedCreds = (redecrypted["S"] as! [String: Any])["credentials"] as! [[String: Any]]
-        let credIds = redecryptedCreds.compactMap { $0["credentialId"] as? String }
-        XCTAssertTrue(credIds.contains("cred-001"), "original credential cred-001 must survive")
-        XCTAssertTrue(credIds.contains("cred-999"), "newly added credential cred-999 must be present")
+        let credIds = redecryptedCreds.compactMap { ($0["credentialId"] as? NSNumber)?.int64Value }
+        XCTAssertTrue(credIds.contains(1), "original credential 1 must survive")
+        XCTAssertTrue(credIds.contains(999), "newly added credential 999 must be present")
 
-        let newCredEntry = redecryptedCreds.first { $0["credentialId"] as? String == "cred-999" }!
-        XCTAssertEqual(newCredEntry["data"] as? String, newCredentialJson)
+        let newCredEntry = redecryptedCreds.first { ($0["credentialId"] as? NSNumber)?.int64Value == 999 }!
+        XCTAssertEqual(newCredEntry["format"] as? String, "vc+sd-jwt")
+        XCTAssertEqual(newCredEntry["credentialIssuerIdentifier"] as? String, "https://issuer2.example.com")
+        XCTAssertEqual(newCredEntry["credentialConfigurationId"] as? String, "other-diploma")
 
         let expectedS = plaintextState["S"] as! [String: Any]
         let actualS = redecrypted["S"] as! [String: Any]
@@ -315,7 +325,7 @@ final class PrivateDataSpecConformanceTests: XCTestCase {
 
             let creds = try await keystore.getAllCredentials()
             XCTAssertEqual(3, creds.count)
-            for id in ["cred-001", "cred-002", "cred-003"] {
+            for id: Int64 in [1, 2, 3] {
                 XCTAssertNotNil(creds[id], "credential \(id) must be visible via this passkey")
             }
         }

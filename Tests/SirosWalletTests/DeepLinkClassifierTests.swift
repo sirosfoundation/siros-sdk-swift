@@ -50,6 +50,18 @@ final class DeepLinkClassifierTests: XCTestCase {
         }
     }
 
+    /// A bare `client_id` (no `request_uri`) is how an unsigned-request-object
+    /// cross-device link can arrive - the verifier passes the request params
+    /// directly rather than by reference.
+    func testPresentationRequestViaClientIdOnly() {
+        let result = DeepLinkClassifier.classify("https://wallet.example.com/present?client_id=https://verifier.example.com&response_uri=https://verifier.example.com/cb")
+        if case .presentationRequest = result {
+            // expected
+        } else {
+            XCTFail("Expected .presentationRequest, got \(result)")
+        }
+    }
+
     func testAuthCallback() {
         let result = DeepLinkClassifier.classify("https://wallet.example.com/callback?code=abc&state=xyz")
         if case .authCallback(let code, let state) = result {

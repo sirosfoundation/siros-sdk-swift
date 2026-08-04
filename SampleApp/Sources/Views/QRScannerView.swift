@@ -1,7 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import SwiftUI
-import SirosWallet
 
 #if canImport(AVFoundation)
 import AVFoundation
@@ -20,10 +19,14 @@ struct QRScannerView: View {
                     simulatorFallback
                     #else
                     CameraQRScanner { code in
-                        // Only accept wallet-relevant URIs
-                        if isWalletUri(code) {
-                            viewModel.handleQrResult(code)
-                        }
+                        // Don't pre-filter by classification here -
+                        // handleQrResult already classifies and, deliberately,
+                        // treats an unclassified URI as a presentation request
+                        // attempt (covers bare reference-URL QR codes with no
+                        // recognized scheme/query shape, e.g. some verifiers'
+                        // "Link" pages). A stricter gate here would silently
+                        // drop those before handleQrResult's own fallback ever runs.
+                        viewModel.handleQrResult(code)
                     }
                     #endif
 
@@ -81,16 +84,6 @@ struct QRScannerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.8))
-    }
-
-    /// Only accept QR codes that are credential offers or presentation requests.
-    private func isWalletUri(_ value: String) -> Bool {
-        switch DeepLinkClassifier.classify(value) {
-        case .credentialOffer, .presentationRequest:
-            return true
-        default:
-            return false
-        }
     }
 }
 

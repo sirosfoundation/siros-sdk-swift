@@ -248,12 +248,13 @@ public final class FlowClient: CredentialNotifier, @unchecked Sendable {
 
                 case .signPresentation:
                     let credIds = signParams.credentialsToInclude?.compactMap {
-                        $0["credential_id"] as? String
+                        ($0["credential_id"] as? String).flatMap { Int64($0) }
                     } ?? []
                     let vp = try await keystore.signPresentation(
                         nonce: signParams.nonce ?? "",
                         audience: signParams.audience ?? "",
-                        credentialIds: credIds
+                        credentialIds: credIds,
+                        kid: nil
                     )
                     response = SignResponse(vpToken: vp)
                 }
