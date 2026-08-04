@@ -715,6 +715,39 @@ public final class SirosWallet: @unchecked Sendable {
         await persistAndSyncKeystore()
     }
 
+    /// Sign an mDoc DeviceResponse for an ISO 18013-5 proximity (BLE)
+    /// presentation - the local, engine-free counterpart to the redirect/
+    /// DC-API presentation paths (`handleSignRequest`/wallet-managed-protocol
+    /// sign handling above), since proximity presentation has no
+    /// wallet-backend/engine round trip at all: the reader IS the
+    /// counterpart, connected directly over BLE.
+    ///
+    /// - Parameters:
+    ///   - credentialId: the `StoredCredential.id` of the mdoc credential to present.
+    ///   - disclosedClaims: element identifiers to disclose (see `DeviceRequestParser.DocRequest.disclosedClaims`).
+    ///   - sessionTranscriptBytes: the proximity `SessionTranscript` bytes, from `ProximitySessionTranscript.build`.
+    /// - Returns: CBOR-encoded DeviceResponse bytes.
+    public func signMdocPresentationForProximity(
+        credentialId: Int64,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data
+    ) async throws -> Data {
+        let allCreds = await credentialStore.getAll()
+        guard let credential = allCreds.first(where: { $0.id == credentialId }) else {
+            throw SirosError.wallet(message: "Credential not found: \(credentialId)")
+        }
+        let credBytes = Data(base64Encoded: credential.raw
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        ) ?? Data()
+        return try await keystore.signMdocPresentationForProximity(
+            credentialBytes: credBytes,
+            disclosedClaims: disclosedClaims,
+            sessionTranscriptBytes: sessionTranscriptBytes,
+            kid: credential.kid
+        )
+    }
+
     // MARK: - Issuance
 
     /// Discover all available credentials across all visible issuers.

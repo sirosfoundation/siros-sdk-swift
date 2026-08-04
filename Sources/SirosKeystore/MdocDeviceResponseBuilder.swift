@@ -103,6 +103,34 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         return Data(assembleFinalResponse(document: disclosedDocument, coseSign1: coseSign1))
     }
 
+    /// Build the CBOR-encoded DeviceResponse for an ISO 18013-5 proximity
+    /// (BLE) presentation, using the caller-supplied proximity
+    /// `SessionTranscript` bytes (§9.1.5.1: `[DeviceEngagementBytes,
+    /// EReaderKeyBytes, Handover]`) instead of building an
+    /// `OpenID4VPHandover`/`OpenID4VPDCAPIHandover` transcript here - unlike
+    /// those two remote-presentation flows, this transcript depends on
+    /// BLE-session-specific context (the engagement and reader key) that
+    /// lives in the proximity transport layer, not this builder (see
+    /// `ProximitySessionTranscript`).
+    ///
+    /// - Parameters:
+    ///   - sessionTranscriptBytes: CBOR-encoded `SessionTranscript`, from `ProximitySessionTranscript.build`.
+    ///   - disclosedClaims: Element identifiers to disclose (nil = disclose all namespaces/elements).
+    ///   - signer: Function that signs raw bytes with the device key; must return a raw (not DER) signature.
+    /// - Returns: CBOR-encoded DeviceResponse bytes.
+    public func buildForProximity(
+        sessionTranscriptBytes: Data,
+        disclosedClaims: [String]?,
+        signer: @Sendable @escaping (Data) async throws -> Data
+    ) async throws -> Data {
+        let disclosedDocument = try parseAndFilter(disclosedClaims)
+        let deviceAuthBytes = buildDeviceAuthentication(docType: disclosedDocument.docType, sessionTranscript: [UInt8](sessionTranscriptBytes))
+        let coseSign1 = try await MdocCose.sign1Detached(algorithm: algorithm, payload: deviceAuthBytes) { bytes in
+            try await Array(signer(Data(bytes)))
+        }
+        return Data(assembleFinalResponse(document: disclosedDocument, coseSign1: coseSign1))
+    }
+
     private func parseAndFilter(_ disclosedClaims: [String]?) throws -> DocumentMdoc {
         let document = try MdocCbor.parseStoredCredential(credentialBytes)
         guard let disclosedClaims else { return document }

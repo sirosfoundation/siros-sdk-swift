@@ -105,6 +105,27 @@ public protocol KeystoreManager: AnyObject, Sendable {
         kid: String?
     ) async throws -> Data
 
+    /// Build an mDoc DeviceResponse (ISO 18013-5) for a proximity (BLE)
+    /// presentation, using the caller-supplied proximity `SessionTranscript`
+    /// bytes (§9.1.5.1) instead of ``signMdocPresentation``'s redirect-flow
+    /// `OpenID4VPHandover` or ``signMdocPresentationForDCAPI``'s
+    /// `OpenID4VPDCAPIHandover` - see `ProximitySessionTranscript`'s doc
+    /// comment for how that transcript is built from the device engagement,
+    /// reader key, and handover context.
+    ///
+    /// - Parameters:
+    ///   - credentialBytes: Raw CBOR bytes of the IssuerSigned structure.
+    ///   - disclosedClaims: Claim names to disclose (nil = all).
+    ///   - sessionTranscriptBytes: CBOR-encoded proximity `SessionTranscript`.
+    ///   - kid: the key ID bound to this credential (see `signMdocPresentation`'s doc comment).
+    /// - Returns: CBOR-encoded DeviceResponse bytes.
+    func signMdocPresentationForProximity(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data,
+        kid: String?
+    ) async throws -> Data
+
     /// Export the encrypted container for backend sync.
     func exportEncryptedContainer() async throws -> Data
 
@@ -238,6 +259,15 @@ public extension KeystoreManager {
         kid: String?
     ) async throws -> Data {
         throw KeystoreError.invalidParameter("mDoc DC API presentation not supported by this keystore")
+    }
+
+    func signMdocPresentationForProximity(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data,
+        kid: String?
+    ) async throws -> Data {
+        throw KeystoreError.invalidParameter("mDoc proximity presentation not supported by this keystore")
     }
 
     func generateKeyAttestation(nonce: String, count: Int) async throws -> String {
