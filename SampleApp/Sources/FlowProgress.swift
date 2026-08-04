@@ -38,6 +38,20 @@ private let presentationSteps = [
     "submitting_response",
 ]
 
+/// ISO 18013-5 BLE proximity presentation - a local-only flow (no
+/// wallet-backend/engine involved, see `SirosWallet.signMdocPresentationForProximity`),
+/// but conceptually the same operation as `presentationSteps` once a reader
+/// has connected, so those steps are reused verbatim below rather than
+/// duplicated (mirrors Kotlin's `FlowProgress.kt` `PROXIMITY_STEPS`).
+private let proximitySteps = [
+    "waiting_for_reader",
+    "reader_connected",
+    "parsing_request",
+    "match_credentials",
+    "awaiting_consent",
+    "submitting_response",
+]
+
 private let stepLabelKeys: [String: String] = [
     "parsing_offer": "flow.steps.parsingOffer",
     "offer_parsed": "flow.steps.offerParsed",
@@ -58,6 +72,8 @@ private let stepLabelKeys: [String: String] = [
     "awaiting_consent": "flow.steps.awaitingConsent",
     "credential_selection": "flow.steps.credentialSelection",
     "submitting_response": "flow.steps.submittingResponse",
+    "waiting_for_reader": "flow.steps.waitingForReader",
+    "reader_connected": "flow.steps.readerConnected",
 ]
 
 /// Localized label for a raw FlowStep token, falling back to a generic
@@ -74,6 +90,7 @@ func flowStepProgress(flowType: String, step: String) -> Double? {
     switch flowType {
     case "issuance": steps = issuanceSteps
     case "presentation": steps = presentationSteps
+    case "proximity": steps = proximitySteps
     default: return nil
     }
     guard let index = steps.firstIndex(of: step) else { return nil }

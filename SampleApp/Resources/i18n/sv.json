@@ -87,6 +87,7 @@
   },
   "flow": {
     "cancelButton": "Avbryt",
+    "closeButton": "Stäng",
     "steps": {
       "parsingOffer": "Läser in intygserbjudande…",
       "offerParsed": "Intygserbjudande inläst",
@@ -107,11 +108,24 @@
       "awaitingConsent": "Väntar på ditt samtycke…",
       "credentialSelection": "Väljer intyg…",
       "submittingResponse": "Skickar svar till kontrollant…",
+      "waitingForReader": "Väntar på läsare…",
+      "readerConnected": "Läsare ansluten",
       "unknown": "Bearbetar…"
     },
     "diagnosticLabel": "Diagnostik: %1$s",
     "credentialsReceived": "Mottog %1$d intyg",
     "presentationSent": "Presentationen skickades"
+  },
+  "proximity": {
+    "title": "Proximitetsanslutning",
+    "scanPrompt": "Skanna med en ISO 18013-5 mdoc-läsare",
+    "activeDescription": "BLE peripheral server-läge och central client-läge är båda aktiva - en verklig läsare kan ansluta via endera och slutföra en presentation om ett sparat intyg matchar den begärda dokumenttypen. NFC statisk handover är inte tillgängligt på iOS.",
+    "presentationFailed": "Presentationen slutfördes inte",
+    "shareCredential": "Dela intyg?",
+    "requestingClaims": "En läsare begär följande, från detta intyg:",
+    "multipleMatches": "Du har fler än ett matchande intyg - välj vilket som ska delas:",
+    "shareButton": "Dela",
+    "declineButton": "Avböj"
   },
   "nav": {
     "credentials": "Intyg",

@@ -2,40 +2,53 @@
 
 import SwiftUI
 import UIKit
+import SirosCredentials
 import SirosKeystore
 
-/// ISO 18013-5 §8.2 device engagement, shown as a QR code (§8.2.2.3) AND a
-/// real "mdoc peripheral server mode" BLE GATT server (`BlePeripheralServer`)
-/// that a real mdoc reader can connect to, decrypt a request from, and
-/// receive a signed `DeviceResponse` back from - this is a genuinely
-/// completable proximity presentation, not just an engagement demo, PROVIDED
-/// a stored credential's docType matches what the reader asks for.
+/// ISO 18013-5 §8.2 device engagement, shown as a QR code (§8.2.2.3) AND
+/// real "mdoc peripheral server mode" (`BlePeripheralServer`) AND "mdoc
+/// central client mode" (`BleCentralClient`) BLE data-retrieval - the
+/// engagement offers both BLE modes simultaneously (§8.2.2.3's `BleOptions`)
+/// since it isn't known in advance which one a given reader will pick;
+/// whichever one actually completes a presentation stops the other. This is
+/// a genuinely completable proximity presentation, not just an engagement
+/// demo, PROVIDED a stored credential's docType matches what the reader asks
+/// for - and, now, provided the user approves the consent sheet this screen
+/// shows once a matching credential family is found.
 ///
 /// Ported from the Kotlin sample app's `ProximityEngagementScreen.kt`.
 /// Unlike that screen, there is no NFC static handover here: iOS doesn't
 /// allow third-party apps to emulate an NFC Type 4 Tag / act as an HCE host
 /// the way Android's `HostApduService` does (that capability is restricted
-/// to specific system frameworks, not general app code) - QR and BLE
-/// peripheral server mode are this screen's only two engagement/retrieval
-/// mechanisms.
-///
-/// "mdoc central client mode" (this device scanning for and connecting to a
-/// reader's own GATT server) is not implemented - see `BlePeripheralServer`'s
-/// doc comment.
+/// to specific system frameworks, not general app code) - QR code plus both
+/// BLE modes are this screen's engagement/retrieval mechanisms.
 struct ProximityEngagementScreen: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
     @State private var engagement: DeviceEngagement.Engagement?
     @State private var qrImage: UIImage?
-    @State private var statusLines: [String] = ["Starting..."]
-    @State private var server: BlePeripheralServer?
     @State private var setupError: String?
+
+    @State private var server: BlePeripheralServer?
+    @State private var centralClient: BleCentralClient?
+
+    /// Canonical step token (see `FlowProgress.swift`'s proximity step
+    /// list), reported by whichever BLE mode is currently furthest along.
+    @State private var currentStep = "waiting_for_reader"
+    /// Set once either BLE mode reports completion (success or failure) -
+    /// non-nil switches this screen to its terminal Close-button view.
+    @State private var result: Bool?
+    @State private var pendingConsent: PendingConsent?
 
     var body: some View {
         NavigationStack {
             Group {
                 if let setupError {
                     errorView(setupError)
+                } else if let result {
+                    ProximityTerminalView(success: result, onClose: { viewModel.closeProximityEngagement() })
+                } else if currentStep != "waiting_for_reader" {
+                    ProximityProgressView(step: currentStep)
                 } else if let qrImage {
                     engagementView(qrImage)
                 } else {
@@ -43,17 +56,21 @@ struct ProximityEngagementScreen: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .navigationTitle("Proximity Engagement")
+            .navigationTitle(L10n.string("proximity.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { viewModel.closeProximityEngagement() }
+                    Button(L10n.string("flow.closeButton")) { viewModel.closeProximityEngagement() }
                 }
             }
         }
         .onAppear(perform: setUpIfNeeded)
         .onDisappear {
             server?.stop()
+            centralClient?.stop()
+        }
+        .sheet(item: $pendingConsent) { consent in
+            ProximityConsentSheet(consent: consent)
         }
     }
 
@@ -61,7 +78,7 @@ struct ProximityEngagementScreen: View {
     private func engagementView(_ qrImage: UIImage) -> some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text("Scan with an ISO 18013-5 mdoc reader")
+                Text(L10n.string("proximity.scanPrompt"))
                     .font(.title3.weight(.medium))
                     .multilineTextAlignment(.center)
 
@@ -74,25 +91,10 @@ struct ProximityEngagementScreen: View {
 
                 Divider()
 
-                Text(
-                    "BLE peripheral server mode is advertising - a real reader can connect " +
-                    "and complete a presentation if a stored credential matches its requested " +
-                    "docType. NFC static handover is not available on iOS."
-                )
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(statusLines.suffix(6).enumerated()), id: \.offset) { pair in
-                        Text(pair.element)
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(L10n.string("proximity.activeDescription"))
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
             .padding(24)
         }
@@ -123,26 +125,242 @@ struct ProximityEngagementScreen: View {
             )
             self.engagement = engagement
             self.qrImage = QrCodeGenerator.generate(engagement.mdocUri)
-
-            let bleServer = BlePeripheralServer(
-                engagement: engagement,
-                getCredentials: { [viewModel] in await viewModel.getCredentialsForProximity() },
-                signPresentation: { [viewModel] credentialId, disclosedClaims, sessionTranscriptBytes in
-                    try await viewModel.signMdocPresentationForProximity(
-                        credentialId: credentialId,
-                        disclosedClaims: disclosedClaims,
-                        sessionTranscriptBytes: sessionTranscriptBytes
-                    )
-                },
-                onLog: { line in statusLines.append(line) },
-                onComplete: { success in
-                    statusLines.append(success ? "Presentation complete" : "Presentation did not complete")
-                }
-            )
-            server = bleServer
-            bleServer.start()
+            startBleModes(engagement: engagement)
         } catch {
             setupError = error.localizedDescription
+        }
+    }
+
+    /// Wires up BOTH `BlePeripheralServer` and `BleCentralClient`
+    /// simultaneously against the same engagement, mirroring the Kotlin
+    /// screen's `DisposableEffect` block: a real reader can complete a
+    /// presentation via whichever BLE mode it actually supports, and
+    /// whichever one wins stops the other (which would otherwise just keep
+    /// scanning/advertising for a connection that will never come).
+    /// `peripheralServer`/`central` are declared as local `var`s (not
+    /// `let`s) and captured by the OTHER mode's `onComplete` closure before
+    /// being fully assigned - Swift closures capture local `var`s by
+    /// reference, so this resolves correctly once both are assigned below,
+    /// the same pattern Kotlin's `var peripheralServer: BlePeripheralServer? = null`
+    /// relies on.
+    private func startBleModes(engagement: DeviceEngagement.Engagement) {
+        var peripheralServer: BlePeripheralServer?
+        var central: BleCentralClient?
+
+        let getCredentials: () async -> [StoredCredential] = { [viewModel] in
+            await viewModel.getCredentialsForProximity()
+        }
+        let signPresentation: (Int64, [String]?, Data) async throws -> Data = { [viewModel] credentialId, disclosedClaims, sessionTranscriptBytes in
+            try await viewModel.signMdocPresentationForProximity(
+                credentialId: credentialId,
+                disclosedClaims: disclosedClaims,
+                sessionTranscriptBytes: sessionTranscriptBytes
+            )
+        }
+
+        peripheralServer = BlePeripheralServer(
+            engagement: engagement,
+            getCredentials: getCredentials,
+            signPresentation: signPresentation,
+            requestConsent: requestConsent,
+            onStep: { step in currentStep = step },
+            onLog: { message in print("[BlePeripheralServer] \(message)") },
+            onComplete: { success in
+                result = success
+                if success { central?.stop() }
+            }
+        )
+        central = BleCentralClient(
+            engagement: engagement,
+            getCredentials: getCredentials,
+            signPresentation: signPresentation,
+            requestConsent: requestConsent,
+            onStep: { step in currentStep = step },
+            onLog: { message in print("[BleCentralClient] \(message)") },
+            onComplete: { success in
+                result = success
+                if success { peripheralServer?.stop() }
+            }
+        )
+
+        server = peripheralServer
+        centralClient = central
+        peripheralServer?.start()
+        central?.start()
+    }
+
+    /// Bridges `BlePeripheralServer`/`BleCentralClient`'s async consent
+    /// request to this screen's consent sheet: suspends the caller (a
+    /// background BLE `Task`) until the user taps Share or Decline in
+    /// `ProximityConsentSheet`. Mirrors the Kotlin screen's
+    /// `suspendCancellableCoroutine` bridge to a Compose `AlertDialog`,
+    /// using Swift's `withCheckedContinuation` instead - the same
+    /// closure-captures-`self`-and-mutates-`@State`-later pattern this file
+    /// already relied on for `onLog`/`onComplete` before this change.
+    private func requestConsent(
+        _ docType: String,
+        _ requestedClaims: [String],
+        _ matchingFamilies: [CredentialFamily]
+    ) async -> ProximityConsentResult {
+        await withCheckedContinuation { continuation in
+            pendingConsent = PendingConsent(
+                docType: docType,
+                requestedClaims: requestedClaims,
+                matchingFamilies: matchingFamilies,
+                respond: { chosen in
+                    pendingConsent = nil
+                    continuation.resume(returning: chosen.map { ProximityConsentResult.approved($0) } ?? .denied)
+                }
+            )
+        }
+    }
+}
+
+/// Progress bar + step label for an in-flight proximity presentation, once a
+/// reader has connected - mirrors `FlowActiveView`'s look
+/// (`ContentView.swift`) for the issuance/redirect-presentation flows, using
+/// the "proximity" step list from `FlowProgress.swift`.
+private struct ProximityProgressView: View {
+    let step: String
+
+    // Same monotonic guard as FlowActiveView: real execution order can
+    // deviate slightly (e.g. both BLE modes reporting steps interleaved
+    // before one wins), but the bar should never visibly un-progress.
+    @State private var maxProgress: Double = 0
+
+    private var stepProgress: Double? { flowStepProgress(flowType: "proximity", step: step) }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            if let stepProgress {
+                ProgressView(value: maxProgress)
+                    .tint(SirosTheme.brand)
+                    .onAppear { maxProgress = max(maxProgress, stepProgress) }
+                    // Single-param onChange(of:perform:) - matches
+                    // FlowActiveView's own choice, since this app's
+                    // deployment target is iOS 16.
+                    .onChange(of: stepProgress) { newValue in
+                        maxProgress = max(maxProgress, newValue)
+                    }
+            } else {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(SirosTheme.brand)
+            }
+            Text(flowStepLabel(step))
+                .font(.body)
+                .foregroundColor(SirosTheme.onSurfaceVariant)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SirosTheme.background)
+    }
+}
+
+/// Terminal state once a proximity presentation has completed or failed -
+/// shows a clear "Close" action rather than "Cancel", since there is nothing
+/// left to cancel: per this feature's explicit UX requirement, this screen
+/// must not offer a Cancel button once the flow is done.
+private struct ProximityTerminalView: View {
+    let success: Bool
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 64))
+                .foregroundColor(success ? SirosTheme.brand : SirosTheme.error)
+            Text(success ? L10n.string("flow.presentationSent") : L10n.string("proximity.presentationFailed"))
+                .font(.title3.weight(.medium))
+                .multilineTextAlignment(.center)
+            Button(L10n.string("flow.closeButton"), action: onClose)
+                .buttonStyle(.borderedProminent)
+                .tint(SirosTheme.brand)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SirosTheme.background)
+    }
+}
+
+/// Holds one in-flight consent request's details plus how to answer it - see
+/// `RequestProximityConsent`. `Identifiable` so it can drive a
+/// `.sheet(item:)` presentation directly.
+private struct PendingConsent: Identifiable {
+    let id = UUID()
+    let docType: String
+    let requestedClaims: [String]
+    let matchingFamilies: [CredentialFamily]
+    /// Call with the chosen family to approve, or nil to deny.
+    let respond: (CredentialFamily?) -> Void
+}
+
+/// Consent sheet shown before a proximity presentation is signed and sent:
+/// a recognizable preview of the actual credential (not just its raw
+/// docType string, so the user can tell at a glance whether this is really
+/// their own mDL/etc.), the actual requested claims, and - only if more
+/// than one credential family matches - a picker to choose which to share.
+/// Mirrors the Kotlin screen's `ProximityConsentDialog`.
+private struct ProximityConsentSheet: View {
+    let consent: PendingConsent
+    @State private var selected: CredentialFamily
+
+    init(consent: PendingConsent) {
+        self.consent = consent
+        _selected = State(initialValue: consent.matchingFamilies.first!)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    CredentialCardView(credential: selected.representative)
+
+                    Text(L10n.string("proximity.requestingClaims"))
+                        .font(.subheadline)
+                        .foregroundColor(SirosTheme.onSurfaceVariant)
+                    ForEach(consent.requestedClaims, id: \.self) { claim in
+                        Text("• \(claim)")
+                            .font(.body)
+                    }
+
+                    if consent.matchingFamilies.count > 1 {
+                        Divider()
+                        Text(L10n.string("proximity.multipleMatches"))
+                            .font(.subheadline.weight(.semibold))
+                        // Tappable-row selection (checkmark indicates the
+                        // current choice) rather than a native SwiftUI
+                        // `Picker` - matches this repo's existing
+                        // tap-to-select convention for small in-app choice
+                        // lists (see `WscaDeveloperView.swift`'s
+                        // `PluginChip`), adapted to full-width rows since
+                        // each option here needs a full credential name.
+                        ForEach(consent.matchingFamilies, id: \.representative.id) { family in
+                            Button(action: { selected = family }) {
+                                HStack {
+                                    Image(systemName: family == selected ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(family == selected ? SirosTheme.brand : SirosTheme.onSurfaceVariant)
+                                    Text(family.representative.metadata?.vct ?? family.representative.metadata?.doctype ?? consent.docType)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle(L10n.string("proximity.shareCredential"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.string("proximity.declineButton")) { consent.respond(nil) }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.string("proximity.shareButton")) { consent.respond(selected) }
+                }
+            }
         }
     }
 }
