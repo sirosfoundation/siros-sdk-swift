@@ -88,7 +88,7 @@ public enum ProximitySessionCrypto {
         public func encrypt(_ plaintext: [UInt8]) throws -> [UInt8] {
             let nonce = try AES.GCM.Nonce(data: nextIv())
             let sealed = try AES.GCM.seal(plaintext, using: key, nonce: nonce)
-            return sealed.ciphertext + sealed.tag
+            return Array(sealed.ciphertext) + Array(sealed.tag)
         }
 
         /// AES-256-GCM decrypt with the next IV for this key; empty AAD, per §12.2.5.
