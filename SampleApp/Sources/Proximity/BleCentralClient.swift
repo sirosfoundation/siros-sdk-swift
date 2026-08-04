@@ -55,6 +55,12 @@ final class BleCentralClient: NSObject {
     static let identUUID = CBUUID(string: "00000008-A123-48CE-896B-4C76973373E6")
 
     private static let stateStart: UInt8 = 0x01
+    private static let stateEnd: UInt8 = 0x02
+
+    /// Default BLE ATT MTU before negotiation (23 bytes, per the Bluetooth
+    /// Core Spec) - yields a 20-byte max chunk payload (MTU-3). Mirrors the
+    /// Kotlin SDK's `BleCentralClient.DEFAULT_MTU`.
+    private static let defaultMtu = 23
 
     private let engagement: DeviceEngagement.Engagement
     /// Mirrors `SirosWallet.getCredentials` - see `BlePeripheralServer`'s matching parameter doc comment.
@@ -63,6 +69,8 @@ final class BleCentralClient: NSObject {
     private let signPresentation: (_ credentialId: Int64, _ disclosedClaims: [String]?, _ sessionTranscriptBytes: Data) async throws -> Data
     /// See `RequestProximityConsent`'s doc comment.
     private let requestConsent: RequestProximityConsent
+    /// See `BlePeripheralServer`'s matching parameter doc comment.
+    private let filterEligible: ([StoredCredential]) -> [StoredCredential]
     /// Reports a canonical step token (see `FlowProgress.swift`'s proximity
     /// step list) for driving the same progress-bar UI the issuance/
     /// presentation flows use.
@@ -85,6 +93,7 @@ final class BleCentralClient: NSObject {
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
         requestConsent: @escaping RequestProximityConsent,
+        filterEligible: @escaping ([StoredCredential]) -> [StoredCredential],
         onStep: @escaping (String) -> Void,
         onLog: @escaping (String) -> Void,
         onComplete: @escaping (Bool) -> Void
@@ -93,6 +102,7 @@ final class BleCentralClient: NSObject {
         self.getCredentials = getCredentials
         self.signPresentation = signPresentation
         self.requestConsent = requestConsent
+        self.filterEligible = filterEligible
         self.onStep = onStep
         self.onLog = onLog
         self.onComplete = onComplete
@@ -193,9 +203,15 @@ final class BleCentralClient: NSObject {
             onComplete(false)
             return
         }
+        let eligible = filterEligible(family.instances)
+        guard !eligible.isEmpty else {
+            onLog("No eligible (unused) instances remain for the approved credential")
+            onComplete(false)
+            return
+        }
         // See BlePeripheralServer's matching comment: pick a random instance
         // from the batch, not always the same one, to preserve unlinkability.
-        let credential = family.instances.randomElement() ?? family.representative
+        let credential = eligible.randomElement()!
 
         onStep("submitting_response")
         let response = try await signPresentation(credential.id, docRequest.disclosedClaims(), Data(sessionTranscript))
@@ -205,12 +221,36 @@ final class BleCentralClient: NSObject {
         onComplete(true)
     }
 
+    /// Writes the encrypted response to `Client2Server`, chunked, then signals
+    /// STATE_END on `State` - matching peripheral-server-mode's more careful
+    /// state handling (Kotlin's `BleCentralClient.kt` originally omitted this;
+    /// a strict reader could otherwise keep the transaction open waiting for
+    /// it unnecessarily).
+    ///
+    /// Unlike `BlePeripheralServer.flushPendingNotifications`'s
+    /// `CBPeripheralManager.updateValue(...)` (which returns `Bool` and is
+    /// checked there), `CBPeripheral.writeValue(_:for:type:)` for
+    /// `.withoutResponse` writes is fire-and-forget on CoreBluetooth - it
+    /// returns `Void`, with no synchronous success/failure signal to check
+    /// (Android's mirror-image `BluetoothGatt.writeCharacteristic` DOES
+    /// return a `Boolean`, which the Kotlin SDK this was ported from checks -
+    /// that check has no CoreBluetooth equivalent to port here). CoreBluetooth
+    /// does expose `peripheralIsReady(toSendWriteWithoutResponse:)` for
+    /// write-side backpressure, but no per-write delivery confirmation, so
+    /// there is nothing further to validate at this call site.
     private func sendData(_ message: [UInt8]) {
         guard let characteristic = client2ServerCharacteristic, let peripheral else { return }
-        let maxChunkSize = min(peripheral.maximumWriteValueLength(for: .withoutResponse), 512)
+        // Floored at `defaultMtu - 3` (20 bytes): `BleMessageChunker.chunk`
+        // requires `maxChunkSize > 1`, and an unexpected/invalid negotiated
+        // write length should never be allowed to produce a smaller (or
+        // negative) value that would crash chunking outright.
+        let maxChunkSize = max(min(peripheral.maximumWriteValueLength(for: .withoutResponse), 512), Self.defaultMtu - 3)
         let chunks = BleMessageChunker.chunk(message, maxChunkSize: maxChunkSize)
         for chunk in chunks {
             peripheral.writeValue(Data(chunk), for: characteristic, type: .withoutResponse)
+        }
+        if let stateCharacteristic {
+            peripheral.writeValue(Data([Self.stateEnd]), for: stateCharacteristic, type: .withoutResponse)
         }
     }
 }

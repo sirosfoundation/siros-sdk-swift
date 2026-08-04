@@ -25,7 +25,8 @@
     "emptySubtitle": "Tap to add your first credential",
     "addTitle": "Add Credential",
     "addLoading": "Loading available credentials...",
-    "addEmpty": "No credentials available"
+    "addEmpty": "No credentials available",
+    "renew": "Renew"
   },
   "presentation": {
     "title": "Credential Request",
@@ -58,7 +59,12 @@
     "wscdNotEnrolled": "Not enrolled",
     "wscdEnroll": "Enroll WSCD",
     "wscdDeveloper": "WSCA Developer",
-    "disconnectButton": "Disconnect"
+    "disconnectButton": "Disconnect",
+    "credentialConsumptionTitle": "Credential consumption",
+    "credentialConsumptionDescription": "Controls whether presenting a credential uses up one of its batch copies",
+    "credentialConsumptionConsumeAll": "Consume on every presentation",
+    "credentialConsumptionConsumeNonZkp": "Consume only non-zero-knowledge presentations",
+    "credentialConsumptionNeverConsume": "Never consume (default)"
   },
   "wscd": {
     "title": "WSCA Developer",
@@ -125,7 +131,8 @@
     "requestingClaims": "A reader is requesting the following, from this credential:",
     "multipleMatches": "You have more than one matching credential - choose which to share:",
     "shareButton": "Share",
-    "declineButton": "Decline"
+    "declineButton": "Decline",
+    "noCopiesLeft": "No copies left - renew in Settings"
   },
   "nav": {
     "credentials": "Credentials",

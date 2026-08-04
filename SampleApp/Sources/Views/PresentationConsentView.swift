@@ -20,6 +20,13 @@ struct PresentationConsentView: View {
             return AnyView(EmptyView())
         }
 
+        // Unlike the Kotlin sample app's PresentationConsentScreen (which
+        // tracks exhaustion per DCQL query/matchResult), this screen's
+        // PresentationRequest is a single flat candidate list - so exhaustion
+        // is computed once, for the whole request, rather than per query.
+        let eligibleIds = Set(viewModel.eligibleCredentialIds(from: request.candidates))
+        let isExhausted = !request.candidates.isEmpty && eligibleIds.isEmpty
+
         let totalSteps = request.candidates.count + 2 // preview + per-cred + summary
 
         return AnyView(
@@ -31,7 +38,7 @@ struct PresentationConsentView: View {
                 // Content
                 Group {
                     if currentStep == 0 {
-                        previewStep(request)
+                        previewStep(request, isExhausted: isExhausted)
                     } else if currentStep <= request.candidates.count {
                         let cred = request.candidates[currentStep - 1]
                         claimSelectionStep(credential: cred, requestedClaims: request.requestedClaims)
@@ -73,8 +80,7 @@ struct PresentationConsentView: View {
                         .tint(SirosTheme.brand)
                     } else {
                         Button(action: {
-                            let ids = request.candidates.map(\.id)
-                            viewModel.acceptPresentation(ids)
+                            viewModel.acceptPresentation(Array(eligibleIds))
                         }) {
                             HStack {
                                 Image(systemName: "checkmark")
@@ -85,6 +91,7 @@ struct PresentationConsentView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(SirosTheme.brand)
+                        .disabled(isExhausted)
                     }
                 }
                 .padding(.horizontal)
@@ -98,7 +105,7 @@ struct PresentationConsentView: View {
     // MARK: - Step 1: Preview
 
     @ViewBuilder
-    private func previewStep(_ request: PresentationRequest) -> some View {
+    private func previewStep(_ request: PresentationRequest, isExhausted: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
@@ -120,9 +127,22 @@ struct PresentationConsentView: View {
                 Text("\(verifier) is requesting the following credentials:")
                     .font(.body)
 
-                ForEach(request.candidates, id: \.id) { cred in
-                    credentialCard(cred, claimCount: request.requestedClaims.flatMap { $0 }.count)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(request.candidates, id: \.id) { cred in
+                        credentialCard(cred, claimCount: request.requestedClaims.flatMap { $0 }.count)
+                    }
+                    if isExhausted {
+                        Text("No eligible copies remain - renew this credential in Settings")
+                            .font(.caption.bold())
+                            .foregroundColor(SirosTheme.error)
+                            .padding(.top, 4)
+                    }
                 }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isExhausted ? SirosTheme.error.opacity(0.12) : Color.clear)
+                )
             }
             .padding(.horizontal)
         }

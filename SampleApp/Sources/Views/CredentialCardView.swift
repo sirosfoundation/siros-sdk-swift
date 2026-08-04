@@ -17,9 +17,32 @@ import SVGView
 /// fetch/substitution fails for any reason.
 struct CredentialCardView: View {
     let credential: StoredCredential
+    /// Every copy in this credential's batch (see `StoredCredential.batchId`),
+    /// including itself - mirrors wallet-frontend's `vcEntity.instances`: the
+    /// ribbon shows how many copies haven't been used in a presentation yet.
+    /// Nil (the default) hides the ribbon entirely and never treats the card
+    /// as exhausted - for callers, like the detail screen's compact header,
+    /// that don't have batch/usage data on hand rather than showing a
+    /// misleading "0".
+    var instances: [CredentialInstance]? = nil
+    /// Called when the card is tapped, UNLESS it's exhausted (every batch
+    /// instance already used - see `instances`) - mirrors the Kotlin sample
+    /// app's `CredentialCard` owning its own click-vs-exhausted gating
+    /// internally rather than leaving it to the caller.
+    var onClick: (() -> Void)? = nil
+    /// Called when the user taps "Renew" on a fully-exhausted credential.
+    /// Only ever shown/invoked when `instances` is non-nil and every
+    /// instance's `sigCount > 0`; ignored (no button rendered) if nil.
+    var onRenewClick: (() -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var svgState: SvgLoadState = .notApplicable
+
+    /// Nil when the caller doesn't have batch/usage data on hand (see
+    /// `instances`'s doc comment) - only gates the greyed-out/Renew state
+    /// when we actually know the count, never on the strength of an absence.
+    private var unusedCount: Int? { instances?.filter { $0.sigCount == 0 }.count }
+    private var isExhausted: Bool { unusedCount == 0 }
 
     var body: some View {
         let meta = credential.metadata
@@ -55,7 +78,49 @@ struct CredentialCardView: View {
                             .fill(SirosTheme.error)
                     )
                     .padding(8)
+            } else if let unusedCount {
+                // Remaining-copies ribbon - mirrors wallet-frontend's
+                // UsagesRibbon: count of batch copies not yet used in a
+                // presentation (sigCount == 0), so it counts down as copies
+                // get consumed rather than showing the fixed batch size.
+                // Only shown when EXPIRED isn't (they'd otherwise collide in
+                // the same corner) - matches this card's single top-trailing
+                // badge slot.
+                Text("\(unusedCount)")
+                    .font(.caption2.bold())
+                    .foregroundColor(unusedCount > 0 ? SirosTheme.onSurfaceVariant : .white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(unusedCount > 0 ? SirosTheme.surfaceVariant : SirosTheme.error)
+                    )
+                    .padding(8)
             }
+        }
+        .overlay {
+            // Every batch instance already used - grey the whole card out
+            // (it can no longer be presented, see
+            // CredentialUtils.eligibleInstances) and offer Renew instead of
+            // leaving it looking like a normal, selectable credential.
+            if isExhausted {
+                ZStack {
+                    Color.black.opacity(0.55)
+                    if let onRenewClick {
+                        Button(action: onRenewClick) {
+                            Text(L10n.string("credentials.renew"))
+                                .font(.body.bold())
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isExhausted else { return }
+            onClick?()
         }
         .task(id: SvgLoadKey(credentialId: credential.id, isDark: colorScheme == .dark)) {
             await loadSvg(preferDark: colorScheme == .dark)

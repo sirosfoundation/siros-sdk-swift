@@ -50,6 +50,17 @@ final class WalletViewModel: ObservableObject {
     }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
+    /// Core wallet policy (not a UI-only preference like the toggles above) -
+    /// persisted here, but enforced by `SirosWallet` itself (see
+    /// `SirosWallet.credentialConsumptionPolicy`'s doc comment). Applied to
+    /// `wallet` both immediately on change (`didSet`) and again whenever
+    /// `rebuildWalletIfNeeded()` creates a fresh instance.
+    @Published var credentialConsumptionPolicy: CredentialConsumptionPolicy {
+        didSet {
+            UserDefaults.standard.set(credentialConsumptionPolicy.rawValue, forKey: "siros_credential_consumption_policy")
+            wallet?.credentialConsumptionPolicy = credentialConsumptionPolicy
+        }
+    }
 
     // MARK: - Wallet state
 
@@ -157,6 +168,8 @@ final class WalletViewModel: ObservableObject {
         // localized label alone is enough. Kept as an opt-in toggle for
         // debugging (was default true during initial rollout).
         self.showDiagnosticMessages = defaults.object(forKey: "siros_show_diagnostic_messages") as? Bool ?? false
+        self.credentialConsumptionPolicy = defaults.string(forKey: "siros_credential_consumption_policy")
+            .flatMap { CredentialConsumptionPolicy(rawValue: $0) } ?? .neverConsume
     }
 
     // MARK: - Public actions
@@ -544,6 +557,71 @@ final class WalletViewModel: ObservableObject {
         )
     }
 
+    /// The wallet's presentation history, read live (unlike `presentationHistory`
+    /// above, which is only refreshed when the History screen opens) - for
+    /// callers like `CredentialsView`/`filterEligibleForProximity` that need
+    /// an up-to-date view to compute `CredentialUtils.eligibleInstances`
+    /// on every render/decision rather than a possibly-stale cached copy.
+    var currentPresentationHistory: [PresentationRecord] {
+        wallet?.presentationHistory ?? []
+    }
+
+    /// Mirrors `CredentialUtils.eligibleInstances` bound to `wallet`'s current
+    /// `credentialConsumptionPolicy`/`presentationHistory` - passed to
+    /// `BlePeripheralServer`/`BleCentralClient` and `ProximityConsentSheet`
+    /// so a family the user approves can't be signed with (or picked for)
+    /// an exhausted instance.
+    func filterEligibleForProximity(_ instances: [StoredCredential]) -> [StoredCredential] {
+        CredentialUtils.eligibleInstances(
+            instances: instances,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: currentPresentationHistory
+        )
+    }
+
+    /// Same as `filterEligibleForProximity`, generalized for the redirect/DC
+    /// API presentation consent screen (`PresentationConsentView`) - a query
+    /// is unsatisfiable if every candidate that matched it has already been
+    /// used up under the active consumption policy (see
+    /// `CredentialUtils.eligibleInstances`). The SDK itself refuses to sign
+    /// with an exhausted instance regardless (defense in depth), but the
+    /// user shouldn't be let all the way to "Share" only to have it silently
+    /// fail.
+    func eligibleCredentialIds(from candidates: [StoredCredential]) -> [Int64] {
+        CredentialUtils.eligibleInstances(
+            instances: candidates,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: currentPresentationHistory
+        ).map(\.id)
+    }
+
+    /// Re-request a fresh batch of `credential` directly from its own
+    /// issuer/config (already stored on it - see
+    /// `StoredCredential.credentialIssuerIdentifier`/`StoredCredential.credentialConfigurationId`),
+    /// skipping the generic issuer-browsing screen entirely - for
+    /// `CredentialCardView`'s "Renew" action once every batch instance has
+    /// been used up (see `CredentialUtils.eligibleInstances`).
+    func renewCredential(_ credential: StoredCredential) {
+        guard let issuerId = credential.credentialIssuerIdentifier,
+              let configId = credential.credentialConfigurationId else {
+            setError("Cannot renew this credential - issuer information is missing")
+            return
+        }
+        let offer = CredentialOffer(
+            credentialConfigurationId: configId,
+            credentialIssuerIdentifier: issuerId,
+            credentialName: credential.metadata?.name ?? credential.format,
+            issuerName: credential.metadata?.issuer?.name ?? issuerId
+        )
+        Task {
+            do {
+                try await wallet?.startIssuanceByOffer(offer)
+            } catch {
+                setError(error.localizedDescription)
+            }
+        }
+    }
+
     func handleQrResult(_ code: String) {
         showQrScanner = false
         let linkType = DeepLinkClassifier.classify(code)
@@ -702,6 +780,7 @@ final class WalletViewModel: ObservableObject {
             sessionStore: KeychainSessionStore(),
             keystore: keystore
         )
+        wallet?.credentialConsumptionPolicy = credentialConsumptionPolicy
         wallet?.setEventListener(self)
         observeState()
     }

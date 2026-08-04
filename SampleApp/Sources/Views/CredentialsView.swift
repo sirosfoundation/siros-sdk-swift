@@ -6,6 +6,18 @@ import SirosCredentials
 struct CredentialsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
+    /// One entry per batch (see `StoredCredential.batchId`) instead of one
+    /// per issued copy - mirrors wallet-frontend's `fetchVcData` grouping
+    /// (and the Kotlin sample app's `CredentialsTab`) so a 5-copy batch
+    /// issuance shows as a single card with a remaining-copies ribbon, not
+    /// five swipeable duplicates.
+    private var grouped: [CredentialWithInstances] {
+        CredentialUtils.groupForDisplay(
+            credentials: viewModel.credentials,
+            presentationHistory: viewModel.currentPresentationHistory
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Welcome, \(viewModel.displayName ?? "User")")
@@ -20,22 +32,28 @@ struct CredentialsView: View {
 
             Spacer().frame(height: 16)
 
-            if viewModel.credentials.isEmpty {
+            let entries = grouped
+            if entries.isEmpty {
                 emptyState
-            } else if viewModel.credentials.count == 1 {
-                CredentialCardView(credential: viewModel.credentials[0])
-                    .onTapGesture {
-                        viewModel.openCredentialDetail(viewModel.credentials[0])
-                    }
-                    .padding(.horizontal, 16)
+            } else if entries.count == 1 {
+                let entry = entries[0]
+                CredentialCardView(
+                    credential: entry.credential,
+                    instances: entry.instances,
+                    onClick: { viewModel.openCredentialDetail(entry.credential) },
+                    onRenewClick: { viewModel.renewCredential(entry.credential) }
+                )
+                .padding(.horizontal, 16)
             } else {
                 TabView {
-                    ForEach(viewModel.credentials, id: \.id) { credential in
-                        CredentialCardView(credential: credential)
-                            .onTapGesture {
-                                viewModel.openCredentialDetail(credential)
-                            }
-                            .padding(.horizontal, 16)
+                    ForEach(entries, id: \.credential.id) { entry in
+                        CredentialCardView(
+                            credential: entry.credential,
+                            instances: entry.instances,
+                            onClick: { viewModel.openCredentialDetail(entry.credential) },
+                            onRenewClick: { viewModel.renewCredential(entry.credential) }
+                        )
+                        .padding(.horizontal, 16)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .always))
@@ -47,7 +65,7 @@ struct CredentialsView: View {
     }
 
     private var credentialCountText: String {
-        let count = viewModel.credentials.count
+        let count = grouped.count
         switch count {
         case 0: return "No credentials yet"
         case 1: return "1 credential"

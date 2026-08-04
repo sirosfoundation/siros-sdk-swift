@@ -25,7 +25,8 @@
     "emptySubtitle": "Tryck för att lägga till ditt första intyg",
     "addTitle": "Lägg till Intyg",
     "addLoading": "Laddar tillgängliga intyg...",
-    "addEmpty": "Inga intyg tillgängliga"
+    "addEmpty": "Inga intyg tillgängliga",
+    "renew": "Förnya"
   },
   "presentation": {
     "title": "Intygsbegäran",
@@ -58,7 +59,12 @@
     "wscdNotEnrolled": "Ej registrerad",
     "wscdEnroll": "Registrera WSCD",
     "wscdDeveloper": "WSCA Utvecklare",
-    "disconnectButton": "Koppla från"
+    "disconnectButton": "Koppla från",
+    "credentialConsumptionTitle": "Förbrukning av intyg",
+    "credentialConsumptionDescription": "Styr om en presentation förbrukar en av intygets kopior",
+    "credentialConsumptionConsumeAll": "Förbruka vid varje presentation",
+    "credentialConsumptionConsumeNonZkp": "Förbruka endast icke-nollkunskapspresentationer",
+    "credentialConsumptionNeverConsume": "Förbruka aldrig (standard)"
   },
   "wscd": {
     "title": "WSCA Utvecklare",
@@ -125,7 +131,8 @@
     "requestingClaims": "En läsare begär följande, från detta intyg:",
     "multipleMatches": "Du har fler än ett matchande intyg - välj vilket som ska delas:",
     "shareButton": "Dela",
-    "declineButton": "Avböj"
+    "declineButton": "Avböj",
+    "noCopiesLeft": "Inga kopior kvar - förnya i Inställningar"
   },
   "nav": {
     "credentials": "Intyg",

@@ -1,5 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
+import Foundation
 import SwiftUI
 import UIKit
 import SirosCredentials
@@ -38,7 +39,22 @@ struct ProximityEngagementScreen: View {
     /// Set once either BLE mode reports completion (success or failure) -
     /// non-nil switches this screen to its terminal Close-button view.
     @State private var result: Bool?
+    /// Per-role outcome, so a terminal failure is only reported once BOTH
+    /// BLE roles have finished unsuccessfully - the two run concurrently, and
+    /// one failing (e.g. central-client mode never finding a reader) must
+    /// not preempt the other still succeeding shortly after. Mirrors a real
+    /// completion-race bug fixed on the Kotlin SDK this was ported from
+    /// (`ProximityEngagementScreen.kt`, fourth Copilot-review round): this
+    /// screen previously set a single terminal `result` the instant either
+    /// role's `onComplete` fired with `false`.
+    @State private var peripheralOutcome: Bool?
+    @State private var centralOutcome: Bool?
     @State private var pendingConsent: PendingConsent?
+    /// The continuation box backing the CURRENTLY shown `pendingConsent`, if
+    /// any - lets `.sheet(item:onDismiss:)`'s `onDismiss` resolve it if the
+    /// sheet is dismissed WITHOUT the user tapping Share/Decline (e.g.
+    /// swiping it away). See `requestConsent`'s doc comment.
+    @State private var activeConsentBox: ConsentContinuationBox?
 
     var body: some View {
         NavigationStack {
@@ -69,8 +85,20 @@ struct ProximityEngagementScreen: View {
             server?.stop()
             centralClient?.stop()
         }
-        .sheet(item: $pendingConsent) { consent in
-            ProximityConsentSheet(consent: consent)
+        .sheet(item: $pendingConsent, onDismiss: {
+            // Covers the sheet being dismissed WITHOUT the user tapping
+            // Share/Decline (e.g. swiping it away) - the continuation would
+            // otherwise hang forever with no way to resolve it. `resumeOnce`
+            // is a no-op if the user already tapped Share/Decline (`respond`
+            // already resumed it, which is what triggered this dismissal in
+            // the first place) - see `requestConsent`'s doc comment.
+            activeConsentBox?.resumeOnce(.denied)
+            activeConsentBox = nil
+        }) { consent in
+            ProximityConsentSheet(
+                consent: consent,
+                filterEligible: { viewModel.filterEligibleForProximity($0) }
+            )
         }
     }
 
@@ -157,17 +185,32 @@ struct ProximityEngagementScreen: View {
                 sessionTranscriptBytes: sessionTranscriptBytes
             )
         }
+        let filterEligible: ([StoredCredential]) -> [StoredCredential] = { [viewModel] instances in
+            viewModel.filterEligibleForProximity(instances)
+        }
 
         peripheralServer = BlePeripheralServer(
             engagement: engagement,
             getCredentials: getCredentials,
             signPresentation: signPresentation,
             requestConsent: requestConsent,
+            filterEligible: filterEligible,
             onStep: { step in currentStep = step },
             onLog: { message in print("[BlePeripheralServer] \(message)") },
             onComplete: { success in
-                result = success
-                if success { central?.stop() }
+                peripheralOutcome = success
+                if success {
+                    // Whichever mode the reader actually picked has now
+                    // finished - the other is just wasting radio time
+                    // scanning/advertising for a connection that will never
+                    // come, so stop it.
+                    central?.stop()
+                    result = true
+                } else if centralOutcome != nil {
+                    // Only report terminal failure once the OTHER role has
+                    // also finished/failed - it may yet succeed on its own.
+                    result = false
+                }
             }
         )
         central = BleCentralClient(
@@ -175,11 +218,17 @@ struct ProximityEngagementScreen: View {
             getCredentials: getCredentials,
             signPresentation: signPresentation,
             requestConsent: requestConsent,
+            filterEligible: filterEligible,
             onStep: { step in currentStep = step },
             onLog: { message in print("[BleCentralClient] \(message)") },
             onComplete: { success in
-                result = success
-                if success { peripheralServer?.stop() }
+                centralOutcome = success
+                if success {
+                    peripheralServer?.stop()
+                    result = true
+                } else if peripheralOutcome != nil {
+                    result = false
+                }
             }
         )
 
@@ -190,29 +239,85 @@ struct ProximityEngagementScreen: View {
     }
 
     /// Bridges `BlePeripheralServer`/`BleCentralClient`'s async consent
-    /// request to this screen's consent sheet: suspends the caller (a
-    /// background BLE `Task`) until the user taps Share or Decline in
-    /// `ProximityConsentSheet`. Mirrors the Kotlin screen's
-    /// `suspendCancellableCoroutine` bridge to a Compose `AlertDialog`,
-    /// using Swift's `withCheckedContinuation` instead - the same
-    /// closure-captures-`self`-and-mutates-`@State`-later pattern this file
-    /// already relied on for `onLog`/`onComplete` before this change.
+    /// request to this screen's consent sheet: suspends the caller until the
+    /// user taps Share or Decline in `ProximityConsentSheet`. Mirrors the
+    /// Kotlin screen's `suspendCancellableCoroutine` bridge to a Compose
+    /// `AlertDialog`.
+    ///
+    /// Thread-safety note (Kotlin's fix hopped to `Dispatchers.Main.immediate`
+    /// before touching Compose state, since it's called from BLE coroutines
+    /// running on `Dispatchers.IO`): `BlePeripheralServer`/`BleCentralClient`
+    /// both create their `CBPeripheralManager`/`CBCentralManager` with
+    /// `queue: nil`, so CoreBluetooth's OWN delegate callbacks already
+    /// dispatch on the main queue - there is no background dispatch queue to
+    /// hop off of the way Kotlin's `Dispatchers.IO` requires, and this
+    /// function is always reached via those callbacks (directly, or via a
+    /// plain `Task { ... }` spawned synchronously from one - see
+    /// `BlePeripheralServer.handleDataWrite`), so it already runs on the main
+    /// actor/thread in practice. Nothing further to hop here.
+    ///
+    /// Cancellation note (Kotlin's fix used `suspendCancellableCoroutine`'s
+    /// `invokeOnCancellation` to clear `pendingConsent` and guard `resume()`
+    /// with an `isActive` check, for when the underlying BLE coroutine scope
+    /// is torn down while the user hasn't answered yet): this screen never
+    /// actually calls `Task.cancel()` on the BLE `Task`s awaiting this
+    /// function (`stop()` only tears down the CoreBluetooth managers, not the
+    /// Swift `Task` itself), so `withTaskCancellationHandler` would have
+    /// nothing to hook here - Kotlin's specific trigger has no real Swift
+    /// equivalent in this screen. The GENUINE equivalent gap in THIS SwiftUI
+    /// screen is the user dismissing the consent sheet by swiping it away
+    /// instead of tapping Share/Decline, which would otherwise leave this
+    /// continuation suspended forever with no way to resolve it - handled via
+    /// `.sheet(item:onDismiss:)`'s `onDismiss` (see `body`), which resumes
+    /// `activeConsentBox` with `.denied` in that case. `ConsentContinuationBox`
+    /// guards the resulting race the same way Kotlin's `isActive` check does:
+    /// whichever of `respond`/`onDismiss` runs first wins, the other is a
+    /// no-op.
     private func requestConsent(
         _ docType: String,
         _ requestedClaims: [String],
         _ matchingFamilies: [CredentialFamily]
     ) async -> ProximityConsentResult {
-        await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<ProximityConsentResult, Never>) in
+            let box = ConsentContinuationBox()
+            box.set(continuation)
+            activeConsentBox = box
             pendingConsent = PendingConsent(
                 docType: docType,
                 requestedClaims: requestedClaims,
                 matchingFamilies: matchingFamilies,
                 respond: { chosen in
+                    // Triggers `.sheet(item:onDismiss:)`'s onDismiss too
+                    // (setting the bound item to nil dismisses the sheet) -
+                    // that's fine: `box.resumeOnce` below already wins the
+                    // race, so onDismiss's own `resumeOnce(.denied)` call is
+                    // a harmless no-op by the time it runs.
                     pendingConsent = nil
-                    continuation.resume(returning: chosen.map { ProximityConsentResult.approved($0) } ?? .denied)
+                    box.resumeOnce(chosen.map { ProximityConsentResult.approved($0) } ?? .denied)
                 }
             )
         }
+    }
+}
+
+/// Resumes a `ProximityConsentResult` continuation at most once, guarding
+/// the race between the user answering via `PendingConsent.respond` and the
+/// consent sheet being dismissed some other way (see `.sheet(item:onDismiss:)`
+/// in `ProximityEngagementScreen.body`, and `requestConsent`'s doc comment).
+/// Both call sites run on the main actor (SwiftUI button actions and
+/// `onDismiss` alike), so no locking is needed here - just the
+/// resume-at-most-once guard itself.
+private final class ConsentContinuationBox {
+    private var continuation: CheckedContinuation<ProximityConsentResult, Never>?
+
+    func set(_ continuation: CheckedContinuation<ProximityConsentResult, Never>) {
+        self.continuation = continuation
+    }
+
+    func resumeOnce(_ result: ProximityConsentResult) {
+        let continuation = self.continuation
+        self.continuation = nil
+        continuation?.resume(returning: result)
     }
 }
 
@@ -303,12 +408,28 @@ private struct PendingConsent: Identifiable {
 /// Mirrors the Kotlin screen's `ProximityConsentDialog`.
 private struct ProximityConsentSheet: View {
     let consent: PendingConsent
+    /// See `BlePeripheralServer.filterEligible`'s doc comment. A family with
+    /// zero eligible instances (every copy already used under the active
+    /// consumption policy) is shown here, not silently omitted - so the user
+    /// isn't confused about where their credential went - but disabled: the
+    /// SDK refuses to sign with an exhausted instance regardless (defense in
+    /// depth), so letting the user pick one here would just fail later.
+    /// Mirrors the Kotlin screen's `ProximityConsentDialog`.
+    let filterEligible: ([StoredCredential]) -> [StoredCredential]
     @State private var selected: CredentialFamily
 
-    init(consent: PendingConsent) {
+    init(consent: PendingConsent, filterEligible: @escaping ([StoredCredential]) -> [StoredCredential]) {
         self.consent = consent
-        _selected = State(initialValue: consent.matchingFamilies.first!)
+        self.filterEligible = filterEligible
+        let eligible = consent.matchingFamilies.first(where: { !filterEligible($0.instances).isEmpty })
+        _selected = State(initialValue: eligible ?? consent.matchingFamilies.first!)
     }
+
+    private func isEligible(_ family: CredentialFamily) -> Bool {
+        !filterEligible(family.instances).isEmpty
+    }
+
+    private var selectedIsEligible: Bool { isEligible(selected) }
 
     var body: some View {
         NavigationStack {
@@ -336,16 +457,25 @@ private struct ProximityConsentSheet: View {
                         // `PluginChip`), adapted to full-width rows since
                         // each option here needs a full credential name.
                         ForEach(consent.matchingFamilies, id: \.representative.id) { family in
-                            Button(action: { selected = family }) {
+                            let eligible = isEligible(family)
+                            Button(action: { if eligible { selected = family } }) {
                                 HStack {
                                     Image(systemName: family == selected ? "checkmark.circle.fill" : "circle")
                                         .foregroundColor(family == selected ? SirosTheme.brand : SirosTheme.onSurfaceVariant)
-                                    Text(family.representative.metadata?.vct ?? family.representative.metadata?.doctype ?? consent.docType)
-                                        .foregroundColor(.primary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(family.representative.metadata?.vct ?? family.representative.metadata?.doctype ?? consent.docType)
+                                            .foregroundColor(eligible ? .primary : SirosTheme.onSurfaceVariant)
+                                        if !eligible {
+                                            Text(L10n.string("proximity.noCopiesLeft"))
+                                                .font(.caption2)
+                                                .foregroundColor(SirosTheme.error)
+                                        }
+                                    }
                                     Spacer()
                                 }
                             }
                             .buttonStyle(.plain)
+                            .disabled(!eligible)
                         }
                     }
                 }
@@ -359,6 +489,7 @@ private struct ProximityConsentSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L10n.string("proximity.shareButton")) { consent.respond(selected) }
+                        .disabled(!selectedIsEligible)
                 }
             }
         }

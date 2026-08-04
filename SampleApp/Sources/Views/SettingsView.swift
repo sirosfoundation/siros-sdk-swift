@@ -2,6 +2,7 @@
 
 import SwiftUI
 import SirosKeystore
+import SirosCredentials
 
 struct SettingsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
@@ -17,6 +18,23 @@ struct SettingsView: View {
                     LabeledContent("Tenant", value: viewModel.tenantId)
                     LabeledContent("Credentials", value: "\(viewModel.credentials.count)")
                     LabeledContent("Transport", value: viewModel.useWmpProtocol ? "WMP (JSON-RPC 2.0)" : "Legacy")
+                }
+
+                // Credential consumption policy section
+                Section {
+                    Picker(selection: $viewModel.credentialConsumptionPolicy) {
+                        ForEach(CredentialConsumptionPolicy.allCases, id: \.self) { policy in
+                            Text(policy.localizedLabel).tag(policy)
+                        }
+                    } label: {
+                        EmptyView()
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } header: {
+                    Text(L10n.string("settings.credentialConsumptionTitle"))
+                } footer: {
+                    Text(L10n.string("settings.credentialConsumptionDescription"))
                 }
 
                 // Passkeys section
@@ -181,3 +199,14 @@ struct PasskeyRow: View {
 
 // Re-export for use in views
 import SirosWallet
+
+/// Localized display label for a `CredentialConsumptionPolicy` value.
+extension CredentialConsumptionPolicy {
+    var localizedLabel: String {
+        switch self {
+        case .consumeAll: return L10n.string("settings.credentialConsumptionConsumeAll")
+        case .consumeNonZkp: return L10n.string("settings.credentialConsumptionConsumeNonZkp")
+        case .neverConsume: return L10n.string("settings.credentialConsumptionNeverConsume")
+        }
+    }
+}

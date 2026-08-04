@@ -57,6 +57,12 @@ final class BlePeripheralServer: NSObject {
     private let signPresentation: (_ credentialId: Int64, _ disclosedClaims: [String]?, _ sessionTranscriptBytes: Data) async throws -> Data
     /// See `RequestProximityConsent`'s doc comment.
     private let requestConsent: RequestProximityConsent
+    /// Mirrors `CredentialUtils.eligibleInstances` bound to the caller's
+    /// current `SirosWallet.credentialConsumptionPolicy`/`presentationHistory` -
+    /// excludes instances the active consumption policy considers already
+    /// used up, so a family the user approves can't sign with an exhausted
+    /// instance even if `requestConsent`'s UI failed to grey it out.
+    private let filterEligible: ([StoredCredential]) -> [StoredCredential]
     /// Reports a canonical step token (see `FlowProgress.swift`'s proximity
     /// step list) for driving the same progress-bar UI the issuance/
     /// presentation flows use.
@@ -70,16 +76,35 @@ final class BlePeripheralServer: NSObject {
     private var deviceCipher: ProximitySessionCrypto.SessionCipher?
     private var pendingNotifications: [Data] = []
     private var completed = false
+    /// Distinct from `deviceCipher != nil`: the cipher is created right after
+    /// session-key derivation, well before a response is actually signed and
+    /// notified back - if the reader sends STATE_END early (e.g. mid-consent,
+    /// or after a timeout), `deviceCipher != nil` would already be true and
+    /// incorrectly report success. Only set once the response has actually
+    /// finished being sent (see `flushPendingNotifications`).
+    private var responseSent = false
+    /// Set by `sendNotification` once a response has been enqueued - the
+    /// next time `flushPendingNotifications` fully drains the queue (whether
+    /// synchronously or later via `peripheralManagerIsReady`), that means
+    /// this response was completely transmitted, so `responseSent`/
+    /// `completeOnce(true)` should fire then, not the instant it was enqueued.
+    private var awaitingFinalFlush = false
     /// Guards `onStep("reader_connected")` firing only once per connection -
     /// see `peripheralManager(_:central:didSubscribeTo:)`'s doc comment for
     /// why that callback is used as the "reader connected" signal.
     private var reportedReaderConnected = false
+
+    /// Default BLE ATT MTU before negotiation (23 bytes, per the Bluetooth
+    /// Core Spec) - yields a 20-byte max chunk payload (MTU-3). Mirrors the
+    /// Kotlin SDK's `BlePeripheralServer.DEFAULT_MTU`.
+    private static let defaultMtu = 23
 
     init(
         engagement: DeviceEngagement.Engagement,
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
         requestConsent: @escaping RequestProximityConsent,
+        filterEligible: @escaping ([StoredCredential]) -> [StoredCredential],
         onStep: @escaping (String) -> Void,
         onLog: @escaping (String) -> Void,
         onComplete: @escaping (Bool) -> Void
@@ -88,6 +113,7 @@ final class BlePeripheralServer: NSObject {
         self.getCredentials = getCredentials
         self.signPresentation = signPresentation
         self.requestConsent = requestConsent
+        self.filterEligible = filterEligible
         self.onStep = onStep
         self.onLog = onLog
         self.onComplete = onComplete
@@ -127,9 +153,8 @@ final class BlePeripheralServer: NSObject {
             onLog("Reader signaled Start")
         case Self.stateEnd:
             onLog("Reader signaled End")
-            let completedOk = deviceCipher != nil
             stop()
-            completeOnce(completedOk)
+            completeOnce(responseSent)
         default:
             break
         }
@@ -218,26 +243,37 @@ final class BlePeripheralServer: NSObject {
             completeOnce(false)
             return
         }
+        let eligible = filterEligible(family.instances)
+        guard !eligible.isEmpty else {
+            onLog("No eligible (unused) instances remain for the approved credential")
+            completeOnce(false)
+            return
+        }
         // Pick a random instance from the batch rather than always the same
         // one - each instance is bound to its own device key specifically so
         // repeated presentations of "the same" credential can't be
         // correlated by a verifier via a reused public key. Always picking
         // the representative would quietly throw that unlinkability away.
-        // `instances` is always non-empty by construction (groupIntoFamilies
-        // never produces an empty family), so this fallback never triggers.
-        let credential = family.instances.randomElement() ?? family.representative
+        let credential = eligible.randomElement()!
 
         onStep("submitting_response")
         let response = try await signPresentation(credential.id, docRequest.disclosedClaims(), Data(sessionTranscript))
         let encrypted = try cipher.encrypt([UInt8](response))
         let sessionData = ProximitySessionMessages.buildSessionData(encryptedData: encrypted)
+        onLog("Sending DeviceResponse for \(docRequest.docType)")
         sendNotification(sessionData, to: central)
-        onLog("Sent DeviceResponse for \(docRequest.docType)")
-        completeOnce(true)
+        // completeOnce(true) fires from flushPendingNotifications once the
+        // response has actually finished sending (see `responseSent`'s doc
+        // comment) - not eagerly here, which would report success even if
+        // CoreBluetooth's backpressure queue never drains (e.g. the reader
+        // disconnects mid-transfer).
     }
 
     private func sendNotification(_ message: [UInt8], to central: CBCentral) {
-        guard server2ClientCharacteristic != nil, peripheralManager != nil else { return }
+        guard server2ClientCharacteristic != nil, peripheralManager != nil else {
+            completeOnce(false)
+            return
+        }
         // §11.1.3.4: chunk size must respect BOTH limits, independently -
         // `central.maximumUpdateValueLength` already reflects the
         // negotiated ATT MTU minus its 3-byte header overhead, AND the
@@ -245,10 +281,15 @@ final class BlePeripheralServer: NSObject {
         // value length. A real bug found via hardware testing in the
         // Kotlin SDK (`BlePeripheralServer.kt`): enforcing only one of
         // these is not enough - a sufficiently large negotiated MTU can
-        // make MTU-3 alone exceed 512.
-        let maxChunkSize = min(central.maximumUpdateValueLength, 512)
+        // make MTU-3 alone exceed 512. Also floored at `defaultMtu - 3` (20
+        // bytes): `BleMessageChunker.chunk` requires `maxChunkSize > 1`, and
+        // an unexpected/invalid negotiated MTU should never be allowed to
+        // produce a smaller (or negative) value that would crash chunking
+        // outright.
+        let maxChunkSize = max(min(central.maximumUpdateValueLength, 512), Self.defaultMtu - 3)
         let chunks = BleMessageChunker.chunk(message, maxChunkSize: maxChunkSize)
         pendingNotifications.append(contentsOf: chunks.map { Data($0) })
+        awaitingFinalFlush = true
         flushPendingNotifications()
     }
 
@@ -257,7 +298,11 @@ final class BlePeripheralServer: NSObject {
     /// the moment CoreBluetooth's internal transmit queue reports it's full -
     /// unlike Android's `notifyCharacteristicChanged`, CoreBluetooth requires
     /// this explicit backpressure handling; silently dropping a `false`
-    /// return here would silently lose chunks.
+    /// return here would silently lose chunks. Once the queue is fully
+    /// drained AND a response was actually enqueued (`awaitingFinalFlush`),
+    /// the presentation is genuinely complete - see `responseSent`'s doc
+    /// comment for why this, not `deviceCipher != nil` or an eager call
+    /// right after `sendNotification`, is the real completion signal.
     private func flushPendingNotifications() {
         guard let characteristic = server2ClientCharacteristic, let peripheralManager else { return }
         while !pendingNotifications.isEmpty {
@@ -266,11 +311,26 @@ final class BlePeripheralServer: NSObject {
             guard didSend else { return }
             pendingNotifications.removeFirst()
         }
+        if awaitingFinalFlush {
+            awaitingFinalFlush = false
+            responseSent = true
+            completeOnce(true)
+        }
     }
 }
 
 extension BlePeripheralServer: CBPeripheralManagerDelegate {
 
+    /// `.unauthorized` here is this SDK's analogue of a denied runtime
+    /// Bluetooth permission - but unlike Android's `ProximityEngagementScreen.kt`
+    /// (which tracked a separate `blePermissionsDenied` boolean that a real
+    /// Copilot-review bug found was never reset back to false once
+    /// permission was later granted), CoreBluetooth has no comparable stale-
+    /// flag class of bug to begin with: `state` is read fresh from
+    /// `CBPeripheralManager` every time this delegate method fires (including
+    /// if the user later grants Bluetooth access and the OS re-invokes it
+    /// with `.poweredOn`), not cached into a separate `@State` boolean that
+    /// could go stale. Nothing to reset here.
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral.state == .poweredOn else {
             if peripheral.state == .unauthorized || peripheral.state == .unsupported {
