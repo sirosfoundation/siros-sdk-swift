@@ -101,8 +101,20 @@ public enum BleMessageChunker {
 
         /// Feed one received chunk (including its prefix byte). Returns the
         /// complete message once the last part arrives, nil otherwise.
+        ///
+        /// The prefix byte must be exactly `0x00` (last) or `0x01` (more
+        /// coming) - a real bug found via Copilot's automated review on the
+        /// Kotlin SDK this was ported from (`org.siros.sdk.keystore.mdoc.BleMessageChunker.Reassembler`,
+        /// fixed in commit `e7d8872`): treating ANY nonzero byte as "more
+        /// chunks coming" risks an unbounded/garbage reassembly if a
+        /// malformed or malicious chunk arrives with e.g. `0xFF` as its
+        /// prefix. Do not reintroduce that gap.
         public func feed(_ chunk: [UInt8]) -> [UInt8]? {
             precondition(!chunk.isEmpty, "chunk must include its continuation-byte prefix")
+            precondition(
+                chunk[0] == 0x00 || chunk[0] == 0x01,
+                "chunk prefix must be 0x00 (last) or 0x01 (more coming), was \(chunk[0])"
+            )
             let isLast = chunk[0] == 0x00
             buffer.append(contentsOf: chunk.dropFirst())
             guard isLast else { return nil }

@@ -186,3 +186,57 @@ final class NfcHandoverSelectTests: XCTestCase {
 }
 
 #endif
+
+/// Regression coverage for the Copilot-review fix ported from the Kotlin SDK
+/// (`NfcHandoverSelect.kt`'s `ndefRecord`, commit `e7d8872`): a >=256-byte
+/// payload must fall back to a normal (non-SR) NDEF record with a 4-byte
+/// length instead of crashing. Deliberately NOT gated behind
+/// `canImport(CryptoKit)` like `NfcHandoverSelectTests` above - it only
+/// exercises `NfcHandoverSelect.build(deviceEngagementBytes:leRole:)`, which
+/// has no crypto dependency, so this runs on every platform including Linux.
+final class NfcHandoverSelectLargePayloadTests: XCTestCase {
+
+    func testBuild_payloadOf256OrMoreBytes_fallsBackToNonShortRecordWith4ByteLength() {
+        // Pad well past the 255-byte short-record cap.
+        let largeDeviceEngagementBytes = [UInt8](repeating: 0xAB, count: 300)
+
+        let message = NfcHandoverSelect.build(
+            deviceEngagementBytes: largeDeviceEngagementBytes,
+            leRole: .bothCentralPreferred
+        )
+
+        // Locate the device-engagement record (the third/last record) the
+        // same way the official-vector test does: walk past the Hs record,
+        // then the fixed-shape BLE carrier-configuration record.
+        let hsPayloadLen = Int(message[2])
+        var offset = 5 + hsPayloadLen
+
+        // Carrier-configuration record is still a short record (its payload
+        // is only 3 bytes) - its header keeps the SR bit (0x10) set.
+        XCTAssertEqual(message[offset] & 0x10, 0x10)
+        let carrierTypeLen = Int(message[offset + 1])
+        let carrierPayloadLen = Int(message[offset + 2])
+        let carrierIdLen = Int(message[offset + 3])
+        offset += 4 + carrierTypeLen + carrierIdLen + carrierPayloadLen
+
+        // Device-engagement record: header must have the SR bit (0x10)
+        // UNSET now that its payload is >= 256 bytes, and the length field
+        // must be 4 bytes (not 1) encoding 300 big-endian.
+        let deHeader = message[offset]
+        XCTAssertEqual(deHeader & 0x10, 0, "SR bit must be unset for a >=256-byte payload")
+        XCTAssertEqual(deHeader & 0x40, 0x40, "ME bit must still be set - this is the last record")
+        let deTypeLen = Int(message[offset + 1])
+        let lengthBytes = message[(offset + 2)..<(offset + 6)]
+        let decodedLength = lengthBytes.reduce(0) { ($0 << 8) | Int($1) }
+        XCTAssertEqual(decodedLength, 300)
+        let deIdLen = Int(message[offset + 6])
+        let deTypeStart = offset + 7
+        XCTAssertEqual(
+            String(decoding: message[deTypeStart..<(deTypeStart + deTypeLen)], as: UTF8.self),
+            "iso.org:18013:deviceengagement"
+        )
+        let dePayloadStart = deTypeStart + deTypeLen + deIdLen
+        XCTAssertEqual(Array(message[dePayloadStart..<(dePayloadStart + decodedLength)]), largeDeviceEngagementBytes)
+        XCTAssertEqual(message.count, dePayloadStart + decodedLength)
+    }
+}

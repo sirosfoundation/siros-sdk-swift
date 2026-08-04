@@ -157,14 +157,31 @@ public enum NfcHandoverSelect {
         messageBegin: Bool,
         messageEnd: Bool
     ) -> [UInt8] {
-        precondition(payload.count < 256, "NDEF short record payload must be < 256 bytes")
+        // NDEF short records (SR) only encode a 1-byte payload length,
+        // capping them at 255 bytes - a real DeviceEngagement payload fits
+        // comfortably today, but isn't guaranteed to forever (e.g. more
+        // retrieval methods or a larger key encoding). Fall back to a
+        // normal (non-SR) record with a 4-byte length instead of crashing
+        // static handover outright - a real bug found via Copilot's
+        // automated review on the Kotlin SDK this was ported from
+        // (`NfcHandoverSelect.kt`, fixed in commit `e7d8872`), which
+        // previously had the same `require(payload.size < 256)` crash.
+        let isShortRecord = payload.count < 256
         var header = tnf
         if messageBegin { header |= ndefMB }
         if messageEnd { header |= ndefME }
-        header |= ndefSR
+        if isShortRecord { header |= ndefSR }
         if id != nil { header |= ndefIL }
 
-        var out: [UInt8] = [header, UInt8(type.count), UInt8(payload.count)]
+        var out: [UInt8] = [header, UInt8(type.count)]
+        if isShortRecord {
+            out.append(UInt8(payload.count))
+        } else {
+            out.append(UInt8((payload.count >> 24) & 0xFF))
+            out.append(UInt8((payload.count >> 16) & 0xFF))
+            out.append(UInt8((payload.count >> 8) & 0xFF))
+            out.append(UInt8(payload.count & 0xFF))
+        }
         if let id { out.append(UInt8(id.count)) }
         out.append(contentsOf: type)
         if let id { out.append(contentsOf: id) }

@@ -141,4 +141,22 @@ final class BleMessageChunkerTests: XCTestCase {
 
         XCTAssertEqual(secondResult, second)
     }
+
+    /// Regression coverage for the Copilot-review fix ported from the
+    /// Kotlin SDK (`BleMessageChunker.Reassembler`, commit `e7d8872`):
+    /// `feed` must accept exactly the two valid prefix bytes, 0x00 (last)
+    /// and 0x01 (more coming). The invalid-prefix case (anything else)
+    /// traps via `precondition` rather than throwing - this repo's test
+    /// suite has no existing convention for asserting on a precondition
+    /// trap (no crash-testing harness elsewhere in `Tests/`), so that half
+    /// of the fix is verified by code-review parity with Kotlin's
+    /// `require(chunk[0] == 0x00 || chunk[0] == 0x01) { ... }` rather than
+    /// by an executable test here; this test instead locks down the valid
+    /// boundary so a future change can't narrow it by accident.
+    func testReassembler_acceptsBothValidPrefixBytes() {
+        let reassembler = BleMessageChunker.Reassembler()
+
+        XCTAssertNil(reassembler.feed([0x01, 1, 2, 3]))
+        XCTAssertEqual(reassembler.feed([0x00, 4, 5]), [1, 2, 3, 4, 5])
+    }
 }

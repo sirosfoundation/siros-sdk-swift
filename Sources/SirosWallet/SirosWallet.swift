@@ -732,8 +732,7 @@ public final class SirosWallet: @unchecked Sendable {
         disclosedClaims: [String]?,
         sessionTranscriptBytes: Data
     ) async throws -> Data {
-        let allCreds = await credentialStore.getAll()
-        guard let credential = allCreds.first(where: { $0.id == credentialId }) else {
+        guard let credential = await credentialStore.getById(credentialId) else {
             throw SirosError.wallet(message: "Credential not found: \(credentialId)")
         }
         let credBytes = Data(base64Encoded: credential.raw
