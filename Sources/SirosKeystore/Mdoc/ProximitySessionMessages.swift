@@ -32,6 +32,12 @@ public enum ProximitySessionMessages {
         guard let eReaderKey = map["eReaderKey"] else {
             throw KeystoreError.invalidParameter("SessionEstablishment missing eReaderKey")
         }
+        // §9.1.1: eReaderKey is a #6.24-tagged COSE_Key - a peer sending an
+        // untagged/differently-tagged value should fail here with a clear
+        // message, not deep inside key parsing with a less actionable one.
+        guard case .tagged(let tag, _) = eReaderKey, tag == .encodedCBORDataItem else {
+            throw KeystoreError.invalidParameter("SessionEstablishment.eReaderKey must be tag-24-wrapped (#6.24 COSE_Key)")
+        }
         guard case .byteString(let data)? = map["data"] else {
             throw KeystoreError.invalidParameter("SessionEstablishment missing data")
         }

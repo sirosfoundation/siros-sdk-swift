@@ -52,6 +52,18 @@ final class ProximitySessionMessagesTests: XCTestCase {
         let map: CBOR = .map([.utf8String("data"): .byteString([1])])
         XCTAssertThrowsError(try ProximitySessionMessages.parseSessionEstablishment(map.encode()))
     }
+
+    /// §9.1.1: eReaderKey must be a #6.24-tagged COSE_Key - an untagged value
+    /// should fail here with a clear message, not deep inside key parsing.
+    /// Mirrors the Kotlin SDK's equivalent validation
+    /// (`ProximitySessionMessages.parseSessionEstablishment`).
+    func testParseSessionEstablishment_untaggedEReaderKey_throws() {
+        let map: CBOR = .map([
+            .utf8String("eReaderKey"): .map([.unsignedInt(1): .unsignedInt(2)]),
+            .utf8String("data"): .byteString([1]),
+        ])
+        XCTAssertThrowsError(try ProximitySessionMessages.parseSessionEstablishment(map.encode()))
+    }
 }
 
 final class BleMessageChunkerTests: XCTestCase {
