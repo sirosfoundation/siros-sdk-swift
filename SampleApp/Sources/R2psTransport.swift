@@ -2,8 +2,8 @@
 
 import Foundation
 
-#if canImport(SirosWscdFFI)
-import SirosWscdFFI
+#if canImport(siros_wscd_managerFFI)
+import siros_wscd_managerFFI
 
 /// URLSession-based HTTP transport for R2PS protocol messages.
 ///

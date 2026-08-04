@@ -6,8 +6,8 @@ import SirosWallet
 import SirosCredentials
 import SirosAuth
 import SirosKeystore
-#if canImport(SirosWscdFFI)
-import SirosWscdFFI
+#if canImport(siros_wscd_managerFFI)
+import siros_wscd_managerFFI
 #endif
 
 #if DEBUG
@@ -133,7 +133,7 @@ final class WalletViewModel: ObservableObject {
     /// onFlowComplete) is enough - no need to key it by flowId, which
     /// onCredentialReceived doesn't carry anyway.
     private var receivedCredentialCount = 0
-    #if canImport(SirosWscdFFI)
+    #if canImport(siros_wscd_managerFFI)
     private var wscdSigner: UniFFISigner?
     #endif
     private var lifecycleContextId: String?
@@ -256,7 +256,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     func enrollWscd() {
-        #if canImport(SirosWscdFFI)
+        #if canImport(siros_wscd_managerFFI)
         guard let signer = wscdSigner else {
             setError("WSCD signer not initialized")
             return
@@ -291,12 +291,12 @@ final class WalletViewModel: ObservableObject {
             enrollmentInProgress = false
         }
         #else
-        setError("WSCD not available (SirosWscdFFI not linked)")
+        setError("WSCD not available (siros_wscd_managerFFI not linked)")
         #endif
     }
 
     func rotateLifecycle() {
-        #if canImport(SirosWscdFFI)
+        #if canImport(siros_wscd_managerFFI)
         guard let signer = wscdSigner, let ctxId = lifecycleContextId else {
             setError("WSCD not enrolled")
             return
@@ -319,7 +319,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     func destroyLifecycle(mode: DestroyMode) {
-        #if canImport(SirosWscdFFI)
+        #if canImport(siros_wscd_managerFFI)
         guard let signer = wscdSigner, let ctxId = lifecycleContextId else {
             setError("WSCD not enrolled")
             return
@@ -353,7 +353,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     func refreshWscdInfo() {
-        #if canImport(SirosWscdFFI)
+        #if canImport(siros_wscd_managerFFI)
         Task {
             guard let signer = wscdSigner else { return }
             do {
@@ -728,7 +728,7 @@ final class WalletViewModel: ObservableObject {
 
         // Build WSCD-backed keystore with selected plugin
         var keystore: KeystoreManager?
-        #if canImport(SirosWscdFFI)
+        #if canImport(siros_wscd_managerFFI)
         do {
             let wscdConfig = FfiWscdConfig(defaultPlugin: selectedPluginId)
             let signer = try UniFFISigner(config: wscdConfig)
