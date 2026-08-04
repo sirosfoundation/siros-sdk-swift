@@ -63,3 +63,4 @@ targets:
               - openid4vp
               - haip
         NSCameraUsageDescription: "Camera is used to scan QR codes for credential offers and presentation requests."
+        NSBluetoothAlwaysUsageDescription: "Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader."

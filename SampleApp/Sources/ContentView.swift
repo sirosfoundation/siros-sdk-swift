@@ -20,6 +20,8 @@ struct ContentView: View {
                     PresentationHistoryView()
                 } else if viewModel.showQrScanner {
                     QRScannerView()
+                } else if viewModel.showProximityEngagement {
+                    ProximityEngagementScreen()
                 } else if viewModel.showAddCredential {
                     AddCredentialView()
                 } else if viewModel.showWscaDeveloper {
@@ -142,6 +144,11 @@ struct MainTabView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
+                Button(action: { viewModel.openProximityEngagement() }) {
+                    Image(systemName: "wave.3.right")
+                        .font(.title3)
+                        .foregroundColor(SirosTheme.onSurface)
+                }
                 Button(action: { viewModel.openQrScanner() }) {
                     Image(systemName: "qrcode.viewfinder")
                         .font(.title3)

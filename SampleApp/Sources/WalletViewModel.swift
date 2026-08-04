@@ -72,6 +72,7 @@ final class WalletViewModel: ObservableObject {
     @Published var showHistory = false
     @Published var showQrScanner = false
     @Published var showWscaDeveloper = false
+    @Published var showProximityEngagement = false
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
 
@@ -507,6 +508,40 @@ final class WalletViewModel: ObservableObject {
 
     func closeQrScanner() {
         showQrScanner = false
+    }
+
+    // MARK: - Proximity (ISO 18013-5 BLE) presentation
+
+    func openProximityEngagement() {
+        showProximityEngagement = true
+    }
+
+    func closeProximityEngagement() {
+        showProximityEngagement = false
+    }
+
+    /// Mirrors `SirosWallet.getCredentials` - passed to `BlePeripheralServer`
+    /// so it can match a request's docType without depending on this view
+    /// model or `SirosWallet` directly.
+    func getCredentialsForProximity() async -> [StoredCredential] {
+        await wallet?.getCredentials() ?? []
+    }
+
+    /// Mirrors `SirosWallet.signMdocPresentationForProximity` - passed to
+    /// `BlePeripheralServer`.
+    func signMdocPresentationForProximity(
+        credentialId: Int64,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data
+    ) async throws -> Data {
+        guard let wallet else {
+            throw SirosError.wallet(message: "Wallet is not connected")
+        }
+        return try await wallet.signMdocPresentationForProximity(
+            credentialId: credentialId,
+            disclosedClaims: disclosedClaims,
+            sessionTranscriptBytes: sessionTranscriptBytes
+        )
     }
 
     func handleQrResult(_ code: String) {
