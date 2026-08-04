@@ -20,6 +20,8 @@ struct ContentView: View {
                     PresentationHistoryView()
                 } else if viewModel.showQrScanner {
                     QRScannerView()
+                } else if viewModel.showProximityEngagement {
+                    ProximityEngagementScreen()
                 } else if viewModel.showAddCredential {
                     AddCredentialView()
                 } else if viewModel.showWscaDeveloper {
@@ -27,8 +29,8 @@ struct ContentView: View {
                 } else {
                     MainTabView()
                 }
-            case .flowActive(let message):
-                FlowActiveView(message: message)
+            case .flowActive(let flowType, let status):
+                FlowActiveView(flowType: flowType, status: status)
             case .error(let message):
                 ErrorView(message: message)
             }
@@ -38,6 +40,11 @@ struct ContentView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+        .alert("Info", isPresented: $viewModel.showInfo) {
+            Button("OK") { viewModel.clearInfo() }
+        } message: {
+            Text(viewModel.infoMessage ?? "")
+        }
     }
 }
 
@@ -45,17 +52,42 @@ struct ContentView: View {
 
 struct FlowActiveView: View {
     @EnvironmentObject var viewModel: WalletViewModel
-    let message: String
+    let flowType: String
+    let status: String
+
+    // Guard against a visible backward jump: real execution order can
+    // deviate slightly from the canonical step list (e.g. a step retried
+    // after a transient error), but the bar should never un-progress.
+    @State private var maxProgress: Double = 0
+
+    private var stepProgress: Double? { flowStepProgress(flowType: flowType, step: status) }
 
     var body: some View {
         VStack(spacing: 16) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .tint(SirosTheme.brand)
-            Text(message)
+            if let stepProgress {
+                ProgressView(value: maxProgress)
+                    .tint(SirosTheme.brand)
+                    .onAppear { maxProgress = max(maxProgress, stepProgress) }
+                    // Single-param onChange(of:perform:) - the two-param
+                    // (oldValue, newValue) overload needs iOS 17+, but this
+                    // app's deployment target is iOS 16.
+                    .onChange(of: stepProgress) { newValue in
+                        maxProgress = max(maxProgress, newValue)
+                    }
+            } else {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(SirosTheme.brand)
+            }
+            Text(flowStepLabel(status))
                 .font(.body)
                 .foregroundColor(SirosTheme.onSurfaceVariant)
-            Button("Cancel") {
+            if viewModel.showDiagnosticMessages {
+                Text(L10n.string("flow.diagnosticLabel", status))
+                    .font(.caption)
+                    .foregroundColor(SirosTheme.onSurfaceVariant.opacity(0.7))
+            }
+            Button(L10n.string("flow.cancelButton")) {
                 viewModel.cancelCurrentFlow()
             }
             .buttonStyle(.bordered)
@@ -112,6 +144,11 @@ struct MainTabView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
+                Button(action: { viewModel.openProximityEngagement() }) {
+                    Image(systemName: "wave.3.right")
+                        .font(.title3)
+                        .foregroundColor(SirosTheme.onSurface)
+                }
                 Button(action: { viewModel.openQrScanner() }) {
                     Image(systemName: "qrcode.viewfinder")
                         .font(.title3)

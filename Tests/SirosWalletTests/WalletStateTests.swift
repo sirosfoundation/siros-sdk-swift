@@ -11,7 +11,7 @@ final class WalletStateTests: XCTestCase {
     }
 
     func testReadyEquality() {
-        let cred = StoredCredential(id: "c1", format: "dc+sd-jwt", raw: "raw")
+        let cred = StoredCredential(id: 1, format: "dc+sd-jwt", raw: "raw", batchId: 1, instanceId: 0)
         let s1 = WalletState.ready(userId: "u1", displayName: "Alice", credentials: [cred])
         let s2 = WalletState.ready(userId: "u1", displayName: "Alice", credentials: [cred])
         XCTAssertEqual(s1, s2)

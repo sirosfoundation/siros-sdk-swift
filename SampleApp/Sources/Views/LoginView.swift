@@ -80,6 +80,11 @@ struct LoginView: View {
             .padding(.horizontal, 32)
         }
         .background(SirosTheme.background)
+        }
+        .sheet(isPresented: $showSettingsSheet) {
+            PreLoginSettingsView()
+                .environmentObject(viewModel)
+        }
     }
 
     @ViewBuilder
@@ -196,12 +201,6 @@ struct LoginView: View {
             }
         }
     }
-    } // ZStack
-    .sheet(isPresented: $showSettingsSheet) {
-        PreLoginSettingsView()
-            .environmentObject(viewModel)
-    }
-    }
 }
 
 // MARK: - Pre-Login Settings Sheet
@@ -232,6 +231,10 @@ struct PreLoginSettingsView: View {
                 Section("Developer") {
                     Toggle("Credential Details", isOn: $viewModel.showCredentialDetails)
                     Text("Whether tapping a credential opens the detail screen (raw credential, claims, disclosures).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Toggle("Diagnostic Messages", isOn: $viewModel.showDiagnosticMessages)
+                    Text("Show the raw backend step token alongside the friendly progress label during a flow.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

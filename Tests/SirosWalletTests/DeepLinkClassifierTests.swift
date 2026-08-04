@@ -50,8 +50,36 @@ final class DeepLinkClassifierTests: XCTestCase {
         }
     }
 
+    /// A bare `client_id` (no `request_uri`) is how an unsigned-request-object
+    /// cross-device link can arrive - the verifier passes the request params
+    /// directly rather than by reference.
+    func testPresentationRequestViaClientIdOnly() {
+        let result = DeepLinkClassifier.classify("https://wallet.example.com/present?client_id=https://verifier.example.com&response_uri=https://verifier.example.com/cb")
+        if case .presentationRequest = result {
+            // expected
+        } else {
+            XCTFail("Expected .presentationRequest, got \(result)")
+        }
+    }
+
     func testAuthCallback() {
         let result = DeepLinkClassifier.classify("https://wallet.example.com/callback?code=abc&state=xyz")
+        if case .authCallback(let code, let state) = result {
+            XCTAssertEqual(code, "abc")
+            XCTAssertEqual(state, "xyz")
+        } else {
+            XCTFail("Expected .authCallback, got \(result)")
+        }
+    }
+
+    /// Regression test for a real Copilot-review finding: an OAuth/OIDC
+    /// redirect commonly carries its own `client_id` query param alongside
+    /// `code`/`state` - the auth-callback check must win, or every login
+    /// using such a provider gets misclassified as a presentation request.
+    func testAuthCallbackWinsOverClientIdHeuristic() {
+        let result = DeepLinkClassifier.classify(
+            "https://wallet.example.com/callback?client_id=my-wallet&code=abc&state=xyz"
+        )
         if case .authCallback(let code, let state) = result {
             XCTAssertEqual(code, "abc")
             XCTAssertEqual(state, "xyz")

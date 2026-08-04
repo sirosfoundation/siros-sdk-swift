@@ -141,6 +141,16 @@ public final class SirosWallet: @unchecked Sendable {
     weak var eventListener: WalletEventListener?
     var activeOffer: CredentialOffer?
     var activeVctm: Vctm?
+    /// Per-instance device key IDs from the most recent backend Key
+    /// Attestation (`attested_keys`, in submission order) - a batch issuer
+    /// binds credential `i` in the eventual response to `attested_keys[i]`
+    /// (per `requestBackendKeyAttestation`'s doc comment), so
+    /// `StoredCredential.kid` for the credential at `StoredCredential.instanceId`
+    /// `i` must be `activeAttestedKeyIds[i]` - without this, every signing
+    /// operation had no way to know which of the N generated keys a given
+    /// batch credential was actually bound to, and silently used an arbitrary
+    /// one (see `WscdKeystoreAdapter.selectSigningKey`'s doc comment).
+    var activeAttestedKeyIds: [String]?
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
@@ -162,6 +172,34 @@ public final class SirosWallet: @unchecked Sendable {
     public var presentationHistory: [PresentationRecord] {
         lock.lock(); defer { lock.unlock() }
         return _presentationHistory
+    }
+
+    /// Record a new presentation: adds it to the in-memory history and
+    /// persists it into the encrypted container (privatedata-spec's
+    /// `S.presentations[]`) so `CredentialUtils.groupForDisplay`'s
+    /// remaining-copies count survives an app restart instead of resetting
+    /// to the full batch size every time - mirrors `deleteCredential`'s
+    /// persist-after-mutation pattern.
+    private func recordPresentation(_ record: PresentationRecord) async {
+        lock.lock(); _presentationHistory.insert(record, at: 0); lock.unlock()
+        if keystore.isUnlocked {
+            if let data = try? JSONEncoder().encode(record), let raw = String(data: data, encoding: .utf8) {
+                try? await keystore.savePresentationRecord(id: record.id, json: raw)
+                await persistAndSyncKeystore()
+            }
+        }
+    }
+
+    /// Reload presentation history from the encrypted container after unlock.
+    private func reloadPresentationHistory() async {
+        guard let allRaw = try? await keystore.getAllPresentationRecords() else { return }
+        let decoder = JSONDecoder()
+        let records = allRaw.values.compactMap { raw in
+            try? decoder.decode(PresentationRecord.self, from: Data(raw.utf8))
+        }.sorted(by: { $0.timestamp > $1.timestamp })
+        lock.lock()
+        _presentationHistory = records
+        lock.unlock()
     }
 
     /// Factory for creating engine sessions (injectable for testing).
@@ -254,6 +292,14 @@ public final class SirosWallet: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         eventListener = listener
     }
+
+    /// Governs whether a successful presentation exhausts the credential
+    /// instance it used (see `CredentialUtils.eligibleInstances`). Defaults
+    /// to `.neverConsume` so existing behavior doesn't change until a host
+    /// app opts in. This is core wallet policy, not a UI-only preference -
+    /// the host app is responsible for persisting the user's choice across
+    /// restarts and setting it here on startup.
+    public var credentialConsumptionPolicy: CredentialConsumptionPolicy = .neverConsume
 
     // MARK: - Registration
 
@@ -496,6 +542,7 @@ public final class SirosWallet: @unchecked Sendable {
 
             let creds = await credentialStore.getAll()
             setState(.ready(userId: session.uuid, displayName: session.displayName, credentials: creds))
+            await reloadPresentationHistory()
         } catch let e as SirosError {
             #if canImport(os)
             logger.error("Login failed: \(e.localizedDescription)")
@@ -650,6 +697,7 @@ public final class SirosWallet: @unchecked Sendable {
 
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
+            await reloadPresentationHistory()
         } catch {
             setState(.error(message: error.localizedDescription))
         }
@@ -666,13 +714,62 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     /// Delete a credential by ID and sync to backend.
-    public func deleteCredential(_ credentialId: String) async {
+    public func deleteCredential(_ credentialId: Int64) async {
         await credentialStore.delete(credentialId)
         if case .ready(let userId, let displayName, _, _) = state {
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
         }
         await persistAndSyncKeystore()
+    }
+
+    /// Sign an mDoc DeviceResponse for an ISO 18013-5 proximity (BLE)
+    /// presentation - the local, engine-free counterpart to the redirect/
+    /// DC-API presentation paths (`handleSignRequest`/wallet-managed-protocol
+    /// sign handling above), since proximity presentation has no
+    /// wallet-backend/engine round trip at all: the reader IS the
+    /// counterpart, connected directly over BLE.
+    ///
+    /// - Parameters:
+    ///   - credentialId: the `StoredCredential.id` of the mdoc credential to present.
+    ///   - disclosedClaims: element identifiers to disclose (see `DeviceRequestParser.DocRequest.disclosedClaims`).
+    ///   - sessionTranscriptBytes: the proximity `SessionTranscript` bytes, from `ProximitySessionTranscript.build`.
+    /// - Returns: CBOR-encoded DeviceResponse bytes.
+    public func signMdocPresentationForProximity(
+        credentialId: Int64,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data
+    ) async throws -> Data {
+        guard let credential = await credentialStore.getById(credentialId) else {
+            throw SirosError.wallet(message: "Credential not found: \(credentialId)")
+        }
+        let allInstances = await credentialStore.getAll().filter { $0.batchId == credential.batchId }
+        let eligible = CredentialUtils.eligibleInstances(
+            instances: allInstances,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
+        guard eligible.contains(where: { $0.id == credentialId }) else {
+            throw SirosError.wallet(message: "No eligible copies of this credential remain - renew it to get more")
+        }
+        guard let credBytes = CredentialUtils.base64UrlDecode(credential.raw) else {
+            throw SirosError.wallet(message: "Credential \(credentialId) has malformed base64url raw data")
+        }
+        let response = try await keystore.signMdocPresentationForProximity(
+            credentialBytes: credBytes,
+            disclosedClaims: disclosedClaims,
+            sessionTranscriptBytes: sessionTranscriptBytes,
+            kid: credential.kid
+        )
+        await recordPresentation(PresentationRecord(
+            id: randomUint32Id(),
+            flowId: "proximity-\(UUID().uuidString)",
+            credentialIds: [credentialId],
+            credentialNames: [credential.metadata?.name].compactMap { $0 },
+            requestedClaims: disclosedClaims ?? [],
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+        ))
+        return response
     }
 
     // MARK: - Issuance
@@ -1478,6 +1575,25 @@ public final class SirosWallet: @unchecked Sendable {
         return "jwt"
     }
 
+    /// Internal counterpart to the wire-format `ProofObject`, additionally
+    /// carrying the device key IDs backing an `attestation` proof's
+    /// `attested_keys` (in submission order) - `nil` when unavailable (the
+    /// self-signed-fallback path doesn't currently expose the keys it
+    /// generated internally). See `activeAttestedKeyIds`'s doc comment for
+    /// why this ordering matters for per-credential key selection at signing
+    /// time.
+    private struct GeneratedProofData {
+        var proofType: String
+        var jwt: String?
+        var attestation: String?
+        var attestedKeyIds: [String]?
+    }
+
+    private struct BackendAttestationResult {
+        var jwt: String
+        var keyIds: [String]
+    }
+
     /// Generate proofs for a `generate_proof` sign request - shared by both
     /// transports so proof generation (including real backend Key Attestation
     /// with a self-signed fallback) behaves identically regardless of which
@@ -1488,22 +1604,26 @@ public final class SirosWallet: @unchecked Sendable {
         count: Int,
         proofTypesSupported: [String: AnyCodable]?,
         proofTypeHint: String?
-    ) async throws -> [ProofObject] {
+    ) async throws -> [GeneratedProofData] {
         let chosen = selectProofType(proofTypesSupported: proofTypesSupported, proofTypeHint: proofTypeHint)
         if chosen == "attestation" {
             let backendAttestation = await requestBackendKeyAttestation(audience: audience, nonce: nonce, count: count)
             let attestationJwt: String
             if let backendAttestation {
-                attestationJwt = backendAttestation
+                attestationJwt = backendAttestation.jwt
             } else {
                 attestationJwt = try await keystore.generateKeyAttestation(nonce: nonce, count: count)
             }
-            return [ProofObject(proofType: "attestation", attestation: attestationJwt)]
+            return [GeneratedProofData(
+                proofType: "attestation",
+                attestation: attestationJwt,
+                attestedKeyIds: backendAttestation?.keyIds
+            )]
         }
-        var proofs: [ProofObject] = []
+        var proofs: [GeneratedProofData] = []
         for _ in 0..<count {
             let jwt = try await keystore.generateProof(audience: audience, nonce: nonce, freshKey: count > 1)
-            proofs.append(ProofObject(proofType: "jwt", jwt: jwt))
+            proofs.append(GeneratedProofData(proofType: "jwt", jwt: jwt))
         }
         return proofs
     }
@@ -1522,7 +1642,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// Returns nil (caller falls back to the self-signed path) when there's
     /// no backend session, the keystore can't produce raw keypairs, or the
     /// backend doesn't support/expose the endpoint.
-    private func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async -> String? {
+    private func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async -> BackendAttestationResult? {
         lock.lock(); let client = apiClient; lock.unlock()
         guard let client else { return nil }
         do {
@@ -1535,12 +1655,18 @@ public final class SirosWallet: @unchecked Sendable {
                     "certification": props.certification.toJsonValue(),
                 ]
             }
-            return try await client.requestKeyAttestation(
+            let jwt = try await client.requestKeyAttestation(
                 jwks: keypairs.map { $0.publicKeyJWK },
                 nonce: nonce,
                 securityProperties: secDict,
                 credentialIssuer: audience.isEmpty ? nil : audience
             )
+            // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
+            // built (jwks preserves list order) - the issuer is expected to
+            // mint credential i in the eventual batch response bound to
+            // attested_keys[i], so this ordering IS the instanceId -> kid
+            // mapping the credential-storage handler needs later.
+            return BackendAttestationResult(jwt: jwt, keyIds: keypairs.map { $0.keyId })
         } catch {
             return nil
         }
@@ -1550,20 +1676,23 @@ public final class SirosWallet: @unchecked Sendable {
         switch params.action {
         case "generate_proof":
             let count = params.count ?? 1
-            let proofs = try await generateProofs(
+            let generated = try await generateProofs(
                 audience: params.audience,
                 nonce: params.nonce,
                 count: count,
                 proofTypesSupported: nil,
                 proofTypeHint: params.proofType
             )
+            lock.lock(); activeAttestedKeyIds = generated.first(where: { $0.attestedKeyIds != nil })?.attestedKeyIds; lock.unlock()
+            let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
             return SignSubFlowResult(proofs: proofs)
 
         case "sign_presentation":
             let vpToken = try await keystore.signPresentation(
                 nonce: params.nonce,
                 audience: params.audience,
-                credentialIds: []
+                credentialIds: [],
+                kid: nil
             )
             return SignSubFlowResult(vpToken: vpToken)
 
@@ -1574,10 +1703,23 @@ public final class SirosWallet: @unchecked Sendable {
 
     private func handleWmpMatchRequest(flowId: String, payload: AnyCodable?) async -> MatchResult {
         let allCreds = await credentialStore.getAll()
-        let matches = allCreds.map { cred in
+        // Only offer instances the active consumption policy still considers
+        // usable - mirrors the legacy engine path's handleMatchRequest (and
+        // Kotlin's matchRequests() collector) so a credential exhausted under
+        // CONSUME_ALL/CONSUME_NON_ZKP can't be matched into a new
+        // presentation via this transport either.
+        let eligibleCreds = CredentialUtils.eligibleInstances(
+            instances: allCreds,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
+        let matches = eligibleCreds.map { cred in
+            // credentialId is the WMP wire-protocol identifier - a separate,
+            // unverified backend contract distinct from privatedata-spec's
+            // numeric StoredCredential.id, so it deliberately stays String.
             CredentialMatch(
                 credentialQueryId: nil,
-                credentialId: cred.id,
+                credentialId: String(cred.id),
                 format: cred.format,
                 vct: cred.metadata?.vct,
                 availableClaims: nil
@@ -1682,13 +1824,15 @@ public final class SirosWallet: @unchecked Sendable {
             switch msg.action {
             case "generate_proof":
                 let count = msg.params.count ?? 1
-                let proofs = try await generateProofs(
+                let generated = try await generateProofs(
                     audience: msg.params.audience ?? "",
                     nonce: msg.params.nonce ?? "",
                     count: count,
                     proofTypesSupported: msg.params.proofTypesSupported,
                     proofTypeHint: msg.params.proofType
                 )
+                lock.lock(); activeAttestedKeyIds = generated.first(where: { $0.attestedKeyIds != nil })?.attestedKeyIds; lock.unlock()
+                let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
             case "sign_presentation":
@@ -1703,21 +1847,24 @@ public final class SirosWallet: @unchecked Sendable {
                     let allCreds = await credentialStore.getAll()
                     var vpParts: [String] = []
                     for ref in credsToInclude {
-                        guard let cred = allCreds.first(where: { $0.id == ref.credentialId }) else { continue }
+                        // ref.credentialId is the WMP wire-protocol identifier
+                        // (String) - parse it back to the numeric
+                        // StoredCredential.id it refers to.
+                        guard let cred = allCreds.first(where: { $0.id == Int64(ref.credentialId) }) else { continue }
 
                         if cred.format == "mso_mdoc" {
                             // mDoc DeviceResponse (ISO 18013-5)
-                            let credBytes = Data(base64Encoded: cred.raw
-                                .replacingOccurrences(of: "-", with: "+")
-                                .replacingOccurrences(of: "_", with: "/")
-                            ) ?? Data()
+                            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+                            }
                             let deviceResponse = try await keystore.signMdocPresentation(
                                 credentialBytes: credBytes,
                                 disclosedClaims: ref.disclosedClaims,
                                 nonce: nonce,
                                 audience: audience,
                                 responseUri: msg.params.responseUri ?? "",
-                                verifierJwkThumbprint: msg.params.verifierJwkThumbprint
+                                verifierJwkThumbprint: msg.params.verifierJwkThumbprint,
+                                kid: cred.kid
                             )
                             vpParts.append(deviceResponse.base64EncodedString()
                                 .replacingOccurrences(of: "+", with: "-")
@@ -1730,7 +1877,8 @@ public final class SirosWallet: @unchecked Sendable {
                                 credential: cred.raw,
                                 disclosedClaims: ref.disclosedClaims,
                                 nonce: nonce,
-                                audience: audience
+                                audience: audience,
+                                kid: cred.kid
                             )
                             vpParts.append(vp)
                         }
@@ -1739,7 +1887,7 @@ public final class SirosWallet: @unchecked Sendable {
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
                 } else {
                     let vpToken = try await keystore.signPresentation(
-                        nonce: nonce, audience: audience, credentialIds: []
+                        nonce: nonce, audience: audience, credentialIds: [], kid: nil
                     )
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
                 }
@@ -1761,7 +1909,7 @@ public final class SirosWallet: @unchecked Sendable {
         let trustResult = lastTrustResults.removeValue(forKey: msg.flowId)
         lock.unlock()
 
-        let selectedIds: [String]
+        let selectedIds: [Int64]
         if let listener, !allCreds.isEmpty {
             selectedIds = await listener.onCredentialSelectionRequired(
                 request: PresentationRequest(
@@ -1771,25 +1919,46 @@ public final class SirosWallet: @unchecked Sendable {
                 )
             )
         } else {
-            selectedIds = allCreds.map(\.id)
+            selectedIds = CredentialUtils.eligibleInstances(
+                instances: allCreds,
+                policy: credentialConsumptionPolicy,
+                presentationHistory: presentationHistory
+            ).map(\.id)
         }
 
-        lock.lock()
-        _presentationHistory.insert(PresentationRecord(
-            id: UUID().uuidString,
+        // The app is trusted to only return IDs it was offered, but shouldn't
+        // be the only thing enforcing consumption - re-validate here too
+        // (defense in depth).
+        let eligibleIds = Set(CredentialUtils.eligibleInstances(
+            instances: allCreds,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        ).map(\.id))
+        guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+            #if canImport(os)
+            logger.error("Selected credential has no eligible copies remaining")
+            #endif
+            return
+        }
+
+        await recordPresentation(PresentationRecord(
+            id: randomUint32Id(),
             flowId: msg.flowId,
             credentialIds: selectedIds,
             credentialNames: selectedIds.compactMap { id in
                 allCreds.first(where: { $0.id == id })?.metadata?.name
             },
             timestamp: Int64(Date().timeIntervalSince1970 * 1000)
-        ), at: 0)
-        lock.unlock()
+        ))
 
         let matches: [CredentialMatch] = selectedIds.compactMap { id in
             guard let cred = allCreds.first(where: { $0.id == id }) else { return nil }
+            // credentialId is the legacy engine wire-protocol identifier - a
+            // separate, unverified backend contract distinct from
+            // privatedata-spec's numeric StoredCredential.id, so it
+            // deliberately stays String.
             return CredentialMatch(
-                credentialId: cred.id,
+                credentialId: String(cred.id),
                 format: cred.format,
                 vct: cred.metadata?.vct
             )

@@ -48,7 +48,7 @@ final class CredentialUtilsTests: XCTestCase {
     }
 
     func testExtractClaimsReturnsUserFacingClaims() {
-        let cred = StoredCredential(id: "test-id", format: "vc+sd-jwt", raw: sampleJwt)
+        let cred = StoredCredential(id: 1, format: "vc+sd-jwt", raw: sampleJwt, batchId: 1, instanceId: 0)
         let claims = CredentialUtils.extractClaims(cred)
         let keys = claims.map(\.key)
         XCTAssertTrue(keys.contains("given_name"))
@@ -63,11 +63,12 @@ final class CredentialUtilsTests: XCTestCase {
 
     func testExtractClaimsUsesVctmLabels() {
         let cred = StoredCredential(
-            id: "test-id", format: "vc+sd-jwt", raw: sampleJwt,
+            id: 1, format: "vc+sd-jwt", raw: sampleJwt,
             metadata: CredentialMetadata(claims: [
                 ClaimMeta(path: ["given_name"], label: "First Name"),
                 ClaimMeta(path: ["family_name"], label: "Surname"),
-            ])
+            ]),
+            batchId: 1, instanceId: 0
         )
         let claims = CredentialUtils.extractClaims(cred)
         XCTAssertEqual(claims.first(where: { $0.key == "given_name" })?.label, "First Name")
@@ -75,13 +76,13 @@ final class CredentialUtilsTests: XCTestCase {
     }
 
     func testExtractClaimsFormatsKeysWhenNoVctm() {
-        let cred = StoredCredential(id: "test-id", format: "vc+sd-jwt", raw: sampleJwt)
+        let cred = StoredCredential(id: 1, format: "vc+sd-jwt", raw: sampleJwt, batchId: 1, instanceId: 0)
         let claims = CredentialUtils.extractClaims(cred)
         XCTAssertEqual(claims.first(where: { $0.key == "given_name" })?.label, "Given Name")
     }
 
     func testExtractClaimsReturnsEmptyForUnparseableCredential() {
-        let cred = StoredCredential(id: "bad", format: "vc+sd-jwt", raw: "not-a-jwt")
+        let cred = StoredCredential(id: 2, format: "vc+sd-jwt", raw: "not-a-jwt", batchId: 2, instanceId: 0)
         XCTAssertTrue(CredentialUtils.extractClaims(cred).isEmpty)
     }
 
@@ -93,10 +94,11 @@ final class CredentialUtilsTests: XCTestCase {
         """)
         let raw = "\(header).\(payload).fakesig"
         let cred = StoredCredential(
-            id: "nested", format: "vc+sd-jwt", raw: raw,
+            id: 3, format: "vc+sd-jwt", raw: raw,
             metadata: CredentialMetadata(claims: [
                 ClaimMeta(path: ["credentialSubject", "hasClaim", "awardedBy", "institution"], label: "Institution"),
-            ])
+            ]),
+            batchId: 3, instanceId: 0
         )
         let claims = CredentialUtils.extractClaims(cred)
         let institution = claims.first(where: { $0.key == "credentialSubject.hasClaim.awardedBy.institution" })
@@ -108,10 +110,11 @@ final class CredentialUtilsTests: XCTestCase {
 
     func testExtractClaimsSkipsVctmClaimMissingFromCredential() {
         let cred = StoredCredential(
-            id: "test-id", format: "vc+sd-jwt", raw: sampleJwt,
+            id: 4, format: "vc+sd-jwt", raw: sampleJwt,
             metadata: CredentialMetadata(claims: [
                 ClaimMeta(path: ["credentialSubject", "nonexistent"], label: "Nope"),
-            ])
+            ]),
+            batchId: 4, instanceId: 0
         )
         let claims = CredentialUtils.extractClaims(cred)
         XCTAssertFalse(claims.contains(where: { $0.label == "Nope" }))
@@ -252,7 +255,7 @@ final class CredentialUtilsTests: XCTestCase {
 
     func testExtractClaimsDispatchesToMdocParsingForMsoMdocFormat() {
         let cred = StoredCredential(
-            id: "cred-1",
+            id: 5,
             format: "mso_mdoc",
             raw: buildMdocRaw(),
             metadata: CredentialMetadata(
@@ -260,7 +263,9 @@ final class CredentialUtilsTests: XCTestCase {
                 claims: [
                     ClaimMeta(path: [mdocNamespace, "family_name"], label: "Family Name", mandatory: true),
                 ]
-            )
+            ),
+            batchId: 5,
+            instanceId: 0
         )
 
         let claims = CredentialUtils.extractClaims(cred)
@@ -321,5 +326,85 @@ final class CredentialUtilsTests: XCTestCase {
         XCTAssertEqual(metadata.name, "Driving Licence (offer)")
         XCTAssertEqual(metadata.backgroundColor, "#1a365d")
         XCTAssertNil(metadata.claims)
+    }
+
+    // MARK: - eligibleInstances / CredentialConsumptionPolicy
+
+    private func consumptionCredential(
+        id: Int64,
+        batchId: Int64 = 1,
+        instanceId: Int = 0,
+        format: String = "vc+sd-jwt"
+    ) -> StoredCredential {
+        StoredCredential(id: id, format: format, raw: "raw-\(id)", batchId: batchId, instanceId: instanceId)
+    }
+
+    private func presentationRecord(_ credentialIds: Int64...) -> PresentationRecord {
+        PresentationRecord(
+            id: credentialIds.reduce(0, +) + 1000,
+            flowId: "flow",
+            credentialIds: credentialIds,
+            timestamp: 0
+        )
+    }
+
+    func testEligibleInstancesNeverConsumeReturnsEveryInstanceRegardlessOfHistory() {
+        let instances = [consumptionCredential(id: 1, instanceId: 0), consumptionCredential(id: 2, instanceId: 1)]
+        let history = [presentationRecord(1), presentationRecord(2)]
+
+        let result = CredentialUtils.eligibleInstances(instances: instances, policy: .neverConsume, presentationHistory: history)
+
+        XCTAssertEqual(result, instances)
+    }
+
+    func testEligibleInstancesConsumeAllExcludesInstancesAlreadyPresented() {
+        let used = consumptionCredential(id: 1, instanceId: 0)
+        let unused = consumptionCredential(id: 2, instanceId: 1)
+        let history = [presentationRecord(1)]
+
+        let result = CredentialUtils.eligibleInstances(instances: [used, unused], policy: .consumeAll, presentationHistory: history)
+
+        XCTAssertEqual(result, [unused])
+    }
+
+    func testEligibleInstancesConsumeAllWithNoHistoryEveryInstanceIsEligible() {
+        let instances = [consumptionCredential(id: 1, instanceId: 0), consumptionCredential(id: 2, instanceId: 1)]
+
+        let result = CredentialUtils.eligibleInstances(instances: instances, policy: .consumeAll, presentationHistory: [])
+
+        XCTAssertEqual(result, instances)
+    }
+
+    func testEligibleInstancesConsumeAllAllInstancesUsedReturnsEmptyList() {
+        let a = consumptionCredential(id: 1, instanceId: 0)
+        let b = consumptionCredential(id: 2, instanceId: 1)
+        let history = [presentationRecord(1), presentationRecord(2)]
+
+        let result = CredentialUtils.eligibleInstances(instances: [a, b], policy: .consumeAll, presentationHistory: history)
+
+        XCTAssertEqual(result, [])
+    }
+
+    func testEligibleInstancesConsumeNonZkpBehavesIdenticallyToConsumeAllSinceNoZkpFormatExistsYet() {
+        // Every format this SDK supports today discloses via salted-hash
+        // digests, not a real ZKP proof - see CredentialUtils.isZkpFormat's
+        // doc comment. This test pins that current equivalence so a future
+        // change introducing a real ZKP format is forced to reconsider it.
+        let used = consumptionCredential(id: 1, instanceId: 0, format: "mso_mdoc")
+        let unused = consumptionCredential(id: 2, instanceId: 1, format: "mso_mdoc")
+        let history = [presentationRecord(1)]
+
+        let result = CredentialUtils.eligibleInstances(instances: [used, unused], policy: .consumeNonZkp, presentationHistory: history)
+
+        XCTAssertEqual(result, [unused])
+    }
+
+    func testEligibleInstancesSigCountOfTwoOrMoreStillCountsAsUsedNotJustExactlyOne() {
+        let overused = consumptionCredential(id: 1, instanceId: 0)
+        let history = [presentationRecord(1), presentationRecord(1), presentationRecord(1)]
+
+        let result = CredentialUtils.eligibleInstances(instances: [overused], policy: .consumeAll, presentationHistory: history)
+
+        XCTAssertEqual(result, [])
     }
 }

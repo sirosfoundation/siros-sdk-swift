@@ -25,7 +25,8 @@
     "emptySubtitle": "Tap to add your first credential",
     "addTitle": "Add Credential",
     "addLoading": "Loading available credentials...",
-    "addEmpty": "No credentials available"
+    "addEmpty": "No credentials available",
+    "renew": "Renew"
   },
   "presentation": {
     "title": "Credential Request",
@@ -58,7 +59,12 @@
     "wscdNotEnrolled": "Not enrolled",
     "wscdEnroll": "Enroll WSCD",
     "wscdDeveloper": "WSCA Developer",
-    "disconnectButton": "Disconnect"
+    "disconnectButton": "Disconnect",
+    "credentialConsumptionTitle": "Credential consumption",
+    "credentialConsumptionDescription": "Controls whether presenting a credential uses up one of its batch copies",
+    "credentialConsumptionConsumeAll": "Consume on every presentation",
+    "credentialConsumptionConsumeNonZkp": "Consume only non-zero-knowledge presentations",
+    "credentialConsumptionNeverConsume": "Never consume (default)"
   },
   "wscd": {
     "title": "WSCA Developer",
@@ -86,7 +92,47 @@
     "retryButton": "Retry"
   },
   "flow": {
-    "cancelButton": "Cancel"
+    "cancelButton": "Cancel",
+    "closeButton": "Close",
+    "steps": {
+      "parsingOffer": "Reading credential offer…",
+      "offerParsed": "Credential offer parsed",
+      "fetchingMetadata": "Fetching issuer information…",
+      "metadataFetched": "Issuer information received",
+      "evaluatingTrust": "Checking issuer trust…",
+      "trustEvaluated": "Issuer trust verified",
+      "awaitingSelection": "Waiting for credential selection…",
+      "authorizationRequired": "Waiting for authorization…",
+      "exchangingToken": "Exchanging authorization for access token…",
+      "tokenObtained": "Access token received",
+      "requestingCredential": "Requesting credential…",
+      "deferred": "Credential issuance deferred…",
+      "parsingRequest": "Reading verifier request…",
+      "requestParsed": "Verifier request parsed",
+      "evaluatingVerifierTrust": "Checking verifier trust…",
+      "matchCredentials": "Matching credentials…",
+      "awaitingConsent": "Waiting for your consent…",
+      "credentialSelection": "Selecting credentials…",
+      "submittingResponse": "Sending response to verifier…",
+      "waitingForReader": "Waiting for a reader…",
+      "readerConnected": "Reader connected",
+      "unknown": "Processing…"
+    },
+    "diagnosticLabel": "Diagnostic: %1$s",
+    "credentialsReceived": "Received %1$d credential(s)",
+    "presentationSent": "Presentation sent successfully"
+  },
+  "proximity": {
+    "title": "Proximity Engagement",
+    "scanPrompt": "Scan with an ISO 18013-5 mdoc reader",
+    "activeDescription": "BLE peripheral server mode and central client mode are both active - a real reader can connect via either and complete a presentation if a stored credential matches its requested docType. NFC static handover is not available on iOS.",
+    "presentationFailed": "Presentation did not complete",
+    "shareCredential": "Share credential?",
+    "requestingClaims": "A reader is requesting the following, from this credential:",
+    "multipleMatches": "You have more than one matching credential - choose which to share:",
+    "shareButton": "Share",
+    "declineButton": "Decline",
+    "noCopiesLeft": "No copies left - renew in Settings"
   },
   "nav": {
     "credentials": "Credentials",

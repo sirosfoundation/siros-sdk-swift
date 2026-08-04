@@ -4,6 +4,20 @@ import Foundation
 import SirosCredentials
 import SirosTransport
 
+/// A randomly-generated uint32-range identifier, matching wallet-frontend's
+/// `credentialId: number` (privatedata-spec §6) - not a UUID. Cross-client
+/// interop (the same encrypted container read by either client) requires
+/// this to be a genuine JSON number on the wire, not a string.
+///
+/// Uses `SystemRandomNumberGenerator` (a CSPRNG on every platform this
+/// package targets) rather than `SecRandomCopyBytes`, which is Apple-only -
+/// this file has no `#if canImport(CryptoKit)` gate of its own.
+func randomUint32Id() -> Int64 {
+    var rng = SystemRandomNumberGenerator()
+    let value = Int64(UInt32.random(in: 0...UInt32.max, using: &rng))
+    return value == 0 ? 1 : value
+}
+
 // OID4VCI §10 credential lifecycle notification handling for the wallet facade.
 extension SirosWallet {
     /// Handle a `flow_complete` message: persist the issued credentials and,
@@ -23,10 +37,18 @@ extension SirosWallet {
         var storedCount = 0
         var storeFailureReason: String?
 
-        lock.lock(); let offer = activeOffer; let vctm = activeVctm; lock.unlock()
+        lock.lock(); let offer = activeOffer; let vctm = activeVctm; let attestedKeyIds = activeAttestedKeyIds; lock.unlock()
+
+        // Shared across every copy in this response so the UI can group them
+        // into one card (see StoredCredential.batchId) - ALWAYS assigned,
+        // even for a single-credential issuance, matching wallet-frontend's
+        // useOID4VCIFlow.ts (batchId = Date.now()) exactly: every issuance
+        // response is its own batch of at least one, there is no "no batch"
+        // sentinel on either client.
+        let batchId = Int64(Date().timeIntervalSince1970 * 1000)
 
         if let credentials = msg.credentials {
-            for cred in credentials {
+            for (index, cred) in credentials.enumerated() {
                 if cred.format == "mso_mdoc" {
                     // mso_mdoc credentials are base64url-encoded CBOR (a
                     // DeviceResponse-shaped envelope, per
@@ -48,11 +70,16 @@ extension SirosWallet {
                         metadata = CredentialUtils.buildMdocMetadata(offer: off, mddlSchema: mddlSchema)
                     }
                     let stored = StoredCredential(
-                        id: UUID().uuidString,
+                        id: randomUint32Id(),
                         format: cred.format,
                         raw: cred.credential,
+                        kid: index < (attestedKeyIds?.count ?? 0) ? attestedKeyIds?[index] : nil,
                         metadata: metadata,
-                        notificationId: cred.notificationId
+                        notificationId: cred.notificationId,
+                        credentialIssuerIdentifier: offer?.credentialIssuerIdentifier,
+                        credentialConfigurationId: offer?.credentialConfigurationId,
+                        batchId: batchId,
+                        instanceId: index
                     )
                     await credentialStore.save(stored)
                     storedCount += 1
@@ -85,13 +112,18 @@ extension SirosWallet {
                 let metadata = offer.flatMap { CredentialUtils.buildMetadata(offer: $0, vctm: vctm, rawCredential: cred.credential) }
 
                 let stored = StoredCredential(
-                    id: UUID().uuidString,
+                    id: randomUint32Id(),
                     format: cred.format,
                     raw: cred.credential,
+                    kid: index < (attestedKeyIds?.count ?? 0) ? attestedKeyIds?[index] : nil,
                     metadata: metadata,
                     issuedAt: payload["iat"] as? Int64,
                     expiresAt: exp,
-                    notificationId: cred.notificationId
+                    notificationId: cred.notificationId,
+                    credentialIssuerIdentifier: offer?.credentialIssuerIdentifier,
+                    credentialConfigurationId: offer?.credentialConfigurationId,
+                    batchId: batchId,
+                    instanceId: index
                 )
                 await credentialStore.save(stored)
                 storedCount += 1
@@ -112,7 +144,7 @@ extension SirosWallet {
                 listener?.onCredentialReceived(credential: stored)
             }
         }
-        lock.lock(); activeOffer = nil; activeVctm = nil; lock.unlock()
+        lock.lock(); activeOffer = nil; activeVctm = nil; activeAttestedKeyIds = nil; lock.unlock()
 
         await persistAndSyncKeystore()
 

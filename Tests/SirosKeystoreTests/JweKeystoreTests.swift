@@ -141,7 +141,8 @@ final class JweKeystoreTests: XCTestCase {
         let vp = try await keystore.signPresentation(
             nonce: "nonce-123",
             audience: "https://verifier.example.com",
-            credentialIds: ["cred-1"]
+            credentialIds: [1],
+            kid: nil
         )
         XCTAssertTrue(vp.contains("."))
         XCTAssertEqual(vp.split(separator: ".").count, 3)
@@ -205,7 +206,8 @@ final class JweKeystoreTests: XCTestCase {
             credential: credential,
             disclosedClaims: nil,
             nonce: "verifier-nonce",
-            audience: "https://verifier.example.com"
+            audience: "https://verifier.example.com",
+            kid: nil
         )
 
         let parts = vpToken.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -248,7 +250,8 @@ final class JweKeystoreTests: XCTestCase {
             credential: credential,
             disclosedClaims: ["given_name"],
             nonce: "n1",
-            audience: "aud"
+            audience: "aud",
+            kid: nil
         )
 
         let parts = vpToken.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -271,7 +274,8 @@ final class JweKeystoreTests: XCTestCase {
             credential: credential,
             disclosedClaims: nil,
             nonce: "n",
-            audience: "a"
+            audience: "a",
+            kid: nil
         )
 
         let kbJwt = vpToken.split(separator: "~", omittingEmptySubsequences: false).map(String.init).last!
@@ -288,7 +292,7 @@ final class JweKeystoreTests: XCTestCase {
     func testSignVpTokenLockedKeystoreThrows() async {
         let keystore = JweKeystore()
         do {
-            let _ = try await keystore.signVpToken(credential: "cred", disclosedClaims: nil, nonce: "n", audience: "a")
+            let _ = try await keystore.signVpToken(credential: "cred", disclosedClaims: nil, nonce: "n", audience: "a", kid: nil)
             XCTFail("Expected KeystoreError")
         } catch is KeystoreError {
             // expected
@@ -303,15 +307,15 @@ final class JweKeystoreTests: XCTestCase {
         let keystore = JweKeystore()
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
 
-        try await keystore.saveCredential(id: "c1", json: "{\"test\":true}")
-        let retrieved = try await keystore.getCredential(id: "c1")
+        try await keystore.saveCredential(id: 1, json: "{\"test\":true}")
+        let retrieved = try await keystore.getCredential(id: 1)
         XCTAssertEqual(retrieved, "{\"test\":true}")
 
         let all = try await keystore.getAllCredentials()
         XCTAssertEqual(all.count, 1)
 
-        try await keystore.deleteCredential(id: "c1")
-        let afterDelete = try await keystore.getCredential(id: "c1")
+        try await keystore.deleteCredential(id: 1)
+        let afterDelete = try await keystore.getCredential(id: 1)
         XCTAssertNil(afterDelete)
     }
 
@@ -319,8 +323,8 @@ final class JweKeystoreTests: XCTestCase {
         let keystore = JweKeystore()
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
 
-        try await keystore.saveCredential(id: "c1", json: "a")
-        try await keystore.saveCredential(id: "c2", json: "b")
+        try await keystore.saveCredential(id: 1, json: "a")
+        try await keystore.saveCredential(id: 2, json: "b")
         let allCreds = try await keystore.getAllCredentials()
         XCTAssertEqual(allCreds.count, 2)
 
@@ -332,7 +336,7 @@ final class JweKeystoreTests: XCTestCase {
     func testCredentialStorageLockedThrows() async {
         let keystore = JweKeystore()
         do {
-            try await keystore.saveCredential(id: "c1", json: "test")
+            try await keystore.saveCredential(id: 1, json: "test")
             XCTFail("Expected error")
         } catch is KeystoreError {
             // expected
@@ -347,15 +351,30 @@ final class JweKeystoreTests: XCTestCase {
         let keystore = JweKeystore()
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
 
-        try await keystore.saveCredential(id: "cred-1", json: "{\"type\":\"test\"}")
+        // Matches KeystoreBackedCredentialStore.save()'s actual shape: the
+        // full StoredCredential JSON, including credential_issuer_identifier/
+        // credential_configuration_id - privatedata-spec's normative
+        // S.credentials[] fields, needed after a fresh login to re-fetch
+        // VCTM display metadata. JweKeystore decomposes/reconstructs these
+        // fields on export/reload (see buildWalletStateV3/loadFromWalletStateV3),
+        // so the round-tripped JSON isn't byte-identical to what was saved -
+        // assert the fields survive rather than exact string equality.
+        let credentialJson = """
+        {"id":1,"format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1","credential_issuer_identifier":"https://issuer.example.com","credential_configuration_id":"diploma"}
+        """
+        try await keystore.saveCredential(id: 1, json: credentialJson)
         let _ = try await keystore.generateKey()
         let exported = try await keystore.exportEncryptedContainer()
 
         keystore.lock()
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: exported, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
 
-        let cred = try await keystore.getCredential(id: "cred-1")
-        XCTAssertEqual(cred, "{\"type\":\"test\"}")
+        let restored = try await keystore.getCredential(id: 1)
+        XCTAssertNotNil(restored)
+        XCTAssertTrue(restored?.contains("issuer.example.com") == true)
+        XCTAssertTrue(restored?.contains("diploma") == true)
+        XCTAssertTrue(restored?.contains("vc+sd-jwt") == true)
+        XCTAssertTrue(restored?.contains("header.payload.sig") == true)
         XCTAssertEqual(keystore.listKeys().count, 1)
     }
 }

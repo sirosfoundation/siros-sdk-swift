@@ -40,7 +40,8 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
     private let signer: Signer
     private let mutex = NSLock()
     private var _isUnlocked = false
-    private var credentials: [String: String] = [:]
+    private var credentials: [Int64: String] = [:]
+    private var presentationRecords: [Int64: String] = [:]
 
     public init(signer: Signer) {
         self.signer = signer
@@ -158,12 +159,10 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         return "\(signingInput).\(sigB64)"
     }
 
-    public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {
+    public func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        guard let key = keys.first else {
-            throw KeystoreError.keyNotFound("no keys available")
-        }
+        let key = try selectSigningKey(keys, kid: kid)
 
         let header = JwtHelpers.jsonBase64Url([
             "alg": algorithmJoseId(key.algorithm),
@@ -188,14 +187,16 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         credential: String,
         disclosedClaims: [String]?,
         nonce: String,
-        audience: String
+        audience: String,
+        kid: String?
     ) async throws -> String {
         try await signVpToken(
             credential: credential,
             disclosedClaims: disclosedClaims,
             nonce: nonce,
             audience: audience,
-            transactionData: nil
+            transactionData: nil,
+            kid: kid
         )
     }
 
@@ -205,13 +206,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         disclosedClaims: [String]?,
         nonce: String,
         audience: String,
-        transactionData: [TransactionDataItem]?
+        transactionData: [TransactionDataItem]?,
+        kid: String? = nil
     ) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        guard let key = keys.first else {
-            throw KeystoreError.keyNotFound("no keys available")
-        }
+        let key = try selectSigningKey(keys, kid: kid)
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -291,13 +291,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         nonce: String,
         audience: String,
         responseUri: String,
-        verifierJwkThumbprint: String?
+        verifierJwkThumbprint: String?,
+        kid: String?
     ) async throws -> Data {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        guard let key = keys.first else {
-            throw KeystoreError.keyNotFound("no keys available for mDoc signing")
-        }
+        let key = try selectSigningKey(keys, kid: kid)
 
         let builder = MdocDeviceResponseBuilder(
             issuerSignedBytes: credentialBytes,
@@ -319,13 +318,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         disclosedClaims: [String]?,
         nonce: String,
         origin: String,
-        encryptionPublicJwkThumbprint: String?
+        encryptionPublicJwkThumbprint: String?,
+        kid: String?
     ) async throws -> Data {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        guard let key = keys.first else {
-            throw KeystoreError.keyNotFound("no keys available for mDoc DC API signing")
-        }
+        let key = try selectSigningKey(keys, kid: kid)
 
         let builder = MdocDeviceResponseBuilder(
             issuerSignedBytes: credentialBytes,
@@ -336,6 +334,28 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
             nonce: nonce,
             origin: origin,
             encryptionPublicJwkThumbprint: encryptionPublicJwkThumbprint,
+            disclosedClaims: disclosedClaims,
+            signer: { data in try await self.signer.sign(keyId: key.keyId, data: data) }
+        )
+    }
+
+    public func signMdocPresentationForProximity(
+        credentialBytes: Data,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data,
+        kid: String?
+    ) async throws -> Data {
+        try checkUnlocked()
+        let keys = try await signer.listKeys()
+        let key = try selectSigningKey(keys, kid: kid)
+
+        let builder = MdocDeviceResponseBuilder(
+            issuerSignedBytes: credentialBytes,
+            algorithm: key.algorithm
+        )
+
+        return try await builder.buildForProximity(
+            sessionTranscriptBytes: sessionTranscriptBytes,
             disclosedClaims: disclosedClaims,
             signer: { data in try await self.signer.sign(keyId: key.keyId, data: data) }
         )
@@ -399,28 +419,28 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
 
     // MARK: - Credential storage (local in-memory)
 
-    public func saveCredential(id: String, json: String) async throws {
+    public func saveCredential(id: Int64, json: String) async throws {
         try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         credentials[id] = json
     }
 
-    public func getCredential(id: String) async throws -> String? {
+    public func getCredential(id: Int64) async throws -> String? {
         try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         return credentials[id]
     }
 
-    public func getAllCredentials() async throws -> [String: String] {
+    public func getAllCredentials() async throws -> [Int64: String] {
         try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
         return credentials
     }
 
-    public func deleteCredential(id: String) async throws {
+    public func deleteCredential(id: Int64) async throws {
         try checkUnlocked()
         mutex.lock()
         defer { mutex.unlock() }
@@ -432,6 +452,29 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         mutex.lock()
         defer { mutex.unlock() }
         credentials.removeAll()
+    }
+
+    // MARK: - Presentation history storage (local in-memory)
+
+    public func savePresentationRecord(id: Int64, json: String) async throws {
+        try checkUnlocked()
+        mutex.lock()
+        defer { mutex.unlock() }
+        presentationRecords[id] = json
+    }
+
+    public func getAllPresentationRecords() async throws -> [Int64: String] {
+        try checkUnlocked()
+        mutex.lock()
+        defer { mutex.unlock() }
+        return presentationRecords
+    }
+
+    public func clearPresentationRecords() async throws {
+        try checkUnlocked()
+        mutex.lock()
+        defer { mutex.unlock() }
+        presentationRecords.removeAll()
     }
 
     public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
@@ -507,6 +550,32 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
         guard _isUnlocked else {
             throw KeystoreError.locked
         }
+    }
+
+    /// Pick the key to sign a presentation with. When `kid` is given (the
+    /// credential being presented has a known bound key - see
+    /// `StoredCredential.kid`), that EXACT key must be used - a wallet
+    /// holding more than one key (e.g. after a batch issuance where each
+    /// credential instance is bound to its own device key) would otherwise
+    /// silently sign every credential with whichever key happens to be
+    /// first, producing a structurally valid but cryptographically wrong
+    /// signature for every credential except that one. Throws rather than
+    /// silently falling back if the specified key isn't found, since signing
+    /// with a different key is never a safe substitute. `kid` is nil only
+    /// for genuinely credential-less call shapes (e.g. `signPresentation`'s
+    /// legacy no-credential form), where "first available key" is the only
+    /// meaningful choice.
+    private func selectSigningKey(_ keys: [SignerKeyInfo], kid: String?) throws -> SignerKeyInfo {
+        if let kid {
+            guard let key = keys.first(where: { $0.keyId == kid }) else {
+                throw KeystoreError.keyNotFound("Signing key '\(kid)' not found - this credential's bound key is unavailable")
+            }
+            return key
+        }
+        guard let key = keys.first else {
+            throw KeystoreError.keyNotFound("no keys available for signing")
+        }
+        return key
     }
 
     /// Translate SIROS's internal WSCD key-storage/user-authentication

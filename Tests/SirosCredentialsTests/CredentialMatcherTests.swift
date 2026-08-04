@@ -10,12 +10,27 @@ final class CredentialMatcherTests: XCTestCase {
         return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
     }
 
+    /// StoredCredential now requires batchId/instanceId - defaults batchId
+    /// to id (a standalone test credential is simplest modeled as a batch
+    /// of one). Note: the DCQL query "id" strings used throughout this file
+    /// (e.g. "q-pid", "pid", "mdl") are a separate, unrelated identifier
+    /// space (the query's own key) and are NOT StoredCredential ids - only
+    /// StoredCredential(id:) itself is numeric.
+    private func storedCredential(
+        id: Int64,
+        format: String,
+        raw: String,
+        metadata: CredentialMetadata? = nil
+    ) -> StoredCredential {
+        StoredCredential(id: id, format: format, raw: raw, metadata: metadata, batchId: id, instanceId: 0)
+    }
+
     func testMatchFiltersByFormatAndVct() {
         let credentials = [
-            StoredCredential(id: "1", format: "dc+sd-jwt", raw: "raw-1",
-                             metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
-            StoredCredential(id: "2", format: "mso_mdoc", raw: "raw-2",
-                             metadata: CredentialMetadata(doctype: "eu.europa.ec.eudi.pid.1")),
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-1",
+                              metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
+            storedCredential(id: 2, format: "mso_mdoc", raw: "raw-2",
+                              metadata: CredentialMetadata(doctype: "eu.europa.ec.eudi.pid.1")),
         ]
 
         let query = parseJSON("""
@@ -35,16 +50,16 @@ final class CredentialMatcherTests: XCTestCase {
 
         XCTAssertEqual(results.count, 1)
         XCTAssertEqual(results.first?.queryId, "q-pid")
-        XCTAssertEqual(results.first?.candidates.map(\.id), ["1"])
+        XCTAssertEqual(results.first?.candidates.map(\.id), [1])
         XCTAssertEqual(results.first?.requestedClaims, [["given_name"]])
     }
 
     func testMatchFiltersByDoctypeForMdoc() {
         let credentials = [
-            StoredCredential(id: "pid-doc", format: "mso_mdoc", raw: "raw-1",
-                             metadata: CredentialMetadata(doctype: "eu.europa.ec.eudi.pid.1")),
-            StoredCredential(id: "other-doc", format: "mso_mdoc", raw: "raw-2",
-                             metadata: CredentialMetadata(doctype: "com.example.other")),
+            storedCredential(id: 1, format: "mso_mdoc", raw: "raw-1",
+                              metadata: CredentialMetadata(doctype: "eu.europa.ec.eudi.pid.1")),
+            storedCredential(id: 2, format: "mso_mdoc", raw: "raw-2",
+                              metadata: CredentialMetadata(doctype: "com.example.other")),
         ]
 
         let query = parseJSON("""
@@ -60,13 +75,13 @@ final class CredentialMatcherTests: XCTestCase {
         """)
 
         let matchedIds = CredentialMatcher.matchedCredentialIds(dcqlQuery: query, credentials: credentials)
-        XCTAssertEqual(matchedIds, ["pid-doc"])
+        XCTAssertEqual(matchedIds, [1])
     }
 
     func testMatchReturnsAllWhenQueryHasNoCredentialsArray() {
         let credentials = [
-            StoredCredential(id: "a", format: "dc+sd-jwt", raw: "raw-a"),
-            StoredCredential(id: "b", format: "mso_mdoc", raw: "raw-b"),
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-a"),
+            storedCredential(id: 2, format: "mso_mdoc", raw: "raw-b"),
         ]
 
         let query = parseJSON("{ \"unexpected\": true }")
@@ -75,14 +90,14 @@ final class CredentialMatcherTests: XCTestCase {
         XCTAssertEqual(results.count, 1)
         XCTAssertEqual(results.first?.queryId, "_default")
         let ids = Set(results.first?.candidates.map(\.id) ?? [])
-        XCTAssertTrue(ids.contains("a"))
-        XCTAssertTrue(ids.contains("b"))
+        XCTAssertTrue(ids.contains(1))
+        XCTAssertTrue(ids.contains(2))
     }
 
     func testMatchedCredentialIdsAreDistinct() {
         let credentials = [
-            StoredCredential(id: "pid-1", format: "dc+sd-jwt", raw: "raw-1",
-                             metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-1",
+                              metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
         ]
 
         let query = parseJSON("""
@@ -95,13 +110,13 @@ final class CredentialMatcherTests: XCTestCase {
         """)
 
         let matchedIds = CredentialMatcher.matchedCredentialIds(dcqlQuery: query, credentials: credentials)
-        XCTAssertEqual(matchedIds, ["pid-1"])
+        XCTAssertEqual(matchedIds, [1])
     }
 
     func testMatchExcludesCredentialsWithoutRequiredMetadata() {
         let credentials = [
-            StoredCredential(id: "missing-vct", format: "dc+sd-jwt", raw: "raw-1"),
-            StoredCredential(id: "missing-doc", format: "mso_mdoc", raw: "raw-2"),
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-1"),
+            storedCredential(id: 2, format: "mso_mdoc", raw: "raw-2"),
         ]
 
         let query = parseJSON("""
@@ -120,8 +135,8 @@ final class CredentialMatcherTests: XCTestCase {
 
     func testMatchSkipsQueriesWithoutId() {
         let credentials = [
-            StoredCredential(id: "1", format: "dc+sd-jwt", raw: "raw-1",
-                             metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-1",
+                              metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
         ]
 
         let query = parseJSON("""
@@ -178,15 +193,15 @@ final class CredentialMatcherTests: XCTestCase {
     func testFindSatisfiableOptions() {
         let queryResults = [
             CredentialMatcher.MatchResult(queryId: "pid", format: "dc+sd-jwt",
-                candidates: [StoredCredential(id: "1", format: "dc+sd-jwt", raw: "r")],
+                candidates: [storedCredential(id: 1, format: "dc+sd-jwt", raw: "r")],
                 requestedClaims: []),
             CredentialMatcher.MatchResult(queryId: "other_pid", format: "dc+sd-jwt",
                 candidates: [], requestedClaims: []),
             CredentialMatcher.MatchResult(queryId: "cred_1", format: "dc+sd-jwt",
-                candidates: [StoredCredential(id: "2", format: "dc+sd-jwt", raw: "r")],
+                candidates: [storedCredential(id: 2, format: "dc+sd-jwt", raw: "r")],
                 requestedClaims: []),
             CredentialMatcher.MatchResult(queryId: "cred_2", format: "dc+sd-jwt",
-                candidates: [StoredCredential(id: "3", format: "dc+sd-jwt", raw: "r")],
+                candidates: [storedCredential(id: 3, format: "dc+sd-jwt", raw: "r")],
                 requestedClaims: []),
         ]
 
@@ -210,10 +225,10 @@ final class CredentialMatcherTests: XCTestCase {
 
     func testMatchDcqlReturnsFullOutputWithCredentialSets() {
         let credentials = [
-            StoredCredential(id: "my-pid", format: "dc+sd-jwt", raw: "raw-1",
-                             metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
-            StoredCredential(id: "my-mdl", format: "mso_mdoc", raw: "raw-2",
-                             metadata: CredentialMetadata(doctype: "org.iso.18013.5.1.mDL")),
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-1",
+                              metadata: CredentialMetadata(vct: "urn:eu:pid:1")),
+            storedCredential(id: 2, format: "mso_mdoc", raw: "raw-2",
+                              metadata: CredentialMetadata(doctype: "org.iso.18013.5.1.mDL")),
         ]
 
         let query = parseJSON("""

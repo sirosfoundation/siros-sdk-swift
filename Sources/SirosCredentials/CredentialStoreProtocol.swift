@@ -14,7 +14,7 @@ public protocol CredentialStore: Sendable {
     func getAll() async -> [StoredCredential]
 
     /// Find a credential by its unique ID. Returns nil if not found.
-    func getById(_ id: String) async -> StoredCredential?
+    func getById(_ id: Int64) async -> StoredCredential?
 
     /// Store a new credential. Overwrites any existing credential with the same ID.
     func save(_ credential: StoredCredential) async
@@ -23,7 +23,7 @@ public protocol CredentialStore: Sendable {
     func update(_ credential: StoredCredential) async
 
     /// Delete a credential by ID. No-op if not found.
-    func delete(_ id: String) async
+    func delete(_ id: Int64) async
 
     /// Remove all stored credentials.
     func clear() async
@@ -31,7 +31,7 @@ public protocol CredentialStore: Sendable {
 
 /// In-memory credential store for development/testing.
 public actor InMemoryCredentialStore: CredentialStore {
-    private var store: [String: StoredCredential] = [:]
+    private var store: [Int64: StoredCredential] = [:]
 
     public init() {}
 
@@ -39,7 +39,7 @@ public actor InMemoryCredentialStore: CredentialStore {
         Array(store.values)
     }
 
-    public func getById(_ id: String) -> StoredCredential? {
+    public func getById(_ id: Int64) -> StoredCredential? {
         store[id]
     }
 
@@ -51,7 +51,7 @@ public actor InMemoryCredentialStore: CredentialStore {
         store[credential.id] = credential
     }
 
-    public func delete(_ id: String) {
+    public func delete(_ id: Int64) {
         store.removeValue(forKey: id)
     }
 

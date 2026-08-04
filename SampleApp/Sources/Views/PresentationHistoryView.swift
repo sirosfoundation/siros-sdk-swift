@@ -7,7 +7,7 @@ import SirosCredentials
 /// made to verifiers. Supports optional credential filtering.
 struct PresentationHistoryView: View {
     @EnvironmentObject var viewModel: WalletViewModel
-    var filterCredentialId: String? = nil
+    var filterCredentialId: Int64? = nil
 
     var body: some View {
         let history = filterCredentialId.map { credId in

@@ -42,8 +42,25 @@ final class WalletViewModel: ObservableObject {
     @Published var showCredentialDetails: Bool {
         didSet { UserDefaults.standard.set(showCredentialDetails, forKey: "siros_show_credential_details") }
     }
+    /// Show the raw backend step token alongside the friendly progress label
+    /// during a flow. Default false - opt-in debugging aid, not shown by
+    /// default since it duplicates the localized label.
+    @Published var showDiagnosticMessages: Bool {
+        didSet { UserDefaults.standard.set(showDiagnosticMessages, forKey: "siros_show_diagnostic_messages") }
+    }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
+    /// Core wallet policy (not a UI-only preference like the toggles above) -
+    /// persisted here, but enforced by `SirosWallet` itself (see
+    /// `SirosWallet.credentialConsumptionPolicy`'s doc comment). Applied to
+    /// `wallet` both immediately on change (`didSet`) and again whenever
+    /// `rebuildWalletIfNeeded()` creates a fresh instance.
+    @Published var credentialConsumptionPolicy: CredentialConsumptionPolicy {
+        didSet {
+            UserDefaults.standard.set(credentialConsumptionPolicy.rawValue, forKey: "siros_credential_consumption_policy")
+            wallet?.credentialConsumptionPolicy = credentialConsumptionPolicy
+        }
+    }
 
     // MARK: - Wallet state
 
@@ -66,6 +83,7 @@ final class WalletViewModel: ObservableObject {
     @Published var showHistory = false
     @Published var showQrScanner = false
     @Published var showWscaDeveloper = false
+    @Published var showProximityEngagement = false
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
 
@@ -93,11 +111,28 @@ final class WalletViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var showError = false
 
+    // MARK: - Info (non-error, transient confirmations e.g. batch receipt)
+
+    @Published var infoMessage: String?
+    @Published var showInfo = false
+
     // MARK: - Wallet instance
 
     private var wallet: SirosWallet?
     private var stateTask: Task<Void, Never>?
     private var pendingAuthFlowId: String?
+    /// The flow type of the most recent `.flowActive` state, captured in
+    /// `updateState` while the flow is still active. `onFlowComplete` needs
+    /// this to distinguish issuance from presentation, but its own body runs
+    /// in a deferred `Task { @MainActor in ... }` - by the time that runs,
+    /// the wallet's state may have already transitioned to `.ready`, so it
+    /// can't just read `wallet?.state` at completion time.
+    private var lastFlowType: String?
+    /// Credentials received so far in the current flow. Flows in this app
+    /// run one at a time, so a plain counter reset on consumption (in
+    /// onFlowComplete) is enough - no need to key it by flowId, which
+    /// onCredentialReceived doesn't carry anyway.
+    private var receivedCredentialCount = 0
     #if canImport(SirosWscdFFI)
     private var wscdSigner: UniFFISigner?
     #endif
@@ -105,8 +140,8 @@ final class WalletViewModel: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
-        var backendUrl = defaults.string(forKey: "siros_backend_url") ?? Self.defaultBackendUrl
-        var tenantId = defaults.string(forKey: "siros_tenant_id") ?? Self.defaultTenantId
+        var backendUrl = defaults.string(forKey: "siros_backend_url") ?? defaultBackendUrl
+        var tenantId = defaults.string(forKey: "siros_tenant_id") ?? defaultTenantId
         #if DEBUG
         // Debug-only test-environment override, the closest Swift/iOS analog
         // to Android's `adb shell am start --es backend_url ... --es tenant_id ...`:
@@ -128,6 +163,13 @@ final class WalletViewModel: ObservableObject {
             self.showCredentialDetails = false
             #endif
         }
+        // Raw FlowStep tokens shown alongside the friendly progress label -
+        // default false: seeing both together in practice is redundant, the
+        // localized label alone is enough. Kept as an opt-in toggle for
+        // debugging (was default true during initial rollout).
+        self.showDiagnosticMessages = defaults.object(forKey: "siros_show_diagnostic_messages") as? Bool ?? false
+        self.credentialConsumptionPolicy = defaults.string(forKey: "siros_credential_consumption_policy")
+            .flatMap { CredentialConsumptionPolicy(rawValue: $0) } ?? .neverConsume
     }
 
     // MARK: - Public actions
@@ -412,6 +454,7 @@ final class WalletViewModel: ObservableObject {
         Task {
             do {
                 isLoading = true
+                guard let wallet else { throw SirosError.wallet(message: "Wallet is not connected") }
                 let token = try await wallet.getAccessToken()
                 let delegate = FaceTecCaptureDelegate()
                 let client = RemoteIDVClient(config: RemoteIDVClient.Config(
@@ -419,7 +462,9 @@ final class WalletViewModel: ObservableObject {
                     authToken: "Bearer \(token)"
                 ))
                 let provider = RemoteIDVProvider(client: client, delegate: delegate)
-                try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: nil)
+                let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+                let rootViewController = windowScene?.windows.first?.rootViewController ?? UIViewController()
+                try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: rootViewController)
             } catch {
                 errorMessage = "IDV failed: \(error.localizedDescription)"
             }
@@ -436,7 +481,7 @@ final class WalletViewModel: ObservableObject {
         selectedCredential = nil
     }
 
-    func deleteCredential(_ id: String) {
+    func deleteCredential(_ id: Int64) {
         Task {
             await wallet?.deleteCredential(id)
             selectedCredential = nil
@@ -445,7 +490,7 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Presentation
 
-    func acceptPresentation(_ selectedIds: [String]) {
+    func acceptPresentation(_ selectedIds: [Int64]) {
         pendingPresentation = nil
         presentationContinuation?.resume(returning: selectedIds)
         presentationContinuation = nil
@@ -478,6 +523,105 @@ final class WalletViewModel: ObservableObject {
         showQrScanner = false
     }
 
+    // MARK: - Proximity (ISO 18013-5 BLE) presentation
+
+    func openProximityEngagement() {
+        showProximityEngagement = true
+    }
+
+    func closeProximityEngagement() {
+        showProximityEngagement = false
+    }
+
+    /// Mirrors `SirosWallet.getCredentials` - passed to `BlePeripheralServer`
+    /// so it can match a request's docType without depending on this view
+    /// model or `SirosWallet` directly.
+    func getCredentialsForProximity() async -> [StoredCredential] {
+        await wallet?.getCredentials() ?? []
+    }
+
+    /// Mirrors `SirosWallet.signMdocPresentationForProximity` - passed to
+    /// `BlePeripheralServer`.
+    func signMdocPresentationForProximity(
+        credentialId: Int64,
+        disclosedClaims: [String]?,
+        sessionTranscriptBytes: Data
+    ) async throws -> Data {
+        guard let wallet else {
+            throw SirosError.wallet(message: "Wallet is not connected")
+        }
+        return try await wallet.signMdocPresentationForProximity(
+            credentialId: credentialId,
+            disclosedClaims: disclosedClaims,
+            sessionTranscriptBytes: sessionTranscriptBytes
+        )
+    }
+
+    /// The wallet's presentation history, read live (unlike `presentationHistory`
+    /// above, which is only refreshed when the History screen opens) - for
+    /// callers like `CredentialsView`/`filterEligibleForProximity` that need
+    /// an up-to-date view to compute `CredentialUtils.eligibleInstances`
+    /// on every render/decision rather than a possibly-stale cached copy.
+    var currentPresentationHistory: [PresentationRecord] {
+        wallet?.presentationHistory ?? []
+    }
+
+    /// Mirrors `CredentialUtils.eligibleInstances` bound to `wallet`'s current
+    /// `credentialConsumptionPolicy`/`presentationHistory` - passed to
+    /// `BlePeripheralServer`/`BleCentralClient` and `ProximityConsentSheet`
+    /// so a family the user approves can't be signed with (or picked for)
+    /// an exhausted instance.
+    func filterEligibleForProximity(_ instances: [StoredCredential]) -> [StoredCredential] {
+        CredentialUtils.eligibleInstances(
+            instances: instances,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: currentPresentationHistory
+        )
+    }
+
+    /// Same as `filterEligibleForProximity`, generalized for the redirect/DC
+    /// API presentation consent screen (`PresentationConsentView`) - a query
+    /// is unsatisfiable if every candidate that matched it has already been
+    /// used up under the active consumption policy (see
+    /// `CredentialUtils.eligibleInstances`). The SDK itself refuses to sign
+    /// with an exhausted instance regardless (defense in depth), but the
+    /// user shouldn't be let all the way to "Share" only to have it silently
+    /// fail.
+    func eligibleCredentialIds(from candidates: [StoredCredential]) -> [Int64] {
+        CredentialUtils.eligibleInstances(
+            instances: candidates,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: currentPresentationHistory
+        ).map(\.id)
+    }
+
+    /// Re-request a fresh batch of `credential` directly from its own
+    /// issuer/config (already stored on it - see
+    /// `StoredCredential.credentialIssuerIdentifier`/`StoredCredential.credentialConfigurationId`),
+    /// skipping the generic issuer-browsing screen entirely - for
+    /// `CredentialCardView`'s "Renew" action once every batch instance has
+    /// been used up (see `CredentialUtils.eligibleInstances`).
+    func renewCredential(_ credential: StoredCredential) {
+        guard let issuerId = credential.credentialIssuerIdentifier,
+              let configId = credential.credentialConfigurationId else {
+            setError("Cannot renew this credential - issuer information is missing")
+            return
+        }
+        let offer = CredentialOffer(
+            credentialConfigurationId: configId,
+            credentialIssuerIdentifier: issuerId,
+            credentialName: credential.metadata?.name ?? credential.format,
+            issuerName: credential.metadata?.issuer?.name ?? issuerId
+        )
+        Task {
+            do {
+                try await wallet?.startIssuanceByOffer(offer)
+            } catch {
+                setError(error.localizedDescription)
+            }
+        }
+    }
+
     func handleQrResult(_ code: String) {
         showQrScanner = false
         let linkType = DeepLinkClassifier.classify(code)
@@ -488,8 +632,17 @@ final class WalletViewModel: ObservableObject {
             Task { try? await wallet?.startPresentation(requestUri: uri) }
         case .authCallback(let authCode, let state):
             handleAuthRedirect(code: authCode, state: state)
-        case .unknown:
-            setError("Unrecognised QR code")
+        case .unknown(let uri):
+            // Fallback: treat unclassified URIs as presentation requests -
+            // covers plain https://...?request_uri= patterns from QR codes
+            // that DeepLinkClassifier doesn't recognize by shape.
+            Task {
+                do {
+                    try await wallet?.startPresentation(requestUri: uri)
+                } catch {
+                    setError(error.localizedDescription)
+                }
+            }
         }
     }
 
@@ -504,8 +657,17 @@ final class WalletViewModel: ObservableObject {
             Task { try? await wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
             Task { try? await wallet?.startPresentation(requestUri: uri) }
-        case .unknown:
-            break
+        case .unknown(let uri):
+            // Fallback: treat unclassified URIs as presentation requests -
+            // matches handleQrResult's fallback for the same URI shapes
+            // arriving via a same-device link instead of a QR scan.
+            Task {
+                do {
+                    try await wallet?.startPresentation(requestUri: uri)
+                } catch {
+                    setError(error.localizedDescription)
+                }
+            }
         }
     }
 
@@ -516,9 +678,14 @@ final class WalletViewModel: ObservableObject {
         showError = false
     }
 
+    func clearInfo() {
+        infoMessage = nil
+        showInfo = false
+    }
+
     // MARK: - Private
 
-    private var presentationContinuation: CheckedContinuation<[String], Never>?
+    private var presentationContinuation: CheckedContinuation<[Int64], Never>?
 
     private func setError(_ message: String) {
         errorMessage = message
@@ -613,6 +780,7 @@ final class WalletViewModel: ObservableObject {
             sessionStore: KeychainSessionStore(),
             keystore: keystore
         )
+        wallet?.credentialConsumptionPolicy = credentialConsumptionPolicy
         wallet?.setEventListener(self)
         observeState()
     }
@@ -649,8 +817,9 @@ final class WalletViewModel: ObservableObject {
             walletState = .connecting
             displayName = name
         case .flowActive(_, _, _, let flowType, let status, let creds):
-            walletState = .flowActive(message: "\(flowType): \(status)")
+            walletState = .flowActive(flowType: flowType, status: status)
             credentials = creds
+            lastFlowType = flowType
         case .error(let message):
             walletState = .error(message: message)
         }
@@ -660,7 +829,7 @@ final class WalletViewModel: ObservableObject {
 // MARK: - WalletEventListener
 
 extension WalletViewModel: WalletEventListener {
-    nonisolated func onCredentialSelectionRequired(request: PresentationRequest) async -> [String] {
+    nonisolated func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] {
         await withCheckedContinuation { continuation in
             Task { @MainActor in
                 self.presentationContinuation = continuation
@@ -669,11 +838,32 @@ extension WalletViewModel: WalletEventListener {
         }
     }
 
-    nonisolated func onCredentialReceived(credential: StoredCredential) {}
-    nonisolated func onFlowComplete(flowId: String) {}
+    nonisolated func onCredentialReceived(credential: StoredCredential) {
+        Task { @MainActor in
+            self.receivedCredentialCount += 1
+        }
+    }
+
+    nonisolated func onFlowComplete(flowId: String) {
+        Task { @MainActor in
+            if self.receivedCredentialCount > 0 {
+                self.infoMessage = L10n.string("flow.credentialsReceived", self.receivedCredentialCount)
+                self.showInfo = true
+                self.receivedCredentialCount = 0
+            } else if self.lastFlowType == "presentation" {
+                // Presentation has no analogous per-item count, so a plain
+                // confirmation is the equivalent "something happened" signal
+                // for a flow whose whole point is watching this screen after
+                // a QR scan.
+                self.infoMessage = L10n.string("flow.presentationSent")
+                self.showInfo = true
+            }
+        }
+    }
 
     nonisolated func onFlowError(flowId: String, errorMessage: String) {
         Task { @MainActor in
+            self.receivedCredentialCount = 0
             self.setError(errorMessage)
         }
     }
@@ -705,6 +895,6 @@ enum WalletViewState: Equatable {
     case disconnected
     case connecting
     case ready
-    case flowActive(message: String)
+    case flowActive(flowType: String, status: String)
     case error(message: String)
 }

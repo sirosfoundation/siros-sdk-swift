@@ -25,7 +25,7 @@ public struct PresentationRequest: Sendable {
 public protocol WalletEventListener: AnyObject, Sendable {
     /// A verifier has requested credentials. Return the IDs the user consented to share.
     /// Return an empty list to cancel the presentation.
-    func onCredentialSelectionRequired(request: PresentationRequest) async -> [String]
+    func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64]
 
     /// A new credential has been received from an issuer.
     func onCredentialReceived(credential: StoredCredential)

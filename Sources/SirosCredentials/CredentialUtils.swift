@@ -393,7 +393,11 @@ public enum CredentialUtils {
         }
     }
 
-    private static func base64UrlDecode(_ string: String) -> Data? {
+    /// Decode a base64url (no padding) string, restoring the `=` padding
+    /// `Data(base64Encoded:)` requires - a bare `-`/`_` substitution without
+    /// restoring padding silently returns nil for any input whose length
+    /// isn't already a multiple of 4.
+    public static func base64UrlDecode(_ string: String) -> Data? {
         var base64 = string
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
@@ -402,5 +406,125 @@ public enum CredentialUtils {
             base64 += String(repeating: "=", count: 4 - remainder)
         }
         return Data(base64Encoded: base64)
+    }
+
+    /// Group stored credentials into display-ready families, mirroring
+    /// wallet-frontend's `CredentialsContextProvider.fetchVcData`: only the
+    /// `instanceId == 0` credential of a batch (see `StoredCredential.batchId`)
+    /// is returned as a visible entry, with every sibling copy's usage count
+    /// attached as `CredentialWithInstances.instances` - the UI derives its
+    /// "remaining copies" badge from `instances.count { $0.sigCount == 0 }`.
+    ///
+    /// Every issuance response - batch of one or of many - shares one
+    /// `batchId`, so grouping is uniform: no separate "standalone" case,
+    /// matching wallet-frontend exactly.
+    public static func groupForDisplay(
+        credentials: [StoredCredential],
+        presentationHistory: [PresentationRecord]
+    ) -> [CredentialWithInstances] {
+        func sigCount(for credentialId: Int64) -> Int {
+            presentationHistory.filter { $0.credentialIds.contains(credentialId) }.count
+        }
+
+        var byBatch: [Int64: [StoredCredential]] = [:]
+        for credential in credentials {
+            byBatch[credential.batchId, default: []].append(credential)
+        }
+
+        let results: [CredentialWithInstances] = byBatch.values.compactMap { members in
+            guard let visible = members.first(where: { $0.instanceId == 0 }) else { return nil }
+            let instances = members
+                .sorted(by: { $0.instanceId < $1.instanceId })
+                .map { CredentialInstance(instanceId: $0.instanceId, sigCount: sigCount(for: $0.id)) }
+            return CredentialWithInstances(credential: visible, instances: instances)
+        }
+
+        return results.sorted(by: { ($0.credential.issuedAt ?? 0) > ($1.credential.issuedAt ?? 0) })
+    }
+
+    /// Every credential format this SDK currently supports discloses via
+    /// salted-hash element digests (mdoc's MSO, SD-JWT's `_sd` array) - none
+    /// is a real ZKP predicate proof - so ``CredentialConsumptionPolicy/consumeNonZkp``
+    /// is indistinguishable from ``CredentialConsumptionPolicy/consumeAll``
+    /// today. Kept as a real, separate policy value (not collapsed into one)
+    /// since it's the right shape for once a ZKP-based format exists; this
+    /// function is the single place that would need updating then.
+    private static func isZkpFormat(_ format: String) -> Bool { false }
+
+    /// Instances from `instances` (all copies of one batch - see
+    /// `StoredCredential.batchId`) that are still allowed to be used for a
+    /// NEW presentation under `policy`, given what `presentationHistory`
+    /// shows has already been presented. Mirrors ``groupForDisplay(credentials:presentationHistory:)``'s
+    /// own `sigCount` usage-counting exactly, so "eligible" and the
+    /// "remaining copies" ribbon never disagree.
+    ///
+    /// ``CredentialConsumptionPolicy/neverConsume`` (the default - today's
+    /// actual behavior) returns every instance unconditionally. Otherwise, an
+    /// instance is eligible only if it hasn't already been presented
+    /// (`sigCount == 0`) - each instance is bound to its own device key
+    /// specifically so a verifier can't correlate repeated presentations by a
+    /// reused key/signature; reusing an already-presented instance would
+    /// throw that guarantee away.
+    public static func eligibleInstances(
+        instances: [StoredCredential],
+        policy: CredentialConsumptionPolicy,
+        presentationHistory: [PresentationRecord]
+    ) -> [StoredCredential] {
+        guard policy != .neverConsume else { return instances }
+        // A single pass building this set, rather than rescanning all of
+        // presentationHistory per instance (O(instances x history) before),
+        // matters once either grows - this can run on every UI update.
+        var usedCredentialIds: Set<Int64> = []
+        for record in presentationHistory {
+            usedCredentialIds.formUnion(record.credentialIds)
+        }
+        return instances.filter { instance in
+            let consumes = policy == .consumeAll || !isZkpFormat(instance.format)
+            return !consumes || !usedCredentialIds.contains(instance.id)
+        }
+    }
+
+    /// Below this many eligible (unused) instances remaining, the UI should
+    /// offer to renew/re-issue the credential rather than let it silently run
+    /// out. Not user-configurable in this pass - just the stated default.
+    public static let renewThreshold = 0
+}
+
+/// Governs whether a successful presentation exhausts the specific credential
+/// instance it used, so that instance can never be presented again.
+///
+/// Defaults to ``neverConsume`` - today's actual behavior - so introducing
+/// this setting doesn't silently change existing wallets' behavior.
+public enum CredentialConsumptionPolicy: String, Sendable, CaseIterable {
+    /// Every successful presentation exhausts the instance it used, regardless of format.
+    case consumeAll
+
+    /// Same as ``consumeAll`` until a real ZKP presentation format exists (see
+    /// `CredentialUtils.isZkpFormat`).
+    case consumeNonZkp
+
+    /// Instances are never exhausted - a presentation may reuse any matching instance.
+    case neverConsume
+}
+
+/// One member of a batch-issued credential family, alongside its usage count.
+public struct CredentialInstance: Sendable, Equatable {
+    public let instanceId: Int
+    public let sigCount: Int
+
+    public init(instanceId: Int, sigCount: Int) {
+        self.instanceId = instanceId
+        self.sigCount = sigCount
+    }
+}
+
+/// A visible credential card plus every instance in its batch (see `CredentialUtils.groupForDisplay`).
+public struct CredentialWithInstances: Sendable, Equatable {
+    public let credential: StoredCredential
+    public let instances: [CredentialInstance]
+
+    public init(credential: StoredCredential, instances: [CredentialInstance]) {
+        self.credential = credential
+        self.instances = instances
     }
 }

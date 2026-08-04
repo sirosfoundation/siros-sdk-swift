@@ -25,7 +25,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
 
     private let mutex = NSLock()
     private var keys: [String: P256.Signing.PrivateKey] = [:]
-    private var credentials: [String: String] = [:]
+    private var credentials: [Int64: String] = [:]
+    private var presentationRecords: [Int64: String] = [:]
     private var _mainKey: SymmetricKey?
     private var containerMetadata: ContainerData?
     // Preserve full WalletStateContainer for round-trip fidelity
@@ -137,6 +138,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         defer { mutex.unlock() }
         keys.removeAll()
         credentials.removeAll()
+        presentationRecords.removeAll()
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
@@ -244,22 +246,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         return "\(signingInput).\(sigB64)"
     }
 
-    public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {
+    public func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
 
-        let key: P256.Signing.PrivateKey
-        let keyId: String
-        if let first = keys.first {
-            keyId = first.key
-            key = first.value
-        } else {
-            keyId = UUID().uuidString.lowercased()
-            let newKey = P256.Signing.PrivateKey()
-            keys[keyId] = newKey
-            key = newKey
-        }
+        let (keyId, key) = try selectSigningKey(kid: kid)
 
         let header = JwtHelpers.jsonBase64Url([
             "alg": "ES256",
@@ -284,21 +276,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         credential: String,
         disclosedClaims: [String]?,
         nonce: String,
-        audience: String
+        audience: String,
+        kid: String?
     ) async throws -> String {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
 
-        let key: P256.Signing.PrivateKey
-        if let first = keys.values.first {
-            key = first
-        } else {
-            let keyId = UUID().uuidString.lowercased()
-            let newKey = P256.Signing.PrivateKey()
-            keys[keyId] = newKey
-            key = newKey
-        }
+        let (_, key) = try selectSigningKey(kid: kid)
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -376,28 +361,28 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
 
     // MARK: - Credential storage
 
-    public func saveCredential(id: String, json: String) async throws {
+    public func saveCredential(id: Int64, json: String) async throws {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
         credentials[id] = json
     }
 
-    public func getCredential(id: String) async throws -> String? {
+    public func getCredential(id: Int64) async throws -> String? {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
         return credentials[id]
     }
 
-    public func getAllCredentials() async throws -> [String: String] {
+    public func getAllCredentials() async throws -> [Int64: String] {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
         return credentials
     }
 
-    public func deleteCredential(id: String) async throws {
+    public func deleteCredential(id: Int64) async throws {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
@@ -409,6 +394,29 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeAll()
+    }
+
+    // MARK: - Presentation history storage
+
+    public func savePresentationRecord(id: Int64, json: String) async throws {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+        presentationRecords[id] = json
+    }
+
+    public func getAllPresentationRecords() async throws -> [Int64: String] {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+        return presentationRecords
+    }
+
+    public func clearPresentationRecords() async throws {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+        presentationRecords.removeAll()
     }
 
     public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
@@ -482,6 +490,30 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         }
     }
 
+    /// Pick the key to sign a presentation with. See
+    /// `WscdKeystoreAdapter.selectSigningKey`'s doc comment for why, when
+    /// `kid` is given (the credential being presented has a known bound key
+    /// - see `StoredCredential.kid`), that EXACT key must be used - throwing
+    /// rather than silently falling back to an arbitrary one if it's
+    /// missing. `kid` is nil only for genuinely credential-less call shapes,
+    /// where "first available key" (generating one if none exist yet) is
+    /// the only meaningful choice.
+    private func selectSigningKey(kid: String?) throws -> (keyId: String, key: P256.Signing.PrivateKey) {
+        if let kid {
+            guard let key = keys[kid] else {
+                throw KeystoreError.keyNotFound("Signing key '\(kid)' not found - this credential's bound key is unavailable")
+            }
+            return (kid, key)
+        }
+        if let first = keys.first {
+            return (first.key, first.value)
+        }
+        let keyId = UUID().uuidString.lowercased()
+        let newKey = P256.Signing.PrivateKey()
+        keys[keyId] = newKey
+        return (keyId, newKey)
+    }
+
     private func filterDisclosures(_ disclosures: [String], claimNames: [String]) -> [String] {
         let requested = Set(claimNames)
         return disclosures.filter { disclosure in
@@ -522,13 +554,101 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             }
         }
 
+        // credentialId/batchId are privatedata-spec `number`s on the wire
+        // (matching wallet-frontend's WalletStateCredential exactly) - read
+        // via asInt64/asInt (which accept both NSNumber and String) rather
+        // than a strict numeric cast, so a value that arrives quoted (e.g.
+        // from a not-yet-migrated container) still parses instead of
+        // silently dropping the entry.
         if let credsArray = state["credentials"] as? [[String: Any]] {
             for entry in credsArray {
-                guard let credId = entry["credentialId"] as? String,
+                guard let credId = Self.asInt64(entry["credentialId"]),
                       let data = entry["data"] as? String else { continue }
-                credentials[credId] = data
+                let credKid = entry["kid"] as? String
+                let credFormat = (entry["format"] as? String) ?? ""
+                let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
+                let credConfigId = entry["credentialConfigurationId"] as? String
+                let batchId = Self.asInt64(entry["batchId"]) ?? 0
+                let instanceId = Self.asInt(entry["instanceId"]) ?? 0
+
+                // Reconstruct a StoredCredential-shaped JSON blob (snake_case
+                // matching StoredCredential's CodingKeys) to preserve kid/
+                // batchId/instanceId/etc binding - credentialIssuerIdentifier/
+                // credentialConfigurationId are part of privatedata-spec's
+                // normative fields (already written by buildWalletStateV3()
+                // below) - reconstructing them here too is what lets
+                // SirosWallet re-fetch VCTM display metadata after a fresh
+                // login.
+                var storedDict: [String: Any] = [
+                    "id": credId,
+                    "format": credFormat,
+                    "raw": data,
+                    "batch_id": batchId,
+                    "instance_id": instanceId,
+                ]
+                if let credKid, !credKid.isEmpty { storedDict["kid"] = credKid }
+                if let credIssuerIdent, !credIssuerIdent.isEmpty {
+                    storedDict["credential_issuer_identifier"] = credIssuerIdent
+                }
+                if let credConfigId, !credConfigId.isEmpty {
+                    storedDict["credential_configuration_id"] = credConfigId
+                }
+
+                if let storedData = try? JSONSerialization.data(withJSONObject: storedDict),
+                   let storedJson = String(data: storedData, encoding: .utf8) {
+                    credentials[credId] = storedJson
+                }
             }
         }
+
+        // Parse presentations: [{ presentationId, transactionId, data,
+        // usedCredentialIds, presentationTimestampSeconds, audience }] -
+        // privatedata-spec's normative shape (wallet-frontend's
+        // WalletStatePresentation). transactionId/data have no
+        // PresentationRecord counterpart (see its doc comment) and are
+        // intentionally dropped on reload, not round-tripped.
+        if let presentationsArray = state["presentations"] as? [[String: Any]] {
+            for entry in presentationsArray {
+                guard let presId = Self.asInt64(entry["presentationId"]) else { continue }
+                let usedCredentialIds = (entry["usedCredentialIds"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
+                let timestampSeconds = Self.asInt64(entry["presentationTimestampSeconds"]) ?? 0
+                let audience = entry["audience"] as? String
+
+                var recordDict: [String: Any] = [
+                    "id": presId,
+                    "flow_id": "",
+                    "credential_ids": usedCredentialIds,
+                    "timestamp": timestampSeconds * 1000,
+                ]
+                if let audience, !audience.isEmpty { recordDict["verifier_name"] = audience }
+
+                if let recordData = try? JSONSerialization.data(withJSONObject: recordDict),
+                   let recordJson = String(data: recordData, encoding: .utf8) {
+                    presentationRecords[presId] = recordJson
+                }
+            }
+        }
+    }
+
+    /// Coerce a JSON value (parsed via `JSONSerialization`, so numbers surface
+    /// as `NSNumber`) or a string-encoded number into an `Int64`. Accepting
+    /// both keeps parsing robust to a not-yet-migrated container where a
+    /// privatedata-spec `number` field might still arrive quoted.
+    private static func asInt64(_ value: Any?) -> Int64? {
+        if let n = value as? NSNumber { return n.int64Value }
+        if let s = value as? String { return Int64(s) }
+        return nil
+    }
+
+    private static func asInt(_ value: Any?) -> Int? {
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String { return Int(s) }
+        return nil
+    }
+
+    private func parseJsonObject(_ jsonString: String) -> [String: Any]? {
+        guard let data = jsonString.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     private func loadLegacyState(_ json: [String: Any]) {
@@ -544,8 +664,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
                 keys[keyId] = key
             }
         }
+        // Legacy Kotlin-only container predates numeric credential ids
+        // entirely - defaults any unparseable (pre-migration UUID-string)
+        // key to 0, since this path is only reachable from a container
+        // exported before the privatedata-spec numeric-id alignment.
         if let creds = json["credentials"] as? [String: String] {
-            credentials = creds
+            credentials = creds.reduce(into: [Int64: String]()) { result, entry in
+                result[Int64(entry.key) ?? 0] = entry.value
+            }
         }
     }
 
@@ -571,11 +697,13 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             return result
         }()
 
-        let originalCredsById: [String: [String: Any]] = {
+        // credentialId is a privatedata-spec number on the wire (matching
+        // wallet-frontend), so compare it numerically rather than as a string.
+        let originalCredsById: [Int64: [String: Any]] = {
             guard let arr = existingS?["credentials"] as? [[String: Any]] else { return [:] }
-            var result: [String: [String: Any]] = [:]
+            var result: [Int64: [String: Any]] = [:]
             for entry in arr {
-                if let credId = entry["credentialId"] as? String {
+                if let credId = Self.asInt64(entry["credentialId"]) {
                     result[credId] = entry
                 }
             }
@@ -617,18 +745,26 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             ]
         }
 
-        // Preserve all metadata fields from the original entry (if this credential
-        // already existed in the loaded container); only fall back to defaults for
-        // genuinely new credentials.
+        // Preserve all metadata fields from the original entry (if this
+        // credential already existed in the loaded container); fall back to
+        // the credential's own saved JSON (parsed) for a credential added
+        // THIS session (saveCredential() then export, with no matching entry
+        // in the previously-imported container yet) - without this fallback,
+        // a freshly-saved batch credential's batchId/instanceId would
+        // silently reset to 0 on every export until the container is
+        // reloaded once.
         let creds: [[String: Any]] = credentials.map { (id, data) in
             let original = originalCredsById[id]
-            let format: String = original?["format"] as? String ?? ""
-            let kid: String = original?["kid"] as? String ?? ""
-            let instanceId: Any = original?["instanceId"] ?? 0
-            let batchId: Any = original?["batchId"] ?? 0
-            let issuerIdent: String = original?["credentialIssuerIdentifier"] as? String ?? ""
-            let configId: String = original?["credentialConfigurationId"] as? String ?? ""
-            let credData: String = original?["data"] as? String ?? data
+            let parsed = parseJsonObject(data)
+            let format = (original?["format"] as? String) ?? (parsed?["format"] as? String) ?? ""
+            let kid = (original?["kid"] as? String) ?? (parsed?["kid"] as? String) ?? ""
+            let instanceId = Self.asInt(original?["instanceId"]) ?? Self.asInt(parsed?["instance_id"]) ?? 0
+            let batchId = Self.asInt64(original?["batchId"]) ?? Self.asInt64(parsed?["batch_id"]) ?? 0
+            let issuerIdent = (original?["credentialIssuerIdentifier"] as? String)
+                ?? (parsed?["credential_issuer_identifier"] as? String) ?? ""
+            let configId = (original?["credentialConfigurationId"] as? String)
+                ?? (parsed?["credential_configuration_id"] as? String) ?? ""
+            let credData = (original?["data"] as? String) ?? (parsed?["raw"] as? String) ?? data
             let entry: [String: Any] = [
                 "credentialId": id,
                 "format": format,
@@ -642,9 +778,36 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
             return entry
         }
 
+        // presentations is privatedata-spec's normative S.presentations[]
+        // (wallet-frontend's WalletStatePresentation) - genuinely built from
+        // the in-memory presentationRecords map, not passed through verbatim,
+        // so a presentation recorded THIS session actually survives
+        // export/reload (see savePresentationRecord). transactionId has no
+        // PresentationRecord counterpart (see its doc comment) - each
+        // Swift-recorded presentation is treated as its own single-VP
+        // transaction, reusing the same id for both fields. `data` (the raw
+        // VP) isn't captured at PresentationRecord construction time
+        // (recorded at credential-selection time, before the VP is actually
+        // signed) - written as "" rather than restructuring that flow, a
+        // known, deliberate gap.
+        let presentations: [[String: Any]] = presentationRecords.map { (id, data) in
+            let parsed = parseJsonObject(data)
+            let usedCredentialIds = (parsed?["credential_ids"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
+            let timestampMillis = Self.asInt64(parsed?["timestamp"]) ?? 0
+            let audience = (parsed?["verifier_name"] as? String) ?? ""
+
+            return [
+                "presentationId": id,
+                "transactionId": id,
+                "data": "",
+                "usedCredentialIds": usedCredentialIds,
+                "presentationTimestampSeconds": timestampMillis / 1000,
+                "audience": audience,
+            ] as [String: Any]
+        }
+
         let lastEventHash = existingState?["lastEventHash"] as? String ?? ""
         let events = existingState?["events"] as? [Any] ?? []
-        let presentations = existingS?["presentations"] as? [Any] ?? []
         let settings = existingS?["settings"] as? [String: Any] ?? [
             "openidRefreshTokenMaxAgeInSeconds": "0",
         ]
@@ -772,29 +935,38 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func signPresentation(nonce: String, audience: String, credentialIds: [String]) async throws -> String {
+    public func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String) async throws -> String {
+    public func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String, kid: String?) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func exportEncryptedContainer() async throws -> Data {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func listKeys() -> [KeyInfo] { [] }
-    public func saveCredential(id: String, json: String) async throws {
+    public func saveCredential(id: Int64, json: String) async throws {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func getCredential(id: String) async throws -> String? {
+    public func getCredential(id: Int64) async throws -> String? {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func getAllCredentials() async throws -> [String: String] {
+    public func getAllCredentials() async throws -> [Int64: String] {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func deleteCredential(id: String) async throws {
+    public func deleteCredential(id: Int64) async throws {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func clearCredentials() async throws {
+        throw KeystoreError.cryptoError("CryptoKit not available on this platform")
+    }
+    public func savePresentationRecord(id: Int64, json: String) async throws {
+        throw KeystoreError.cryptoError("CryptoKit not available on this platform")
+    }
+    public func getAllPresentationRecords() async throws -> [Int64: String] {
+        throw KeystoreError.cryptoError("CryptoKit not available on this platform")
+    }
+    public func clearPresentationRecords() async throws {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
