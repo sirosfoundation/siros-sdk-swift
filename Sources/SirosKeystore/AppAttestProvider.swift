@@ -5,6 +5,22 @@ import DeviceCheck
 import Foundation
 import CryptoKit
 
+/// The subset of `DCAppAttestService`'s API `AppAttestProvider` uses,
+/// extracted as a protocol so tests can inject a fake instead of the real
+/// service - `DCAppAttestService` itself requires a real device + valid
+/// entitlement and can't be exercised in CI/Simulator (`isSupported` is
+/// `false` there), so this is the only way to unit-test the key-exists/
+/// key-doesn't-exist branching logic in `generateEvidence` at all.
+public protocol AppAttestServiceProviding: Sendable {
+    var isSupported: Bool { get }
+    func generateKey() async throws -> String
+    func attestKey(_ keyId: String, clientDataHash: Data) async throws -> Data
+    func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data
+}
+
+@available(iOS 14.0, macOS 12.0, *)
+extension DCAppAttestService: AppAttestServiceProviding {}
+
 /// Provides Apple App Attest attestation for wallet instance authentication.
 ///
 /// This provider generates and validates App Attest keys, producing attestation
@@ -17,7 +33,7 @@ import CryptoKit
 /// let attestation = try await provider.attest(keyId: keyId, challenge: challengeData)
 /// ```
 @available(iOS 14.0, macOS 12.0, *)
-public final class AppAttestProvider: @unchecked Sendable {
+public final class AppAttestProvider: NativeAttestationProvider, @unchecked Sendable {
 
     /// Errors specific to App Attest operations.
     public enum AppAttestError: Error, Sendable {
@@ -25,18 +41,55 @@ public final class AppAttestProvider: @unchecked Sendable {
         case keyGenerationFailed(Error)
         case attestationFailed(Error)
         case assertionFailed(Error)
+        /// An App Attest key already exists for this install. Re-attesting
+        /// an existing key isn't meaningful (App Attest keys are generated
+        /// exactly once per install and reused forever after) and isn't
+        /// backend-verifiable today anyway (only the initial attestation
+        /// object is verified server-side, not repeat assertions) - callers
+        /// of `generateEvidence` treat this like any other best-effort
+        /// failure and omit `native_attestation`.
+        case alreadyAttested
     }
 
-    private let service: DCAppAttestService
+    private let service: AppAttestServiceProviding
+    /// Loads this install's persisted App Attest key ID, if one was already
+    /// generated - injected so `SirosWallet` can back it with
+    /// `SessionStoreProtocol.appAttestKeyId` (Keychain-backed) without this
+    /// type needing to know about session storage.
+    private let loadPersistedKeyId: @Sendable () -> String?
+    /// Persists a newly-generated App Attest key ID for reuse on every
+    /// subsequent call, for the same reason.
+    private let savePersistedKeyId: @Sendable (String) -> Void
 
-    public init() {
+    public init(
+        loadPersistedKeyId: @escaping @Sendable () -> String? = { nil },
+        savePersistedKeyId: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.service = DCAppAttestService.shared
+        self.loadPersistedKeyId = loadPersistedKeyId
+        self.savePersistedKeyId = savePersistedKeyId
+    }
+
+    /// Test-only constructor: injects a fake `AppAttestServiceProviding` in
+    /// place of the real `DCAppAttestService.shared`.
+    init(
+        service: AppAttestServiceProviding,
+        loadPersistedKeyId: @escaping @Sendable () -> String? = { nil },
+        savePersistedKeyId: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
+        self.service = service
+        self.loadPersistedKeyId = loadPersistedKeyId
+        self.savePersistedKeyId = savePersistedKeyId
     }
 
     /// Whether App Attest is supported on this device.
     public var isSupported: Bool {
         service.isSupported
     }
+
+    /// `NativeAttestationProvider` conformance - `isSupported` remains the
+    /// primary, documented API; this just satisfies the shared contract.
+    public var isAvailable: Bool { isSupported }
 
     /// Generate a new App Attest key.
     /// - Returns: The key identifier (used for attestation and assertions).
@@ -91,6 +144,42 @@ public final class AppAttestProvider: @unchecked Sendable {
         } catch {
             throw AppAttestError.assertionFailed(error)
         }
+    }
+
+    /// Generate native attestation evidence for a WIA challenge.
+    ///
+    /// App Attest keys are generated exactly once per install: if
+    /// `loadPersistedKeyId()` already has one, this throws
+    /// `AppAttestError.alreadyAttested` rather than re-attesting (see that
+    /// case's doc comment) - callers should treat this exactly like any
+    /// other best-effort attestation failure and omit `native_attestation`.
+    /// Only a fresh install (no persisted key yet) produces real evidence.
+    ///
+    /// - Parameters:
+    ///   - challenge: The challenge nonce from `/wia/challenge`.
+    ///   - keyId: The WSCD instance key ID (the shared contract's
+    ///     correlation value) - NOT the App Attest key ID, which is purely
+    ///     this provider's own internal persisted state.
+    public func generateEvidence(challenge: String, keyId: String) async throws -> NativeAttestationEvidence {
+        guard loadPersistedKeyId() == nil else {
+            throw AppAttestError.alreadyAttested
+        }
+        let appAttestKeyId = try await generateKey()
+        // Persist only AFTER attest() succeeds (real Copilot-review finding:
+        // persisting first meant a transient attest() failure - network
+        // error, app killed mid-call, etc. - would leave the unattested key
+        // ID persisted forever, permanently throwing alreadyAttested on
+        // every later call and bricking native attestation for this install
+        // until reinstall). Generating a throwaway key that never gets
+        // attested is harmless and cheap; a permanently stuck install is not.
+        let attestationObject = try await attest(keyId: appAttestKeyId, challenge: Data(challenge.utf8))
+        savePersistedKeyId(appAttestKeyId)
+        return NativeAttestationEvidence(
+            type: "apple_app_attest",
+            token: attestationObject.base64EncodedString(),
+            keyId: keyId,
+            challenge: challenge
+        )
     }
 }
 #endif

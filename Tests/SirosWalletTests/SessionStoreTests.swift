@@ -79,4 +79,42 @@ final class SessionStoreTests: XCTestCase {
         store.appToken = nil
         XCTAssertNil(store.appToken)
     }
+
+    /// Real Copilot-review finding: appAttestKeyId must be genuinely
+    /// install-scoped, NOT account-scoped like every other property here -
+    /// App Attest keys are generated once per install and reused forever,
+    /// so switching the active account must not affect it at all (unlike
+    /// account-scoped properties, which read back nil for a different account).
+    func testAppAttestKeyIdIsSharedAcrossAccountsNotAccountScoped() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "account-a"
+        store.appAttestKeyId = "app-attest-key-1"
+        XCTAssertEqual(store.appAttestKeyId, "app-attest-key-1")
+
+        store.activeAccountId = "account-b"
+        XCTAssertEqual(store.appAttestKeyId, "app-attest-key-1", "must be visible under a different account too")
+
+        // Contrast with an account-scoped property, which does NOT survive an account switch.
+        store.instanceKeyId = "instance-key-b"
+        store.activeAccountId = "account-a"
+        XCTAssertNil(store.instanceKeyId, "instanceKeyId is account-scoped, unlike appAttestKeyId")
+    }
+
+    /// Real Copilot-review finding: clearAccount() (logout/account switch)
+    /// must NOT delete appAttestKeyId - only clearAll() (factory reset)
+    /// should. Deleting it on logout would force a fresh App Attest key +
+    /// attestation on next login, defeating its one-per-install purpose.
+    func testAppAttestKeyIdSurvivesClearAccountButNotClearAll() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        store.appAttestKeyId = "app-attest-key-1"
+        store.userId = "user-1"
+
+        store.clearAccount()
+        XCTAssertEqual(store.appAttestKeyId, "app-attest-key-1", "clearAccount() must not delete appAttestKeyId")
+        XCTAssertNil(store.userId, "clearAccount() must still clear account-scoped data")
+
+        store.clearAll()
+        XCTAssertNil(store.appAttestKeyId, "clearAll() (factory reset) must delete appAttestKeyId")
+    }
 }

@@ -32,6 +32,18 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     /// register a new "instance" on every flow.
     var instanceKeyId: String? { get set }
 
+    /// This install's persisted Apple App Attest key ID (see
+    /// `AppAttestProvider`), if one has been generated - App Attest keys
+    /// are generated exactly once PER INSTALL (not per-account, unlike every
+    /// other property here) and reused forever after. Implementations must
+    /// store this OUTSIDE the `activeAccountId`-scoped namespace and must
+    /// NOT clear it in `clearAccount()` (only `clearAll()`/factory reset) -
+    /// otherwise switching accounts or logging out would force a fresh App
+    /// Attest key + attestation on next login, which defeats the entire
+    /// point of a stable per-install identity (and wastes real App Attest
+    /// key-generation calls against Apple's servers).
+    var appAttestKeyId: String? { get set }
+
     var hasSession: Bool { get }
 
     /// Clear the active account's session data only.
@@ -80,6 +92,16 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public var privateDataEtag: String? { get { get("privateDataEtag") } set { set("privateDataEtag", newValue) } }
     public var instanceKeyId: String? { get { get("instanceKeyId") } set { set("instanceKeyId", newValue) } }
 
+    // Deliberately NOT account-scoped (see the protocol doc comment) - a
+    // fixed key with no account prefix, so it survives `clearAccount()` and
+    // account switches. `clearAccount()`'s prefix-based filter below can
+    // never match this key, since it's never written with an `{id}/` prefix.
+    private var unscopedAppAttestKeyId: String?
+    public var appAttestKeyId: String? {
+        get { lock.lock(); defer { lock.unlock() }; return unscopedAppAttestKeyId }
+        set { lock.lock(); defer { lock.unlock() }; unscopedAppAttestKeyId = newValue }
+    }
+
     public var hasSession: Bool { userId != nil }
 
     public func clearAccount() {
@@ -92,6 +114,7 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public func clearAll() {
         lock.lock(); defer { lock.unlock() }
         store.removeAll()
+        unscopedAppAttestKeyId = nil
         activeAccountId = nil
     }
 

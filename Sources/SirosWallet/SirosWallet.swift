@@ -944,6 +944,40 @@ public final class SirosWallet: @unchecked Sendable {
                 audience: config.backendUrl,
                 extraClaims: ["nonce": challenge]
             )
+            // Best-effort, on its OWN try/catch (not the outer one): a
+            // native-attestation failure must degrade to a plain
+            // backend-attested WIA, not abort issuance entirely. No
+            // WalletConfig field needed on iOS - unlike Play Integrity,
+            // App Attest needs no host-app-supplied config beyond the Xcode
+            // entitlement (a project-level setting), so this constructs the
+            // provider directly whenever the platform/OS version supports it.
+            #if canImport(DeviceCheck)
+            var nativeAttestation: [String: Any]?
+            let appAttestProvider = AppAttestProvider(
+                loadPersistedKeyId: { [weak self] in self?.sessionStore.appAttestKeyId },
+                savePersistedKeyId: { [weak self] in self?.sessionStore.appAttestKeyId = $0 }
+            )
+            if appAttestProvider.isAvailable {
+                do {
+                    let evidence = try await appAttestProvider.generateEvidence(challenge: challenge, keyId: keyId)
+                    nativeAttestation = [
+                        "type": evidence.type,
+                        "token": evidence.token,
+                        "key_id": evidence.keyId,
+                        "challenge": evidence.challenge,
+                    ]
+                } catch {
+                    // Best-effort - device capability/entitlement issues are
+                    // common and expected (Simulator, no entitlement, key
+                    // already attested this install) - but silent failures
+                    // here are hard to diagnose in the field, so log them.
+                    print("[SirosWallet] App Attest evidence generation failed, continuing without it: \(error)")
+                    nativeAttestation = nil
+                }
+            }
+            #else
+            let nativeAttestation: [String: Any]? = nil
+            #endif
             let wia = try await client.generateWIA(
                 pop: pop,
                 challenge: challenge,
@@ -951,7 +985,8 @@ public final class SirosWallet: @unchecked Sendable {
                 // claim MUST specify client_id value of the OAuth Client" -
                 // confirmed via a real geneva2026.mdoc.online conformance run
                 // that flagged sub=<instance jkt> as a FAIL.
-                clientId: clientAttestationClientId()
+                clientId: clientAttestationClientId(),
+                nativeAttestation: nativeAttestation
             )
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
             lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()

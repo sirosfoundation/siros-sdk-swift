@@ -85,6 +85,15 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         get { read("instanceKeyId") }
         set { write("instanceKeyId", newValue) }
     }
+    // Deliberately NOT run through read/write (which scope by
+    // activeAccountId) - see the protocol doc comment. `clearAll()`'s
+    // existing blanket SecItemDelete (no kSecAttrAccount filter, matches
+    // every item under `service`) already covers this on factory reset;
+    // `clearAccount()` below must NOT touch it.
+    public var appAttestKeyId: String? {
+        get { readRaw(account: "appAttestKeyId") }
+        set { writeRaw(account: "appAttestKeyId", newValue) }
+    }
 
     public var hasSession: Bool { userId != nil }
 
@@ -131,13 +140,25 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
 
     private func read(_ key: String) -> String? {
         guard let k = scopedKey(key) else { return nil }
+        return readRaw(account: k)
+    }
+
+    private func write(_ key: String, _ value: String?) {
+        guard let k = scopedKey(key) else { return }
+        writeRaw(account: k, value)
+    }
+
+    /// Reads a Keychain item under `account` directly - NOT run through
+    /// `scopedKey()`/`activeAccountId`. Only for genuinely install-scoped
+    /// (not account-scoped) values like `appAttestKeyId`.
+    private func readRaw(account: String) -> String? {
         lock.lock()
         defer { lock.unlock() }
 
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: k,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -151,15 +172,15 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         return String(data: data, encoding: .utf8)
     }
 
-    private func write(_ key: String, _ value: String?) {
-        guard let k = scopedKey(key) else { return }
+    /// Writes a Keychain item under `account` directly - see `readRaw`'s doc comment.
+    private func writeRaw(account: String, _ value: String?) {
         lock.lock()
         defer { lock.unlock() }
 
         var deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: k,
+            kSecAttrAccount as String: account,
         ]
         if let group = accessGroup {
             deleteQuery[kSecAttrAccessGroup as String] = group
@@ -171,7 +192,7 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         var addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: k,
+            kSecAttrAccount as String: account,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
