@@ -919,7 +919,8 @@ public final class SirosWallet: @unchecked Sendable {
     /// deployment enables this feature.
     private func ensureWalletInstanceAttestation() async -> String? {
         let now = Int(Date().timeIntervalSince1970)
-        if let wia = cachedWia, cachedWiaExpiresAt - now > 60 {
+        lock.lock(); let cached = cachedWia; let expiresAt = cachedWiaExpiresAt; lock.unlock()
+        if let wia = cached, expiresAt - now > 60 {
             return wia
         }
         guard let client = apiClient else { return nil }
@@ -952,8 +953,8 @@ public final class SirosWallet: @unchecked Sendable {
                 // that flagged sub=<instance jkt> as a FAIL.
                 clientId: clientAttestationClientId()
             )
-            cachedWia = wia
-            cachedWiaExpiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
+            let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
+            lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
             return wia
         } catch {
             return nil
@@ -981,7 +982,8 @@ public final class SirosWallet: @unchecked Sendable {
     func currentWalletInstanceId() -> String? {
         let now = Int(Date().timeIntervalSince1970)
         let nativeAttestationSources: Set<String> = ["ios_app_attest", "android_play_integrity"]
-        guard let wia = cachedWia, cachedWiaExpiresAt - now > 60,
+        lock.lock(); let cached = cachedWia; let expiresAt = cachedWiaExpiresAt; lock.unlock()
+        guard let wia = cached, expiresAt - now > 60,
               let payload = CredentialUtils.parseJwtPayload(wia),
               let source = payload["attestation_source"] as? String,
               nativeAttestationSources.contains(source),
