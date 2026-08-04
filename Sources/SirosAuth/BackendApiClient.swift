@@ -162,7 +162,8 @@ public final class BackendApiClient: @unchecked Sendable {
         jwks: [[String: Any]],
         nonce: String,
         securityProperties: [String: Any]? = nil,
-        credentialIssuer: String? = nil
+        credentialIssuer: String? = nil,
+        walletInstanceId: String? = nil
     ) async throws -> String {
         var openid4vci: [String: Any] = ["nonce": nonce]
         if let issuer = credentialIssuer, !issuer.isEmpty {
@@ -174,6 +175,13 @@ public final class BackendApiClient: @unchecked Sendable {
         ]
         if let props = securityProperties {
             body["security_properties"] = props
+        }
+        // The WIA's JWK-thumbprint identity (`cnf.jkt`) - lets the backend's
+        // KA trust gate look up this wallet instance's own recorded
+        // attestation_source and lift the K3 clamp when it's genuinely
+        // native-attested. Omitted whenever the caller has no such WIA.
+        if let id = walletInstanceId, !id.isEmpty {
+            body["wallet_instance_id"] = id
         }
         let result = try await post("/wallet-provider/key-attestation/generate", body: body)
         guard let attestation = result["key_attestation"] as? String else {

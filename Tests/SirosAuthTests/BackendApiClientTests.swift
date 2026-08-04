@@ -96,6 +96,34 @@ final class BackendApiClientTests: XCTestCase {
         XCTAssertNil(openid4vci["credential_issuer"])
     }
 
+    func testRequestKeyAttestationSendsWalletInstanceIdWhenProvided() async throws {
+        let server = MockHttpServer()
+        server.enqueue("{\"key_attestation\": \"signed-jwt\"}")
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: server.httpFunction)
+
+        let _ = try await client.requestKeyAttestation(
+            jwks: [["kty": "EC"]],
+            nonce: "nonce-1",
+            walletInstanceId: "test-jkt"
+        )
+
+        let body = try XCTUnwrap(server.requests[0].body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["wallet_instance_id"] as? String, "test-jkt")
+    }
+
+    func testRequestKeyAttestationOmitsWalletInstanceIdWhenNotProvided() async throws {
+        let server = MockHttpServer()
+        server.enqueue("{\"key_attestation\": \"signed-jwt\"}")
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: server.httpFunction)
+
+        let _ = try await client.requestKeyAttestation(jwks: [["kty": "EC"]], nonce: "nonce-1")
+
+        let body = try XCTUnwrap(server.requests[0].body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["wallet_instance_id"])
+    }
+
     func testEvaluateTrustPostsToExpectedEndpoint() async throws {
         let server = MockHttpServer()
         server.enqueue("{\"decision\":true}")

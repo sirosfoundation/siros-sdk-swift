@@ -888,8 +888,12 @@ public final class SirosWallet: @unchecked Sendable {
     /// `ensureWalletInstanceAttestation`). Not persisted across app restarts:
     /// cheap to reissue given a challenge round trip, unlike the instance KEY
     /// itself (`SessionStoreProtocol.instanceKeyId`), which must stay stable.
-    private var cachedWia: String?
-    private var cachedWiaExpiresAt: Int = 0
+    // Internal (not private), matching this file's `handleFlowComplete`
+    // convention - lets tests seed a fake WIA directly via `@testable
+    // import` rather than driving a full challenge/generateWIA network round
+    // trip through a real keystore.
+    var cachedWia: String?
+    var cachedWiaExpiresAt: Int = 0
 
     /// Get (creating once, on first use) this wallet installation's persistent
     /// OAuth Client Attestation instance key ID - see
@@ -954,6 +958,26 @@ public final class SirosWallet: @unchecked Sendable {
         } catch {
             return nil
         }
+    }
+
+    /// The wallet_instance_id to send with a Key Attestation request: the
+    /// JWK Thumbprint (`cnf.jkt`) of the current session's WIA-issued
+    /// instance key, but only when that WIA's `attestation_source` is a
+    /// verified native platform attestation (ios_app_attest /
+    /// android_play_integrity) - go-wallet-backend's KA trust gate clamps to
+    /// K3 for anything else anyway, so there's no value in sending an ID
+    /// that won't lift the clamp, and every other failure mode (no WIA, WIA
+    /// disabled, non-native tier) must resolve to omitting the field exactly
+    /// like today's pre-this-change behavior.
+    func currentWalletInstanceId() async -> String? {
+        let nativeAttestationSources: Set<String> = ["ios_app_attest", "android_play_integrity"]
+        guard let wia = await ensureWalletInstanceAttestation(),
+              let payload = CredentialUtils.parseJwtPayload(wia),
+              let source = payload["attestation_source"] as? String,
+              nativeAttestationSources.contains(source),
+              let cnf = payload["cnf"] as? [String: Any],
+              let jkt = cnf["jkt"] as? String else { return nil }
+        return jkt
     }
 
     /// The OAuth `client_id` this wallet uses in OID4VCI/OID4VP flows.
@@ -1659,7 +1683,8 @@ public final class SirosWallet: @unchecked Sendable {
                 jwks: keypairs.map { $0.publicKeyJWK },
                 nonce: nonce,
                 securityProperties: secDict,
-                credentialIssuer: audience.isEmpty ? nil : audience
+                credentialIssuer: audience.isEmpty ? nil : audience,
+                walletInstanceId: await currentWalletInstanceId()
             )
             // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
             // built (jwks preserves list order) - the issuer is expected to
