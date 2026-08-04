@@ -293,6 +293,14 @@ public final class SirosWallet: @unchecked Sendable {
         eventListener = listener
     }
 
+    /// Governs whether a successful presentation exhausts the credential
+    /// instance it used (see `CredentialUtils.eligibleInstances`). Defaults
+    /// to `.neverConsume` so existing behavior doesn't change until a host
+    /// app opts in. This is core wallet policy, not a UI-only preference -
+    /// the host app is responsible for persisting the user's choice across
+    /// restarts and setting it here on startup.
+    public var credentialConsumptionPolicy: CredentialConsumptionPolicy = .neverConsume
+
     // MARK: - Registration
 
     /// Register a new user with a passkey.
@@ -735,16 +743,34 @@ public final class SirosWallet: @unchecked Sendable {
         guard let credential = await credentialStore.getById(credentialId) else {
             throw SirosError.wallet(message: "Credential not found: \(credentialId)")
         }
+        let allInstances = await credentialStore.getAll().filter { $0.batchId == credential.batchId }
+        let eligible = CredentialUtils.eligibleInstances(
+            instances: allInstances,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
+        guard eligible.contains(where: { $0.id == credentialId }) else {
+            throw SirosError.wallet(message: "No eligible copies of this credential remain - renew it to get more")
+        }
         let credBytes = Data(base64Encoded: credential.raw
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         ) ?? Data()
-        return try await keystore.signMdocPresentationForProximity(
+        let response = try await keystore.signMdocPresentationForProximity(
             credentialBytes: credBytes,
             disclosedClaims: disclosedClaims,
             sessionTranscriptBytes: sessionTranscriptBytes,
             kid: credential.kid
         )
+        await recordPresentation(PresentationRecord(
+            id: randomUint32Id(),
+            flowId: "proximity-\(UUID().uuidString)",
+            credentialIds: [credentialId],
+            credentialNames: [credential.metadata?.name].compactMap { $0 },
+            requestedClaims: disclosedClaims ?? [],
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+        ))
+        return response
     }
 
     // MARK: - Issuance
@@ -1678,7 +1704,17 @@ public final class SirosWallet: @unchecked Sendable {
 
     private func handleWmpMatchRequest(flowId: String, payload: AnyCodable?) async -> MatchResult {
         let allCreds = await credentialStore.getAll()
-        let matches = allCreds.map { cred in
+        // Only offer instances the active consumption policy still considers
+        // usable - mirrors the legacy engine path's handleMatchRequest (and
+        // Kotlin's matchRequests() collector) so a credential exhausted under
+        // CONSUME_ALL/CONSUME_NON_ZKP can't be matched into a new
+        // presentation via this transport either.
+        let eligibleCreds = CredentialUtils.eligibleInstances(
+            instances: allCreds,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
+        let matches = eligibleCreds.map { cred in
             // credentialId is the WMP wire-protocol identifier - a separate,
             // unverified backend contract distinct from privatedata-spec's
             // numeric StoredCredential.id, so it deliberately stays String.
@@ -1885,7 +1921,26 @@ public final class SirosWallet: @unchecked Sendable {
                 )
             )
         } else {
-            selectedIds = allCreds.map(\.id)
+            selectedIds = CredentialUtils.eligibleInstances(
+                instances: allCreds,
+                policy: credentialConsumptionPolicy,
+                presentationHistory: presentationHistory
+            ).map(\.id)
+        }
+
+        // The app is trusted to only return IDs it was offered, but shouldn't
+        // be the only thing enforcing consumption - re-validate here too
+        // (defense in depth).
+        let eligibleIds = Set(CredentialUtils.eligibleInstances(
+            instances: allCreds,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        ).map(\.id))
+        guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+            #if canImport(os)
+            logger.error("Selected credential has no eligible copies remaining")
+            #endif
+            return
         }
 
         await recordPresentation(PresentationRecord(
