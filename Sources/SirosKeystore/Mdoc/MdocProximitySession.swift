@@ -165,6 +165,18 @@ public final class MdocProximitySession {
             return .failed(reason: "no matching credential")
         }
         let families = CredentialUtils.groupIntoFamilies(matches)
+        guard !families.isEmpty else {
+            // matches non-empty doesn't guarantee families non-empty:
+            // groupIntoFamilies skips any batch missing an instanceId==0
+            // representative (see its own doc comment). Treat that as a
+            // non-match rather than calling requestConsent with an empty
+            // list, which would violate RequestProximityConsent's
+            // documented "never empty" contract.
+            #if canImport(os)
+            logger.warning("\(self.logTag, privacy: .public): matching credentials exist but none have a representable family (missing instanceId==0 member)")
+            #endif
+            return .failed(reason: "no representable credential family")
+        }
 
         onStep("awaiting_consent")
         let consent = await requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
