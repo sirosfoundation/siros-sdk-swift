@@ -30,6 +30,8 @@ targets:
         product: SirosAuth
       - package: SirosSDK
         product: SirosKeystore
+      - package: SirosSDK
+        product: SirosFlow
       - package: SVGView
         product: SVGView
     settings:
