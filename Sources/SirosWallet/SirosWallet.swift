@@ -129,6 +129,28 @@ public final class SirosWallet: @unchecked Sendable {
     private let authProvider: AuthProvider
     private let sessionStore: SessionStoreProtocol
     private let keystore: KeystoreManager
+
+    /// WSCD hardware-key lifecycle (enroll/rotate/destroy) and
+    /// additional-plugin registration (FIDO2 rawSign, R2PS remote HSM) -
+    /// `nil` unless `keystore` is WSCD-backed (see `WscdKeystoreAdapter`).
+    /// The default JWE-encrypted keystore has no such concept.
+    public var wscdManager: WscdManager? { keystore as? WscdManager }
+
+    /// Static feature availability - lets a consumer gate its own UI
+    /// without probing by side effect (e.g. attempting a WSCD plugin
+    /// registration and catching the resulting error). Reflects what's
+    /// *configured*/available on this platform, not runtime
+    /// plugin-registration state the app already controls itself (e.g.
+    /// whether FIDO2 specifically has been registered on `wscdManager`).
+    public var capabilities: WalletCapabilities {
+        #if canImport(DeviceCheck)
+        let nativeAttestation = AppAttestProvider().isAvailable
+        #else
+        let nativeAttestation = false
+        #endif
+        return WalletCapabilities(nativeAttestation: nativeAttestation, wscd: wscdManager != nil)
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
@@ -172,6 +194,20 @@ public final class SirosWallet: @unchecked Sendable {
     public var presentationHistory: [PresentationRecord] {
         lock.lock(); defer { lock.unlock() }
         return _presentationHistory
+    }
+
+    /// Filters `instances` down to the ones this wallet's own
+    /// `credentialConsumptionPolicy` and `presentationHistory` currently
+    /// consider eligible (i.e. not yet consumed) - the same computation
+    /// this class performs internally before every presentation, exposed
+    /// as a convenience so consent/selection UI doesn't need to thread
+    /// both properties through `CredentialUtils.eligibleInstances` itself.
+    public func eligibleInstances(from instances: [StoredCredential]) -> [StoredCredential] {
+        CredentialUtils.eligibleInstances(
+            instances: instances,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
     }
 
     /// Record a new presentation: adds it to the in-memory history and

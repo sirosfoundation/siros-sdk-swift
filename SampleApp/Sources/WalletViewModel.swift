@@ -1,5 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
+import CryptoKit
 import Foundation
 import SwiftUI
 import SirosWallet
@@ -134,6 +135,11 @@ final class WalletViewModel: ObservableObject {
     /// onCredentialReceived doesn't carry anyway.
     private var receivedCredentialCount = 0
     #if canImport(siros_wscd_managerFFI)
+    /// Stored reference to the UniFFISigner for `listKeys()`/
+    /// `securityProperties(keyId:)` calls only - these aren't part of
+    /// `WscdManager` at all (they're generic `Signer`/`KeystoreManager`
+    /// surface). Everything else (lifecycle, plugin registration) goes
+    /// through `wallet.wscdManager`.
     private var wscdSigner: UniFFISigner?
     #endif
     private var lifecycleContextId: String?
@@ -257,7 +263,7 @@ final class WalletViewModel: ObservableObject {
 
     func enrollWscd() {
         #if canImport(siros_wscd_managerFFI)
-        guard let signer = wscdSigner else {
+        guard let manager = wallet?.wscdManager else {
             setError("WSCD signer not initialized")
             return
         }
@@ -268,7 +274,7 @@ final class WalletViewModel: ObservableObject {
                 let contextId = "ctx-\(Int(Date().timeIntervalSince1970 * 1000))"
                 let factorKind: FactorKind = pluginId == "r2ps" ? .opaque : .rawSign
 
-                let regOutcome = try await signer.registerLifecycle(
+                let regOutcome = try await manager.registerLifecycle(
                     request: RegisterLifecycleRequest(
                         pluginId: pluginId,
                         contextId: contextId,
@@ -277,7 +283,7 @@ final class WalletViewModel: ObservableObject {
                 )
                 lifecycleState = regOutcome.state
 
-                let actOutcome = try await signer.activateLifecycle(
+                let actOutcome = try await manager.activateLifecycle(
                     request: ActivateLifecycleRequest(
                         pluginId: pluginId,
                         contextId: contextId
@@ -297,13 +303,13 @@ final class WalletViewModel: ObservableObject {
 
     func rotateLifecycle() {
         #if canImport(siros_wscd_managerFFI)
-        guard let signer = wscdSigner, let ctxId = lifecycleContextId else {
+        guard let manager = wallet?.wscdManager, let ctxId = lifecycleContextId else {
             setError("WSCD not enrolled")
             return
         }
         Task {
             do {
-                let outcome = try await signer.rotateLifecycle(
+                let outcome = try await manager.rotateLifecycle(
                     request: RotateLifecycleRequest(
                         pluginId: selectedPluginId,
                         contextId: ctxId
@@ -320,13 +326,13 @@ final class WalletViewModel: ObservableObject {
 
     func destroyLifecycle(mode: DestroyMode) {
         #if canImport(siros_wscd_managerFFI)
-        guard let signer = wscdSigner, let ctxId = lifecycleContextId else {
+        guard let manager = wallet?.wscdManager, let ctxId = lifecycleContextId else {
             setError("WSCD not enrolled")
             return
         }
         Task {
             do {
-                let outcome = try await signer.destroyLifecycle(
+                let outcome = try await manager.destroyLifecycle(
                     request: DestroyLifecycleRequest(
                         pluginId: selectedPluginId,
                         contextId: ctxId,
@@ -355,23 +361,24 @@ final class WalletViewModel: ObservableObject {
     func refreshWscdInfo() {
         #if canImport(siros_wscd_managerFFI)
         Task {
-            guard let signer = wscdSigner else { return }
-            do {
-                let keys = try await signer.listKeys()
-                wscdKeys = keys
-                var props: [String: SignerSecurityProperties] = [:]
-                for key in keys {
-                    if let p = try? await signer.securityProperties(keyId: key.keyId) {
-                        props[key.keyId] = p
+            if let signer = wscdSigner {
+                do {
+                    let keys = try await signer.listKeys()
+                    wscdKeys = keys
+                    var props: [String: SignerSecurityProperties] = [:]
+                    for key in keys {
+                        if let p = try? await signer.securityProperties(keyId: key.keyId) {
+                            props[key.keyId] = p
+                        }
                     }
+                    wscdKeySecurityProps = props
+                } catch {
+                    print("Failed to list keys: \(error)")
                 }
-                wscdKeySecurityProps = props
-            } catch {
-                print("Failed to list keys: \(error)")
             }
-            guard let ctxId = lifecycleContextId else { return }
+            guard let manager = wallet?.wscdManager, let ctxId = lifecycleContextId else { return }
             do {
-                let status = try await signer.lifecycleStatus(pluginId: selectedPluginId, contextId: ctxId)
+                let status = try await manager.lifecycleStatus(pluginId: selectedPluginId, contextId: ctxId)
                 lifecycleStatus = status
                 lifecycleState = status.state
             } catch {
@@ -735,19 +742,19 @@ final class WalletViewModel: ObservableObject {
 
             // Register R2PS plugin if selected
             if selectedPluginId == "r2ps" || r2psEnabled {
-                let r2psConfig = FfiR2psConfig(
+                // Ephemeral P-256 key pair for the R2PS message envelope
+                // (JWS/JWE identity) - required regardless of auth mode.
+                let clientKey = P256.Signing.PrivateKey()
+                let r2psConfig = R2psConfig(
                     serverUrl: r2psServerUrl,
                     clientId: "sample-app",
                     context: "wallet",
-                    authMode: "opaque",
-                    rpId: "",
-                    allowedCredentialIds: [],
-                    clientKeyPem: "",
-                    serverPublicKeyPem: ""
+                    clientKeyPem: clientKey.pemRepresentation,
+                    serverPublicKeyPem: clientKey.publicKey.pemRepresentation,
+                    authMode: .opaque
                 )
                 let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
-                let pake = SamplePakeClient()
-                try signer.registerR2psPlugin(config: r2psConfig, transport: transport, pake: pake)
+                try signer.registerR2psPlugin(config: r2psConfig, transport: transport)
             }
 
             self.wscdSigner = signer
