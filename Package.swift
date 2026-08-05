@@ -62,11 +62,30 @@ let package = Package(
             path: "Tests/SirosAuthTests"
         ),
 
+        // --- siros-wscd-manager UniFFI bindings (XCFramework) ---
+        // Built by `make xcframework` in the siros-wscd-manager crate;
+        // the module name is the crate name + "FFI"
+        // (`siros_wscd_managerFFI`, NOT a friendlier name like
+        // "SirosWscdFFI" - confirmed by inspecting the real published
+        // XCFramework's module.modulemap).
+        .binaryTarget(
+            name: "siros_wscd_managerFFI",
+            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.6.1/siros_wscd_manager.xcframework.zip",
+            checksum: "b6c87d64ee58c9830d268f0131aae7dc9e3a85cf5168480fe4b62e5e8b503a1c"
+        ),
+
         // --- Keystore: JWE-encrypted key management ---
         .target(
             name: "SirosKeystore",
             dependencies: [
                 "SirosCredentials",
+                // siros_wscd_managerFFI's XCFramework only ships iOS slices
+                // (device + simulator) - no macOS slice exists, and this
+                // package's CI builds/tests the whole thing on bare macOS
+                // too (swift.yml's test-macos job), so this dependency must
+                // be scoped to iOS only. FFI-dependent code in this target
+                // is correspondingly wrapped in `#if os(iOS)`.
+                .target(name: "siros_wscd_managerFFI", condition: .when(platforms: [.iOS])),
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
             ],
             path: "Sources/SirosKeystore"
