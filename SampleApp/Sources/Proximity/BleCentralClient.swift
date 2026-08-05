@@ -39,9 +39,11 @@ import SirosKeystore
 ///
 /// UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
 /// GATT-server test tool available yet (the same gap the Kotlin SDK's
-/// equivalent class doc comment notes: `tools/ble_reader_test.py` uses
-/// `bleak`, which is central/client-only on every platform, the same role
-/// this class plays - it cannot stand in as a peripheral to test against).
+/// equivalent class doc comment notes: siros-verifier-cli's `siros-verify
+/// read` command, https://github.com/sirosfoundation/siros-verifier-cli,
+/// uses `bleak`, which is central/client-only on every platform, the same
+/// role this class plays - it cannot stand in as a peripheral to test
+/// against).
 /// Needs testing against either a real ISO 18013-5 reader or a purpose-built
 /// BLE-peripheral test script before relying on it. This is a brand-new
 /// port with no prior Swift version to carry forward any hardware
