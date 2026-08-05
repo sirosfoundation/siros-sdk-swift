@@ -74,16 +74,34 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
 
     /// Register the R2PS remote HSM plugin.
     ///
-    /// - Parameters:
-    ///   - config: R2PS server connection parameters.
-    ///   - transport: HTTP transport for R2PS protocol messages.
-    ///   - pake: OPAQUE (RFC 9807) client for PAKE authentication.
-    public func registerR2psPlugin(
-        config: FfiR2psConfig,
-        transport: FfiHttpTransport,
-        pake: FfiPakeClient
-    ) throws {
-        try ffi.registerR2psPlugin(config: config, transport: transport, pake: pake)
+    /// Real OPAQUE (RFC 9807) PAKE authentication (used when
+    /// `config.authMode == .opaque`) is handled entirely in Rust
+    /// (`r2ps-client`) - `transport` only needs to move raw R2PS protocol
+    /// message bytes.
+    public func registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) throws {
+        let authMode: R2psAuthMode = config.authMode
+        var rpId = ""
+        var allowedCredentialIds: [String] = []
+        if case let .webAuthn(configRpId, configAllowedCredentialIds) = authMode {
+            rpId = configRpId
+            allowedCredentialIds = configAllowedCredentialIds
+        }
+        let ffiConfig = FfiR2psConfig(
+            serverUrl: config.serverUrl,
+            clientId: config.clientId,
+            context: config.context,
+            authMode: isWebAuthn(authMode) ? "webauthn" : "opaque",
+            rpId: rpId,
+            allowedCredentialIds: allowedCredentialIds,
+            clientKeyPem: config.clientKeyPem,
+            serverPublicKeyPem: config.serverPublicKeyPem
+        )
+        try ffi.registerR2psPlugin(config: ffiConfig, transport: R2psTransportBridge(transport))
+    }
+
+    private func isWebAuthn(_ mode: R2psAuthMode) -> Bool {
+        if case .webAuthn = mode { return true }
+        return false
     }
 
     /// Register the FIDO2 previewSign (rawSign) plugin.
@@ -366,6 +384,41 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
         connectLock.unlock()
     }
 }
+
+/// Bridges the `async`-based `R2psTransportProvider` to `FfiHttpTransport`'s
+/// synchronous callback, same `DispatchSemaphore` pattern as
+/// `Ctap2TransportBridge`.
+private final class R2psTransportBridge: FfiHttpTransport, @unchecked Sendable {
+    private let provider: R2psTransportProvider
+
+    init(_ provider: R2psTransportProvider) {
+        self.provider = provider
+    }
+
+    func send(body: Data) throws -> Data {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<Data, Error> = .failure(Ctap2TransportError.deviceDisconnected)
+
+        Task {
+            do {
+                result = .success(try await self.provider.send(body: body))
+            } catch {
+                result = .failure(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        switch result {
+        case .success(let data): return data
+        case .failure(let error): throw error
+        }
+    }
+}
+
+// MARK: - WSCD manager conformance
+
+extension UniFFISigner: WscdManager {}
 
 // MARK: - Lifecycle conformance
 

@@ -81,3 +81,9 @@ public struct WalletConfig: Sendable {
         }
     }
 }
+
+/// See `SirosWallet.capabilities`.
+public struct WalletCapabilities: Sendable {
+    public let nativeAttestation: Bool
+    public let wscd: Bool
+}

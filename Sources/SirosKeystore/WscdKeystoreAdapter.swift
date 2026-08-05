@@ -35,7 +35,7 @@ public struct TransactionDataItem: Sendable {
 /// let keystore = WscdKeystoreAdapter(signer: wscdSigner)
 /// let wallet = SirosWallet(keystore: keystore)
 /// ```
-public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
+public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, WscdManager {
 
     private let signer: Signer
     private let mutex = NSLock()
@@ -43,8 +43,52 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager {
     private var credentials: [Int64: String] = [:]
     private var presentationRecords: [Int64: String] = [:]
 
+    /// Non-nil only when `signer` is itself WSCD-backed (i.e. a
+    /// `UniFFISigner`) - a plain software `Signer` has no lifecycle or
+    /// plugin-registration concept.
+    private var wscdManager: WscdManager? { signer as? WscdManager }
+
+    private func requireWscdManager() throws -> WscdManager {
+        guard let manager = wscdManager else {
+            throw KeystoreError.invalidParameter(
+                "WSCD lifecycle/plugin registration not supported by this keystore"
+            )
+        }
+        return manager
+    }
+
     public init(signer: Signer) {
         self.signer = signer
+    }
+
+    // MARK: - WscdManager conformance
+
+    public func lifecycleStatus(pluginId: String, contextId: String) async throws -> LifecycleStatus {
+        try await requireWscdManager().lifecycleStatus(pluginId: pluginId, contextId: contextId)
+    }
+
+    public func registerLifecycle(request: RegisterLifecycleRequest) async throws -> RegistrationOutcome {
+        try await requireWscdManager().registerLifecycle(request: request)
+    }
+
+    public func activateLifecycle(request: ActivateLifecycleRequest) async throws -> ActivationOutcome {
+        try await requireWscdManager().activateLifecycle(request: request)
+    }
+
+    public func rotateLifecycle(request: RotateLifecycleRequest) async throws -> RotationOutcome {
+        try await requireWscdManager().rotateLifecycle(request: request)
+    }
+
+    public func destroyLifecycle(request: DestroyLifecycleRequest) async throws -> DestructionOutcome {
+        try await requireWscdManager().destroyLifecycle(request: request)
+    }
+
+    public func registerFido2Plugin(transport: Ctap2TransportProvider) throws {
+        try requireWscdManager().registerFido2Plugin(transport: transport)
+    }
+
+    public func registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) throws {
+        try requireWscdManager().registerR2psPlugin(config: config, transport: transport)
     }
 
     // MARK: - KeystoreManager conformance

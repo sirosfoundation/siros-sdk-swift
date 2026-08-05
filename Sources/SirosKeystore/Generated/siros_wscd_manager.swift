@@ -600,11 +600,14 @@ public protocol FfiWscdManagerProtocol : AnyObject {
      *
      * The host SDK must provide:
      * - `transport`: HTTP transport for sending R2PS protocol messages
-     * - `pake`: OPAQUE (RFC 9807) client compatible with bytemare/opaque
      * - `config`: R2PS server connection parameters including PEM-encoded P-256
      * keys for JWS/JWE envelope protection
+     *
+     * OPAQUE (RFC 9807) PAKE authentication (used when `config.auth_mode ==
+     * "opaque"`) is handled entirely in Rust via `r2ps_client::OpaqueClient`
+     * - no host-provided PAKE callback is needed (or possible) any more.
      */
-    func registerR2psPlugin(config: FfiR2psConfig, transport: FfiHttpTransport, pake: FfiPakeClient) throws 
+    func registerR2psPlugin(config: FfiR2psConfig, transport: FfiHttpTransport) throws 
     
     /**
      * Register the built-in softkey plugin.
@@ -846,15 +849,17 @@ open func registerLifecycle(request: FfiRegisterLifecycleRequest, auth: FfiAuthC
      *
      * The host SDK must provide:
      * - `transport`: HTTP transport for sending R2PS protocol messages
-     * - `pake`: OPAQUE (RFC 9807) client compatible with bytemare/opaque
      * - `config`: R2PS server connection parameters including PEM-encoded P-256
      * keys for JWS/JWE envelope protection
+     *
+     * OPAQUE (RFC 9807) PAKE authentication (used when `config.auth_mode ==
+     * "opaque"`) is handled entirely in Rust via `r2ps_client::OpaqueClient`
+     * - no host-provided PAKE callback is needed (or possible) any more.
      */
-open func registerR2psPlugin(config: FfiR2psConfig, transport: FfiHttpTransport, pake: FfiPakeClient)throws  {try rustCallWithError(FfiConverterTypeFfiWscdError.lift) {
+open func registerR2psPlugin(config: FfiR2psConfig, transport: FfiHttpTransport)throws  {try rustCallWithError(FfiConverterTypeFfiWscdError.lift) {
     uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_r2ps_plugin(self.uniffiClonePointer(),
         FfiConverterTypeFfiR2psConfig.lower(config),
-        FfiConverterCallbackInterfaceFfiHttpTransport.lower(transport),
-        FfiConverterCallbackInterfaceFfiPakeClient.lower(pake),$0
+        FfiConverterCallbackInterfaceFfiHttpTransport.lower(transport),$0
     )
 }
 }
@@ -3427,206 +3432,6 @@ extension FfiConverterCallbackInterfaceFfiHttpTransport : FfiConverter {
 
 
 
-/**
- * Host-provided OPAQUE (RFC 9807) client for R2PS PAKE authentication.
- *
- * The wire format must be compatible with bytemare/opaque (Go).
- * The host SDK should use a platform OPAQUE library that implements the
- * same VOPRF suite (P256-SHA256) as the server.
- */
-public protocol FfiPakeClient : AnyObject {
-    
-    /**
-     * Start registration: returns serialized RegistrationRequest.
-     */
-    func registrationInit(password: Data) throws  -> Data
-    
-    /**
-     * Finalize registration: consumes RegistrationResponse, returns RegistrationRecord.
-     */
-    func registrationFinalize(serverResp: Data) throws  -> Data
-    
-    /**
-     * Start authentication: returns serialized KE1.
-     */
-    func authInit(password: Data) throws  -> Data
-    
-    /**
-     * Finalize authentication: consumes KE2, returns KE3 + session_key concatenated.
-     */
-    func authFinalize(serverResp: Data) throws  -> Data
-    
-}
-
-
-
-// Put the implementation in a struct so we don't pollute the top-level namespace
-fileprivate struct UniffiCallbackInterfaceFfiPakeClient {
-
-    // Create the VTable using a series of closures.
-    // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceFfiPakeClient = UniffiVTableCallbackInterfaceFfiPakeClient(
-        registrationInit: { (
-            uniffiHandle: UInt64,
-            password: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Data in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiPakeClient.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.registrationInit(
-                     password: try FfiConverterData.lift(password)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFfiWscdError.lower
-            )
-        },
-        registrationFinalize: { (
-            uniffiHandle: UInt64,
-            serverResp: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Data in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiPakeClient.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.registrationFinalize(
-                     serverResp: try FfiConverterData.lift(serverResp)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFfiWscdError.lower
-            )
-        },
-        authInit: { (
-            uniffiHandle: UInt64,
-            password: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Data in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiPakeClient.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.authInit(
-                     password: try FfiConverterData.lift(password)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFfiWscdError.lower
-            )
-        },
-        authFinalize: { (
-            uniffiHandle: UInt64,
-            serverResp: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> Data in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiPakeClient.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return try uniffiObj.authFinalize(
-                     serverResp: try FfiConverterData.lift(serverResp)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
-            uniffiTraitInterfaceCallWithError(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn,
-                lowerError: FfiConverterTypeFfiWscdError.lower
-            )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceFfiPakeClient.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface FfiPakeClient: handle missing in uniffiFree")
-            }
-        }
-    )
-}
-
-private func uniffiCallbackInitFfiPakeClient() {
-    uniffi_siros_wscd_manager_fn_init_callback_vtable_ffipakeclient(&UniffiCallbackInterfaceFfiPakeClient.vtable)
-}
-
-// FfiConverter protocol for callback interfaces
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterCallbackInterfaceFfiPakeClient {
-    fileprivate static var handleMap = UniffiHandleMap<FfiPakeClient>()
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-extension FfiConverterCallbackInterfaceFfiPakeClient : FfiConverter {
-    typealias SwiftType = FfiPakeClient
-    typealias FfiType = UInt64
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func lift(_ handle: UInt64) throws -> SwiftType {
-        try handleMap.get(handle: handle)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func lower(_ v: SwiftType) -> UInt64 {
-        return handleMap.insert(obj: v)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(v))
-    }
-}
-
-
-
-
 public protocol FfiProgressCallback : AnyObject {
     
     func onProgress(progress: FfiOperationProgress) 
@@ -3926,7 +3731,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_lifecycle() != 59574) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_r2ps_plugin() != 56622) {
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_r2ps_plugin() != 61563) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_softkey_plugin() != 48657) {
@@ -3956,18 +3761,6 @@ private var initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_method_ffihttptransport_send() != 15795) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_wscd_manager_checksum_method_ffipakeclient_registration_init() != 57335) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_siros_wscd_manager_checksum_method_ffipakeclient_registration_finalize() != 62528) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_siros_wscd_manager_checksum_method_ffipakeclient_auth_init() != 50797) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_siros_wscd_manager_checksum_method_ffipakeclient_auth_finalize() != 11635) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_siros_wscd_manager_checksum_method_ffiprogresscallback_on_progress() != 24301) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3975,7 +3768,6 @@ private var initializationResult: InitializationResult = {
     uniffiCallbackInitFfiAuthCallback()
     uniffiCallbackInitFfiCtap2Transport()
     uniffiCallbackInitFfiHttpTransport()
-    uniffiCallbackInitFfiPakeClient()
     uniffiCallbackInitFfiProgressCallback()
     return InitializationResult.ok
 }()
