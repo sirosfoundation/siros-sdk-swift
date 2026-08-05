@@ -207,7 +207,7 @@ public final class MdocProximitySession {
 
     public var established: Bool { false }
 
-    public func handleSessionEstablishment(_ message: [UInt8]) async throws -> Result {
+    public func handleSessionEstablishment(_: [UInt8]) async throws -> Result {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
 
