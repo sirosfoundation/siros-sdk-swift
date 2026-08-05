@@ -13,12 +13,12 @@ import SirosKeystore
 /// "mdoc reader service" (Table 6: `State`, `Client2Server`,
 /// `Server2Client`, `Ident`), verifies the reader's identity via the `Ident`
 /// characteristic, then runs the same session-establishment/session-data
-/// protocol as `BlePeripheralServer` with the GATT roles reversed: this mdoc
-/// WRITES to `Client2Server` and receives via `Server2Client` notify
-/// (§11.1.3.4: "Client2Server" always carries GATT-client-to-server traffic
-/// and "Server2Client" always carries the reverse, regardless of which side -
-/// mdoc or reader - holds the GATT client/server role for a given
-/// transaction).
+/// protocol as `BlePeripheralServer` (via the shared `MdocProximitySession`)
+/// with the GATT roles reversed: this mdoc WRITES to `Client2Server` and
+/// receives via `Server2Client` notify (§11.1.3.4: "Client2Server" always
+/// carries GATT-client-to-server traffic and "Server2Client" always carries
+/// the reverse, regardless of which side - mdoc or reader - holds the GATT
+/// client/server role for a given transaction).
 ///
 /// Ported from the Kotlin SDK sample app's `BleCentralClient.kt`, using
 /// `CoreBluetooth`'s `CBCentralManager`/`CBPeripheral` instead of Android's
@@ -63,27 +63,16 @@ final class BleCentralClient: NSObject {
     private static let defaultMtu = 23
 
     private let engagement: DeviceEngagement.Engagement
-    /// Mirrors `SirosWallet.getCredentials` - see `BlePeripheralServer`'s matching parameter doc comment.
-    private let getCredentials: () async -> [StoredCredential]
-    /// Mirrors `SirosWallet.signMdocPresentationForProximity`.
-    private let signPresentation: (_ credentialId: Int64, _ disclosedClaims: [String]?, _ sessionTranscriptBytes: Data) async throws -> Data
-    /// See `RequestProximityConsent`'s doc comment.
-    private let requestConsent: RequestProximityConsent
-    /// See `BlePeripheralServer`'s matching parameter doc comment.
-    private let filterEligible: ([StoredCredential]) -> [StoredCredential]
-    /// Reports a canonical step token (see `FlowProgress.swift`'s proximity
-    /// step list) for driving the same progress-bar UI the issuance/
-    /// presentation flows use.
     private let onStep: (String) -> Void
     private let onLog: (String) -> Void
     private let onComplete: (_ success: Bool) -> Void
+    private let session: MdocProximitySession
 
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private let reassembler = BleMessageChunker.Reassembler()
     private var stateCharacteristic: CBCharacteristic?
     private var client2ServerCharacteristic: CBCharacteristic?
-    private var deviceCipher: ProximitySessionCrypto.SessionCipher?
     private var identVerified = false
     private var notifyReady: Set<CBUUID> = []
     private var wroteStateStart = false
@@ -99,13 +88,18 @@ final class BleCentralClient: NSObject {
         onComplete: @escaping (Bool) -> Void
     ) {
         self.engagement = engagement
-        self.getCredentials = getCredentials
-        self.signPresentation = signPresentation
-        self.requestConsent = requestConsent
-        self.filterEligible = filterEligible
         self.onStep = onStep
         self.onLog = onLog
         self.onComplete = onComplete
+        self.session = MdocProximitySession(
+            engagement: engagement,
+            getCredentials: getCredentials,
+            signPresentation: signPresentation,
+            requestConsent: requestConsent,
+            filterEligible: filterEligible,
+            onStep: onStep,
+            logTag: "BleCentralClient"
+        )
         super.init()
     }
 
@@ -145,80 +139,6 @@ final class BleCentralClient: NSObject {
         else { return }
         wroteStateStart = true
         peripheral.writeValue(Data([Self.stateStart]), for: stateCharacteristic, type: .withoutResponse)
-    }
-
-    /// Decrypts the incoming `SessionEstablishment`, matches stored
-    /// credential families against the request, asks the user for consent,
-    /// and signs/sends the response - mirrors `BlePeripheralServer`'s
-    /// method of the same name. Unlike that method (and unlike Kotlin's own
-    /// `BlePeripheralServer.kt`), this does NOT need a QR-vs-NFC handover
-    /// retry: Kotlin's own `BleCentralClient.kt` doesn't have one either -
-    /// central-client mode is always initiated by THIS device scanning for
-    /// a reader's advertisement, which has no NFC-handover counterpart to be
-    /// ambiguous with in the first place.
-    private func handleSessionEstablishment(_ message: [UInt8]) async throws {
-        onStep("parsing_request")
-        let established = try ProximitySessionMessages.parseSessionEstablishment(message)
-        let eReaderPublicKey = try ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
-        let sessionTranscript = try ProximitySessionTranscript.build(
-            deviceEngagementBytes: engagement.deviceEngagementBytes,
-            eReaderKeyBytes: established.eReaderKeyBytes,
-            handoverSelectMessageBytes: nil
-        )
-        let keys = try ProximitySessionCrypto.deriveSessionKeys(
-            eDeviceKeyPrivate: engagement.privateKey,
-            eReaderKeyPublic: eReaderPublicKey,
-            sessionTranscript: sessionTranscript
-        )
-        let requestBytes = try ProximitySessionCrypto.readerCipher(keys.skReader).decrypt(established.encryptedData)
-        let cipher = ProximitySessionCrypto.deviceCipher(keys.skDevice)
-        deviceCipher = cipher
-
-        let docRequests = try DeviceRequestParser.parse(requestBytes)
-        guard let docRequest = docRequests.first else {
-            onLog("Request contained no documents")
-            onComplete(false)
-            return
-        }
-
-        onStep("match_credentials")
-        let credentials = await getCredentials()
-        let matches = credentials.filter { cred in
-            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred.raw)?.docType == docRequest.docType
-        }
-        guard !matches.isEmpty else {
-            onLog("No stored credential matches requested docType '\(docRequest.docType)'")
-            onComplete(false)
-            return
-        }
-        let families = groupIntoFamilies(matches)
-
-        onStep("awaiting_consent")
-        let consent = await requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
-        let family: CredentialFamily
-        switch consent {
-        case .approved(let approvedFamily):
-            family = approvedFamily
-        case .denied:
-            onComplete(false)
-            return
-        }
-        let eligible = filterEligible(family.instances)
-        guard !eligible.isEmpty else {
-            onLog("No eligible (unused) instances remain for the approved credential")
-            onComplete(false)
-            return
-        }
-        // See BlePeripheralServer's matching comment: pick a random instance
-        // from the batch, not always the same one, to preserve unlinkability.
-        let credential = eligible.randomElement()!
-
-        onStep("submitting_response")
-        let response = try await signPresentation(credential.id, docRequest.disclosedClaims(), Data(sessionTranscript))
-        let encrypted = try cipher.encrypt([UInt8](response))
-        let sessionData = ProximitySessionMessages.buildSessionData(encryptedData: encrypted)
-        sendData(sessionData)
-        onComplete(true)
     }
 
     /// Writes the encrypted response to `Client2Server`, chunked, then signals
@@ -289,7 +209,7 @@ extension BleCentralClient: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        if deviceCipher == nil {
+        if !session.established {
             onLog("Reader disconnected before completing a presentation")
             onComplete(false)
         }
@@ -374,7 +294,19 @@ extension BleCentralClient: CBPeripheralDelegate {
             guard let message = reassembler.feed([UInt8](value)) else { return }
             Task {
                 do {
-                    try await handleSessionEstablishment(message)
+                    if session.established {
+                        onLog("Additional SessionData messages after the first request are not yet handled")
+                        return
+                    }
+                    switch try await session.handleSessionEstablishment(message) {
+                    case .response(let sessionData):
+                        sendData([UInt8](sessionData))
+                        onComplete(true)
+                    case .denied:
+                        onComplete(false)
+                    case .failed:
+                        onComplete(false)
+                    }
                 } catch {
                     onLog("Proximity presentation failed: \(error.localizedDescription)")
                     onComplete(false)

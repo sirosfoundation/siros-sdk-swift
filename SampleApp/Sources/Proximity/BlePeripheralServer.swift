@@ -10,11 +10,11 @@ import SirosKeystore
 /// `engagement.peripheralServerModeUuid` and exposing the "mdoc service"
 /// characteristics (Table 5: `State`, `Client2Server`, `Server2Client`). The
 /// reader connects as GATT client, writes the `SessionEstablishment` message
-/// (chunked) to `Client2Server`, and this class decrypts the mdoc request,
-/// offers every matching stored credential family to the user via
-/// `requestConsent`, signs a `DeviceResponse` over the ISO 18013-5 proximity
-/// session transcript, and notifies the encrypted `SessionData` response back
-/// via `Server2Client`.
+/// (chunked) to `Client2Server`, and `MdocProximitySession` decrypts the mdoc
+/// request, matches a stored credential family, obtains consent, signs a
+/// `DeviceResponse` over the ISO 18013-5 proximity session transcript, and
+/// this class notifies the encrypted `SessionData` response back via
+/// `Server2Client`.
 ///
 /// Ported from the Kotlin SDK sample app's `BlePeripheralServer.kt`, using
 /// `CoreBluetooth`'s `CBPeripheralManager` instead of Android's
@@ -29,8 +29,10 @@ import SirosKeystore
 /// wires both simultaneously since it isn't known in advance which mode a
 /// given reader will pick.
 ///
-/// Every matching credential FAMILY (see `CredentialFamily`) is offered to
-/// the user via `requestConsent` before signing - no auto-selection.
+/// The proximity protocol itself (session establishment, credential
+/// matching, consent, signing) lives in `MdocProximitySession` (SDK-level,
+/// shared with `BleCentralClient`) - this class only handles BLE/GATT
+/// transport.
 ///
 /// UNVERIFIED ON REAL HARDWARE beyond compiling - this class has only been
 /// verified by code review and reasoning about the CoreBluetooth API
@@ -49,39 +51,23 @@ final class BlePeripheralServer: NSObject {
     private static let stateEnd: UInt8 = 0x02
 
     private let engagement: DeviceEngagement.Engagement
-    /// Mirrors `SirosWallet.getCredentials` - injected rather than taking a
-    /// `SirosWallet`/`WalletViewModel` directly, keeping this BLE/GATT glue
-    /// class independent of the app's view-model layer.
-    private let getCredentials: () async -> [StoredCredential]
-    /// Mirrors `SirosWallet.signMdocPresentationForProximity`.
-    private let signPresentation: (_ credentialId: Int64, _ disclosedClaims: [String]?, _ sessionTranscriptBytes: Data) async throws -> Data
-    /// See `RequestProximityConsent`'s doc comment.
-    private let requestConsent: RequestProximityConsent
-    /// Mirrors `CredentialUtils.eligibleInstances` bound to the caller's
-    /// current `SirosWallet.credentialConsumptionPolicy`/`presentationHistory` -
-    /// excludes instances the active consumption policy considers already
-    /// used up, so a family the user approves can't sign with an exhausted
-    /// instance even if `requestConsent`'s UI failed to grey it out.
-    private let filterEligible: ([StoredCredential]) -> [StoredCredential]
-    /// Reports a canonical step token (see `FlowProgress.swift`'s proximity
-    /// step list) for driving the same progress-bar UI the issuance/
-    /// presentation flows use.
     private let onStep: (String) -> Void
     private let onLog: (String) -> Void
     private let onComplete: (_ success: Bool) -> Void
+    private let session: MdocProximitySession
 
     private var peripheralManager: CBPeripheralManager?
     private let reassembler = BleMessageChunker.Reassembler()
     private var server2ClientCharacteristic: CBMutableCharacteristic?
-    private var deviceCipher: ProximitySessionCrypto.SessionCipher?
     private var pendingNotifications: [Data] = []
     private var completed = false
-    /// Distinct from `deviceCipher != nil`: the cipher is created right after
-    /// session-key derivation, well before a response is actually signed and
-    /// notified back - if the reader sends STATE_END early (e.g. mid-consent,
-    /// or after a timeout), `deviceCipher != nil` would already be true and
-    /// incorrectly report success. Only set once the response has actually
-    /// finished being sent (see `flushPendingNotifications`).
+    /// Distinct from `session.established`: the session's cipher is created
+    /// right after session-key derivation, well before a response is
+    /// actually signed and notified back - if the reader sends STATE_END
+    /// early (e.g. mid-consent, or after a timeout), `session.established`
+    /// would already be true and incorrectly report success. Only set once
+    /// the response has actually finished being sent (see
+    /// `flushPendingNotifications`).
     private var responseSent = false
     /// Set by `sendNotification` once a response has been enqueued - the
     /// next time `flushPendingNotifications` fully drains the queue (whether
@@ -110,13 +96,18 @@ final class BlePeripheralServer: NSObject {
         onComplete: @escaping (Bool) -> Void
     ) {
         self.engagement = engagement
-        self.getCredentials = getCredentials
-        self.signPresentation = signPresentation
-        self.requestConsent = requestConsent
-        self.filterEligible = filterEligible
         self.onStep = onStep
         self.onLog = onLog
         self.onComplete = onComplete
+        self.session = MdocProximitySession(
+            engagement: engagement,
+            getCredentials: getCredentials,
+            signPresentation: signPresentation,
+            requestConsent: requestConsent,
+            filterEligible: filterEligible,
+            onStep: onStep,
+            logTag: "BlePeripheralServer"
+        )
         super.init()
     }
 
@@ -164,109 +155,30 @@ final class BlePeripheralServer: NSObject {
         guard let message = reassembler.feed(chunk) else { return }
         Task {
             do {
-                if deviceCipher == nil {
-                    try await handleSessionEstablishment(message, central: central)
-                } else {
+                if session.established {
                     onLog("Additional SessionData messages after the first request are not yet handled")
+                    return
+                }
+                switch try await session.handleSessionEstablishment(message) {
+                case .response(let sessionData):
+                    onLog("Sending DeviceResponse")
+                    sendNotification([UInt8](sessionData), to: central)
+                    // completeOnce(true) fires from flushPendingNotifications
+                    // once the response has actually finished sending (see
+                    // `responseSent`'s doc comment) - not eagerly here, which
+                    // would report success even if CoreBluetooth's
+                    // backpressure queue never drains (e.g. the reader
+                    // disconnects mid-transfer).
+                case .denied:
+                    completeOnce(false)
+                case .failed:
+                    completeOnce(false)
                 }
             } catch {
                 onLog("Presentation failed: \(error.localizedDescription)")
                 completeOnce(false)
             }
         }
-    }
-
-    /// Decrypts the incoming `SessionEstablishment`, matches stored
-    /// credential families against the request, asks the user for consent,
-    /// and signs/sends the response.
-    ///
-    /// Unlike the Kotlin SDK's `BlePeripheralServer.kt` (fixed in commit
-    /// `75e4d61` after `e7d8872` initially got it wrong), this does NOT try
-    /// both a QR-handover (`Handover = nil`) and an NFC-static-handover
-    /// SessionTranscript variant when deriving session keys. That retry
-    /// exists on Android because the SAME BLE service is reachable via both
-    /// a scanned QR code and a physical NFC tap served by
-    /// `MdocHostApduService`, and the BLE layer alone can't tell which one a
-    /// given reader used. iOS has no `MdocHostApduService` equivalent -
-    /// third-party apps cannot emulate an NFC Type 4 Tag / act as an HCE
-    /// host (see `NfcHandoverSelect`'s doc comment) - so this engagement is
-    /// NEVER actually reachable via NFC static handover on iOS. There is
-    /// only one possible `Handover` value a real reader could have used
-    /// (`nil`, the QR variant), so there is no ambiguity to retry against.
-    /// This was evaluated deliberately, not missed - do not add a
-    /// multi-candidate retry loop here unless iOS gains a way to actually
-    /// serve NFC static handover.
-    private func handleSessionEstablishment(_ message: [UInt8], central: CBCentral) async throws {
-        onStep("parsing_request")
-        let established = try ProximitySessionMessages.parseSessionEstablishment(message)
-        let eReaderPublicKey = try ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
-        let sessionTranscript = try ProximitySessionTranscript.build(
-            deviceEngagementBytes: engagement.deviceEngagementBytes,
-            eReaderKeyBytes: established.eReaderKeyBytes,
-            handoverSelectMessageBytes: nil
-        )
-        let keys = try ProximitySessionCrypto.deriveSessionKeys(
-            eDeviceKeyPrivate: engagement.privateKey,
-            eReaderKeyPublic: eReaderPublicKey,
-            sessionTranscript: sessionTranscript
-        )
-        let requestBytes = try ProximitySessionCrypto.readerCipher(keys.skReader).decrypt(established.encryptedData)
-        let cipher = ProximitySessionCrypto.deviceCipher(keys.skDevice)
-        deviceCipher = cipher
-
-        let docRequests = try DeviceRequestParser.parse(requestBytes)
-        guard let docRequest = docRequests.first else {
-            onLog("Request contained no documents")
-            completeOnce(false)
-            return
-        }
-
-        onStep("match_credentials")
-        let credentials = await getCredentials()
-        let matches = credentials.filter { cred in
-            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred.raw)?.docType == docRequest.docType
-        }
-        guard !matches.isEmpty else {
-            onLog("No stored credential matches requested docType '\(docRequest.docType)'")
-            completeOnce(false)
-            return
-        }
-        let families = groupIntoFamilies(matches)
-
-        onStep("awaiting_consent")
-        let consent = await requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
-        let family: CredentialFamily
-        switch consent {
-        case .approved(let approvedFamily):
-            family = approvedFamily
-        case .denied:
-            completeOnce(false)
-            return
-        }
-        let eligible = filterEligible(family.instances)
-        guard !eligible.isEmpty else {
-            onLog("No eligible (unused) instances remain for the approved credential")
-            completeOnce(false)
-            return
-        }
-        // Pick a random instance from the batch rather than always the same
-        // one - each instance is bound to its own device key specifically so
-        // repeated presentations of "the same" credential can't be
-        // correlated by a verifier via a reused public key. Always picking
-        // the representative would quietly throw that unlinkability away.
-        let credential = eligible.randomElement()!
-
-        onStep("submitting_response")
-        let response = try await signPresentation(credential.id, docRequest.disclosedClaims(), Data(sessionTranscript))
-        let encrypted = try cipher.encrypt([UInt8](response))
-        let sessionData = ProximitySessionMessages.buildSessionData(encryptedData: encrypted)
-        onLog("Sending DeviceResponse for \(docRequest.docType)")
-        sendNotification(sessionData, to: central)
-        // completeOnce(true) fires from flushPendingNotifications once the
-        // response has actually finished sending (see `responseSent`'s doc
-        // comment) - not eagerly here, which would report success even if
-        // CoreBluetooth's backpressure queue never drains (e.g. the reader
-        // disconnects mid-transfer).
     }
 
     private func sendNotification(_ message: [UInt8], to central: CBCentral) {
@@ -301,7 +213,7 @@ final class BlePeripheralServer: NSObject {
     /// return here would silently lose chunks. Once the queue is fully
     /// drained AND a response was actually enqueued (`awaitingFinalFlush`),
     /// the presentation is genuinely complete - see `responseSent`'s doc
-    /// comment for why this, not `deviceCipher != nil` or an eager call
+    /// comment for why this, not `session.established` or an eager call
     /// right after `sendNotification`, is the real completion signal.
     private func flushPendingNotifications() {
         guard let characteristic = server2ClientCharacteristic, let peripheralManager else { return }

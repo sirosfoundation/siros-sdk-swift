@@ -488,6 +488,29 @@ public enum CredentialUtils {
     /// offer to renew/re-issue the credential rather than let it silently run
     /// out. Not user-configurable in this pass - just the stated default.
     public static let renewThreshold = 0
+
+    /// Group stored credentials into one ``CredentialFamily`` per
+    /// `StoredCredential.batchId`, for callers (mdoc proximity consent) that
+    /// need every instance's full `StoredCredential` - not just its usage
+    /// count, as ``groupForDisplay(credentials:presentationHistory:)``'s
+    /// `CredentialInstance` carries - because a proximity session signs with
+    /// whichever approved instance it picks.
+    ///
+    /// Uses the same convention as `groupForDisplay`: a batch is only
+    /// representable if it has an `instanceId == 0` member; a batch missing
+    /// one is skipped rather than falling back to an arbitrary member, so
+    /// the two grouping functions never disagree about which batches are
+    /// representable.
+    public static func groupIntoFamilies(_ credentials: [StoredCredential]) -> [CredentialFamily] {
+        var byBatch: [Int64: [StoredCredential]] = [:]
+        for credential in credentials {
+            byBatch[credential.batchId, default: []].append(credential)
+        }
+        return byBatch.values.compactMap { members in
+            guard let representative = members.first(where: { $0.instanceId == 0 }) else { return nil }
+            return CredentialFamily(representative: representative, instances: members)
+        }
+    }
 }
 
 /// Governs whether a successful presentation exhausts the specific credential
@@ -525,6 +548,27 @@ public struct CredentialWithInstances: Sendable, Equatable {
 
     public init(credential: StoredCredential, instances: [CredentialInstance]) {
         self.credential = credential
+        self.instances = instances
+    }
+}
+
+/// One credential "type" as the user should see it: every `StoredCredential`
+/// instance sharing a `StoredCredential.batchId` is the SAME credential from
+/// a batch issuance (see `CredentialUtils.groupForDisplay`'s doc comment for
+/// why - each instance is bound to its own device key purely for
+/// unlinkability, not a distinct credential the user chose to hold multiple
+/// of). A proximity consent prompt must offer one choice per family, never
+/// one per raw instance, or a 5-instance batch reads as "you have 5 driver's
+/// licenses." See `CredentialUtils.groupIntoFamilies`.
+public struct CredentialFamily: Sendable, Equatable {
+    /// The instance shown to the user for display (matches
+    /// `CredentialUtils.groupForDisplay`'s convention of the `instanceId == 0` member).
+    public let representative: StoredCredential
+    /// Every instance in this batch - the proximity session picks one of these to actually sign with once the family is approved.
+    public let instances: [StoredCredential]
+
+    public init(representative: StoredCredential, instances: [StoredCredential]) {
+        self.representative = representative
         self.instances = instances
     }
 }

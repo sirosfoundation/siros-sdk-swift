@@ -407,4 +407,45 @@ final class CredentialUtilsTests: XCTestCase {
 
         XCTAssertEqual(result, [])
     }
+
+    // MARK: - groupIntoFamilies
+
+    func testGroupIntoFamiliesRepresentativeIsTheInstanceZeroMember() {
+        let credentials = [
+            consumptionCredential(id: 41, batchId: 500, instanceId: 0),
+            consumptionCredential(id: 42, batchId: 500, instanceId: 1),
+            consumptionCredential(id: 43, batchId: 500, instanceId: 2),
+        ]
+
+        let result = CredentialUtils.groupIntoFamilies(credentials)
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.first?.representative.id, 41)
+        XCTAssertEqual(result.first?.instances.count, 3)
+    }
+
+    func testGroupIntoFamiliesSkipsABatchMissingItsInstanceZeroMember() {
+        // A batch missing an instanceId==0 member must be skipped, not
+        // fall back to an arbitrary member - matching groupForDisplay's
+        // own convention exactly, so the two grouping functions never
+        // disagree about which batches are representable.
+        let credentials = [
+            consumptionCredential(id: 51, batchId: 600, instanceId: 1),
+            consumptionCredential(id: 52, batchId: 600, instanceId: 2),
+        ]
+
+        let result = CredentialUtils.groupIntoFamilies(credentials)
+
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    func testGroupIntoFamiliesStandaloneCredentialBecomesItsOwnOneInstanceFamily() {
+        let cred = consumptionCredential(id: 61, batchId: 700, instanceId: 0)
+
+        let result = CredentialUtils.groupIntoFamilies([cred])
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.first?.representative, cred)
+        XCTAssertEqual(result.first?.instances, [cred])
+    }
 }

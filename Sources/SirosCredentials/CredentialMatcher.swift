@@ -92,6 +92,14 @@ public enum CredentialMatcher {
         )
     }
 
+    /// Match stored credentials against an ISO 18013-5 mdoc `docType`
+    /// requested during a proximity (BLE) presentation - the mdoc proximity
+    /// protocol has no DCQL query, just a bare docType string in the
+    /// `DeviceRequest`'s `ItemsRequest`.
+    public static func matchMdocDocType(_ credentials: [StoredCredential], docType: String) -> [StoredCredential] {
+        credentials.filter { $0.format == "mso_mdoc" && CredentialUtils.parseMdocDocument($0.raw)?.docType == docType }
+    }
+
     public static func matchedCredentialIds(dcqlQuery: [String: Any], credentials: [StoredCredential]) -> [Int64] {
         var seen = Set<Int64>()
         return match(dcqlQuery: dcqlQuery, credentials: credentials)
