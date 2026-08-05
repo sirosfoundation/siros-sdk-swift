@@ -2,12 +2,47 @@
 
 import XCTest
 @testable import SirosCredentials
+@preconcurrency import SwiftCBOR
 
 final class CredentialMatcherTests: XCTestCase {
 
     private func parseJSON(_ string: String) -> [String: Any] {
         let data = string.data(using: .utf8)!
         return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    }
+
+    /// A minimal but REAL CBOR-encoded bare `IssuerSigned` structure (no
+    /// enclosing `{documents: [...]}` envelope), base64url-encoded the same
+    /// way `StoredCredential.raw` is stored - see `MdocCborTests`'s matching
+    /// fixture builder for why the payload must be a real double-encoded
+    /// byte string, not an in-memory tagged value.
+    private func mdocRaw(docType: String) -> String {
+        let item: CBOR = .tagged(.encodedCBORDataItem, .byteString(CBOR.map([
+            .utf8String("digestID"): .unsignedInt(0),
+            .utf8String("random"): .byteString([UInt8](repeating: 0, count: 16)),
+            .utf8String("elementIdentifier"): .utf8String("given_name"),
+            .utf8String("elementValue"): .utf8String("Jane"),
+        ]).encode()))
+        let nameSpaces: CBOR = .map([.utf8String("org.iso.18013.5.1"): .array([item])])
+
+        let mso: CBOR = .map([.utf8String("docType"): .utf8String(docType)])
+        let taggedMso: CBOR = .tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerAuth: CBOR = .array([
+            .byteString([]),
+            .map([:]),
+            .byteString(taggedMso.encode()),
+            .byteString([UInt8](repeating: 0, count: 64)),
+        ])
+
+        let bareIssuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): nameSpaces,
+            .utf8String("issuerAuth"): issuerAuth,
+        ])
+
+        return Data(bareIssuerSigned.encode()).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     /// StoredCredential now requires batchId/instanceId - defaults batchId
@@ -253,5 +288,40 @@ final class CredentialMatcherTests: XCTestCase {
         XCTAssertNotNil(output.credentialSets)
         XCTAssertEqual(output.credentialSets?.count, 1)
         XCTAssertEqual(output.satisfiableOptions.count, 2)
+    }
+
+    func testMatchMdocDocTypeFiltersByRealDocTypeParsedFromCbor() {
+        let credentials = [
+            storedCredential(id: 1, format: "mso_mdoc", raw: mdocRaw(docType: "org.iso.18013.5.1.mDL")),
+            storedCredential(id: 2, format: "mso_mdoc", raw: mdocRaw(docType: "eu.europa.ec.eudi.pid.1")),
+        ]
+
+        let matches = CredentialMatcher.matchMdocDocType(credentials, docType: "org.iso.18013.5.1.mDL")
+
+        XCTAssertEqual(matches.map(\.id), [1])
+    }
+
+    func testMatchMdocDocTypeExcludesNonMdocFormatsEvenWithMatchingDocType() {
+        // A DCQL/SD-JWT credential should never be selectable by an
+        // ISO 18013-5 proximity request's bare docType string, regardless
+        // of what its (irrelevant) format-specific fields happen to contain.
+        let credentials = [
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: "not-cbor-at-all"),
+            storedCredential(id: 2, format: "mso_mdoc", raw: mdocRaw(docType: "org.iso.18013.5.1.mDL")),
+        ]
+
+        let matches = CredentialMatcher.matchMdocDocType(credentials, docType: "org.iso.18013.5.1.mDL")
+
+        XCTAssertEqual(matches.map(\.id), [2])
+    }
+
+    func testMatchMdocDocTypeReturnsEmptyWhenNoDocTypeMatches() {
+        let credentials = [
+            storedCredential(id: 1, format: "mso_mdoc", raw: mdocRaw(docType: "com.example.other")),
+        ]
+
+        let matches = CredentialMatcher.matchMdocDocType(credentials, docType: "org.iso.18013.5.1.mDL")
+
+        XCTAssertTrue(matches.isEmpty)
     }
 }
