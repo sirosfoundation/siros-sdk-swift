@@ -94,6 +94,10 @@
   "flow": {
     "cancelButton": "Cancel",
     "closeButton": "Close",
+    "starting": {
+      "issuance": "Contacting issuer…",
+      "presentation": "Contacting verifier…"
+    },
     "steps": {
       "parsingOffer": "Reading credential offer…",
       "offerParsed": "Credential offer parsed",

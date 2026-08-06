@@ -12,7 +12,9 @@ struct ContentView: View {
             case .disconnected, .connecting:
                 LoginView()
             case .ready:
-                if viewModel.pendingPresentation != nil {
+                if let flowType = viewModel.flowStarting {
+                    FlowStartingView(flowType: flowType)
+                } else if viewModel.pendingPresentation != nil {
                     PresentationConsentView()
                 } else if let credential = viewModel.selectedCredential {
                     CredentialDetailView(credential: credential)
@@ -45,6 +47,43 @@ struct ContentView: View {
         } message: {
             Text(viewModel.infoMessage ?? "")
         }
+    }
+}
+
+// MARK: - Flow Starting View
+
+/// Interstitial shown the instant a QR-scanned (or pasted/deep-linked)
+/// offer/request URI is handed off to the SDK's issuance/presentation start
+/// call, and cleared the moment the engine's first real flow-progress state
+/// arrives (see `WalletViewModel.flowStarting`). Covers the network-bound gap
+/// (VCTM fetch, issuer metadata, client attestation) before `FlowActiveView`
+/// below has anything to show - without it, a slow issuer left the screen
+/// looking unchanged long enough that a user could reasonably conclude the
+/// scan hadn't registered.
+struct FlowStartingView: View {
+    @EnvironmentObject var viewModel: WalletViewModel
+    let flowType: String
+
+    private var messageKey: String {
+        flowType == "presentation" ? "flow.starting.presentation" : "flow.starting.issuance"
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(SirosTheme.brand)
+            Text(L10n.string(messageKey))
+                .font(.body)
+                .foregroundColor(SirosTheme.onSurfaceVariant)
+            Button(L10n.string("flow.cancelButton")) {
+                viewModel.cancelFlowStarting()
+            }
+            .buttonStyle(.bordered)
+            .tint(SirosTheme.brand)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SirosTheme.background)
     }
 }
 

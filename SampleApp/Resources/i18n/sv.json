@@ -94,6 +94,10 @@
   "flow": {
     "cancelButton": "Avbryt",
     "closeButton": "Stäng",
+    "starting": {
+      "issuance": "Kontaktar utfärdare…",
+      "presentation": "Kontaktar kontrollant…"
+    },
     "steps": {
       "parsingOffer": "Läser in intygserbjudande…",
       "offerParsed": "Intygserbjudande inläst",

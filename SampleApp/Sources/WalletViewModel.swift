@@ -88,6 +88,22 @@ final class WalletViewModel: ObservableObject {
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
 
+    /// Set the instant a QR-scanned (or pasted/deep-linked) offer/request URI
+    /// is classified and handed off to the SDK's issuance/presentation start
+    /// call - `"issuance"`, `"presentation"`, or `nil` when nothing is
+    /// starting. Cleared the moment any real subsequent wallet state update
+    /// arrives (`updateState` clears it unconditionally on every state, since
+    /// `SirosWallet.setState` re-emits without a dedup check - see its doc
+    /// comment), or immediately on a synchronous handoff failure.
+    ///
+    /// Covers the silent network-bound gap (VCTM fetch, issuer metadata,
+    /// client attestation) between a successful scan and the engine's first
+    /// real flow-progress state, which against a slow issuer is long enough
+    /// that a user could reasonably conclude the scan didn't register. Pure
+    /// sample-app UI state built entirely on the existing wallet-state
+    /// stream - no SDK API involved.
+    @Published var flowStarting: String?
+
     // MARK: - Add credential state
 
     @Published var availableCredentials: [CredentialOffer] = []
@@ -634,21 +650,43 @@ final class WalletViewModel: ObservableObject {
         let linkType = DeepLinkClassifier.classify(code)
         switch linkType {
         case .credentialOffer(let uri):
-            Task { try? await wallet?.startIssuance(offerUri: uri) }
+            startFlow(type: "issuance") { try await self.wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
-            Task { try? await wallet?.startPresentation(requestUri: uri) }
+            startFlow(type: "presentation") { try await self.wallet?.startPresentation(requestUri: uri) }
         case .authCallback(let authCode, let state):
             handleAuthRedirect(code: authCode, state: state)
         case .unknown(let uri):
             // Fallback: treat unclassified URIs as presentation requests -
             // covers plain https://...?request_uri= patterns from QR codes
             // that DeepLinkClassifier doesn't recognize by shape.
-            Task {
-                do {
-                    try await wallet?.startPresentation(requestUri: uri)
-                } catch {
-                    setError(error.localizedDescription)
-                }
+            startFlow(type: "presentation") { try await self.wallet?.startPresentation(requestUri: uri) }
+        }
+    }
+
+    /// Cancel affordance for the "Contacting issuer/verifier..." interstitial
+    /// shown while `flowStarting != nil`. Best-effort: `cancelCurrentFlow()`
+    /// is a guarded no-op unless the engine has already reported
+    /// `.flowActive` (see its doc comment), which may not have happened yet
+    /// at this point - clearing `flowStarting` locally is what actually
+    /// dismisses the interstitial either way.
+    func cancelFlowStarting() {
+        flowStarting = nil
+        wallet?.cancelCurrentFlow()
+    }
+
+    /// Sets `flowStarting` synchronously before kicking off `body`, clearing
+    /// it again immediately if `body` throws synchronously (e.g. "not
+    /// connected"). Any error surfaced later via the engine's own event/state
+    /// stream instead (bad offer/request content, network failure) is
+    /// cleared by `updateState`'s unconditional clear-on-every-state, not here.
+    private func startFlow(type: String, _ body: @escaping () async throws -> Void) {
+        flowStarting = type
+        Task {
+            do {
+                try await body()
+            } catch {
+                flowStarting = nil
+                setError(error.localizedDescription)
             }
         }
     }
@@ -661,20 +699,14 @@ final class WalletViewModel: ObservableObject {
         case .authCallback(let code, let state):
             handleAuthRedirect(code: code, state: state)
         case .credentialOffer(let uri):
-            Task { try? await wallet?.startIssuance(offerUri: uri) }
+            startFlow(type: "issuance") { try await self.wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
-            Task { try? await wallet?.startPresentation(requestUri: uri) }
+            startFlow(type: "presentation") { try await self.wallet?.startPresentation(requestUri: uri) }
         case .unknown(let uri):
             // Fallback: treat unclassified URIs as presentation requests -
             // matches handleQrResult's fallback for the same URI shapes
             // arriving via a same-device link instead of a QR scan.
-            Task {
-                do {
-                    try await wallet?.startPresentation(requestUri: uri)
-                } catch {
-                    setError(error.localizedDescription)
-                }
-            }
+            startFlow(type: "presentation") { try await self.wallet?.startPresentation(requestUri: uri) }
         }
     }
 
@@ -804,6 +836,12 @@ final class WalletViewModel: ObservableObject {
     }
 
     private func updateState(_ state: WalletState) {
+        // Every call here is a real state update from the engine (or a
+        // reconnect/logout) - whatever the QR-scan/deep-link handoff was
+        // waiting on has now either progressed (flowActive), failed
+        // (.error), or otherwise resolved, so the "Contacting issuer/
+        // verifier..." interstitial no longer applies.
+        flowStarting = nil
         switch state {
         case .disconnected(let accounts):
             walletState = .disconnected
