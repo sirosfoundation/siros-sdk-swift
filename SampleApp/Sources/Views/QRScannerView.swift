@@ -10,6 +10,9 @@ import AVFoundation
 struct QRScannerView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     @State private var pasteUri = ""
+    /// Non-nil the instant a code is decoded, until the delayed handoff below
+    /// fires. Drives the checkmark/flash overlay - see `handleDetectedCode`.
+    @State private var detectedCode: String?
 
     var body: some View {
         NavigationStack {
@@ -19,22 +22,19 @@ struct QRScannerView: View {
                     simulatorFallback
                     #else
                     CameraQRScanner { code in
-                        // Don't pre-filter by classification here -
-                        // handleQrResult already classifies and, deliberately,
-                        // treats an unclassified URI as a presentation request
-                        // attempt (covers bare reference-URL QR codes with no
-                        // recognized scheme/query shape, e.g. some verifiers'
-                        // "Link" pages). A stricter gate here would silently
-                        // drop those before handleQrResult's own fallback ever runs.
-                        viewModel.handleQrResult(code)
+                        handleDetectedCode(code)
                     }
                     #endif
 
                     // Viewfinder overlay
                     RoundedRectangle(cornerRadius: 16)
-                        .stroke(.white, lineWidth: 3)
+                        .stroke(detectedCode == nil ? Color.white : SirosTheme.brand, lineWidth: 3)
                         .frame(width: 250, height: 250)
                         .shadow(radius: 8)
+
+                    if detectedCode != nil {
+                        detectionOverlay
+                    }
                 }
 
                 // Paste URI fallback (always visible, like Kotlin)
@@ -67,6 +67,48 @@ struct QRScannerView: View {
                     Button("Cancel") { viewModel.closeQrScanner() }
                 }
             }
+        }
+    }
+
+    /// Brief flash + checkmark shown over the viewfinder the instant a code
+    /// is decoded, so a successful scan has *some* visible confirmation
+    /// before the scanner screen closes - previously the screen just closed
+    /// with nothing to confirm the scan actually registered.
+    private var detectionOverlay: some View {
+        ZStack {
+            Color.white.opacity(0.18)
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 72))
+                .foregroundStyle(.white, SirosTheme.brand)
+                .shadow(radius: 8)
+        }
+        .frame(width: 250, height: 250)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        .allowsHitTesting(false)
+    }
+
+    /// Fires the instant `CameraQRScanner` decodes a code (camera capture is
+    /// already stopped by then - see `QRScannerViewController.hasScanned`).
+    /// Shows the checkmark/flash overlay immediately, then delays the actual
+    /// handoff to `handleQrResult` (which closes this screen) so the overlay
+    /// is visible for at least one frame first. Guarded by `detectedCode` so
+    /// a second metadata callback (shouldn't happen given `hasScanned`, but
+    /// cheap to guard) can't schedule a duplicate handoff.
+    private func handleDetectedCode(_ code: String) {
+        guard detectedCode == nil else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            detectedCode = code
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            // Don't pre-filter by classification here - handleQrResult
+            // already classifies and, deliberately, treats an unclassified
+            // URI as a presentation request attempt (covers bare
+            // reference-URL QR codes with no recognized scheme/query shape,
+            // e.g. some verifiers' "Link" pages). A stricter gate here would
+            // silently drop those before handleQrResult's own fallback ever
+            // runs.
+            viewModel.handleQrResult(code)
         }
     }
 

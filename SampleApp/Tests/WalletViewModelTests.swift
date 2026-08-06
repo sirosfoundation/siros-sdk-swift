@@ -146,6 +146,41 @@ final class WalletViewModelTests: XCTestCase {
         XCTAssertFalse(vm.showQrScanner)
     }
 
+    // MARK: - Flow starting interstitial
+
+    /// `flowStarting` must be set synchronously (not after the Task hop) so
+    /// the interstitial covers the entire gap starting the instant the scan
+    /// is classified - not just from whenever the Task first gets scheduled.
+    func testHandleQrResultSetsFlowStartingSynchronouslyForCredentialOffer() {
+        let vm = makeViewModel()
+        vm.handleQrResult("openid-credential-offer://some-offer")
+        XCTAssertEqual(vm.flowStarting, "issuance")
+    }
+
+    func testHandleQrResultSetsFlowStartingForUnknownUriFallback() {
+        let vm = makeViewModel()
+        vm.handleQrResult("https://example.com/not-a-wallet-uri")
+        XCTAssertEqual(vm.flowStarting, "presentation")
+    }
+
+    /// An auth-callback QR (or deep link) isn't an issuance/presentation
+    /// handoff at all - no interstitial should appear for it.
+    func testHandleQrResultDoesNotSetFlowStartingForAuthCallback() {
+        let vm = makeViewModel()
+        vm.handleQrResult("siros-sample://callback?code=abc&state=xyz")
+        XCTAssertNil(vm.flowStarting)
+    }
+
+    func testCancelFlowStartingClearsFlag() {
+        let vm = makeViewModel()
+        vm.handleQrResult("openid-credential-offer://some-offer")
+        XCTAssertEqual(vm.flowStarting, "issuance")
+
+        vm.cancelFlowStarting()
+
+        XCTAssertNil(vm.flowStarting)
+    }
+
     // MARK: - Presentation consent
 
     func testAcceptPresentationClearsPending() {
