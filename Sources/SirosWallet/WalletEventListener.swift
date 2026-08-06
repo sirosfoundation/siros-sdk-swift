@@ -42,6 +42,15 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// An issuer requires a transaction code (PIN).
     /// Return the PIN value, or nil to cancel.
     func onTxCodeRequired(flowId: String, description: String?) -> String?
+
+    /// The current session could not be silently refreshed and is no longer
+    /// valid - e.g. the engine WebSocket's token refresh failed before a
+    /// reconnect, or repeated REST calls were rejected as unauthenticated.
+    /// `SirosWallet` has already logged out by the time this fires. Unlike
+    /// `onFlowError` (a specific flow's failure, session otherwise fine),
+    /// this means the whole session is gone - route the user to the login
+    /// screen rather than surfacing a generic error message.
+    func onReauthenticationRequired()
 }
 
 /// Default implementations for optional callbacks.
@@ -51,4 +60,5 @@ public extension WalletEventListener {
     func onFlowError(flowId: String, errorMessage: String) {}
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}
     func onTxCodeRequired(flowId: String, description: String?) -> String? { nil }
+    func onReauthenticationRequired() {}
 }
