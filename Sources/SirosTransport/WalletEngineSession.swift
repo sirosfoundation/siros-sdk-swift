@@ -17,7 +17,14 @@ import FoundationNetworking
 /// 4. Exchange flow messages until disconnect
 public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable {
     public enum State: String, Sendable {
-        case disconnected, connecting, connected, reconnecting, failed
+        case disconnected, connecting, connected, reconnecting
+        /// Distinct from `.failed`: a reconnect attempt's `tokenProvider` call
+        /// itself failed (the access-token/session refresh mechanism was
+        /// rejected), not merely that the socket couldn't connect - see
+        /// `scheduleReconnect`. `.failed` is reserved for exhausting reconnect
+        /// attempts on a transient network-level failure.
+        case reauthRequired
+        case failed
     }
 
     private let baseUrl: String
@@ -38,6 +45,16 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     private var webSocketTask: URLSessionWebSocketTask?
     private var sessionId: String?
     private var lastAppToken: String?
+    /// Mints a fresh handshake token on demand - called before every
+    /// automatic reconnect attempt instead of replaying `lastAppToken`, which
+    /// is otherwise never updated after the initial `connect` and goes stale
+    /// within minutes (the AS's default access-token TTL is 2 minutes) since
+    /// this path had no refresh logic at all. Typically wraps
+    /// `AuthTokens.ensureAnonymousToken()`, which already handles
+    /// expiry-aware caching - this class only needs to call it, not
+    /// duplicate that logic. Nil preserves the old (non-refreshing) behavior
+    /// for callers that haven't opted in.
+    private var tokenProvider: (() async throws -> String)?
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 5
     private let baseReconnectDelayMs: UInt64 = 1000
@@ -144,10 +161,18 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     public var isConnected: Bool { webSocketTask != nil }
 
     /// Connect to the engine WebSocket and perform the handshake.
-    public func connect(appToken: String) {
+    /// - Parameters:
+    ///   - appToken: JWT used for this initial handshake (avoids an extra
+    ///     round trip re-minting a token we were just handed).
+    ///   - tokenProvider: mints a fresh token before each subsequent
+    ///     automatic reconnect attempt - see `tokenProvider`'s doc comment.
+    ///     Omit only if the caller genuinely has no refresh mechanism to
+    ///     offer; every real `SirosWallet` call site should pass one.
+    public func connect(appToken: String, tokenProvider: (() async throws -> String)? = nil) {
         guard _state != .connected else { return }
         setState(.connecting)
         lastAppToken = appToken
+        self.tokenProvider = tokenProvider
         reconnectAttempts = 0
         doConnect(appToken: appToken)
     }
@@ -209,7 +234,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     }
 
     private func scheduleReconnect() {
-        guard let token = lastAppToken, reconnectAttempts < maxReconnectAttempts else {
+        guard lastAppToken != nil, reconnectAttempts < maxReconnectAttempts else {
             setState(.failed)
             return
         }
@@ -220,9 +245,31 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
 
         Task {
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            guard self._state == .reconnecting else { return }
+            guard let token = await self.refreshTokenOrSignalReauth() else { return }
             if self._state == .reconnecting {
                 self.doConnect(appToken: token)
             }
+        }
+    }
+
+    /// Mints a fresh token via `tokenProvider` (falling back to
+    /// `lastAppToken` if no provider was supplied) for a reconnect attempt.
+    /// A provider failure means the refresh mechanism itself was rejected -
+    /// not a transient network blip like a socket-connect failure - so this
+    /// short-circuits straight to `.reauthRequired` rather than consuming
+    /// the remaining backoff budget on a broken session.
+    /// - Returns: the token to reconnect with, or nil if reconnecting should
+    ///   stop (state has already been updated to reflect why).
+    private func refreshTokenOrSignalReauth() async -> String? {
+        guard let provider = tokenProvider else { return lastAppToken }
+        do {
+            let fresh = try await provider()
+            lastAppToken = fresh
+            return fresh
+        } catch {
+            setState(.reauthRequired)
+            return nil
         }
     }
 
@@ -395,7 +442,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 for await state in self.stateStream {
-                    if state == .connected || state == .failed {
+                    if state == .connected || state == .failed || state == .reauthRequired {
                         return
                     }
                 }
@@ -407,8 +454,13 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             try await group.next()
             group.cancelAll()
         }
-        if _state == .failed {
+        switch _state {
+        case .reauthRequired:
+            throw EngineSessionError.reauthenticationRequired
+        case .failed:
             throw EngineSessionError.connectionFailed
+        default:
+            break
         }
     }
 
@@ -468,6 +520,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// Disconnect the WebSocket session.
     public func disconnect() {
         lastAppToken = nil
+        tokenProvider = nil
         webSocketTask?.cancel(with: .normalClosure, reason: "client disconnect".data(using: .utf8))
         webSocketTask = nil
         sessionId = nil
@@ -502,6 +555,11 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
 public enum EngineSessionError: Error, Sendable {
     case connectionTimeout
     case connectionFailed
+    /// The token-refresh mechanism itself was rejected before a reconnect -
+    /// the session is invalid, not just the socket. Distinct from
+    /// `.connectionFailed` (transient network failure) - callers should
+    /// route the user to the login screen rather than retrying.
+    case reauthenticationRequired
 }
 
 extension EngineSessionError: LocalizedError {
@@ -509,6 +567,7 @@ extension EngineSessionError: LocalizedError {
         switch self {
         case .connectionTimeout: return "Engine session connection timed out"
         case .connectionFailed: return "Engine session connection failed"
+        case .reauthenticationRequired: return "Session expired and could not be refreshed - user must log in again"
         }
     }
 }

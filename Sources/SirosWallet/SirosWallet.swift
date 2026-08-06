@@ -316,9 +316,27 @@ public final class SirosWallet: @unchecked Sendable {
         self.authServerClient = asClient
         let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
         tokens.onSessionRejected = { [weak self] in
-            self?.logout()
+            self?.handleReauthenticationRequired()
         }
         self.authTokens = tokens
+    }
+
+    /// Fires whenever ANY code path determines the current session is no
+    /// longer valid and can't be silently refreshed - repeated REST 401s
+    /// (`AuthTokens.onSessionRejected`) or the engine WebSocket's token
+    /// refresh failing before a reconnect (`WalletEngineSession.State
+    /// .reauthRequired`, observed via the engine's `stateStream` in
+    /// `connectEngine`). Notifies the host app via
+    /// `WalletEventListener.onReauthenticationRequired` - distinct from
+    /// `onFlowError` - so it can route straight to a login screen instead of
+    /// surfacing a generic error message, then logs out to put the SDK's own
+    /// state in sync with that.
+    private func handleReauthenticationRequired() {
+        lock.lock()
+        let listener = eventListener
+        lock.unlock()
+        listener?.onReauthenticationRequired()
+        logout()
     }
 
     // MARK: - Event listener
@@ -1357,7 +1375,7 @@ public final class SirosWallet: @unchecked Sendable {
         guard let tokens = authTokens else {
             throw SirosError.wallet(message: "Not connected")
         }
-        let token = try await tokens.ensureAnonymousToken()
+        let token = try await tokens.ensureBackendToken()
         engine.forceReconnect(appToken: token.raw)
         try await engine.awaitConnected()
     }
@@ -1436,7 +1454,7 @@ public final class SirosWallet: @unchecked Sendable {
                 guard let tokens else {
                     throw SirosError.wallet(message: "Not connected")
                 }
-                let token = try await tokens.ensureAnonymousToken()
+                let token = try await tokens.ensureBackendToken()
                 engine.forceReconnect(appToken: token.raw)
                 try await engine.awaitConnected()
                 // Client attestation for the resumed flow: Execute() sets up
@@ -1602,9 +1620,15 @@ public final class SirosWallet: @unchecked Sendable {
 
     // MARK: - Engine connection
 
-    /// Connect engine using an anonymous token from the AS.
+    /// Connect engine using a backend token from the AS. The anonymous token
+    /// is scoped to `tac="rl"` for registry-style reads only - the engine
+    /// session needs `insert` for OID4VCI issuance, so it must use the
+    /// fully-scoped backend token, not the anonymous one
+    /// (go-wallet-backend#264 made the missing `insert` scope a hard
+    /// server-side rejection for `oid4vci` flow_start, not just a
+    /// documentation note).
     private func connectEngineWithToken(_ tokens: AuthTokens) async throws {
-        let token = try await tokens.ensureAnonymousToken()
+        let token = try await tokens.ensureBackendToken()
         if config.useWmpProtocol {
             try await connectViaWmp(appToken: token.raw)
         } else {
@@ -1886,8 +1910,23 @@ public final class SirosWallet: @unchecked Sendable {
         }
         let engine = Self.createEngineSession(engineBase, config.tenantId)
         lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
-        engine.connect(appToken: appToken)
+        engine.connect(appToken: appToken) { [weak self] in
+            guard let tokens = self?.authTokens else {
+                throw SirosError.wallet(message: "Not connected")
+            }
+            return try await tokens.ensureBackendToken().raw
+        }
         try await engine.awaitConnected()
+
+        // Catches WalletEngineSession.State.reauthRequired transitions from
+        // the automatic background reconnect loop, which never goes through
+        // awaitConnected - cancelled alongside every other engine task on
+        // logout (see cancelEngineTasks).
+        let reauthTask = Task { [weak self] in
+            for await state in engine.stateStream where state == .reauthRequired {
+                self?.handleReauthenticationRequired()
+            }
+        }
 
         // Sign requests → auto-sign with keystore
         let signTask = Task { [weak self] in
@@ -1924,7 +1963,7 @@ public final class SirosWallet: @unchecked Sendable {
                 self.handleFlowError(msg: msg)
             }
         }
-        engineTasks = [signTask, matchTask, progressTask, completeTask, errorTask]
+        engineTasks = [signTask, matchTask, progressTask, completeTask, errorTask, reauthTask]
     }
 
     private func handleSignRequest(engine: WalletEngineSession, msg: SignRequestMessage) async {
