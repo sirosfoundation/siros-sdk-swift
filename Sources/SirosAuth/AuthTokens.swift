@@ -64,7 +64,7 @@ public final class AuthTokens: @unchecked Sendable {
         ),
         tokenAnonymous: TokenKind(
             name: tokenAnonymous,
-            aud: "wallet-backend",
+            aud: "wallet-registry",
             tac: "rl",
             anonymous: true
         ),
@@ -109,7 +109,8 @@ public final class AuthTokens: @unchecked Sendable {
         try await ensureToken(Self.tokenBackend)
     }
 
-    /// Convenience: ensure an anonymous token (read-only, no auth required).
+    /// Convenience: ensure an anonymous token (issued without a `sub` claim;
+    /// still requires a real, already-authenticated session server-side).
     public func ensureAnonymousToken() async throws -> AccessToken {
         try await ensureToken(Self.tokenAnonymous)
     }
