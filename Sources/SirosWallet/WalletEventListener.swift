@@ -60,5 +60,8 @@ public extension WalletEventListener {
     func onFlowError(flowId: String, errorMessage: String) {}
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}
     func onTxCodeRequired(flowId: String, description: String?) -> String? { nil }
-    func onReauthenticationRequired() {}
+    func onReauthenticationRequired() {
+        // No-op by default: implementers only need to override this if they
+        // want to route the user to a login screen on forced logout.
+    }
 }
