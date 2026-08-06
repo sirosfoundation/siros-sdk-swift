@@ -1375,7 +1375,7 @@ public final class SirosWallet: @unchecked Sendable {
         guard let tokens = authTokens else {
             throw SirosError.wallet(message: "Not connected")
         }
-        let token = try await tokens.ensureAnonymousToken()
+        let token = try await tokens.ensureBackendToken()
         engine.forceReconnect(appToken: token.raw)
         try await engine.awaitConnected()
     }
@@ -1454,7 +1454,7 @@ public final class SirosWallet: @unchecked Sendable {
                 guard let tokens else {
                     throw SirosError.wallet(message: "Not connected")
                 }
-                let token = try await tokens.ensureAnonymousToken()
+                let token = try await tokens.ensureBackendToken()
                 engine.forceReconnect(appToken: token.raw)
                 try await engine.awaitConnected()
                 // Client attestation for the resumed flow: Execute() sets up
@@ -1620,9 +1620,15 @@ public final class SirosWallet: @unchecked Sendable {
 
     // MARK: - Engine connection
 
-    /// Connect engine using an anonymous token from the AS.
+    /// Connect engine using a backend token from the AS. The anonymous token
+    /// is scoped to `tac="rl"` for registry-style reads only - the engine
+    /// session needs `insert` for OID4VCI issuance, so it must use the
+    /// fully-scoped backend token, not the anonymous one
+    /// (go-wallet-backend#264 made the missing `insert` scope a hard
+    /// server-side rejection for `oid4vci` flow_start, not just a
+    /// documentation note).
     private func connectEngineWithToken(_ tokens: AuthTokens) async throws {
-        let token = try await tokens.ensureAnonymousToken()
+        let token = try await tokens.ensureBackendToken()
         if config.useWmpProtocol {
             try await connectViaWmp(appToken: token.raw)
         } else {
@@ -1908,7 +1914,7 @@ public final class SirosWallet: @unchecked Sendable {
             guard let tokens = self?.authTokens else {
                 throw SirosError.wallet(message: "Not connected")
             }
-            return try await tokens.ensureAnonymousToken().raw
+            return try await tokens.ensureBackendToken().raw
         }
         try await engine.awaitConnected()
 
