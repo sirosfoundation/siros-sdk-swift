@@ -12,6 +12,13 @@ public struct Vctm: Codable, Sendable, Equatable {
     public let extends: String?
     public let schemaUri: String?
 
+    /// Minimum key-storage assurance tier a WSCD plugin must meet before the
+    /// wallet generates issuance keys for this credential type (ISO 18045
+    /// vocabulary: `"iso_18045_basic"` / `"iso_18045_moderate"` /
+    /// `"iso_18045_high"`, ascending). `nil` when the issuer declared no
+    /// requirement - treated as no gate by `WscdSelectionPolicy`.
+    public let requiredKeyStorage: String?
+
     public init(
         vct: String,
         name: String? = nil,
@@ -19,7 +26,8 @@ public struct Vctm: Codable, Sendable, Equatable {
         display: [VctmDisplay]? = nil,
         claims: [VctmClaim]? = nil,
         extends: String? = nil,
-        schemaUri: String? = nil
+        schemaUri: String? = nil,
+        requiredKeyStorage: String? = nil
     ) {
         self.vct = vct
         self.name = name
@@ -28,11 +36,13 @@ public struct Vctm: Codable, Sendable, Equatable {
         self.claims = claims
         self.extends = extends
         self.schemaUri = schemaUri
+        self.requiredKeyStorage = requiredKeyStorage
     }
 
     enum CodingKeys: String, CodingKey {
         case vct, name, description, display, claims, extends
         case schemaUri = "schema_uri"
+        case requiredKeyStorage = "attestation_los"
     }
 }
 

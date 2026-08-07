@@ -51,6 +51,18 @@ final class WalletViewModel: ObservableObject {
     }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
+    /// PEM-encoded P-256 R2PS SERVER public key, for the R2PS message
+    /// envelope's JWE encryption (`R2psConfig.serverPublicKeyPem` - see its
+    /// doc comment: this must be the server's key, never the client's own).
+    /// No real R2PS dev server key is available to hardcode in this sample
+    /// app's current dev configuration (unlike `r2psServerUrl`, there's no
+    /// established dev endpoint here to fetch one from) - defaults to empty
+    /// so `buildWscdSigner`'s R2PS registration fails loudly (caught,
+    /// logged, and skipped - the existing best-effort path) instead of
+    /// silently substituting the wrong key. A dev wiring up a real R2PS
+    /// server should paste its actual public key here (or via the
+    /// "R2PS Server Public Key" field in `WscaDeveloperView`).
+    @Published var r2psServerPublicKeyPem: String = ""
     /// Core wallet policy (not a UI-only preference like the toggles above) -
     /// persisted here, but enforced by `SirosWallet` itself (see
     /// `SirosWallet.credentialConsumptionPolicy`'s doc comment). Applied to
@@ -60,6 +72,36 @@ final class WalletViewModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(credentialConsumptionPolicy.rawValue, forKey: "siros_credential_consumption_policy")
             wallet?.credentialConsumptionPolicy = credentialConsumptionPolicy
+        }
+    }
+
+    /// Dev/host-app config for `WscdSelectionPolicy`'s multi-plugin
+    /// selection (`WalletConfig.availableKeystores`) - gated behind an
+    /// explicit developer toggle (`WscaDeveloperView`'s "WSCD Selection
+    /// Policy" section) rather than always building a `KeystoreManager` for
+    /// every known plugin ID: a plain single-plugin run only ever needs
+    /// `selectedPluginId`'s one plugin, so constructing the others
+    /// unconditionally would be pure overhead for a feature most runs never
+    /// exercise. Requires a fresh `rebuildWalletIfNeeded()` to take effect
+    /// (like `selectedPluginId`/`r2psServerUrl` above), so it's read-only
+    /// dev config, not something toggled mid-session.
+    @Published var wscdMultiPluginEnabled: Bool {
+        didSet { UserDefaults.standard.set(wscdMultiPluginEnabled, forKey: "siros_wscd_multi_plugin_enabled") }
+    }
+
+    /// Host-app-supplied `WalletConfig.defaultWscdMapping` - dev config
+    /// (`WscaDeveloperView`'s "WSCD Selection Policy" section), not an
+    /// end-user Settings toggle, since it's a shortcut for an integrator
+    /// that already knows the right plugin for a given (issuer,
+    /// credentialType) pair to skip the `RequestWscdChoice` prompt entirely
+    /// - not a preference an end user would ever set for themselves. Keyed
+    /// the same way the SDK does (`"\(issuer)|\(credentialType)"`, see
+    /// `WscdSelectionPolicy.tofuKey`).
+    @Published var wscdDefaultMapping: [String: String] {
+        didSet {
+            guard let data = try? JSONEncoder().encode(wscdDefaultMapping),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            UserDefaults.standard.set(json, forKey: "siros_wscd_default_mapping_json")
         }
     }
 
@@ -87,6 +129,11 @@ final class WalletViewModel: ObservableObject {
     @Published var showProximityEngagement = false
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
+    /// Non-nil while a `RequestWscdChoice` prompt (see `requestWscdChoice`)
+    /// is awaiting the user's answer - drives `WscdChoiceSheet` via
+    /// `.sheet(item:)` in `ContentView`, mirroring `pendingPresentation`'s
+    /// pattern above.
+    @Published var pendingWscdChoice: PendingWscdChoice?
 
     /// Set the instant a QR-scanned (or pasted/deep-linked) offer/request URI
     /// is classified and handed off to the SDK's issuance/presentation start
@@ -121,6 +168,21 @@ final class WalletViewModel: ObservableObject {
     @Published var enrollmentInProgress = false
     @Published var wscdKeys: [SignerKeyInfo] = []
     @Published var wscdKeySecurityProps: [String: SignerSecurityProperties] = [:]
+    /// Snapshot of `SirosWallet.wscdTofuMapping`, refreshed on demand
+    /// (`refreshWscdTofuMapping()`) - the SDK doesn't publish TOFU changes
+    /// as wallet-state stream events (they're a side effect of credential
+    /// issuance, not a first-class state transition), so this is an
+    /// imperative refresh like `listPasskeysForUI()`/`wscdKeys` rather than
+    /// always-live.
+    @Published var wscdTofuMappingSnapshot: [String: String] = [:]
+    /// Snapshot of `SirosWallet.wscdUserOverrides` - deliberate per-(issuer,
+    /// credentialType) user preferences, distinct from the TOFU snapshot
+    /// above (see `WscdRememberScope`'s doc comment). Refreshed the same
+    /// imperative way.
+    @Published var wscdUserOverridesSnapshot: [String: String] = [:]
+    /// Snapshot of `SirosWallet.wscdGlobalOverride` - the single global user
+    /// preference, or `nil` for "no preference."
+    @Published var wscdGlobalOverrideSnapshot: String?
 
     // MARK: - Loading / error
 
@@ -159,6 +221,9 @@ final class WalletViewModel: ObservableObject {
     private var wscdSigner: UniFFISigner?
     #endif
     private var lifecycleContextId: String?
+    /// The continuation box backing the CURRENTLY shown `pendingWscdChoice`,
+    /// if any - see `requestWscdChoice`'s doc comment.
+    private var wscdChoiceContinuationBox: WscdChoiceContinuationBox?
 
     init() {
         let defaults = UserDefaults.standard
@@ -192,6 +257,10 @@ final class WalletViewModel: ObservableObject {
         self.showDiagnosticMessages = defaults.object(forKey: "siros_show_diagnostic_messages") as? Bool ?? false
         self.credentialConsumptionPolicy = defaults.string(forKey: "siros_credential_consumption_policy")
             .flatMap { CredentialConsumptionPolicy(rawValue: $0) } ?? .neverConsume
+        self.wscdMultiPluginEnabled = defaults.bool(forKey: "siros_wscd_multi_plugin_enabled")
+        self.wscdDefaultMapping = defaults.string(forKey: "siros_wscd_default_mapping_json")
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
     }
 
     // MARK: - Public actions
@@ -402,6 +471,129 @@ final class WalletViewModel: ObservableObject {
             }
         }
         #endif
+    }
+
+    // MARK: - WSCD selection policy (TOFU mapping + default mapping)
+
+    /// Refreshes `wscdTofuMappingSnapshot` from `SirosWallet.wscdTofuMapping`
+    /// - call on appear, like `listPasskeysForUI()`.
+    func refreshWscdTofuMapping() {
+        wscdTofuMappingSnapshot = wallet?.wscdTofuMapping ?? [:]
+    }
+
+    /// Clears one persisted WSCD TOFU entry - `key` must be exactly one of
+    /// `wscdTofuMappingSnapshot`'s keys.
+    func clearWscdTofuMapping(forKey key: String) {
+        wallet?.clearWscdTofuMapping(forKey: key)
+        refreshWscdTofuMapping()
+    }
+
+    /// Clears every persisted WSCD TOFU entry.
+    func clearAllWscdTofuMappings() {
+        wallet?.clearAllWscdTofuMappings()
+        refreshWscdTofuMapping()
+    }
+
+    // MARK: - WSCD user overrides (explicit preferences, distinct from TOFU)
+
+    /// Refreshes `wscdUserOverridesSnapshot`/`wscdGlobalOverrideSnapshot`
+    /// from the SDK - call on appear, like `refreshWscdTofuMapping()`.
+    func refreshWscdUserOverrides() {
+        wscdUserOverridesSnapshot = wallet?.wscdUserOverrides ?? [:]
+        wscdGlobalOverrideSnapshot = wallet?.wscdGlobalOverride
+    }
+
+    /// Sets (or overwrites) an explicit per-issuer WSCD preference from
+    /// Settings - outranks TOFU and the global override for this exact pair.
+    func setWscdUserOverride(issuer: String, credentialType: String, pluginId: String) {
+        wallet?.setWscdUserOverride(issuer: issuer, credentialType: credentialType, pluginId: pluginId)
+        refreshWscdUserOverrides()
+    }
+
+    /// Clears one per-issuer WSCD preference. Deliberately takes `issuer`/
+    /// `credentialType` separately rather than one of
+    /// `wscdUserOverridesSnapshot`'s combined `"issuer|credentialType"` keys
+    /// - either half could itself contain the `"|"` separator, so there's
+    /// no unambiguous way to split a combined key back into its parts (see
+    /// `WscdSelectionPolicy.clearUserOverride`'s equivalent signature).
+    func clearWscdUserOverride(issuer: String, credentialType: String) {
+        wallet?.clearWscdUserOverride(issuer: issuer, credentialType: credentialType)
+        refreshWscdUserOverrides()
+    }
+
+    /// Sets (or overwrites) the single global WSCD preference from Settings.
+    func setWscdGlobalOverride(pluginId: String) {
+        wallet?.setWscdGlobalOverride(pluginId: pluginId)
+        refreshWscdUserOverrides()
+    }
+
+    /// Clears the global WSCD preference ("No preference").
+    func clearWscdGlobalOverride() {
+        wallet?.clearWscdGlobalOverride()
+        refreshWscdUserOverrides()
+    }
+
+    /// Adds/overwrites one `WalletConfig.defaultWscdMapping` entry - dev
+    /// config (`WscaDeveloperView`), not persisted TOFU state. Requires a
+    /// fresh `rebuildWalletIfNeeded()` (e.g. next login) to actually take
+    /// effect, same as `selectedPluginId`.
+    func addWscdDefaultMapping(issuer: String, credentialType: String, pluginId: String) {
+        guard !issuer.isEmpty, !credentialType.isEmpty, !pluginId.isEmpty else { return }
+        wscdDefaultMapping["\(issuer)|\(credentialType)"] = pluginId
+    }
+
+    /// Removes one `WalletConfig.defaultWscdMapping` entry - `key` must be
+    /// exactly one of `wscdDefaultMapping`'s keys.
+    func removeWscdDefaultMapping(key: String) {
+        wscdDefaultMapping.removeValue(forKey: key)
+    }
+
+    /// Bridges `RequestWscdChoice`'s async callback (see `WalletConfig.requestWscdChoice`)
+    /// to `WscdChoiceSheet`: suspends the caller until the user taps a
+    /// plugin or Cancel. Mirrors `ProximityEngagementScreen.requestConsent`'s
+    /// identical bridge for `RequestProximityConsent`.
+    nonisolated func requestWscdChoice(
+        issuer: String,
+        credentialType: String,
+        eligiblePluginIds: [String]
+    ) async -> WscdChoiceResult {
+        await withCheckedContinuation { (continuation: CheckedContinuation<WscdChoiceResult, Never>) in
+            let box = WscdChoiceContinuationBox()
+            box.set(continuation)
+            Task { @MainActor in
+                self.wscdChoiceContinuationBox = box
+                self.pendingWscdChoice = PendingWscdChoice(
+                    issuer: issuer,
+                    credentialType: credentialType,
+                    eligiblePluginIds: eligiblePluginIds,
+                    respond: { chosenPluginId, rememberScope in
+                        // Triggers `.sheet(item:onDismiss:)`'s onDismiss too
+                        // (setting the bound item to nil dismisses the
+                        // sheet) - that's fine: `box.resumeOnce` below
+                        // already wins the race, so onDismiss's own
+                        // `dismissWscdChoice` call is a harmless no-op by
+                        // the time it runs. See `ProximityEngagementScreen
+                        // .requestConsent`'s identical comment.
+                        self.pendingWscdChoice = nil
+                        let result = chosenPluginId.map { WscdChoiceResult.chosen(pluginId: $0, rememberScope: rememberScope) } ?? .cancelled
+                        box.resumeOnce(result)
+                    }
+                )
+            }
+        }
+    }
+
+    /// Resolves `pendingWscdChoice` as `.cancelled` if the sheet is
+    /// dismissed without the user tapping a plugin or Cancel (e.g. swiping
+    /// it away) - the genuine Swift equivalent of the gap
+    /// `ProximityEngagementScreen`'s own `onDismiss` handles for
+    /// `RequestProximityConsent`; without it this continuation would
+    /// otherwise hang forever. `resumeOnce` is a no-op if the user already
+    /// tapped a plugin/Cancel (`respond` already resumed it).
+    func dismissWscdChoice() {
+        pendingWscdChoice = nil
+        wscdChoiceContinuationBox?.resumeOnce(.cancelled)
+        wscdChoiceContinuationBox = nil
     }
 
     /// Start issuance from a credential offer URI (for testing/automation).
@@ -740,14 +932,52 @@ final class WalletViewModel: ObservableObject {
         wallet?.completeAuthorization(flowId: flowId, code: code, state: state)
     }
 
-    private func rebuildWalletIfNeeded() {
-        let config = WalletConfig(
-            backendUrl: backendUrl,
-            tenantId: tenantId,
-            redirectUri: "\(redirectScheme)://callback",
-            useWmpProtocol: useWmpProtocol
-        )
+    #if canImport(siros_wscd_managerFFI)
+    /// Builds a WSCD-backed `Signer` for a single plugin ID, using exactly
+    /// the `FfiWscdConfig`/`UniFFISigner`/R2PS-registration construction
+    /// `rebuildWalletIfNeeded` always used for its one `selectedPluginId`
+    /// signer - factored out here so `WalletConfig.availableKeystores` can
+    /// reuse it once per known plugin ID instead of duplicating it, per
+    /// `WscdSelectionPolicy`'s multi-plugin selection feature.
+    private func buildWscdSigner(forPlugin pluginId: String) -> UniFFISigner? {
+        do {
+            let wscdConfig = FfiWscdConfig(defaultPlugin: pluginId)
+            let signer = try UniFFISigner(config: wscdConfig)
 
+            if pluginId == "r2ps" {
+                // Ephemeral P-256 key pair for the R2PS message envelope
+                // (JWS/JWE identity) - required regardless of auth mode.
+                let clientKey = P256.Signing.PrivateKey()
+                // `serverPublicKeyPem` MUST be the R2PS SERVER's own public
+                // key (for JWE envelope encryption TO the server) - never
+                // the client's own key, which would break the security
+                // model entirely (encrypting to a key the client itself
+                // holds the private half of defeats the point). See
+                // `r2psServerPublicKeyPem`'s doc comment: no real dev server
+                // key is available to hardcode here, so this is left as an
+                // explicit dev-configurable placeholder rather than
+                // silently substituting `clientKey.publicKey` again.
+                let r2psConfig = R2psConfig(
+                    serverUrl: r2psServerUrl,
+                    clientId: "sample-app",
+                    context: "wallet",
+                    clientKeyPem: clientKey.pemRepresentation,
+                    serverPublicKeyPem: r2psServerPublicKeyPem,
+                    authMode: .opaque
+                )
+                let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
+                try signer.registerR2psPlugin(config: r2psConfig, transport: transport)
+            }
+
+            return signer
+        } catch {
+            print("WSCD setup failed for plugin \(pluginId): \(error). Skipping.")
+            return nil
+        }
+    }
+    #endif
+
+    private func rebuildWalletIfNeeded() {
         // Rebuild if wallet doesn't exist or is in Disconnected/Error state
         let needsRebuild: Bool
         if wallet == nil {
@@ -767,35 +997,84 @@ final class WalletViewModel: ObservableObject {
 
         // Build WSCD-backed keystore with selected plugin
         var keystore: KeystoreManager?
+        var availableKeystores: [String: KeystoreManager] = [:]
         #if canImport(siros_wscd_managerFFI)
-        do {
-            let wscdConfig = FfiWscdConfig(defaultPlugin: selectedPluginId)
-            let signer = try UniFFISigner(config: wscdConfig)
+        // Only construct a signer for every known plugin ID when the dev has
+        // explicitly opted into multi-plugin selection
+        // (`wscdMultiPluginEnabled`, see its doc comment) - otherwise (the
+        // common case) this must build exactly the one `selectedPluginId`
+        // signer, matching this method's behavior before `availableKeystores`
+        // existed. "r2ps" additionally needs a reachable server URL to
+        // register successfully, so it's only attempted when the dev has
+        // separately turned it on (matches its existing gating below).
+        let pluginIdsToTry: [String]
+        if wscdMultiPluginEnabled {
+            pluginIdsToTry = selectedPluginId == "r2ps" || r2psEnabled
+                ? Array(WscdPluginCapabilities.pluginTiers.keys)
+                : WscdPluginCapabilities.pluginTiers.keys.filter { $0 != "r2ps" }
+        } else {
+            pluginIdsToTry = [selectedPluginId]
+        }
 
-            // Register R2PS plugin if selected
-            if selectedPluginId == "r2ps" || r2psEnabled {
-                // Ephemeral P-256 key pair for the R2PS message envelope
-                // (JWS/JWE identity) - required regardless of auth mode.
-                let clientKey = P256.Signing.PrivateKey()
-                let r2psConfig = R2psConfig(
-                    serverUrl: r2psServerUrl,
-                    clientId: "sample-app",
-                    context: "wallet",
-                    clientKeyPem: clientKey.pemRepresentation,
-                    serverPublicKeyPem: clientKey.publicKey.pemRepresentation,
-                    authMode: .opaque
-                )
-                let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
-                try signer.registerR2psPlugin(config: r2psConfig, transport: transport)
+        for pluginId in pluginIdsToTry {
+            guard let signer = buildWscdSigner(forPlugin: pluginId) else { continue }
+            // Exactly one `WscdKeystoreAdapter` per signer, reused as both
+            // the main `keystore` (for `selectedPluginId`) and its
+            // `availableKeystores` entry - never two separate adapter
+            // instances wrapping the same underlying signer, which would
+            // let their independent `_isUnlocked`/credentials state drift
+            // apart if `WscdSelectionPolicy.resolve` ever picked
+            // `selectedPluginId` back out of `availableKeystores` (its doc
+            // comment treats a `nil` result, not a same-as-default result,
+            // as "no change" - a same-ID resolution is possible whenever
+            // more than one plugin is eligible and the user/TOFU/default
+            // mapping happens to pick the one that's already the default).
+            let adapter = WscdKeystoreAdapter(signer: signer)
+            if pluginId == selectedPluginId {
+                self.wscdSigner = signer
+                keystore = adapter
             }
-
-            self.wscdSigner = signer
-            keystore = WscdKeystoreAdapter(signer: signer)
-        } catch {
-            print("WSCD setup failed: \(error). Falling back to default keystore.")
-            keystore = nil
+            // Only populate `availableKeystores` beyond the selected plugin
+            // when the dev has explicitly opted into multi-plugin selection
+            // (`WscaDeveloperView`'s toggle) - see `wscdMultiPluginEnabled`'s
+            // doc comment for why this isn't unconditional.
+            if pluginId == selectedPluginId || wscdMultiPluginEnabled {
+                availableKeystores[pluginId] = adapter
+            }
         }
         #endif
+
+        // Broken out into separately-typed statements rather than inlined
+        // directly in the `WalletConfig(...)` call below - the combination
+        // of ternaries plus an inline `@Sendable` async closure literal in
+        // one expression hit a real Swift type-checker limit ("failed to
+        // produce diagnostic for expression") when compiled via Xcode.
+        let resolvedAvailableKeystores: [String: KeystoreManager]? =
+            (wscdMultiPluginEnabled && !availableKeystores.isEmpty) ? availableKeystores : nil
+        let resolvedDefaultWscdMapping: [String: String]? =
+            (wscdMultiPluginEnabled && !wscdDefaultMapping.isEmpty) ? wscdDefaultMapping : nil
+        let resolvedRequestWscdChoice: RequestWscdChoice?
+        if wscdMultiPluginEnabled {
+            resolvedRequestWscdChoice = { [weak self] issuer, credentialType, eligiblePluginIds in
+                await self?.requestWscdChoice(
+                    issuer: issuer,
+                    credentialType: credentialType,
+                    eligiblePluginIds: eligiblePluginIds
+                ) ?? .cancelled
+            }
+        } else {
+            resolvedRequestWscdChoice = nil
+        }
+
+        let config = WalletConfig(
+            backendUrl: backendUrl,
+            tenantId: tenantId,
+            redirectUri: "\(redirectScheme)://callback",
+            useWmpProtocol: useWmpProtocol,
+            availableKeystores: resolvedAvailableKeystores,
+            defaultWscdMapping: resolvedDefaultWscdMapping,
+            requestWscdChoice: resolvedRequestWscdChoice
+        )
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider
         // (Face ID/Touch ID/roaming security keys) and is used on every

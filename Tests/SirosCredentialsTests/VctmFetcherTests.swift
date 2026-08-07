@@ -47,6 +47,27 @@ final class VctmFetcherTests: XCTestCase {
         XCTAssertEqual(vctm?.claims?.first?.mandatory, true)
     }
 
+    func testParseVctmDefaultsRequiredKeyStorageToNilWhenAbsent() {
+        let fetcher = VctmFetcher()
+        let vctm = fetcher.parseVctm(sampleVctmJson)
+
+        XCTAssertNotNil(vctm)
+        XCTAssertNil(vctm?.requiredKeyStorage, "absent attestation_los must mean no requirement declared")
+    }
+
+    func testParseVctmParsesAttestationLosAsRequiredKeyStorage() {
+        let json = """
+        {
+          "vct": "urn:eu:pid:1",
+          "attestation_los": "iso_18045_high"
+        }
+        """
+        let fetcher = VctmFetcher()
+        let vctm = fetcher.parseVctm(json)
+
+        XCTAssertEqual(vctm?.requiredKeyStorage, "iso_18045_high")
+    }
+
     func testParseVctmReturnsNilForInvalidJson() {
         let fetcher = VctmFetcher()
         XCTAssertNil(fetcher.parseVctm("not json"))

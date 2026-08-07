@@ -15,6 +15,18 @@ final class WalletConfigTests: XCTestCase {
         XCTAssertNil(config.urlRewriter)
         XCTAssertTrue(config.requireUserAuth)
         XCTAssertFalse(config.useWmpProtocol)
+        XCTAssertNil(config.availableKeystores, "backward compatible: no multi-plugin selection unless opted in")
+        XCTAssertNil(config.defaultWscdMapping)
+        XCTAssertNil(config.requestWscdChoice)
+    }
+
+    func testWscdSelectionFieldsCanBeSet() {
+        var config = WalletConfig(backendUrl: "https://wallet.example.com")
+        config.defaultWscdMapping = ["https://issuer.example.com|urn:example:pid": "fido2"]
+        config.requestWscdChoice = { _, _, eligible in .chosen(pluginId: eligible.first ?? "softkey", rememberScope: .thisIssuer) }
+
+        XCTAssertEqual(config.defaultWscdMapping?["https://issuer.example.com|urn:example:pid"], "fido2")
+        XCTAssertNotNil(config.requestWscdChoice)
     }
 
     func testCustomConfig() {

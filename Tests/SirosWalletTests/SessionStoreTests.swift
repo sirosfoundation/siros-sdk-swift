@@ -117,4 +117,50 @@ final class SessionStoreTests: XCTestCase {
         store.clearAll()
         XCTAssertNil(store.appAttestKeyId, "clearAll() (factory reset) must delete appAttestKeyId")
     }
+
+    /// `wscdTofuMappingJson` is a single JSON string blob (matching
+    /// `privateDataJwe`'s as-string-blob precedent), account-scoped like
+    /// most other properties - unlike `appAttestKeyId`, it must NOT survive
+    /// an account switch or `clearAccount()`.
+    func testWscdTofuMappingJsonIsAccountScoped() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "account-a"
+        store.wscdTofuMappingJson = "{\"issuer|type\":\"fido2\"}"
+        XCTAssertEqual(store.wscdTofuMappingJson, "{\"issuer|type\":\"fido2\"}")
+
+        store.activeAccountId = "account-b"
+        XCTAssertNil(store.wscdTofuMappingJson, "must be account-scoped, unlike appAttestKeyId")
+
+        store.activeAccountId = "account-a"
+        XCTAssertEqual(store.wscdTofuMappingJson, "{\"issuer|type\":\"fido2\"}")
+
+        store.clearAccount()
+        XCTAssertNil(store.wscdTofuMappingJson, "clearAccount() must clear the TOFU mapping like other account-scoped data")
+    }
+
+    /// `wscdUserOverrideMappingJson`/`wscdGlobalOverridePluginId` are new
+    /// properties for `WscdSelectionPolicy`'s explicit user-preference
+    /// feature - same account-scoping behavior as `wscdTofuMappingJson`
+    /// above (a deliberate per-account preference, not an install-wide one
+    /// like `appAttestKeyId`).
+    func testWscdUserOverridePropertiesAreAccountScoped() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "account-a"
+        store.wscdUserOverrideMappingJson = "{\"issuer|type\":\"fido2\"}"
+        store.wscdGlobalOverridePluginId = "r2ps"
+        XCTAssertEqual(store.wscdUserOverrideMappingJson, "{\"issuer|type\":\"fido2\"}")
+        XCTAssertEqual(store.wscdGlobalOverridePluginId, "r2ps")
+
+        store.activeAccountId = "account-b"
+        XCTAssertNil(store.wscdUserOverrideMappingJson, "must be account-scoped")
+        XCTAssertNil(store.wscdGlobalOverridePluginId, "must be account-scoped")
+
+        store.activeAccountId = "account-a"
+        XCTAssertEqual(store.wscdUserOverrideMappingJson, "{\"issuer|type\":\"fido2\"}")
+        XCTAssertEqual(store.wscdGlobalOverridePluginId, "r2ps")
+
+        store.clearAccount()
+        XCTAssertNil(store.wscdUserOverrideMappingJson, "clearAccount() must clear the per-issuer override mapping")
+        XCTAssertNil(store.wscdGlobalOverridePluginId, "clearAccount() must clear the global override")
+    }
 }

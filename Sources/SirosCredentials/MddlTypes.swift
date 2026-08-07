@@ -13,16 +13,29 @@ public struct MddlSchema: Codable, Sendable, Equatable {
     public let display: [MddlDisplay]?
     public let claims: [String: [String: MddlClaimMeta]]?
 
+    /// Minimum key-storage assurance tier a WSCD plugin must meet before the
+    /// wallet generates issuance keys for this credential type - the mdoc
+    /// analogue of `Vctm.requiredKeyStorage`; see its doc comment for the
+    /// ISO 18045 vocabulary and `nil` semantics.
+    public let requiredKeyStorage: String?
+
     public init(
         format: String,
         doctype: String,
         display: [MddlDisplay]? = nil,
-        claims: [String: [String: MddlClaimMeta]]? = nil
+        claims: [String: [String: MddlClaimMeta]]? = nil,
+        requiredKeyStorage: String? = nil
     ) {
         self.format = format
         self.doctype = doctype
         self.display = display
         self.claims = claims
+        self.requiredKeyStorage = requiredKeyStorage
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case format, doctype, display, claims
+        case requiredKeyStorage = "attestation_los"
     }
 }
 

@@ -24,6 +24,33 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     var privateDataJwe: String? { get set }
     var privateDataEtag: String? { get set }
 
+    /// TOFU (trust-on-first-use) `(issuer, credentialType) -> pluginId`
+    /// mapping for `WscdSelectionPolicy`, serialized as a single JSON
+    /// string blob (`[String: String]`, matching `privateDataJwe`'s
+    /// as-string-blob precedent rather than one Keychain/store item per
+    /// mapping entry). Account-scoped like every other property here (not
+    /// install-scoped like `appAttestKeyId`) - a WSCD plugin choice for a
+    /// given issuer/credential type is a per-account decision.
+    var wscdTofuMappingJson: String? { get set }
+
+    /// Per-(issuer, credentialType) EXPLICIT user preference for
+    /// `WscdSelectionPolicy`, serialized the same way as
+    /// `wscdTofuMappingJson` (`[String: String]`, same key shape, own JSON
+    /// blob). Deliberately a separate property from TOFU rather than folded
+    /// into it: TOFU is the SDK's own auto-remembered outcome of an
+    /// otherwise-ambiguous resolution, whereas this is a user's own
+    /// deliberate "always use X for this issuer" choice, which outranks TOFU
+    /// and must survive independently of it (e.g. clearing TOFU must not
+    /// clear this, and vice versa).
+    var wscdUserOverrideMappingJson: String? { get set }
+
+    /// The single global user preference for `WscdSelectionPolicy` - one
+    /// plugin ID applying across every (issuer, credentialType) pair that
+    /// doesn't already have its own more-specific
+    /// `wscdUserOverrideMappingJson` entry. A simple scalar, unlike the two
+    /// JSON-blob mapping properties above, since there is only ever one.
+    var wscdGlobalOverridePluginId: String? { get set }
+
     /// The keystore key ID used as this wallet installation's persistent
     /// OAuth Client Attestation instance key (draft-ietf-oauth-attestation-based-client-auth-04
     /// §3.1) - generated once, reused for the account's lifetime. The
@@ -90,6 +117,9 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public var credentialId: String? { get { get("credentialId") } set { set("credentialId", newValue) } }
     public var privateDataJwe: String? { get { get("privateDataJwe") } set { set("privateDataJwe", newValue) } }
     public var privateDataEtag: String? { get { get("privateDataEtag") } set { set("privateDataEtag", newValue) } }
+    public var wscdTofuMappingJson: String? { get { get("wscdTofuMappingJson") } set { set("wscdTofuMappingJson", newValue) } }
+    public var wscdUserOverrideMappingJson: String? { get { get("wscdUserOverrideMappingJson") } set { set("wscdUserOverrideMappingJson", newValue) } }
+    public var wscdGlobalOverridePluginId: String? { get { get("wscdGlobalOverridePluginId") } set { set("wscdGlobalOverridePluginId", newValue) } }
     public var instanceKeyId: String? { get { get("instanceKeyId") } set { set("instanceKeyId", newValue) } }
 
     // Deliberately NOT account-scoped (see the protocol doc comment) - a

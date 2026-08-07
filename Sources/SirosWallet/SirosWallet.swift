@@ -151,18 +151,88 @@ public final class SirosWallet: @unchecked Sendable {
         return WalletCapabilities(nativeAttestation: nativeAttestation, wscd: wscdManager != nil)
     }
 
+    /// Read-only snapshot of the persisted WSCD TOFU mapping
+    /// (`"issuer|credentialType" -> pluginId`) - lets a host app render/
+    /// manage it in its own UI (e.g. a settings screen). See
+    /// `WscdSelectionPolicy.currentTofuMapping`'s doc comment. Always empty
+    /// when `config.availableKeystores` was never set, since
+    /// `WscdSelectionPolicy.resolve` never runs (and so never persists
+    /// anything) in that case.
+    public var wscdTofuMapping: [String: String] { wscdSelectionPolicy.currentTofuMapping() }
+
+    /// Clears one persisted WSCD TOFU entry - `key` must be exactly one of
+    /// `wscdTofuMapping`'s keys. The corresponding (issuer, credentialType)
+    /// pair re-resolves (auto-pick/prompt) on its next matching credential
+    /// issuance instead of reusing the old choice.
+    public func clearWscdTofuMapping(forKey key: String) {
+        wscdSelectionPolicy.clearTofuMapping(forKey: key)
+    }
+
+    /// Clears every persisted WSCD TOFU entry.
+    public func clearAllWscdTofuMappings() {
+        wscdSelectionPolicy.clearAllTofuMappings()
+    }
+
+    /// Read-only snapshot of every persisted per-(issuer, credentialType)
+    /// user override (`"issuer|credentialType" -> pluginId`) - an explicit,
+    /// deliberate user preference, distinct from `wscdTofuMapping` (see
+    /// `WscdRememberScope`'s doc comment). Mirrors `wscdTofuMapping`'s
+    /// pattern exactly.
+    public var wscdUserOverrides: [String: String] { wscdSelectionPolicy.currentUserOverrides() }
+
+    /// Sets (or overwrites) an explicit per-(issuer, credentialType) user
+    /// preference - outranks TOFU and the global override for this exact
+    /// pair on the next matching resolution (see `WscdSelectionPolicy.resolve`).
+    public func setWscdUserOverride(issuer: String, credentialType: String, pluginId: String) {
+        wscdSelectionPolicy.setUserOverride(issuer: issuer, credentialType: credentialType, pluginId: pluginId)
+    }
+
+    /// Clears one persisted per-issuer user override, if present.
+    public func clearWscdUserOverride(issuer: String, credentialType: String) {
+        wscdSelectionPolicy.clearUserOverride(issuer: issuer, credentialType: credentialType)
+    }
+
+    /// The currently persisted global user override (applies to every
+    /// issuer/credential type without a more specific per-issuer override),
+    /// if any.
+    public var wscdGlobalOverride: String? { wscdSelectionPolicy.currentGlobalUserOverride() }
+
+    /// Sets (or overwrites) the single global user override.
+    public func setWscdGlobalOverride(pluginId: String) {
+        wscdSelectionPolicy.setGlobalUserOverride(pluginId: pluginId)
+    }
+
+    /// Clears the global user override, if set.
+    public func clearWscdGlobalOverride() {
+        wscdSelectionPolicy.clearGlobalUserOverride()
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
     private let accountRegistry: AccountRegistry
 
-    private var apiClient: BackendApiClient?
+    // Internal (not private) so `@testable import` can seed a fake client
+    // directly, matching this file's existing precedent for other testable
+    // internals (e.g. `cachedWia`, `currentWalletInstanceId()`).
+    var apiClient: BackendApiClient?
     var engineSession: WalletEngineSession?
     /// Transport-independent notifier for OID4VCI §10 events.
     var credentialNotifier: CredentialNotifier?
     weak var eventListener: WalletEventListener?
     var activeOffer: CredentialOffer?
     var activeVctm: Vctm?
+    /// The mdoc analogue of `activeVctm` - the currently-in-flight
+    /// issuance's `MddlSchema`, when the credential being issued is
+    /// `mso_mdoc` rather than SD-JWT. Populated the same way `activeVctm`
+    /// is: fetched (best-effort - `nil` on any failure, including a 404
+    /// because the offer is actually SD-JWT and has no MDDL schema) via
+    /// `mddlSchemaFetcher` at the same call sites `activeVctm` is.
+    var activeMddlSchema: MddlSchema?
+    /// Resolves which registered WSCD plugin should back credential-
+    /// issuance key generation - a no-op unless `config.availableKeystores`
+    /// is set. See `WscdSelectionPolicy`'s doc comment.
+    private let wscdSelectionPolicy: WscdSelectionPolicy
     /// Per-instance device key IDs from the most recent backend Key
     /// Attestation (`attested_keys`, in submission order) - a batch issuer
     /// binds credential `i` in the eventual response to `attested_keys[i]`
@@ -310,6 +380,12 @@ public final class SirosWallet: @unchecked Sendable {
             }
         }
         self.mddlSchemaFetcher = MddlSchemaFetcher()
+
+        self.wscdSelectionPolicy = WscdSelectionPolicy(
+            sessionStore: sessionStore,
+            defaultMapping: config.defaultWscdMapping,
+            requestChoice: config.requestWscdChoice
+        )
 
         // Set up new AS-based auth
         let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
@@ -1192,12 +1268,20 @@ public final class SirosWallet: @unchecked Sendable {
         try await ensureEngineConnected(engine)
         lock.lock(); activeOffer = offer; lock.unlock()
 
-        // Try to fetch VCTM
-        lock.lock()
-        activeVctm = try? await vctmFetcher.fetch(
+        // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
+        // like `activeVctm`'s existing fetch: whichever one doesn't match
+        // this offer's actual format simply fails to decode and stays nil.
+        let vctm = try? await vctmFetcher.fetch(
             issuerUrl: offer.credentialIssuerIdentifier,
             scope: offer.credentialConfigurationId
         )
+        let mddlSchema = await mddlSchemaFetcher.fetch(
+            issuerUrl: offer.credentialIssuerIdentifier,
+            scope: offer.credentialConfigurationId
+        )
+        lock.lock()
+        activeVctm = vctm
+        activeMddlSchema = mddlSchema
         lock.unlock()
 
         var credOffer: [String: AnyCodable] = [
@@ -1246,7 +1330,11 @@ public final class SirosWallet: @unchecked Sendable {
                 issuerUrl: offer.credentialIssuerIdentifier,
                 scope: offer.credentialConfigurationId
             )
-            lock.lock(); activeVctm = vctm; lock.unlock()
+            let mddlSchema = await mddlSchemaFetcher.fetch(
+                issuerUrl: offer.credentialIssuerIdentifier,
+                scope: offer.credentialConfigurationId
+            )
+            lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
         }
         // Resolve OAuth Client Attestation once, independent of whether the
         // display-metadata resolution above succeeded - a client that can't
@@ -1713,14 +1801,20 @@ public final class SirosWallet: @unchecked Sendable {
     /// generated internally). See `activeAttestedKeyIds`'s doc comment for
     /// why this ordering matters for per-credential key selection at signing
     /// time.
-    private struct GeneratedProofData {
+    // Internal (not private) - see `requestBackendKeyAttestation`'s doc
+    // comment on why that function itself is internal for testability; the
+    // fallback-keystore-bypass regression test needs to drive `generateProofs`
+    // directly, which needs this to be visible to `@testable import` too.
+    struct GeneratedProofData {
         var proofType: String
         var jwt: String?
         var attestation: String?
         var attestedKeyIds: [String]?
     }
 
-    private struct BackendAttestationResult {
+    // Internal (not private) - see `requestBackendKeyAttestation`'s doc
+    // comment on why that function itself is internal for testability.
+    struct BackendAttestationResult {
         var jwt: String
         var keyIds: [String]
     }
@@ -1729,7 +1823,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// transports so proof generation (including real backend Key Attestation
     /// with a self-signed fallback) behaves identically regardless of which
     /// transport carried the request.
-    private func generateProofs(
+    // Internal (not private) so `@testable import` can exercise the
+    // backend-attestation-fails-so-fall-back-to-self-signed path directly
+    // (see `SirosWalletWscdSelectionTests.testFallbackAfterFailedBackendAttestationUsesResolvedKeystoreNotDefault`),
+    // matching `requestBackendKeyAttestation`'s existing testability precedent.
+    func generateProofs(
         audience: String,
         nonce: String,
         count: Int,
@@ -1738,12 +1836,18 @@ public final class SirosWallet: @unchecked Sendable {
     ) async throws -> [GeneratedProofData] {
         let chosen = selectProofType(proofTypesSupported: proofTypesSupported, proofTypeHint: proofTypeHint)
         if chosen == "attestation" {
-            let backendAttestation = await requestBackendKeyAttestation(audience: audience, nonce: nonce, count: count)
+            let (backendAttestation, effectiveKeystore) = try await requestBackendKeyAttestation(audience: audience, nonce: nonce, count: count)
             let attestationJwt: String
             if let backendAttestation {
                 attestationJwt = backendAttestation.jwt
             } else {
-                attestationJwt = try await keystore.generateKeyAttestation(nonce: nonce, count: count)
+                // Must fall back on the SAME resolved keystore
+                // `requestBackendKeyAttestation` picked for this call (e.g.
+                // a `WscdSelectionPolicy`-resolved plugin), never
+                // unconditionally `self.keystore` - otherwise a resolved
+                // higher-tier plugin would be silently bypassed on fallback,
+                // generating a lower-tier self-signed attestation instead.
+                attestationJwt = try await effectiveKeystore.generateKeyAttestation(nonce: nonce, count: count)
             }
             return [GeneratedProofData(
                 proofType: "attestation",
@@ -1770,17 +1874,64 @@ public final class SirosWallet: @unchecked Sendable {
     /// the backend signs an attestation *over* them with its own,
     /// operator-provisioned x5c-chained key.
     ///
-    /// Returns nil (caller falls back to the self-signed path) when there's
-    /// no backend session, the keystore can't produce raw keypairs, or the
+    /// Returns a `nil` result (caller falls back to the self-signed path,
+    /// via the `keystore` also returned here - see below) when there's no
+    /// backend session, the keystore can't produce raw keypairs, or the
     /// backend doesn't support/expose the endpoint.
-    private func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async -> BackendAttestationResult? {
+    ///
+    /// - Returns: the attestation result (`nil` on any failure - see above),
+    ///   ALONGSIDE the `KeystoreManager` this call actually resolved and
+    ///   used for key generation (`self.keystore` unless
+    ///   `WscdSelectionPolicy` picked a different registered plugin for
+    ///   this credential type). The caller's self-signed fallback on a
+    ///   `nil` result must use THIS keystore, not `self.keystore` again -
+    ///   otherwise a resolved higher-tier plugin would be silently bypassed
+    ///   on fallback, generating a lower-tier self-signed attestation
+    ///   instead.
+    /// - Throws: `WscdSelectionError.noEligiblePlugin` or
+    ///   `.ambiguousChoiceNotMade` when `config.availableKeystores` is set
+    ///   but selection couldn't produce a plugin ID to use - unlike every
+    ///   other failure here, these must NOT be swallowed into a nil/
+    ///   self-signed fallback, since that fallback would just use an
+    ///   equally (or more) insufficient plugin (see `WscdSelectionPolicy`'s
+    ///   doc comment).
+    // Internal (not private) so `@testable import` can exercise the WSCD
+    // plugin-selection wiring directly (see `SirosWalletWscdSelectionTests`),
+    // matching this file's existing precedent for other testable internals.
+    func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async throws -> (result: BackendAttestationResult?, keystore: KeystoreManager) {
         lock.lock(); let client = apiClient; lock.unlock()
-        guard let client else { return nil }
+
+        // Pick which registered keystore backs this batch's key generation -
+        // a no-op (stays `self.keystore`) unless the host app opted in via
+        // `config.availableKeystores`. This can throw `noEligiblePlugin`/
+        // `.ambiguousChoiceNotMade`; that's allowed to propagate past this
+        // function's own catch-all below (see the doc comment above).
+        // Resolved BEFORE the `client` guard so a `nil` "no backend session"
+        // return still carries the correctly-resolved keystore for the
+        // caller's fallback, rather than always `self.keystore`.
+        var effectiveKeystore = keystore
+        if let availableKeystores = config.availableKeystores {
+            lock.lock()
+            let credentialType = activeVctm?.vct ?? activeMddlSchema?.doctype ?? activeOffer?.credentialConfigurationId ?? ""
+            let requiredTier = activeVctm?.requiredKeyStorage ?? activeMddlSchema?.requiredKeyStorage
+            lock.unlock()
+            if let pluginId = try await wscdSelectionPolicy.resolve(
+                issuer: audience,
+                credentialType: credentialType,
+                requiredTier: requiredTier,
+                availablePluginIds: Array(availableKeystores.keys)
+            ), let picked = availableKeystores[pluginId] {
+                effectiveKeystore = picked
+            }
+        }
+
+        guard let client else { return (nil, effectiveKeystore) }
+
         do {
-            let keypairs = try await keystore.generateKeypairs(count: count)
-            await registerFido2AttestationsForBatch(keypairs: keypairs, client: client)
+            let keypairs = try await effectiveKeystore.generateKeypairs(count: count)
+            await registerFido2AttestationsForBatch(keypairs: keypairs, client: client, keystore: effectiveKeystore)
             var secDict: [String: Any]?
-            if let keyId = keypairs.first?.keyId, let props = await keystore.securityProperties(keyId: keyId) {
+            if let keyId = keypairs.first?.keyId, let props = await effectiveKeystore.securityProperties(keyId: keyId) {
                 secDict = [
                     "key_storage": props.keyStorage,
                     "user_authentication": props.userAuthentication,
@@ -1799,9 +1950,9 @@ public final class SirosWallet: @unchecked Sendable {
             // mint credential i in the eventual batch response bound to
             // attested_keys[i], so this ordering IS the instanceId -> kid
             // mapping the credential-storage handler needs later.
-            return BackendAttestationResult(jwt: jwt, keyIds: keypairs.map { $0.keyId })
+            return (BackendAttestationResult(jwt: jwt, keyIds: keypairs.map { $0.keyId }), effectiveKeystore)
         } catch {
-            return nil
+            return (nil, effectiveKeystore)
         }
     }
 
@@ -1832,7 +1983,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// like `currentWalletInstanceId` - that gate is specifically about the
     /// KA security_properties clamp-lift, unrelated to this). No cached WIA
     /// means nothing to register against, so this is a no-op entirely.
-    private func registerFido2AttestationsForBatch(keypairs: [KeypairInfo], client: BackendApiClient) async {
+    /// - Parameter keystore: the keystore that actually generated
+    ///   `keypairs` - `requestBackendKeyAttestation` may have swapped in a
+    ///   registered plugin other than `self.keystore` for this batch (see
+    ///   `WscdSelectionPolicy`), so this must NOT assume `self.keystore`.
+    private func registerFido2AttestationsForBatch(keypairs: [KeypairInfo], client: BackendApiClient, keystore: KeystoreManager) async {
         let now = Int(Date().timeIntervalSince1970)
         lock.lock(); let wia = cachedWia; let expiresAt = cachedWiaExpiresAt; lock.unlock()
         guard let wia, expiresAt - now > 60,
