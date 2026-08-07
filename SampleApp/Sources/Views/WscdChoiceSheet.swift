@@ -16,8 +16,9 @@ struct PendingWscdChoice: Identifiable {
     let issuer: String
     let credentialType: String
     let eligiblePluginIds: [String]
-    /// Call with the chosen plugin ID to approve, or `nil` to cancel.
-    let respond: (String?) -> Void
+    /// Call with the chosen plugin ID + how long to remember it to approve,
+    /// or `nil` (scope is irrelevant for a cancel) to cancel.
+    let respond: (String?, WscdRememberScope) -> Void
 }
 
 /// Bridges `RequestWscdChoice`'s async callback to this sheet: suspends the
@@ -48,6 +49,11 @@ final class WscdChoiceContinuationBox {
 struct WscdChoiceSheet: View {
     let choice: PendingWscdChoice
 
+    /// Defaults to "Remember for this issuer" - the TOFU behavior this
+    /// sheet always had before `WscdRememberScope` existed, so leaving the
+    /// picker untouched keeps the same outcome as before this feature.
+    @State private var rememberScope: WscdRememberScope = .thisIssuer
+
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
@@ -65,7 +71,7 @@ struct WscdChoiceSheet: View {
 
                 VStack(spacing: 8) {
                     ForEach(choice.eligiblePluginIds, id: \.self) { pluginId in
-                        Button(action: { choice.respond(pluginId) }) {
+                        Button(action: { choice.respond(pluginId, rememberScope) }) {
                             HStack {
                                 Text(pluginId)
                                     .font(.body.weight(.medium))
@@ -85,9 +91,22 @@ struct WscdChoiceSheet: View {
                     }
                 }
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Remember this choice")
+                        .font(.caption)
+                        .foregroundColor(SirosTheme.onSurfaceVariant)
+                    Picker("Remember this choice", selection: $rememberScope) {
+                        Text("Just this once").tag(WscdRememberScope.once)
+                        Text("This issuer").tag(WscdRememberScope.thisIssuer)
+                        Text("Always").tag(WscdRememberScope.allIssuers)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
                 Spacer()
 
-                Button(action: { choice.respond(nil) }) {
+                Button(action: { choice.respond(nil, rememberScope) }) {
                     Text("Cancel")
                         .frame(maxWidth: .infinity)
                         .frame(height: 48)

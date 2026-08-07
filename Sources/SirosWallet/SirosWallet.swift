@@ -173,6 +173,40 @@ public final class SirosWallet: @unchecked Sendable {
         wscdSelectionPolicy.clearAllTofuMappings()
     }
 
+    /// Read-only snapshot of every persisted per-(issuer, credentialType)
+    /// user override (`"issuer|credentialType" -> pluginId`) - an explicit,
+    /// deliberate user preference, distinct from `wscdTofuMapping` (see
+    /// `WscdRememberScope`'s doc comment). Mirrors `wscdTofuMapping`'s
+    /// pattern exactly.
+    public var wscdUserOverrides: [String: String] { wscdSelectionPolicy.currentUserOverrides() }
+
+    /// Sets (or overwrites) an explicit per-(issuer, credentialType) user
+    /// preference - outranks TOFU and the global override for this exact
+    /// pair on the next matching resolution (see `WscdSelectionPolicy.resolve`).
+    public func setWscdUserOverride(issuer: String, credentialType: String, pluginId: String) {
+        wscdSelectionPolicy.setUserOverride(issuer: issuer, credentialType: credentialType, pluginId: pluginId)
+    }
+
+    /// Clears one persisted per-issuer user override, if present.
+    public func clearWscdUserOverride(issuer: String, credentialType: String) {
+        wscdSelectionPolicy.clearUserOverride(issuer: issuer, credentialType: credentialType)
+    }
+
+    /// The currently persisted global user override (applies to every
+    /// issuer/credential type without a more specific per-issuer override),
+    /// if any.
+    public var wscdGlobalOverride: String? { wscdSelectionPolicy.currentGlobalUserOverride() }
+
+    /// Sets (or overwrites) the single global user override.
+    public func setWscdGlobalOverride(pluginId: String) {
+        wscdSelectionPolicy.setGlobalUserOverride(pluginId: pluginId)
+    }
+
+    /// Clears the global user override, if set.
+    public func clearWscdGlobalOverride() {
+        wscdSelectionPolicy.clearGlobalUserOverride()
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
@@ -1767,7 +1801,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// generated internally). See `activeAttestedKeyIds`'s doc comment for
     /// why this ordering matters for per-credential key selection at signing
     /// time.
-    private struct GeneratedProofData {
+    // Internal (not private) - see `requestBackendKeyAttestation`'s doc
+    // comment on why that function itself is internal for testability; the
+    // fallback-keystore-bypass regression test needs to drive `generateProofs`
+    // directly, which needs this to be visible to `@testable import` too.
+    struct GeneratedProofData {
         var proofType: String
         var jwt: String?
         var attestation: String?
@@ -1785,7 +1823,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// transports so proof generation (including real backend Key Attestation
     /// with a self-signed fallback) behaves identically regardless of which
     /// transport carried the request.
-    private func generateProofs(
+    // Internal (not private) so `@testable import` can exercise the
+    // backend-attestation-fails-so-fall-back-to-self-signed path directly
+    // (see `SirosWalletWscdSelectionTests.testFallbackAfterFailedBackendAttestationUsesResolvedKeystoreNotDefault`),
+    // matching `requestBackendKeyAttestation`'s existing testability precedent.
+    func generateProofs(
         audience: String,
         nonce: String,
         count: Int,
@@ -1794,12 +1836,18 @@ public final class SirosWallet: @unchecked Sendable {
     ) async throws -> [GeneratedProofData] {
         let chosen = selectProofType(proofTypesSupported: proofTypesSupported, proofTypeHint: proofTypeHint)
         if chosen == "attestation" {
-            let backendAttestation = try await requestBackendKeyAttestation(audience: audience, nonce: nonce, count: count)
+            let (backendAttestation, effectiveKeystore) = try await requestBackendKeyAttestation(audience: audience, nonce: nonce, count: count)
             let attestationJwt: String
             if let backendAttestation {
                 attestationJwt = backendAttestation.jwt
             } else {
-                attestationJwt = try await keystore.generateKeyAttestation(nonce: nonce, count: count)
+                // Must fall back on the SAME resolved keystore
+                // `requestBackendKeyAttestation` picked for this call (e.g.
+                // a `WscdSelectionPolicy`-resolved plugin), never
+                // unconditionally `self.keystore` - otherwise a resolved
+                // higher-tier plugin would be silently bypassed on fallback,
+                // generating a lower-tier self-signed attestation instead.
+                attestationJwt = try await effectiveKeystore.generateKeyAttestation(nonce: nonce, count: count)
             }
             return [GeneratedProofData(
                 proofType: "attestation",
@@ -1826,29 +1874,41 @@ public final class SirosWallet: @unchecked Sendable {
     /// the backend signs an attestation *over* them with its own,
     /// operator-provisioned x5c-chained key.
     ///
-    /// Returns nil (caller falls back to the self-signed path) when there's
-    /// no backend session, the keystore can't produce raw keypairs, or the
+    /// Returns a `nil` result (caller falls back to the self-signed path,
+    /// via the `keystore` also returned here - see below) when there's no
+    /// backend session, the keystore can't produce raw keypairs, or the
     /// backend doesn't support/expose the endpoint.
     ///
-    /// - Throws: `WscdSelectionError.noEligiblePlugin` when
-    ///   `config.availableKeystores` is set but zero registered plugins meet
-    ///   the credential type's declared key-storage requirement - unlike
-    ///   every other failure here, this must NOT be swallowed into a nil/
+    /// - Returns: the attestation result (`nil` on any failure - see above),
+    ///   ALONGSIDE the `KeystoreManager` this call actually resolved and
+    ///   used for key generation (`self.keystore` unless
+    ///   `WscdSelectionPolicy` picked a different registered plugin for
+    ///   this credential type). The caller's self-signed fallback on a
+    ///   `nil` result must use THIS keystore, not `self.keystore` again -
+    ///   otherwise a resolved higher-tier plugin would be silently bypassed
+    ///   on fallback, generating a lower-tier self-signed attestation
+    ///   instead.
+    /// - Throws: `WscdSelectionError.noEligiblePlugin` or
+    ///   `.ambiguousChoiceNotMade` when `config.availableKeystores` is set
+    ///   but selection couldn't produce a plugin ID to use - unlike every
+    ///   other failure here, these must NOT be swallowed into a nil/
     ///   self-signed fallback, since that fallback would just use an
     ///   equally (or more) insufficient plugin (see `WscdSelectionPolicy`'s
     ///   doc comment).
     // Internal (not private) so `@testable import` can exercise the WSCD
     // plugin-selection wiring directly (see `SirosWalletWscdSelectionTests`),
     // matching this file's existing precedent for other testable internals.
-    func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async throws -> BackendAttestationResult? {
+    func requestBackendKeyAttestation(audience: String, nonce: String, count: Int) async throws -> (result: BackendAttestationResult?, keystore: KeystoreManager) {
         lock.lock(); let client = apiClient; lock.unlock()
-        guard let client else { return nil }
 
         // Pick which registered keystore backs this batch's key generation -
         // a no-op (stays `self.keystore`) unless the host app opted in via
-        // `config.availableKeystores`. This can throw `noEligiblePlugin`;
-        // that's allowed to propagate past this function's own catch-all
-        // below (see the doc comment above).
+        // `config.availableKeystores`. This can throw `noEligiblePlugin`/
+        // `.ambiguousChoiceNotMade`; that's allowed to propagate past this
+        // function's own catch-all below (see the doc comment above).
+        // Resolved BEFORE the `client` guard so a `nil` "no backend session"
+        // return still carries the correctly-resolved keystore for the
+        // caller's fallback, rather than always `self.keystore`.
         var effectiveKeystore = keystore
         if let availableKeystores = config.availableKeystores {
             lock.lock()
@@ -1864,6 +1924,8 @@ public final class SirosWallet: @unchecked Sendable {
                 effectiveKeystore = picked
             }
         }
+
+        guard let client else { return (nil, effectiveKeystore) }
 
         do {
             let keypairs = try await effectiveKeystore.generateKeypairs(count: count)
@@ -1888,9 +1950,9 @@ public final class SirosWallet: @unchecked Sendable {
             // mint credential i in the eventual batch response bound to
             // attested_keys[i], so this ordering IS the instanceId -> kid
             // mapping the credential-storage handler needs later.
-            return BackendAttestationResult(jwt: jwt, keyIds: keypairs.map { $0.keyId })
+            return (BackendAttestationResult(jwt: jwt, keyIds: keypairs.map { $0.keyId }), effectiveKeystore)
         } catch {
-            return nil
+            return (nil, effectiveKeystore)
         }
     }
 

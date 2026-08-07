@@ -45,6 +45,24 @@ struct WscaDeveloperView: View {
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                        // No real R2PS dev server key is wired into this
+                        // sample app yet (see `r2psServerPublicKeyPem`'s doc
+                        // comment) - left blank by default rather than
+                        // silently reusing the client's own key, which
+                        // would be actively wrong. Paste the real server's
+                        // PEM public key here to test against an actual
+                        // R2PS server.
+                        TextField("R2PS Server Public Key (PEM)", text: $viewModel.r2psServerPublicKeyPem, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.caption.monospaced())
+                            .lineLimit(3...6)
+                        if viewModel.r2psServerPublicKeyPem.isEmpty {
+                            Text("No server public key configured - R2PS registration will fail until one is provided.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     // WSCD Selection Policy - `WscdSelectionPolicy`'s

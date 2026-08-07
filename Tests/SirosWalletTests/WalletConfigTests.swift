@@ -23,7 +23,7 @@ final class WalletConfigTests: XCTestCase {
     func testWscdSelectionFieldsCanBeSet() {
         var config = WalletConfig(backendUrl: "https://wallet.example.com")
         config.defaultWscdMapping = ["https://issuer.example.com|urn:example:pid": "fido2"]
-        config.requestWscdChoice = { _, _, eligible in .chosen(pluginId: eligible.first ?? "softkey") }
+        config.requestWscdChoice = { _, _, eligible in .chosen(pluginId: eligible.first ?? "softkey", rememberScope: .thisIssuer) }
 
         XCTAssertEqual(config.defaultWscdMapping?["https://issuer.example.com|urn:example:pid"], "fido2")
         XCTAssertNotNil(config.requestWscdChoice)

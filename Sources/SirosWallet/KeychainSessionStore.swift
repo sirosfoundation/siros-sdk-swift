@@ -85,6 +85,14 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         get { read("wscdTofuMappingJson") }
         set { write("wscdTofuMappingJson", newValue) }
     }
+    public var wscdUserOverrideMappingJson: String? {
+        get { read("wscdUserOverrideMappingJson") }
+        set { write("wscdUserOverrideMappingJson", newValue) }
+    }
+    public var wscdGlobalOverridePluginId: String? {
+        get { read("wscdGlobalOverridePluginId") }
+        set { write("wscdGlobalOverridePluginId", newValue) }
+    }
     public var instanceKeyId: String? {
         get { read("instanceKeyId") }
         set { write("instanceKeyId", newValue) }
@@ -110,6 +118,7 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
                     "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
                     "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag",
                     "instanceKeyId", "wscdTofuMappingJson",
+                    "wscdUserOverrideMappingJson", "wscdGlobalOverridePluginId",
                     // Legacy key, no longer written (the per-instance-key
                     // FIDO2 registration dedupe it backed was removed in
                     // favor of per-credential-key registration - see

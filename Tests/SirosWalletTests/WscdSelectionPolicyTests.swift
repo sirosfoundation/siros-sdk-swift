@@ -31,7 +31,7 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertNil(result)
     }
 
-    // 2. TOFU hit.
+    // 4. TOFU hit.
     func testTofuHitReusesPersistedChoiceWithoutPrompting() async throws {
         let store = InMemorySessionStore()
         store.activeAccountId = "test:account"
@@ -40,7 +40,7 @@ final class WscdSelectionPolicyTests: XCTestCase {
             sessionStore: store,
             requestChoice: { _, _, eligible in
                 promptCount += 1
-                return .chosen(pluginId: eligible.first ?? "softkey")
+                return .chosen(pluginId: eligible.first ?? "softkey", rememberScope: .thisIssuer)
             }
         )
         // First call has 2 eligible plugins ("fido2" and "r2ps" both meet "iso_18045_high"),
@@ -106,7 +106,7 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertEqual(result, "r2ps", "a TOFU entry for an unregistered plugin must not be reused - must fall through to what's actually registered")
     }
 
-    // 3. Default-mapping hit.
+    // 5. Default-mapping hit.
     func testDefaultMappingHitIsUsedAndPersistedAsTofu() async throws {
         let store = InMemorySessionStore()
         store.activeAccountId = "test:account"
@@ -166,12 +166,12 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertFalse(store.wscdTofuMappingJson?.contains("fido2") ?? false, "the unregistered mapped plugin must not be persisted as TOFU")
     }
 
-    // 4. Auto single-match.
+    // 6. Auto single-match.
     func testAutoPicksSingleEligiblePluginWithoutPrompting() async throws {
         var promptCount = 0
         let policy = makePolicy(requestChoice: { _, _, eligible in
             promptCount += 1
-            return .chosen(pluginId: eligible.first ?? "softkey")
+            return .chosen(pluginId: eligible.first ?? "softkey", rememberScope: .thisIssuer)
         })
 
         let result = try await policy.resolve(
@@ -184,14 +184,14 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertEqual(promptCount, 0, "exactly one eligible plugin must not trigger a user prompt")
     }
 
-    // 5. Ask-user, multiple eligible - chosen.
+    // 7. Ask-user, multiple eligible - chosen.
     func testMultipleEligibleAsksUserAndPersistsChoice() async throws {
         var capturedEligible: [String]?
         let policy = makePolicy(requestChoice: { issuer, credentialType, eligible in
             capturedEligible = eligible
             XCTAssertEqual(issuer, "https://issuer.example.com")
             XCTAssertEqual(credentialType, "org.iso.18013.5.1.mDL")
-            return .chosen(pluginId: "r2ps")
+            return .chosen(pluginId: "r2ps", rememberScope: .thisIssuer)
         })
 
         let result = try await policy.resolve(
@@ -215,7 +215,10 @@ final class WscdSelectionPolicyTests: XCTestCase {
             return .cancelled
         })
 
-        _ = try await policy.resolve(
+        // `.cancelled` now throws `ambiguousChoiceNotMade` (see the
+        // dedicated tests for that) - irrelevant here, this test only cares
+        // about what was passed INTO the callback before it answered.
+        _ = try? await policy.resolve(
             issuer: "https://issuer.example.com",
             credentialType: "org.iso.18013.5.1.mDL",
             requiredTier: "iso_18045_high",
@@ -225,54 +228,119 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertEqual(capturedEligible, ["fido2", "r2ps"], "must be sorted regardless of input order")
     }
 
-    // 5. Ask-user, multiple eligible - cancelled.
-    func testMultipleEligibleCancelledReturnsNilAndDoesNotPersist() async throws {
+    // 7. Ask-user, multiple eligible - cancelled. There IS something usable
+    // (2+ eligible plugins), so this must throw `ambiguousChoiceNotMade`
+    // rather than silently returning `nil` (which the caller would read as
+    // "use the default keystore", possibly an insufficient one).
+    func testMultipleEligibleCancelledThrowsAmbiguousChoiceNotMadeAndDoesNotPersist() async throws {
         let store = InMemorySessionStore()
         store.activeAccountId = "test:account"
         let policy = WscdSelectionPolicy(sessionStore: store, requestChoice: { _, _, _ in .cancelled })
 
-        let result = try await policy.resolve(
-            issuer: "https://issuer.example.com",
-            credentialType: "org.iso.18013.5.1.mDL",
-            requiredTier: "iso_18045_high",
-            availablePluginIds: ["softkey", "fido2", "r2ps"]
-        )
-        XCTAssertNil(result)
+        do {
+            _ = try await policy.resolve(
+                issuer: "https://issuer.example.com",
+                credentialType: "org.iso.18013.5.1.mDL",
+                requiredTier: "iso_18045_high",
+                availablePluginIds: ["softkey", "fido2", "r2ps"]
+            )
+            XCTFail("expected WscdSelectionError.ambiguousChoiceNotMade")
+        } catch WscdSelectionError.ambiguousChoiceNotMade(let issuer, let credentialType, let requiredTier) {
+            XCTAssertEqual(issuer, "https://issuer.example.com")
+            XCTAssertEqual(credentialType, "org.iso.18013.5.1.mDL")
+            XCTAssertEqual(requiredTier, "iso_18045_high")
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
         XCTAssertNil(store.wscdTofuMappingJson, "a cancelled choice must not be persisted as TOFU")
     }
 
-    // 5. Ask-user, host callback returns a pluginId outside the eligible
-    // list it was given (e.g. a host UI bug) - must be treated like
-    // `.cancelled`, not trusted and persisted as-is.
-    func testMultipleEligibleChoiceOutsideEligibleListIsTreatedAsCancelled() async throws {
+    // 7. Ask-user, host callback returns a pluginId outside the eligible
+    // list it was given (e.g. a host UI bug) - just as "nothing usable was
+    // chosen" as a cancellation, so it must throw the same error rather
+    // than being trusted and persisted as-is.
+    func testMultipleEligibleChoiceOutsideEligibleListThrowsAmbiguousChoiceNotMade() async throws {
         let store = InMemorySessionStore()
         store.activeAccountId = "test:account"
         // "softkey" doesn't meet the required tier, so it's never in `eligible`.
-        let policy = WscdSelectionPolicy(sessionStore: store, requestChoice: { _, _, _ in .chosen(pluginId: "softkey") })
-
-        let result = try await policy.resolve(
-            issuer: "https://issuer.example.com",
-            credentialType: "org.iso.18013.5.1.mDL",
-            requiredTier: "iso_18045_high",
-            availablePluginIds: ["softkey", "fido2", "r2ps"]
+        let policy = WscdSelectionPolicy(
+            sessionStore: store,
+            requestChoice: { _, _, _ in .chosen(pluginId: "softkey", rememberScope: .thisIssuer) }
         )
-        XCTAssertNil(result)
+
+        do {
+            _ = try await policy.resolve(
+                issuer: "https://issuer.example.com",
+                credentialType: "org.iso.18013.5.1.mDL",
+                requiredTier: "iso_18045_high",
+                availablePluginIds: ["softkey", "fido2", "r2ps"]
+            )
+            XCTFail("expected WscdSelectionError.ambiguousChoiceNotMade")
+        } catch WscdSelectionError.ambiguousChoiceNotMade {
+            // Expected.
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
         XCTAssertNil(store.wscdTofuMappingJson, "an invalid choice must not be persisted as TOFU")
     }
 
-    // 5. No callback configured at all - best-effort nil, not a crash.
-    func testMultipleEligibleWithNoCallbackConfiguredReturnsNil() async throws {
+    // 7. No callback configured at all - still must throw, not silently
+    // return `nil` (there IS something usable, just no way to ask).
+    func testMultipleEligibleWithNoCallbackConfiguredThrowsAmbiguousChoiceNotMade() async throws {
         let policy = makePolicy(requestChoice: nil)
+        do {
+            _ = try await policy.resolve(
+                issuer: "https://issuer.example.com",
+                credentialType: "org.iso.18013.5.1.mDL",
+                requiredTier: "iso_18045_high",
+                availablePluginIds: ["softkey", "fido2", "r2ps"]
+            )
+            XCTFail("expected WscdSelectionError.ambiguousChoiceNotMade")
+        } catch WscdSelectionError.ambiguousChoiceNotMade {
+            // Expected.
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+    }
+
+    // `WscdRememberScope.once` must not persist anything at all - neither
+    // TOFU nor either override - the chosen plugin applies to this single
+    // resolution only.
+    func testChosenWithOnceScopeDoesNotPersistAnything() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store, requestChoice: { _, _, _ in .chosen(pluginId: "r2ps", rememberScope: .once) })
+
         let result = try await policy.resolve(
             issuer: "https://issuer.example.com",
             credentialType: "org.iso.18013.5.1.mDL",
             requiredTier: "iso_18045_high",
             availablePluginIds: ["softkey", "fido2", "r2ps"]
         )
-        XCTAssertNil(result)
+        XCTAssertEqual(result, "r2ps")
+        XCTAssertNil(store.wscdTofuMappingJson, "'once' must not persist a TOFU entry")
+        XCTAssertNil(store.wscdUserOverrideMappingJson, "'once' must not persist a per-issuer override")
+        XCTAssertNil(store.wscdGlobalOverridePluginId, "'once' must not persist a global override")
     }
 
-    // 6. Zero eligible - hard error.
+    // `WscdRememberScope.allIssuers` must set the global user override, not TOFU.
+    func testChosenWithAllIssuersScopeSetsGlobalOverrideNotTofu() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store, requestChoice: { _, _, _ in .chosen(pluginId: "r2ps", rememberScope: .allIssuers) })
+
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "org.iso.18013.5.1.mDL",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["softkey", "fido2", "r2ps"]
+        )
+        XCTAssertEqual(result, "r2ps")
+        XCTAssertEqual(policy.currentGlobalUserOverride(), "r2ps")
+        XCTAssertEqual(policy.currentTofuMapping(), [:], "'allIssuers' must not also write a TOFU entry")
+    }
+
+    // 8. Zero eligible - hard error.
     func testZeroEligibleThrowsNoEligiblePlugin() async {
         let policy = makePolicy()
         do {
@@ -409,5 +477,180 @@ final class WscdSelectionPolicyTests: XCTestCase {
         policy.clearAllTofuMappings()
 
         XCTAssertEqual(policy.currentTofuMapping(), [:])
+    }
+
+    // MARK: - User override precedence (steps 2/3 of `resolve`'s doc comment)
+
+    func testPerIssuerUserOverrideWinsOverTofu() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let issuer = "https://issuer.example.com"
+        let credentialType = "urn:eu.europa.ec.eudi:pid:1"
+
+        // Seed a TOFU entry pointing at "fido2" via auto single-match.
+        let tofuResult = try await policy.resolve(
+            issuer: issuer, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["fido2"]
+        )
+        XCTAssertEqual(tofuResult, "fido2")
+
+        // A deliberate per-issuer override for "r2ps" must win over the
+        // existing TOFU entry on the next resolution.
+        policy.setUserOverride(issuer: issuer, credentialType: credentialType, pluginId: "r2ps")
+        let result = try await policy.resolve(
+            issuer: issuer, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["fido2", "r2ps"]
+        )
+        XCTAssertEqual(result, "r2ps", "an explicit per-issuer user override must win over TOFU")
+    }
+
+    func testGlobalUserOverrideWinsOverTofuButLosesToPerIssuerOverride() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let issuerA = "https://issuer-a.example.com"
+        let issuerB = "https://issuer-b.example.com"
+        let credentialType = "urn:eu.europa.ec.eudi:pid:1"
+
+        // Seed TOFU for issuer A pointing at "fido2".
+        _ = try await policy.resolve(
+            issuer: issuerA, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["fido2"]
+        )
+
+        policy.setGlobalUserOverride(pluginId: "r2ps")
+        policy.setUserOverride(issuer: issuerA, credentialType: credentialType, pluginId: "fido2")
+
+        // Issuer A has its own more-specific override ("fido2") - that wins
+        // over the global override ("r2ps").
+        let resultA = try await policy.resolve(
+            issuer: issuerA, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["fido2", "r2ps"]
+        )
+        XCTAssertEqual(resultA, "fido2", "a per-issuer override must win over the global override")
+
+        // Issuer B has no per-issuer override and no TOFU entry at all - the
+        // global override applies, winning over what would otherwise be a
+        // fresh TOFU resolution.
+        let resultB = try await policy.resolve(
+            issuer: issuerB, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["fido2", "r2ps"]
+        )
+        XCTAssertEqual(resultB, "r2ps", "the global override must win over a fresh TOFU resolution")
+    }
+
+    func testUserOverrideNoLongerSufficientFallsThrough() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let issuer = "https://issuer.example.com"
+        let credentialType = "urn:eu.europa.ec.eudi:pid:1"
+
+        // Override points at "softkey" (basic tier only).
+        policy.setUserOverride(issuer: issuer, credentialType: credentialType, pluginId: "softkey")
+
+        // The credential type now demands "iso_18045_high" - the override
+        // no longer qualifies, so it must fall through rather than being
+        // used (and rather than throwing - there's still "fido2" to fall
+        // back to).
+        let result = try await policy.resolve(
+            issuer: issuer, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["softkey", "fido2"]
+        )
+        XCTAssertEqual(result, "fido2", "an override that no longer meets the required tier must be skipped, falling through")
+    }
+
+    func testUserOverrideToUnregisteredPluginFallsThrough() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let issuer = "https://issuer.example.com"
+        let credentialType = "urn:eu.europa.ec.eudi:pid:1"
+
+        // Override points at "fido2", which meets the tier but isn't
+        // actually registered on this resolution.
+        policy.setUserOverride(issuer: issuer, credentialType: credentialType, pluginId: "fido2")
+
+        let result = try await policy.resolve(
+            issuer: issuer, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["r2ps"]
+        )
+        XCTAssertEqual(result, "r2ps", "an override for an unregistered plugin must be skipped, falling through to what's actually registered")
+    }
+
+    func testGlobalOverrideNoLongerSufficientOrUnregisteredFallsThrough() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+
+        policy.setGlobalUserOverride(pluginId: "softkey")
+
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["softkey", "fido2"]
+        )
+        XCTAssertEqual(result, "fido2", "an insufficient global override must be skipped, falling through")
+    }
+
+    func testCurrentUserOverridesReflectsPersistedEntriesAndClearWorks() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+
+        XCTAssertEqual(policy.currentUserOverrides(), [:])
+        policy.setUserOverride(issuer: "https://issuer-a.example.com", credentialType: "pid", pluginId: "fido2")
+        policy.setUserOverride(issuer: "https://issuer-b.example.com", credentialType: "pid", pluginId: "r2ps")
+        XCTAssertEqual(policy.currentUserOverrides().count, 2)
+
+        policy.clearUserOverride(issuer: "https://issuer-a.example.com", credentialType: "pid")
+        XCTAssertEqual(policy.currentUserOverrides(), ["https://issuer-b.example.com|pid": "r2ps"])
+    }
+
+    func testCurrentGlobalUserOverrideReflectsPersistedValueAndClearWorks() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+
+        XCTAssertNil(policy.currentGlobalUserOverride())
+        policy.setGlobalUserOverride(pluginId: "r2ps")
+        XCTAssertEqual(policy.currentGlobalUserOverride(), "r2ps")
+        policy.clearGlobalUserOverride()
+        XCTAssertNil(policy.currentGlobalUserOverride())
+    }
+
+    // MARK: - Concurrency (TOFU/override read-modify-write must not race)
+
+    /// Regression test for the un-synchronized TOFU read-modify-write bug:
+    /// many concurrent `resolve()` calls for DISTINCT (issuer,
+    /// credentialType) pairs, each auto-picking its single eligible plugin
+    /// and persisting it as TOFU. Before the `NSLock` fix, two concurrent
+    /// persistTofu read-modify-write sequences could race and one's update
+    /// would be silently dropped (last-writer-wins on a stale read) -
+    /// asserting every single one of N entries survived is exactly the
+    /// condition that fix guarantees.
+    func testConcurrentResolutionsForDistinctKeysDoNotDropTofuEntries() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+
+        let count = 50
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for i in 0..<count {
+                group.addTask {
+                    _ = try await policy.resolve(
+                        issuer: "https://issuer-\(i).example.com",
+                        credentialType: "urn:eu.europa.ec.eudi:pid:1",
+                        requiredTier: "iso_18045_basic",
+                        availablePluginIds: ["softkey"]
+                    )
+                }
+            }
+            for try await _ in group {}
+        }
+
+        XCTAssertEqual(policy.currentTofuMapping().count, count, "every concurrent resolution's TOFU entry must survive - none dropped by a lost read-modify-write race")
     }
 }

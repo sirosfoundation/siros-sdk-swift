@@ -51,6 +51,18 @@ final class WalletViewModel: ObservableObject {
     }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
+    /// PEM-encoded P-256 R2PS SERVER public key, for the R2PS message
+    /// envelope's JWE encryption (`R2psConfig.serverPublicKeyPem` - see its
+    /// doc comment: this must be the server's key, never the client's own).
+    /// No real R2PS dev server key is available to hardcode in this sample
+    /// app's current dev configuration (unlike `r2psServerUrl`, there's no
+    /// established dev endpoint here to fetch one from) - defaults to empty
+    /// so `buildWscdSigner`'s R2PS registration fails loudly (caught,
+    /// logged, and skipped - the existing best-effort path) instead of
+    /// silently substituting the wrong key. A dev wiring up a real R2PS
+    /// server should paste its actual public key here (or via the
+    /// "R2PS Server Public Key" field in `WscaDeveloperView`).
+    @Published var r2psServerPublicKeyPem: String = ""
     /// Core wallet policy (not a UI-only preference like the toggles above) -
     /// persisted here, but enforced by `SirosWallet` itself (see
     /// `SirosWallet.credentialConsumptionPolicy`'s doc comment). Applied to
@@ -163,6 +175,14 @@ final class WalletViewModel: ObservableObject {
     /// imperative refresh like `listPasskeysForUI()`/`wscdKeys` rather than
     /// always-live.
     @Published var wscdTofuMappingSnapshot: [String: String] = [:]
+    /// Snapshot of `SirosWallet.wscdUserOverrides` - deliberate per-(issuer,
+    /// credentialType) user preferences, distinct from the TOFU snapshot
+    /// above (see `WscdRememberScope`'s doc comment). Refreshed the same
+    /// imperative way.
+    @Published var wscdUserOverridesSnapshot: [String: String] = [:]
+    /// Snapshot of `SirosWallet.wscdGlobalOverride` - the single global user
+    /// preference, or `nil` for "no preference."
+    @Published var wscdGlobalOverrideSnapshot: String?
 
     // MARK: - Loading / error
 
@@ -474,6 +494,45 @@ final class WalletViewModel: ObservableObject {
         refreshWscdTofuMapping()
     }
 
+    // MARK: - WSCD user overrides (explicit preferences, distinct from TOFU)
+
+    /// Refreshes `wscdUserOverridesSnapshot`/`wscdGlobalOverrideSnapshot`
+    /// from the SDK - call on appear, like `refreshWscdTofuMapping()`.
+    func refreshWscdUserOverrides() {
+        wscdUserOverridesSnapshot = wallet?.wscdUserOverrides ?? [:]
+        wscdGlobalOverrideSnapshot = wallet?.wscdGlobalOverride
+    }
+
+    /// Sets (or overwrites) an explicit per-issuer WSCD preference from
+    /// Settings - outranks TOFU and the global override for this exact pair.
+    func setWscdUserOverride(issuer: String, credentialType: String, pluginId: String) {
+        wallet?.setWscdUserOverride(issuer: issuer, credentialType: credentialType, pluginId: pluginId)
+        refreshWscdUserOverrides()
+    }
+
+    /// Clears one per-issuer WSCD preference. Deliberately takes `issuer`/
+    /// `credentialType` separately rather than one of
+    /// `wscdUserOverridesSnapshot`'s combined `"issuer|credentialType"` keys
+    /// - either half could itself contain the `"|"` separator, so there's
+    /// no unambiguous way to split a combined key back into its parts (see
+    /// `WscdSelectionPolicy.clearUserOverride`'s equivalent signature).
+    func clearWscdUserOverride(issuer: String, credentialType: String) {
+        wallet?.clearWscdUserOverride(issuer: issuer, credentialType: credentialType)
+        refreshWscdUserOverrides()
+    }
+
+    /// Sets (or overwrites) the single global WSCD preference from Settings.
+    func setWscdGlobalOverride(pluginId: String) {
+        wallet?.setWscdGlobalOverride(pluginId: pluginId)
+        refreshWscdUserOverrides()
+    }
+
+    /// Clears the global WSCD preference ("No preference").
+    func clearWscdGlobalOverride() {
+        wallet?.clearWscdGlobalOverride()
+        refreshWscdUserOverrides()
+    }
+
     /// Adds/overwrites one `WalletConfig.defaultWscdMapping` entry - dev
     /// config (`WscaDeveloperView`), not persisted TOFU state. Requires a
     /// fresh `rebuildWalletIfNeeded()` (e.g. next login) to actually take
@@ -507,7 +566,7 @@ final class WalletViewModel: ObservableObject {
                     issuer: issuer,
                     credentialType: credentialType,
                     eligiblePluginIds: eligiblePluginIds,
-                    respond: { chosenPluginId in
+                    respond: { chosenPluginId, rememberScope in
                         // Triggers `.sheet(item:onDismiss:)`'s onDismiss too
                         // (setting the bound item to nil dismisses the
                         // sheet) - that's fine: `box.resumeOnce` below
@@ -516,7 +575,7 @@ final class WalletViewModel: ObservableObject {
                         // the time it runs. See `ProximityEngagementScreen
                         // .requestConsent`'s identical comment.
                         self.pendingWscdChoice = nil
-                        let result = chosenPluginId.map { WscdChoiceResult.chosen(pluginId: $0) } ?? .cancelled
+                        let result = chosenPluginId.map { WscdChoiceResult.chosen(pluginId: $0, rememberScope: rememberScope) } ?? .cancelled
                         box.resumeOnce(result)
                     }
                 )
@@ -889,12 +948,21 @@ final class WalletViewModel: ObservableObject {
                 // Ephemeral P-256 key pair for the R2PS message envelope
                 // (JWS/JWE identity) - required regardless of auth mode.
                 let clientKey = P256.Signing.PrivateKey()
+                // `serverPublicKeyPem` MUST be the R2PS SERVER's own public
+                // key (for JWE envelope encryption TO the server) - never
+                // the client's own key, which would break the security
+                // model entirely (encrypting to a key the client itself
+                // holds the private half of defeats the point). See
+                // `r2psServerPublicKeyPem`'s doc comment: no real dev server
+                // key is available to hardcode here, so this is left as an
+                // explicit dev-configurable placeholder rather than
+                // silently substituting `clientKey.publicKey` again.
                 let r2psConfig = R2psConfig(
                     serverUrl: r2psServerUrl,
                     clientId: "sample-app",
                     context: "wallet",
                     clientKeyPem: clientKey.pemRepresentation,
-                    serverPublicKeyPem: clientKey.publicKey.pemRepresentation,
+                    serverPublicKeyPem: r2psServerPublicKeyPem,
                     authMode: .opaque
                 )
                 let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
