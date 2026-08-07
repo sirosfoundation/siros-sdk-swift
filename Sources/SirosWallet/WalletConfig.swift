@@ -69,6 +69,25 @@ public struct WalletConfig: Sendable {
     /// `availableKeystores` is set.
     public var requestWscdChoice: RequestWscdChoice?
 
+    /// Base URL for go-wallet-backend's credential-type registry service
+    /// (TS11-backed, cached, includes `attestation_los`/required-key-storage-
+    /// tier data) - queried as `<registryUrl>/type-metadata?vct=<id>` for
+    /// both SD-JWT `vct` values and ISO 18013-5 mdoc `doctype` values (one
+    /// handler/store serves both formats under the same generic query param
+    /// name). This is the SAME service the reference wallet-frontend
+    /// implementation always calls for VCT/mdoc type-metadata lookups
+    /// (`VCT_REGISTRY_URL`), never the issuer directly.
+    ///
+    /// `nil` (the common case) derives this automatically as
+    /// `<backendUrl>/registry` - the registry route is mounted under a
+    /// `/registry` path prefix on the same host/port as the rest of
+    /// go-wallet-backend's public API. Set this explicitly only to point at
+    /// a registry deployment independent of `backendUrl` (e.g. a different
+    /// environment's registry, or a standalone registry service), matching
+    /// `VCT_REGISTRY_URL` being a distinct, independently-settable config
+    /// value in wallet-frontend.
+    public var registryUrl: String?
+
     public init(
         backendUrl: String,
         tenantId: String = "default",
@@ -80,7 +99,8 @@ public struct WalletConfig: Sendable {
         useWmpProtocol: Bool = false,
         availableKeystores: [String: KeystoreManager]? = nil,
         defaultWscdMapping: [String: String]? = nil,
-        requestWscdChoice: RequestWscdChoice? = nil
+        requestWscdChoice: RequestWscdChoice? = nil,
+        registryUrl: String? = nil
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -93,6 +113,7 @@ public struct WalletConfig: Sendable {
         self.availableKeystores = availableKeystores
         self.defaultWscdMapping = defaultWscdMapping
         self.requestWscdChoice = requestWscdChoice
+        self.registryUrl = registryUrl
     }
 
     /// Discover the engine base URL from the backend's

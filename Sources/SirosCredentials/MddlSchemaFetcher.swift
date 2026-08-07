@@ -27,8 +27,35 @@ public final class MddlSchemaFetcher: Sendable {
     /// - Parameters:
     ///   - issuerUrl: the credential issuer URL (e.g. "https://issuer.example.com")
     ///   - scope: the credential configuration ID / scope
+    ///   - doctype: the ISO 18013-5 mdoc `doctype` this configuration issues,
+    ///     when already known (unlike some SD-JWT `vct` cases, this is
+    ///     normally known upfront from issuer metadata, so callers should
+    ///     pass it whenever available). Used for the registry-service
+    ///     strategy below.
+    ///   - registryUrl: go-wallet-backend's credential-type registry service
+    ///     base URL (e.g. `<backendUrl>/registry`). When non-nil and
+    ///     `doctype` is known, tried first as the authoritative, TS11-backed
+    ///     source, before falling back to the issuer-direct strategy.
     /// - Returns: the parsed `MddlSchema`, or nil if not available
-    public func fetch(issuerUrl: String, scope: String) async -> MddlSchema? {
+    public func fetch(
+        issuerUrl: String,
+        scope: String,
+        doctype: String? = nil,
+        registryUrl: String? = nil
+    ) async -> MddlSchema? {
+        // Strategy 1 (authoritative): go-wallet-backend's TS11-backed,
+        // cached credential-type registry service - the mdoc analogue of
+        // `VctmFetcher`'s identical registry strategy. mdoc doctypes are
+        // normally known upfront, so this should virtually always be
+        // attempted when a `registryUrl` is configured.
+        if let registryUrl, let doctype {
+            if let registryLookupUrl = resolveRegistryUrl(registryUrl, doctype: doctype) {
+                if let result = await fetchFromUrl(registryLookupUrl) {
+                    return result
+                }
+            }
+        }
+
         let baseUrl = issuerUrl.hasSuffix("/")
             ? String(issuerUrl.dropLast())
             : issuerUrl
@@ -58,6 +85,22 @@ public final class MddlSchemaFetcher: Sendable {
     }
 
     // MARK: - Private
+
+    /// Build a `<registryUrl>/type-metadata?vct=<doctype>` lookup URL
+    /// against go-wallet-backend's registry service. The query param is
+    /// named `vct`, not `doctype`, on purpose: confirmed live, the backend's
+    /// single handler/store uses the same generic `vct` param name for both
+    /// SD-JWT `vct` values and ISO 18013-5 mdoc `doctype` values - a
+    /// historical naming artifact, not a bug (see
+    /// `VctmFetcher.resolveRegistryUrl`).
+    private func resolveRegistryUrl(_ registryUrl: String, doctype: String) -> String? {
+        let baseUrl = registryUrl.hasSuffix("/")
+            ? String(registryUrl.dropLast())
+            : registryUrl
+        var components = URLComponents(string: "\(baseUrl)/type-metadata")
+        components?.queryItems = [URLQueryItem(name: "vct", value: doctype)]
+        return components?.url?.absoluteString
+    }
 
     private func fetchFromUrl(_ url: String) async -> MddlSchema? {
         do {

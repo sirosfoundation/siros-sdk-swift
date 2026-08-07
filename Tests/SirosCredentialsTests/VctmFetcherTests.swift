@@ -159,4 +159,100 @@ final class VctmFetcherTests: XCTestCase {
 
         XCTAssertNil(vctm)
     }
+
+    // MARK: - Registry-service strategy (go-wallet-backend's TS11-backed registry)
+
+    func testFetchUsesRegistryStrategyFirstWhenAvailable() async {
+        var calledUrls: [String] = []
+        let fetcher = VctmFetcher(httpGet: { url in
+            calledUrls.append(url)
+            if url == "https://wallet.example.com/registry/type-metadata?vct=urn:eudi:diploma:1" {
+                return self.sampleVctmJson
+            }
+            // The issuer-direct strategies must NOT even be reached.
+            XCTFail("registry strategy should short-circuit before issuer-direct fallbacks: \(url)")
+            return nil
+        })
+
+        let vctm = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "diploma",
+            vct: "urn:eudi:diploma:1",
+            registryUrl: "https://wallet.example.com/registry"
+        )
+
+        XCTAssertNotNil(vctm)
+        XCTAssertEqual(vctm?.vct, "urn:eu:pid:1")
+        XCTAssertEqual(calledUrls, ["https://wallet.example.com/registry/type-metadata?vct=urn:eudi:diploma:1"])
+    }
+
+    func testFetchFallsBackToIssuerDirectWhenRegistryHasNoEntry() async {
+        // Registry returns nothing (e.g. a live 404 - `fetchFromUrl` already
+        // treats any non-200 as `nil`), so the existing issuer-hosted
+        // `/type-metadata/<scope>` strategy must still run as a fallback.
+        let fetcher = VctmFetcher(httpGet: { url in
+            if url.hasPrefix("https://wallet.example.com/registry") {
+                return nil
+            }
+            if url == "https://issuer.example.com/type-metadata/diploma" {
+                return self.sampleVctmJson
+            }
+            return nil
+        })
+
+        let vctm = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "diploma",
+            vct: "urn:eudi:diploma:1",
+            registryUrl: "https://wallet.example.com/registry"
+        )
+
+        XCTAssertNotNil(vctm, "must fall through to the issuer-direct strategy when the registry has no entry")
+    }
+
+    func testFetchSkipsRegistryStrategyWhenRegistryUrlIsNil() async {
+        var calledUrls: [String] = []
+        let fetcher = VctmFetcher(httpGet: { url in
+            calledUrls.append(url)
+            if url == "https://issuer.example.com/type-metadata/diploma" {
+                return self.sampleVctmJson
+            }
+            return nil
+        })
+
+        let vctm = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "diploma",
+            vct: "urn:eudi:diploma:1",
+            registryUrl: nil
+        )
+
+        XCTAssertNotNil(vctm)
+        XCTAssertEqual(calledUrls, ["https://issuer.example.com/type-metadata/diploma"], "no registry lookup should ever be attempted")
+    }
+
+    func testFetchSkipsRegistryStrategyWhenVctIsNil() async {
+        // A registry URL is configured, but this call site doesn't know the
+        // vct yet (e.g. resolved only after a credential is issued) - the
+        // registry strategy can't run, matching the existing well-known
+        // strategy's own nil-vct behavior.
+        var calledUrls: [String] = []
+        let fetcher = VctmFetcher(httpGet: { url in
+            calledUrls.append(url)
+            if url == "https://issuer.example.com/type-metadata/diploma" {
+                return self.sampleVctmJson
+            }
+            return nil
+        })
+
+        let vctm = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "diploma",
+            vct: nil,
+            registryUrl: "https://wallet.example.com/registry"
+        )
+
+        XCTAssertNotNil(vctm)
+        XCTAssertEqual(calledUrls, ["https://issuer.example.com/type-metadata/diploma"], "no registry lookup should ever be attempted")
+    }
 }

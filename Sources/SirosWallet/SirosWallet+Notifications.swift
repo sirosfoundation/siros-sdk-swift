@@ -65,7 +65,9 @@ extension SirosWallet {
                     if let off = offer {
                         let mddlSchema = await mddlSchemaFetcher.fetch(
                             issuerUrl: off.credentialIssuerIdentifier,
-                            scope: off.credentialConfigurationId
+                            scope: off.credentialConfigurationId,
+                            doctype: off.doctype,
+                            registryUrl: resolvedRegistryUrl
                         )
                         metadata = CredentialUtils.buildMdocMetadata(offer: off, mddlSchema: mddlSchema)
                     }
