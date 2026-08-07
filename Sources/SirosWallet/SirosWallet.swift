@@ -221,9 +221,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// `SirosWallet+Notifications.swift` (a separate file, same module) can
     /// use it too, matching `mddlSchemaFetcher`'s own visibility above.
     var resolvedRegistryUrl: String {
-        if let registryUrl = config.registryUrl { return registryUrl }
-        let trimmedBackendUrl = config.backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return "\(trimmedBackendUrl)/registry"
+        Self.resolveRegistryUrl(config: config)
     }
 
     // Internal (not private) so `@testable import` can seed a fake client
@@ -383,18 +381,6 @@ public final class SirosWallet: @unchecked Sendable {
 
         self.accountRegistry = AccountRegistry()
 
-        self.vctmFetcher = VctmFetcher { url in
-            guard let u = URL(string: url) else { return nil }
-            do {
-                let (data, response) = try await URLSession.shared.data(from: u)
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
-                return String(data: data, encoding: .utf8)
-            } catch {
-                return nil
-            }
-        }
-        self.mddlSchemaFetcher = MddlSchemaFetcher()
-
         self.wscdSelectionPolicy = WscdSelectionPolicy(
             sessionStore: sessionStore,
             defaultMapping: config.defaultWscdMapping,
@@ -405,10 +391,105 @@ public final class SirosWallet: @unchecked Sendable {
         let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
         self.authServerClient = asClient
         let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
+        self.authTokens = tokens
+
+        // Shared HTTP GET for both type-metadata fetchers - see
+        // `makeTypeMetadataHttpGet`'s doc comment for why the auth headers
+        // are conditional on the target URL. Captures `config`, `tokens`,
+        // and the `sessionStore` parameter directly (not `self`) - both
+        // `resolvedRegistryUrl` and `authTokens` are invariant for this
+        // wallet instance's whole lifetime (derived from/aliasing the `let
+        // config` below and the local `tokens` just assigned to
+        // `self.authTokens` above, never reassigned afterwards), so there's
+        // no need to read them via `self` later. This also has to run
+        // BEFORE `tokens.onSessionRejected` below: that closure captures
+        // `self`, and Swift requires every stored property - including
+        // `vctmFetcher`/`mddlSchemaFetcher`, assigned here - to already be
+        // initialized before `self` can be captured anywhere in `init`.
+        let typeMetadataGet = Self.makeTypeMetadataHttpGet(
+            registryUrl: Self.resolveRegistryUrl(config: config),
+            tenantId: config.tenantId,
+            authTokens: tokens,
+            sessionStore: sessionStore
+        )
+        self.vctmFetcher = VctmFetcher(httpGet: typeMetadataGet)
+        self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
+
         tokens.onSessionRejected = { [weak self] in
             self?.handleReauthenticationRequired()
         }
-        self.authTokens = tokens
+    }
+
+    /// Builds the HTTP GET closure shared by `vctmFetcher`/`mddlSchemaFetcher`.
+    ///
+    /// Both fetchers' registry-service strategy (Strategy 1: `<registryUrl
+    /// >/type-metadata?vct=...`) hits go-wallet-backend's own registry
+    /// service, which - like every other backend REST call
+    /// (`BackendApiClient.request(_:path:body:)`) - may require an
+    /// `Authorization: Bearer` token and always wants the tenant-routing
+    /// `X-Tenant-ID` header. Their OTHER two strategies (issuer-direct
+    /// `<issuerUrl>/type-metadata/<scope>` and the SD-JWT well-known
+    /// `.well-known/vct/...`) hit arbitrary third-party issuer domains -
+    /// attaching the wallet's own bearer token/tenant ID there would leak
+    /// them to an external party. So headers are attached if and only if the
+    /// URL being fetched starts with the resolved registry URL for this
+    /// wallet instance - the same prefix `VctmFetcher`/`MddlSchemaFetcher`
+    /// construct their registry lookup URL from.
+    ///
+    /// - Parameter performRequest: the actual network call, isolated behind
+    ///   this parameter (default: a real `URLSession.shared.data(for:)` call
+    ///   that returns the body only on a 200 response) so
+    ///   `SirosWalletRegistryUrlTests` can inject a stub that captures the
+    ///   built `URLRequest` - in particular its headers - and assert on
+    ///   them directly, without a real network round trip (and without
+    ///   needing to construct an `HTTPURLResponse`, which
+    ///   swift-corelibs-foundation on Linux has no public initializer for).
+    ///   Not `private` for the same `@testable import` access reason.
+    static func makeTypeMetadataHttpGet(
+        registryUrl: String,
+        tenantId: String,
+        authTokens: AuthTokens,
+        sessionStore: SessionStoreProtocol,
+        performRequest: @escaping @Sendable (URLRequest) async -> Data? = { request in
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return nil
+            }
+            return data
+        }
+    ) -> @Sendable (String) async -> String? {
+        { url in
+            guard let requestUrl = URL(string: url) else { return nil }
+            var request = URLRequest(url: requestUrl)
+            request.httpMethod = "GET"
+
+            if url.hasPrefix(registryUrl) {
+                request.setValue(tenantId, forHTTPHeaderField: "X-Tenant-ID")
+                // Mirrors `BackendApiClient.request(_:path:body:)`'s own
+                // auth-token precedence: prefer a live AS-issued backend
+                // token, falling back to the legacy plain app-token string
+                // (read fresh each call - unlike `authTokens`, this DOES
+                // change over the wallet's lifetime, e.g. across
+                // login/logout) when no AS session is available.
+                if let token = try? await authTokens.ensureBackendToken() {
+                    request.setValue("Bearer \(token.raw)", forHTTPHeaderField: "Authorization")
+                } else if let appToken = sessionStore.appToken {
+                    request.setValue("Bearer \(appToken)", forHTTPHeaderField: "Authorization")
+                }
+            }
+
+            guard let data = await performRequest(request) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+    }
+
+    /// Same derivation as the `resolvedRegistryUrl` instance property below,
+    /// factored out as a `static` so it can be computed in `init` before
+    /// `self` is fully initialized (see `makeTypeMetadataHttpGet` call site).
+    private static func resolveRegistryUrl(config: WalletConfig) -> String {
+        if let registryUrl = config.registryUrl { return registryUrl }
+        let trimmedBackendUrl = config.backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "\(trimmedBackendUrl)/registry"
     }
 
     /// Fires whenever ANY code path determines the current session is no
