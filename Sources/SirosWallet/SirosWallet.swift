@@ -1044,9 +1044,47 @@ public final class SirosWallet: @unchecked Sendable {
             )
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
             lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
+            await maybeRegisterFido2Attestation(keyId: keyId, wia: wia, client: client)
             return wia
         } catch {
             return nil
+        }
+    }
+
+    /// Register this instance key's FIDO2/CTAP2 hardware attestation with
+    /// the backend once, the first time a WIA is issued for it - so the
+    /// backend can durably mark the wallet instance as hardware-key-attested
+    /// (see `FIDO2AttestationService` in go-wallet-backend). A no-op for
+    /// software-backed keys (`keystore.attestationChain` returns nil for
+    /// those). Best-effort: any failure here must never block WIA issuance,
+    /// and is simply retried on the next call (nothing is persisted as
+    /// "registered" until the backend call actually succeeds).
+    ///
+    /// Deliberately called from `ensureWalletInstanceAttestation` rather
+    /// than `ensureInstanceKeyId` - registration needs `wallet_instance_id`
+    /// (the WIA's `cnf.jkt`), which doesn't exist until a WIA has actually
+    /// been issued for this key.
+    private func maybeRegisterFido2Attestation(keyId: String, wia: String, client: BackendApiClient) async {
+        if sessionStore.fido2AttestationRegisteredKeyId == keyId { return }
+        guard let chain = try? await keystore.attestationChain(keyId: keyId) else { return }
+        guard let attestationObject = chain.certificates.first else { return }
+        guard let cnf = CredentialUtils.parseJwtPayload(wia)?["cnf"] as? [String: Any],
+              let walletInstanceId = cnf["jkt"] as? String else { return }
+        do {
+            // Takes the caller's already-unwrapped `client` rather than
+            // re-reading `self.apiClient` - a real Copilot-review finding:
+            // `apiClient?.registerFido2Attestation(...)` would silently
+            // no-op (not throw) if apiClient had gone nil since the caller
+            // checked it, and the next line would still mark the key
+            // registered even though nothing was actually sent.
+            try await client.registerFido2Attestation(
+                walletInstanceId: walletInstanceId,
+                attestationObject: attestationObject,
+                clientDataHash: chain.clientDataHash
+            )
+            sessionStore.fido2AttestationRegisteredKeyId = keyId
+        } catch {
+            print("[SirosWallet] FIDO2 attestation registration failed, will retry on next WIA issuance: \(error)")
         }
     }
 

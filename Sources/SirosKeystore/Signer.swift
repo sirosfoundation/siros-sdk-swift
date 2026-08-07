@@ -30,9 +30,10 @@ public protocol Signer: AnyObject, Sendable {
     /// Return the attestation certificate chain for a key, if available.
     ///
     /// For hardware-backed keys (FIDO2, CTAP2), this returns the
-    /// attestation statement certificate chain proving key provenance.
-    /// For software keys, returns `nil`.
-    func attestationChain(keyId: String) async throws -> [Data]?
+    /// attestation statement certificate chain proving key provenance,
+    /// plus the client data hash the attestation signature was computed
+    /// over. For software keys, returns `nil`.
+    func attestationChain(keyId: String) async throws -> AttestationChain?
 
     /// Export the public key in JWK format (JSON-encoded).
     func exportPublicKey(keyId: String) async throws -> Data
@@ -67,6 +68,22 @@ public struct SignerKeyInfo: Sendable, Equatable {
     public init(keyId: String, algorithm: String) {
         self.keyId = keyId
         self.algorithm = algorithm
+    }
+}
+
+/// A hardware-backed key's attestation evidence, as returned by
+/// `Signer.attestationChain` - the raw CTAP2 makeCredential attestation
+/// object certificate chain (leaf first), plus the client data hash the
+/// attestation signature was computed over. Both are needed to register
+/// the attestation with the backend (see
+/// `BackendApiClient.registerFido2Attestation` in SirosAuth).
+public struct AttestationChain: Sendable, Equatable {
+    public let certificates: [Data]
+    public let clientDataHash: Data
+
+    public init(certificates: [Data], clientDataHash: Data) {
+        self.certificates = certificates
+        self.clientDataHash = clientDataHash
     }
 }
 

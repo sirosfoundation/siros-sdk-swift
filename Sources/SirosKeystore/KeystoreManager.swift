@@ -177,6 +177,12 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// above. Returns nil if not available.
     func securityProperties(keyId: String) async -> SignerSecurityProperties?
 
+    /// Return the attestation certificate chain for a key, if available -
+    /// see `Signer.attestationChain`. Returns nil if attestation is not
+    /// available; only a WSCD-backed keystore with a hardware-attesting
+    /// plugin (e.g. FIDO2/CTAP2) actually has one to return.
+    func attestationChain(keyId: String) async throws -> AttestationChain?
+
     /// Generate `count` fresh keypairs and build a single OID4VCI `attestation`
     /// proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",
     /// proof type Appendix "attestation Proof Type") covering all of them via
@@ -238,6 +244,7 @@ public extension KeystoreManager {
 
     func securityProperties() async -> SignerSecurityProperties? { nil }
     func securityProperties(keyId: String) async -> SignerSecurityProperties? { nil }
+    func attestationChain(keyId: String) async throws -> AttestationChain? { nil }
     func signMdocPresentation(
         credentialBytes: Data,
         disclosedClaims: [String]?,
