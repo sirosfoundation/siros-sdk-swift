@@ -36,7 +36,7 @@ private final class MockSigner: Signer, @unchecked Sendable {
 
     func deleteKey(keyId: String) async throws {}
 
-    func attestationChain(keyId: String) async throws -> [Data]? { nil }
+    func attestationChain(keyId: String) async throws -> AttestationChain? { nil }
 
     func exportPublicKey(keyId: String) async throws -> Data {
         if let override = exportPublicKeyOverride { return override }

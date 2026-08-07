@@ -236,6 +236,31 @@ public final class BackendApiClient: @unchecked Sendable {
         return wia
     }
 
+    /// POST /wallet-provider/fido2-attestation/register — register a FIDO2/CTAP2
+    /// hardware-key attestation once, at key-creation time, so the backend can
+    /// durably mark the wallet instance as hardware-key-attested (see
+    /// `FIDO2AttestationService` in go-wallet-backend). Throws `SirosError.backendApi`
+    /// if the backend rejects the attestation (e.g. untrusted AAGUID/chain) or the
+    /// feature isn't enabled.
+    /// - Parameters:
+    ///   - walletInstanceId: The WIA JWK Thumbprint (`cnf.jkt`) this key belongs to.
+    ///   - attestationObject: The raw CTAP2 makeCredential attestation object
+    ///     (siros-wscd-manager's `AttestationChain.certificates[0]`).
+    ///   - clientDataHash: The 32-byte hash the attestation signature was computed
+    ///     over (`AttestationChain.clientDataHash`).
+    public func registerFido2Attestation(
+        walletInstanceId: String,
+        attestationObject: Data,
+        clientDataHash: Data
+    ) async throws {
+        let body: [String: Any] = [
+            "wallet_instance_id": walletInstanceId,
+            "attestation_object": WebAuthnAuthClient.base64UrlEncode(attestationObject),
+            "client_data_hash": WebAuthnAuthClient.base64UrlEncode(clientDataHash),
+        ]
+        _ = try await post("/wallet-provider/fido2-attestation/register", body: body)
+    }
+
     // MARK: - HTTP primitives
 
     private func get(_ path: String) async throws -> [String: Any] {

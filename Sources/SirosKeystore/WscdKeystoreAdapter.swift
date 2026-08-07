@@ -437,7 +437,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     ///
     /// For hardware-backed keys (FIDO2/CTAP2), this provides the
     /// attestation statement that proves key provenance for OID4VCI.
-    public func attestationChain(keyId: String) async throws -> [Data]? {
+    public func attestationChain(keyId: String) async throws -> AttestationChain? {
         return try await signer.attestationChain(keyId: keyId)
     }
 

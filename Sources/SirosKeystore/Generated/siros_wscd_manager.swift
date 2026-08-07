@@ -1104,11 +1104,13 @@ public func FfiConverterTypeFfiActivationOutcome_lower(_ value: FfiActivationOut
 
 public struct FfiAttestationChain {
     public var certificates: [Data]
+    public var clientDataHash: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(certificates: [Data]) {
+    public init(certificates: [Data], clientDataHash: Data) {
         self.certificates = certificates
+        self.clientDataHash = clientDataHash
     }
 }
 
@@ -1119,11 +1121,15 @@ extension FfiAttestationChain: Equatable, Hashable {
         if lhs.certificates != rhs.certificates {
             return false
         }
+        if lhs.clientDataHash != rhs.clientDataHash {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(certificates)
+        hasher.combine(clientDataHash)
     }
 }
 
@@ -1135,12 +1141,14 @@ public struct FfiConverterTypeFfiAttestationChain: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttestationChain {
         return
             try FfiAttestationChain(
-                certificates: FfiConverterSequenceData.read(from: &buf)
+                certificates: FfiConverterSequenceData.read(from: &buf),
+                clientDataHash: FfiConverterData.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiAttestationChain, into buf: inout [UInt8]) {
         FfiConverterSequenceData.write(value.certificates, into: &buf)
+        FfiConverterData.write(value.clientDataHash, into: &buf)
     }
 }
 

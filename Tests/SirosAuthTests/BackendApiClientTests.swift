@@ -124,6 +124,33 @@ final class BackendApiClientTests: XCTestCase {
         XCTAssertNil(json["wallet_instance_id"])
     }
 
+    func testRegisterFido2AttestationSendsExpectedFields() async throws {
+        let server = MockHttpServer()
+        server.enqueue("{\"verified\": true}")
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: server.httpFunction)
+
+        try await client.registerFido2Attestation(
+            walletInstanceId: "test-jkt",
+            attestationObject: Data([0x01, 0x02, 0x03]),
+            clientDataHash: Data(repeating: 0x09, count: 32)
+        )
+
+        let req = server.requests[0]
+        XCTAssertEqual(req.path, "/wallet-provider/fido2-attestation/register")
+        XCTAssertEqual(req.method, "POST")
+        let body = try XCTUnwrap(req.body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["wallet_instance_id"] as? String, "test-jkt")
+        XCTAssertEqual(
+            json["attestation_object"] as? String,
+            WebAuthnAuthClient.base64UrlEncode(Data([0x01, 0x02, 0x03]))
+        )
+        XCTAssertEqual(
+            json["client_data_hash"] as? String,
+            WebAuthnAuthClient.base64UrlEncode(Data(repeating: 0x09, count: 32))
+        )
+    }
+
     func testEvaluateTrustPostsToExpectedEndpoint() async throws {
         let server = MockHttpServer()
         server.enqueue("{\"decision\":true}")

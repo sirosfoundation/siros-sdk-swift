@@ -161,9 +161,11 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         }
     }
 
-    public func attestationChain(keyId: String) async throws -> [Data]? {
+    public func attestationChain(keyId: String) async throws -> AttestationChain? {
         try await onFFIQueue {
-            try self.ffi.attestationChain(kid: keyId)?.certificates
+            try self.ffi.attestationChain(kid: keyId).map {
+                AttestationChain(certificates: $0.certificates, clientDataHash: $0.clientDataHash)
+            }
         }
     }
 
