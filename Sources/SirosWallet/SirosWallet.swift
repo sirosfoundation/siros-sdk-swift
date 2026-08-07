@@ -1848,7 +1848,7 @@ public final class SirosWallet: @unchecked Sendable {
                     clientDataHash: chain.clientDataHash
                 )
             } catch {
-                print("[SirosWallet] FIDO2 attestation registration failed for key \(kp.keyId), continuing: \(error)")
+                logger.warning("FIDO2 attestation registration failed for key \(kp.keyId), continuing: \(error.localizedDescription)")
             }
         }
     }
