@@ -1,6 +1,10 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import SirosAuth
 import SirosCredentials
 import SirosKeystore
@@ -71,5 +75,115 @@ final class SirosWalletRegistryUrlTests: XCTestCase {
         let wallet = makeWallet(config: config)
 
         XCTAssertEqual(wallet.resolvedRegistryUrl, "https://registry.example.com/v1")
+    }
+
+    // MARK: - Registry-service auth headers (security-sensitive)
+
+    /// Covers `SirosWallet.makeTypeMetadataHttpGet` - the HTTP GET closure
+    /// shared by `vctmFetcher`/`mddlSchemaFetcher`. It must attach
+    /// `X-Tenant-ID`/`Authorization` headers ONLY when the target URL is
+    /// go-wallet-backend's own resolved registry service, and NEVER for the
+    /// other two fetch strategies' URLs (arbitrary third-party issuer
+    /// domains) - a leak there would hand the wallet's own bearer
+    /// token/tenant ID to an external party. Exercises the closure directly
+    /// (via `@testable import`), injecting a stub `performRequest` so no
+    /// real network call is made; a throwing `AuthServerClient` httpFn
+    /// forces `ensureBackendToken()` to fail, exercising the legacy
+    /// `sessionStore.appToken` fallback path, same as `BackendApiClient`'s.
+    private struct NoAsSession: Error {}
+
+    private func makeAuthTokens(tenantId: String = "default") -> AuthTokens {
+        let asClient = AuthServerClient(baseUrl: "https://as.example.com", tenantId: tenantId) { _, _, _, _ in
+            throw NoAsSession()
+        }
+        return AuthTokens(authServerClient: asClient, tenantId: tenantId)
+    }
+
+    func testTypeMetadataHttpGetAttachesAuthHeadersForRegistryUrl() async {
+        let sessionStore = InMemorySessionStore()
+        // SessionStoreProtocol scopes all reads/writes to `activeAccountId`
+        // (nil means every read/write is a no-op) - must be set for
+        // `appToken` to actually persist, matching every other
+        // `InMemorySessionStore` use in this SDK.
+        sessionStore.activeAccountId = "tenant-42:test-user"
+        sessionStore.appToken = "legacy-app-token"
+        var capturedRequest: URLRequest?
+
+        let httpGet = SirosWallet.makeTypeMetadataHttpGet(
+            registryUrl: "https://wallet.example.com/registry",
+            tenantId: "tenant-42",
+            authTokens: makeAuthTokens(),
+            sessionStore: sessionStore,
+            performRequest: { request in
+                capturedRequest = request
+                return Data("{}".utf8)
+            }
+        )
+
+        _ = await httpGet("https://wallet.example.com/registry/type-metadata?vct=urn:eudi:diploma:1")
+
+        // `value(forHTTPHeaderField:)` (unlike `allHTTPHeaderFields`) looks
+        // up case-insensitively, matching HTTP semantics - relevant on
+        // Linux, where swift-corelibs-foundation canonicalizes the header
+        // key casing it stores internally.
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "X-Tenant-ID"), "tenant-42")
+        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer legacy-app-token")
+    }
+
+    func testTypeMetadataHttpGetOmitsAuthHeadersForIssuerDirectUrl() async {
+        let sessionStore = InMemorySessionStore()
+        // SessionStoreProtocol scopes all reads/writes to `activeAccountId`
+        // (nil means every read/write is a no-op) - must be set for
+        // `appToken` to actually persist, matching every other
+        // `InMemorySessionStore` use in this SDK.
+        sessionStore.activeAccountId = "tenant-42:test-user"
+        sessionStore.appToken = "legacy-app-token"
+        var capturedRequest: URLRequest?
+
+        let httpGet = SirosWallet.makeTypeMetadataHttpGet(
+            registryUrl: "https://wallet.example.com/registry",
+            tenantId: "tenant-42",
+            authTokens: makeAuthTokens(),
+            sessionStore: sessionStore,
+            performRequest: { request in
+                capturedRequest = request
+                return Data("{}".utf8)
+            }
+        )
+
+        // Issuer-direct strategy's URL - an arbitrary third-party domain,
+        // NOT the registry URL above.
+        _ = await httpGet("https://issuer.example.com/type-metadata/diploma")
+
+        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "X-Tenant-ID"), "must never leak the tenant ID to a third-party issuer")
+        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "must never leak the wallet's bearer token to a third-party issuer")
+    }
+
+    func testTypeMetadataHttpGetOmitsAuthHeadersForWellKnownUrl() async {
+        let sessionStore = InMemorySessionStore()
+        // SessionStoreProtocol scopes all reads/writes to `activeAccountId`
+        // (nil means every read/write is a no-op) - must be set for
+        // `appToken` to actually persist, matching every other
+        // `InMemorySessionStore` use in this SDK.
+        sessionStore.activeAccountId = "tenant-42:test-user"
+        sessionStore.appToken = "legacy-app-token"
+        var capturedRequest: URLRequest?
+
+        let httpGet = SirosWallet.makeTypeMetadataHttpGet(
+            registryUrl: "https://wallet.example.com/registry",
+            tenantId: "tenant-42",
+            authTokens: makeAuthTokens(),
+            sessionStore: sessionStore,
+            performRequest: { request in
+                capturedRequest = request
+                return Data("{}".utf8)
+            }
+        )
+
+        // Well-known strategy's URL - also a third-party issuer domain.
+        _ = await httpGet("https://example.com/.well-known/vct/types/pid")
+
+        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "X-Tenant-ID"))
+        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "Authorization"))
     }
 }

@@ -10,12 +10,46 @@ private let logger = Logger(subsystem: "org.siros.sdk", category: "VctmFetcher")
 #endif
 
 /// Fetches SD-JWT VC Type Metadata from issuer endpoints.
-public final class VctmFetcher: Sendable {
+///
+/// In-memory caches the final result of `fetch()` (whichever strategy
+/// satisfied it) for `cacheTtlSeconds`, matching wallet-frontend's
+/// IndexedDB-backed HTTP cache (30 minute default `maxAge`). Only
+/// successful (non-nil) results are cached, so a transient failure or a
+/// not-yet-registered credential type never gets stuck negative for the
+/// TTL window - every call with no cached entry retries all strategies
+/// fresh.
+public final class VctmFetcher: @unchecked Sendable {
     private let httpGet: (@Sendable (String) async -> String?)?
     private let decoder = JSONDecoder()
+    private let cacheTtlSeconds: TimeInterval
+    private let lock = NSLock()
+    private var cache: [CacheKey: CacheEntry] = [:]
 
-    public init(httpGet: (@Sendable (String) async -> String?)? = nil) {
+    private struct CacheKey: Hashable {
+        let issuerUrl: String
+        let scope: String
+        let vct: String?
+        let registryUrl: String?
+    }
+
+    private struct CacheEntry {
+        let result: Vctm
+        let cachedAt: Date
+    }
+
+    /// - Parameters:
+    ///   - httpGet: test/host-supplied HTTP GET override; defaults to a real
+    ///     `URLSession` fetch when nil.
+    ///   - cacheTtlSeconds: how long a successful `fetch()` result is served
+    ///     from the in-memory cache before a fresh network fetch is required
+    ///     again. Defaults to 1800s (30 minutes), matching wallet-frontend's
+    ///     reference default.
+    public init(
+        httpGet: (@Sendable (String) async -> String?)? = nil,
+        cacheTtlSeconds: TimeInterval = 1800
+    ) {
         self.httpGet = httpGet
+        self.cacheTtlSeconds = cacheTtlSeconds
     }
 
     public func fetch(
@@ -24,6 +58,11 @@ public final class VctmFetcher: Sendable {
         vct: String? = nil,
         registryUrl: String? = nil
     ) async -> Vctm? {
+        let cacheKey = CacheKey(issuerUrl: issuerUrl, scope: scope, vct: vct, registryUrl: registryUrl)
+        if let cached = cachedResult(for: cacheKey) {
+            return cached
+        }
+
         // Strategy 1 (authoritative): go-wallet-backend's TS11-backed,
         // cached credential-type registry service - the same one
         // wallet-frontend always queries for VCTM lookups, never the
@@ -35,6 +74,7 @@ public final class VctmFetcher: Sendable {
         if let registryUrl, let vct {
             if let registryLookupUrl = resolveRegistryUrl(registryUrl, vct: vct) {
                 if let result = await fetchFromUrl(registryLookupUrl) {
+                    store(result, for: cacheKey)
                     return result
                 }
             }
@@ -46,12 +86,14 @@ public final class VctmFetcher: Sendable {
         let typeMetadataUrl = "\(baseUrl)/type-metadata/\(scope)"
 
         if let result = await fetchFromUrl(typeMetadataUrl) {
+            store(result, for: cacheKey)
             return result
         }
 
         if let vct {
             if let wellKnownUrl = resolveWellKnownUrl(vct) {
                 if let result = await fetchFromUrl(wellKnownUrl) {
+                    store(result, for: cacheKey)
                     return result
                 }
             }
@@ -61,6 +103,25 @@ public final class VctmFetcher: Sendable {
         logger.debug("No VCTM found for scope=\(scope) vct=\(vct ?? "nil")")
         #endif
         return nil
+    }
+
+    // MARK: - Cache
+
+    private func cachedResult(for key: CacheKey) -> Vctm? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = cache[key] else { return nil }
+        guard Date().timeIntervalSince(entry.cachedAt) <= cacheTtlSeconds else {
+            cache.removeValue(forKey: key)
+            return nil
+        }
+        return entry.result
+    }
+
+    private func store(_ result: Vctm, for key: CacheKey) {
+        lock.lock()
+        defer { lock.unlock() }
+        cache[key] = CacheEntry(result: result, cachedAt: Date())
     }
 
     public func parseVctm(_ jsonString: String) -> Vctm? {

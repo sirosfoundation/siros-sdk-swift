@@ -163,4 +163,93 @@ final class MddlSchemaFetcherTests: XCTestCase {
         XCTAssertNotNil(schema)
         XCTAssertEqual(calledUrls, ["https://issuer.example.com/type-metadata/mdl"], "no registry lookup should ever be attempted")
     }
+
+    // MARK: - In-memory TTL cache
+
+    func testFetchCachesSuccessfulResultWithinTtl() async {
+        var callCount = 0
+        let fetcher = MddlSchemaFetcher(httpGet: { _ in
+            callCount += 1
+            return self.sampleMddlSchemaJson
+        }, cacheTtlSeconds: 1800)
+
+        let first = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+        let second = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+
+        XCTAssertNotNil(first)
+        XCTAssertNotNil(second)
+        XCTAssertEqual(callCount, 1, "second call within TTL must be served from cache, not hit the network again")
+    }
+
+    func testFetchDoesNotServeCacheForDifferentParameters() async {
+        var callCount = 0
+        let fetcher = MddlSchemaFetcher(httpGet: { _ in
+            callCount += 1
+            return self.sampleMddlSchemaJson
+        }, cacheTtlSeconds: 1800)
+
+        _ = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+        _ = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "photoId")
+        _ = await fetcher.fetch(issuerUrl: "https://other-issuer.example.com", scope: "mdl")
+
+        XCTAssertEqual(callCount, 3, "different scope/issuerUrl must never be served from another key's cache entry")
+    }
+
+    func testFetchDoesNotServeCacheForDifferentDoctypeOrRegistryUrl() async {
+        var callCount = 0
+        let fetcher = MddlSchemaFetcher(httpGet: { _ in
+            callCount += 1
+            return self.sampleMddlSchemaJson
+        }, cacheTtlSeconds: 1800)
+
+        _ = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "mdl",
+            doctype: "org.iso.18013.5.1.mDL",
+            registryUrl: "https://wallet.example.com/registry"
+        )
+        _ = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "mdl",
+            doctype: "org.iso.18013.5.1.other",
+            registryUrl: "https://wallet.example.com/registry"
+        )
+        _ = await fetcher.fetch(
+            issuerUrl: "https://issuer.example.com",
+            scope: "mdl",
+            doctype: "org.iso.18013.5.1.mDL",
+            registryUrl: "https://other-wallet.example.com/registry"
+        )
+
+        XCTAssertEqual(callCount, 3, "different doctype/registryUrl must never be served from another key's cache entry")
+    }
+
+    func testFetchRefetchesAfterTtlExpires() async {
+        var callCount = 0
+        let fetcher = MddlSchemaFetcher(httpGet: { _ in
+            callCount += 1
+            return self.sampleMddlSchemaJson
+        }, cacheTtlSeconds: 0.05)
+
+        _ = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms > 50ms TTL
+        _ = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+
+        XCTAssertEqual(callCount, 2, "a call after TTL expiry must hit the network again")
+    }
+
+    func testFetchNeverCachesAFailedLookup() async {
+        var callCount = 0
+        let fetcher = MddlSchemaFetcher(httpGet: { _ in
+            callCount += 1
+            return nil
+        }, cacheTtlSeconds: 1800)
+
+        let first = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+        let second = await fetcher.fetch(issuerUrl: "https://issuer.example.com", scope: "mdl")
+
+        XCTAssertNil(first)
+        XCTAssertNil(second)
+        XCTAssertEqual(callCount, 2, "a nil result must never be cached - every call must retry all strategies fresh")
+    }
 }

@@ -14,12 +14,45 @@ private let logger = Logger(subsystem: "org.siros.sdk", category: "MddlSchemaFet
 /// relay (confirmed format-blind server-side: `go-wallet-backend`'s registry
 /// relay has no format/`mso_mdoc` branching, so it serves whatever document
 /// shape it's given unchanged - same mechanism, no new backend endpoint).
-public final class MddlSchemaFetcher: Sendable {
+///
+/// In-memory caches the final result of `fetch()` (whichever strategy
+/// satisfied it) for `cacheTtlSeconds`, matching wallet-frontend's
+/// IndexedDB-backed HTTP cache (30 minute default `maxAge`) - see
+/// `VctmFetcher`'s identical caching strategy. Only successful (non-nil)
+/// results are cached, so a transient failure or a not-yet-registered
+/// credential type never gets stuck negative for the TTL window.
+public final class MddlSchemaFetcher: @unchecked Sendable {
     private let httpGet: (@Sendable (String) async -> String?)?
     private let decoder = JSONDecoder()
+    private let cacheTtlSeconds: TimeInterval
+    private let lock = NSLock()
+    private var cache: [CacheKey: CacheEntry] = [:]
 
-    public init(httpGet: (@Sendable (String) async -> String?)? = nil) {
+    private struct CacheKey: Hashable {
+        let issuerUrl: String
+        let scope: String
+        let doctype: String?
+        let registryUrl: String?
+    }
+
+    private struct CacheEntry {
+        let result: MddlSchema
+        let cachedAt: Date
+    }
+
+    /// - Parameters:
+    ///   - httpGet: test/host-supplied HTTP GET override; defaults to a real
+    ///     `URLSession` fetch when nil.
+    ///   - cacheTtlSeconds: how long a successful `fetch()` result is served
+    ///     from the in-memory cache before a fresh network fetch is required
+    ///     again. Defaults to 1800s (30 minutes), matching wallet-frontend's
+    ///     reference default.
+    public init(
+        httpGet: (@Sendable (String) async -> String?)? = nil,
+        cacheTtlSeconds: TimeInterval = 1800
+    ) {
         self.httpGet = httpGet
+        self.cacheTtlSeconds = cacheTtlSeconds
     }
 
     /// Fetch the MDDL schema for a credential configuration.
@@ -43,6 +76,11 @@ public final class MddlSchemaFetcher: Sendable {
         doctype: String? = nil,
         registryUrl: String? = nil
     ) async -> MddlSchema? {
+        let cacheKey = CacheKey(issuerUrl: issuerUrl, scope: scope, doctype: doctype, registryUrl: registryUrl)
+        if let cached = cachedResult(for: cacheKey) {
+            return cached
+        }
+
         // Strategy 1 (authoritative): go-wallet-backend's TS11-backed,
         // cached credential-type registry service - the mdoc analogue of
         // `VctmFetcher`'s identical registry strategy. mdoc doctypes are
@@ -51,6 +89,7 @@ public final class MddlSchemaFetcher: Sendable {
         if let registryUrl, let doctype {
             if let registryLookupUrl = resolveRegistryUrl(registryUrl, doctype: doctype) {
                 if let result = await fetchFromUrl(registryLookupUrl) {
+                    store(result, for: cacheKey)
                     return result
                 }
             }
@@ -62,6 +101,7 @@ public final class MddlSchemaFetcher: Sendable {
         let typeMetadataUrl = "\(baseUrl)/type-metadata/\(scope)"
 
         if let result = await fetchFromUrl(typeMetadataUrl) {
+            store(result, for: cacheKey)
             return result
         }
 
@@ -69,6 +109,25 @@ public final class MddlSchemaFetcher: Sendable {
         logger.debug("No MDDL schema found for scope=\(scope)")
         #endif
         return nil
+    }
+
+    // MARK: - Cache
+
+    private func cachedResult(for key: CacheKey) -> MddlSchema? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = cache[key] else { return nil }
+        guard Date().timeIntervalSince(entry.cachedAt) <= cacheTtlSeconds else {
+            cache.removeValue(forKey: key)
+            return nil
+        }
+        return entry.result
+    }
+
+    private func store(_ result: MddlSchema, for key: CacheKey) {
+        lock.lock()
+        defer { lock.unlock() }
+        cache[key] = CacheEntry(result: result, cachedAt: Date())
     }
 
     /// Parse an MDDL schema from raw JSON, e.g. if embedded in an issuer metadata response.
