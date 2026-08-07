@@ -117,4 +117,24 @@ final class SessionStoreTests: XCTestCase {
         store.clearAll()
         XCTAssertNil(store.appAttestKeyId, "clearAll() (factory reset) must delete appAttestKeyId")
     }
+
+    /// `wscdTofuMappingJson` is a single JSON string blob (matching
+    /// `privateDataJwe`'s as-string-blob precedent), account-scoped like
+    /// most other properties - unlike `appAttestKeyId`, it must NOT survive
+    /// an account switch or `clearAccount()`.
+    func testWscdTofuMappingJsonIsAccountScoped() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "account-a"
+        store.wscdTofuMappingJson = "{\"issuer|type\":\"fido2\"}"
+        XCTAssertEqual(store.wscdTofuMappingJson, "{\"issuer|type\":\"fido2\"}")
+
+        store.activeAccountId = "account-b"
+        XCTAssertNil(store.wscdTofuMappingJson, "must be account-scoped, unlike appAttestKeyId")
+
+        store.activeAccountId = "account-a"
+        XCTAssertEqual(store.wscdTofuMappingJson, "{\"issuer|type\":\"fido2\"}")
+
+        store.clearAccount()
+        XCTAssertNil(store.wscdTofuMappingJson, "clearAccount() must clear the TOFU mapping like other account-scoped data")
+    }
 }

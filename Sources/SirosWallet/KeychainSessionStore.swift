@@ -81,6 +81,10 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         get { read("privateDataEtag") }
         set { write("privateDataEtag", newValue) }
     }
+    public var wscdTofuMappingJson: String? {
+        get { read("wscdTofuMappingJson") }
+        set { write("wscdTofuMappingJson", newValue) }
+    }
     public var instanceKeyId: String? {
         get { read("instanceKeyId") }
         set { write("instanceKeyId", newValue) }
@@ -105,7 +109,7 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         let keys = ["appToken", "refreshToken", "userId", "displayName",
                     "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
                     "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag",
-                    "instanceKeyId",
+                    "instanceKeyId", "wscdTofuMappingJson",
                     // Legacy key, no longer written (the per-instance-key
                     // FIDO2 registration dedupe it backed was removed in
                     // favor of per-credential-key registration - see
