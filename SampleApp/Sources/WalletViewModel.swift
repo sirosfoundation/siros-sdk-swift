@@ -976,22 +976,36 @@ final class WalletViewModel: ObservableObject {
         }
         #endif
 
+        // Broken out into separately-typed statements rather than inlined
+        // directly in the `WalletConfig(...)` call below - the combination
+        // of ternaries plus an inline `@Sendable` async closure literal in
+        // one expression hit a real Swift type-checker limit ("failed to
+        // produce diagnostic for expression") when compiled via Xcode.
+        let resolvedAvailableKeystores: [String: KeystoreManager]? =
+            (wscdMultiPluginEnabled && !availableKeystores.isEmpty) ? availableKeystores : nil
+        let resolvedDefaultWscdMapping: [String: String]? =
+            (wscdMultiPluginEnabled && !wscdDefaultMapping.isEmpty) ? wscdDefaultMapping : nil
+        let resolvedRequestWscdChoice: RequestWscdChoice?
+        if wscdMultiPluginEnabled {
+            resolvedRequestWscdChoice = { [weak self] issuer, credentialType, eligiblePluginIds in
+                await self?.requestWscdChoice(
+                    issuer: issuer,
+                    credentialType: credentialType,
+                    eligiblePluginIds: eligiblePluginIds
+                ) ?? .cancelled
+            }
+        } else {
+            resolvedRequestWscdChoice = nil
+        }
+
         let config = WalletConfig(
             backendUrl: backendUrl,
             tenantId: tenantId,
             redirectUri: "\(redirectScheme)://callback",
             useWmpProtocol: useWmpProtocol,
-            availableKeystores: wscdMultiPluginEnabled && !availableKeystores.isEmpty ? availableKeystores : nil,
-            defaultWscdMapping: wscdMultiPluginEnabled && !wscdDefaultMapping.isEmpty ? wscdDefaultMapping : nil,
-            requestWscdChoice: wscdMultiPluginEnabled
-                ? { [weak self] issuer, credentialType, eligiblePluginIds in
-                    await self?.requestWscdChoice(
-                        issuer: issuer,
-                        credentialType: credentialType,
-                        eligiblePluginIds: eligiblePluginIds
-                    ) ?? .cancelled
-                }
-                : nil
+            availableKeystores: resolvedAvailableKeystores,
+            defaultWscdMapping: resolvedDefaultWscdMapping,
+            requestWscdChoice: resolvedRequestWscdChoice
         )
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider
