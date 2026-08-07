@@ -43,10 +43,15 @@ public struct WalletConfig: Sendable {
     /// see `WscdPluginCapabilities`), each with its own platform transport
     /// (BLE/USB/CoreNFC/etc) already wired up - only the host app can
     /// construct these, since that transport wiring is deliberately kept out
-    /// of the SDK. `nil`/empty is fully backward compatible: none of
+    /// of the SDK. `nil` (the default) is fully backward compatible: none of
     /// `WscdSelectionPolicy`'s selection logic engages, and credential-
     /// issuance key generation behaves exactly as it does today, always
-    /// using the wallet's single `keystore`. Only set this to opt into
+    /// using the wallet's single `keystore`. An explicitly *empty*
+    /// dictionary is NOT the same as `nil` - it means the host app opted
+    /// into multi-plugin selection but has zero plugins registered right
+    /// now, so a credential type that declares a key-storage requirement
+    /// still gets `WscdSelectionError.noEligiblePlugin` rather than a
+    /// silent fallback to the default keystore. Only set this to opt into
     /// multi-plugin selection.
     public var availableKeystores: [String: KeystoreManager]?
 
