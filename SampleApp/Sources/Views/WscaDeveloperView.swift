@@ -8,6 +8,14 @@ import SirosKeystore
 struct WscaDeveloperView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
+    // WSCD Selection Policy - new-entry form state for
+    // `WalletConfig.defaultWscdMapping` (see the section below's header
+    // comment for why this dev-only config lives here rather than in
+    // end-user Settings).
+    @State private var newMappingIssuer = ""
+    @State private var newMappingCredentialType = ""
+    @State private var newMappingPluginId = "fido2"
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -37,6 +45,97 @@ struct WscaDeveloperView: View {
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                    }
+
+                    // WSCD Selection Policy - `WscdSelectionPolicy`'s
+                    // multi-plugin key-storage selection (see its doc
+                    // comment). Dev config, not end-user Settings: unlike
+                    // the "Security Key Choices" TOFU section in
+                    // `SettingsView` (which shows/clears what the wallet
+                    // already decided per-credential), `defaultWscdMapping`
+                    // is an integrator's up-front shortcut answer for a
+                    // given issuer/credential type - not a preference an
+                    // end user would ever configure for themselves - and
+                    // `availableKeystores`/`requestWscdChoice` only need to
+                    // exist at all when this toggle is on, so it belongs
+                    // next to the plugin chooser above, matching the
+                    // Kotlin sample app's equivalent dev-only placement.
+                    sectionHeader("WSCD Selection Policy")
+                    infoCard {
+                        Toggle("Enable multi-plugin selection", isOn: $viewModel.wscdMultiPluginEnabled)
+                            .font(.subheadline)
+                        Text("Requires reconnecting to take effect.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if viewModel.wscdMultiPluginEnabled {
+                        Text("Default Mapping")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+
+                        if viewModel.wscdDefaultMapping.isEmpty {
+                            Text("No default mappings configured")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            infoCard {
+                                ForEach(Array(viewModel.wscdDefaultMapping.keys.sorted()), id: \.self) { key in
+                                    if let pluginId = viewModel.wscdDefaultMapping[key] {
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(key)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
+                                                Text(pluginId)
+                                                    .font(.caption.weight(.medium))
+                                            }
+                                            Spacer()
+                                            Button(action: { viewModel.removeWscdDefaultMapping(key: key) }) {
+                                                Image(systemName: "xmark.circle")
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            .buttonStyle(.borderless)
+                                        }
+                                        .padding(.vertical, 2)
+                                    }
+                                }
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Issuer URL", text: $newMappingIssuer)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                            TextField("Credential type (vct/doctype)", text: $newMappingCredentialType)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                            HStack(spacing: 8) {
+                                ForEach(["softkey", "r2ps", "fido2"], id: \.self) { pluginId in
+                                    PluginChip(
+                                        label: pluginId,
+                                        isSelected: newMappingPluginId == pluginId,
+                                        action: { newMappingPluginId = pluginId }
+                                    )
+                                }
+                            }
+                            Button("Add Mapping") {
+                                viewModel.addWscdDefaultMapping(
+                                    issuer: newMappingIssuer,
+                                    credentialType: newMappingCredentialType,
+                                    pluginId: newMappingPluginId
+                                )
+                                newMappingIssuer = ""
+                                newMappingCredentialType = ""
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(newMappingIssuer.isEmpty || newMappingCredentialType.isEmpty)
+                        }
                     }
 
                     // Lifecycle Status

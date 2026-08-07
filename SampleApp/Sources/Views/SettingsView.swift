@@ -37,6 +37,44 @@ struct SettingsView: View {
                     Text(L10n.string("settings.credentialConsumptionDescription"))
                 }
 
+                // WSCD key-storage choices (TOFU mapping) section - see
+                // `WscdSelectionPolicy`'s doc comment. Read-only display +
+                // per-entry/clear-all, matching the credential consumption
+                // section's plain-List-row convention above. The actual
+                // dev-only `defaultWscdMapping`/multi-plugin toggle lives in
+                // `WscaDeveloperView` instead - see its own doc comment for
+                // why that split makes sense.
+                if !viewModel.wscdTofuMappingSnapshot.isEmpty {
+                    Section {
+                        ForEach(viewModel.wscdTofuMappingSnapshot.sorted(by: { $0.key < $1.key }), id: \.key) { key, pluginId in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(key)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Text(pluginId)
+                                        .font(.body.weight(.medium))
+                                }
+                                Spacer()
+                                Button(action: { viewModel.clearWscdTofuMapping(forKey: key) }) {
+                                    Image(systemName: "xmark.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        Button(role: .destructive, action: { viewModel.clearAllWscdTofuMappings() }) {
+                            Text("Clear All")
+                        }
+                    } header: {
+                        Text("Security Key Choices")
+                    } footer: {
+                        Text("Which security key was picked for each credential you've received. Clearing an entry asks again next time.")
+                    }
+                }
+
                 // Passkeys section
                 Section("Passkeys") {
                     if viewModel.passkeys.isEmpty {
@@ -137,6 +175,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 viewModel.listPasskeysForUI()
+                viewModel.refreshWscdTofuMapping()
             }
         }
     }

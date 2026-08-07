@@ -151,6 +151,28 @@ public final class SirosWallet: @unchecked Sendable {
         return WalletCapabilities(nativeAttestation: nativeAttestation, wscd: wscdManager != nil)
     }
 
+    /// Read-only snapshot of the persisted WSCD TOFU mapping
+    /// (`"issuer|credentialType" -> pluginId`) - lets a host app render/
+    /// manage it in its own UI (e.g. a settings screen). See
+    /// `WscdSelectionPolicy.currentTofuMapping`'s doc comment. Always empty
+    /// when `config.availableKeystores` was never set, since
+    /// `WscdSelectionPolicy.resolve` never runs (and so never persists
+    /// anything) in that case.
+    public var wscdTofuMapping: [String: String] { wscdSelectionPolicy.currentTofuMapping() }
+
+    /// Clears one persisted WSCD TOFU entry - `key` must be exactly one of
+    /// `wscdTofuMapping`'s keys. The corresponding (issuer, credentialType)
+    /// pair re-resolves (auto-pick/prompt) on its next matching credential
+    /// issuance instead of reusing the old choice.
+    public func clearWscdTofuMapping(forKey key: String) {
+        wscdSelectionPolicy.clearTofuMapping(forKey: key)
+    }
+
+    /// Clears every persisted WSCD TOFU entry.
+    public func clearAllWscdTofuMappings() {
+        wscdSelectionPolicy.clearAllTofuMappings()
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher

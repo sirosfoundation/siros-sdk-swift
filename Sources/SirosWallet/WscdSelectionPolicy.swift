@@ -186,6 +186,34 @@ public final class WscdSelectionPolicy {
         "\(issuer)|\(credentialType)"
     }
 
+    // MARK: - TOFU inspection/management (host-app settings UI)
+
+    /// Read-only snapshot of the currently persisted TOFU mapping
+    /// (`"\(issuer)|\(credentialType)" -> pluginId`, see `tofuKey`) - lets a
+    /// host app render/manage it, e.g. a settings screen listing which
+    /// plugin was picked for which issuer/credential type, with an option to
+    /// clear an entry and force fresh resolution (steps 3-6 of `resolve`'s
+    /// doc comment) on the next matching issuance.
+    public func currentTofuMapping() -> [String: String] {
+        readTofu()
+    }
+
+    /// Clears one persisted TOFU entry, if present. `key` must be exactly
+    /// one of `currentTofuMapping()`'s keys - this does not accept a raw
+    /// `(issuer, credentialType)` pair, since either half could itself
+    /// contain the `"|"` separator and there is no unambiguous way to
+    /// reconstruct the exact key from its parts alone.
+    public func clearTofuMapping(forKey key: String) {
+        var map = readTofu()
+        map.removeValue(forKey: key)
+        writeTofu(map)
+    }
+
+    /// Clears every persisted TOFU entry.
+    public func clearAllTofuMappings() {
+        writeTofu([:])
+    }
+
     // MARK: - TOFU persistence
 
     private func readTofu() -> [String: String] {
@@ -200,6 +228,10 @@ public final class WscdSelectionPolicy {
     private func persistTofu(key: String, pluginId: String) {
         var map = readTofu()
         map[key] = pluginId
+        writeTofu(map)
+    }
+
+    private func writeTofu(_ map: [String: String]) {
         guard let data = try? JSONEncoder().encode(map), let json = String(data: data, encoding: .utf8) else { return }
         sessionStore.wscdTofuMappingJson = json
     }

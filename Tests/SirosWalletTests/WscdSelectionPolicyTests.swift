@@ -318,4 +318,75 @@ final class WscdSelectionPolicyTests: XCTestCase {
         )
         XCTAssertEqual(resultAAgain, "softkey")
     }
+
+    // MARK: - TOFU inspection/management (host-app settings UI)
+
+    func testCurrentTofuMappingReflectsPersistedEntries() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        XCTAssertEqual(policy.currentTofuMapping(), [:])
+
+        _ = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_basic",
+            availablePluginIds: ["softkey"]
+        )
+        XCTAssertEqual(
+            policy.currentTofuMapping(),
+            ["https://issuer.example.com|urn:eu.europa.ec.eudi:pid:1": "softkey"]
+        )
+    }
+
+    func testClearTofuMappingForKeyRemovesOnlyThatEntry() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+
+        _ = try await policy.resolve(
+            issuer: "https://issuer-a.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_basic",
+            availablePluginIds: ["softkey"]
+        )
+        _ = try await policy.resolve(
+            issuer: "https://issuer-b.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["fido2"]
+        )
+        XCTAssertEqual(policy.currentTofuMapping().count, 2)
+
+        policy.clearTofuMapping(forKey: "https://issuer-a.example.com|urn:eu.europa.ec.eudi:pid:1")
+
+        XCTAssertEqual(
+            policy.currentTofuMapping(),
+            ["https://issuer-b.example.com|urn:eu.europa.ec.eudi:pid:1": "fido2"]
+        )
+    }
+
+    func testClearAllTofuMappingsRemovesEverything() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+
+        _ = try await policy.resolve(
+            issuer: "https://issuer-a.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_basic",
+            availablePluginIds: ["softkey"]
+        )
+        _ = try await policy.resolve(
+            issuer: "https://issuer-b.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["fido2"]
+        )
+        XCTAssertEqual(policy.currentTofuMapping().count, 2)
+
+        policy.clearAllTofuMappings()
+
+        XCTAssertEqual(policy.currentTofuMapping(), [:])
+    }
 }

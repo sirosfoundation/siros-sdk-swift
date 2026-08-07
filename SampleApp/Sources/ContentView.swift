@@ -47,6 +47,19 @@ struct ContentView: View {
         } message: {
             Text(viewModel.infoMessage ?? "")
         }
+        // Attached at this top level (not inside a specific screen) since a
+        // `RequestWscdChoice` prompt can fire during credential issuance
+        // regardless of which screen happens to be showing underneath -
+        // mirrors how the error/info alerts above are handled globally.
+        .sheet(item: $viewModel.pendingWscdChoice, onDismiss: {
+            // Covers the sheet being dismissed WITHOUT the user tapping a
+            // plugin or Cancel (e.g. swiping it away) - see
+            // `WalletViewModel.dismissWscdChoice`'s doc comment, mirroring
+            // `ProximityEngagementScreen`'s identical `onDismiss` handling.
+            viewModel.dismissWscdChoice()
+        }) { choice in
+            WscdChoiceSheet(choice: choice)
+        }
     }
 }
 
