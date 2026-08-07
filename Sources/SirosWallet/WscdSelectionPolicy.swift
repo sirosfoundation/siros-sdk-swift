@@ -128,14 +128,23 @@ public final class WscdSelectionPolicy {
         guard let requiredTier else { return nil }
 
         let key = Self.tofuKey(issuer: issuer, credentialType: credentialType)
+        let registered = Set(availablePluginIds)
 
-        // 2. TOFU hit, still sufficient.
-        if let cached = readTofu()[key], isSufficient(cached, for: requiredTier) {
+        // 2. TOFU hit, still registered and still sufficient. A cached
+        // pluginId whose plugin was since unregistered (e.g. the host app
+        // removed it from `availableKeystores`) must NOT be reused - falling
+        // through here means it's re-evaluated against what's actually
+        // registered by steps 3-6 instead, which can still throw
+        // `noEligiblePlugin` if nothing else qualifies.
+        if let cached = readTofu()[key], registered.contains(cached), isSufficient(cached, for: requiredTier) {
             return cached
         }
 
-        // 3. Host-app-supplied default mapping.
-        if let mapped = defaultMapping[key], isSufficient(mapped, for: requiredTier) {
+        // 3. Host-app-supplied default mapping - same registered-check as
+        // TOFU above, since a stale/misconfigured mapping entry is the same
+        // class of bug (silently falling back to the default keystore
+        // instead of surfacing `noEligiblePlugin`).
+        if let mapped = defaultMapping[key], registered.contains(mapped), isSufficient(mapped, for: requiredTier) {
             persistTofu(key: key, pluginId: mapped)
             return mapped
         }
@@ -152,6 +161,11 @@ public final class WscdSelectionPolicy {
             guard let requestChoice else { return nil }
             switch await requestChoice(issuer, credentialType, eligible) {
             case .chosen(let pluginId):
+                // Guard against a host callback returning something outside
+                // the `eligible` list it was just given (e.g. a UI bug) -
+                // treat it the same as `.cancelled` rather than persisting
+                // and returning an unvalidated choice.
+                guard eligible.contains(pluginId) else { return nil }
                 persistTofu(key: key, pluginId: pluginId)
                 return pluginId
             case .cancelled:

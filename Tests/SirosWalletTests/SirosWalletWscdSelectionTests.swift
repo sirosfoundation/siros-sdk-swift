@@ -178,4 +178,28 @@ final class SirosWalletWscdSelectionTests: XCTestCase {
         XCTAssertEqual(result?.keyIds.first, "softkey-key-0")
         XCTAssertEqual(fidoKeystore.generateKeypairsCallCount, 0)
     }
+
+    func testThrowsNoEligiblePluginWhenAvailableKeystoresIsExplicitlyEmpty() async throws {
+        // `availableKeystores` set to a non-nil but EMPTY dictionary - the
+        // host app opted into multi-plugin selection but has zero plugins
+        // registered right now. This must throw `noEligiblePlugin` (like any
+        // other zero-eligible case), not silently skip selection entirely
+        // and fall back to the default keystore.
+        let defaultKeystore = StubKeystoreManager(label: "softkey")
+        var config = WalletConfig(backendUrl: "https://example.invalid")
+        config.availableKeystores = [:]
+
+        let wallet = SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: defaultKeystore)
+        let w = wallet!
+        w.apiClient = fakeApiClient()
+        w.activeVctm = Vctm(vct: "urn:example:pid", requiredKeyStorage: "iso_18045_high")
+
+        do {
+            _ = try await w.requestBackendKeyAttestation(audience: "https://issuer.example.com", nonce: "n", count: 1)
+            XCTFail("expected WscdSelectionError.noEligiblePlugin to propagate")
+        } catch WscdSelectionError.noEligiblePlugin {
+            // Expected.
+        }
+        XCTAssertEqual(defaultKeystore.generateKeypairsCallCount, 0, "must never silently fall back to the default keystore")
+    }
 }

@@ -1828,7 +1828,7 @@ public final class SirosWallet: @unchecked Sendable {
         // that's allowed to propagate past this function's own catch-all
         // below (see the doc comment above).
         var effectiveKeystore = keystore
-        if let availableKeystores = config.availableKeystores, !availableKeystores.isEmpty {
+        if let availableKeystores = config.availableKeystores {
             lock.lock()
             let credentialType = activeVctm?.vct ?? activeMddlSchema?.doctype ?? activeOffer?.credentialConfigurationId ?? ""
             let requiredTier = activeVctm?.requiredKeyStorage ?? activeMddlSchema?.requiredKeyStorage

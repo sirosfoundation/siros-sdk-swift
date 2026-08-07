@@ -86,6 +86,26 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertEqual(result, "fido2", "must fall through to the one still-sufficient plugin, not the stale TOFU entry")
     }
 
+    func testTofuEntryNoLongerRegisteredIsIgnored() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        // Pre-seed a TOFU mapping pointing at "fido2", which meets the tier
+        // but is no longer in `availablePluginIds` below (e.g. the host app
+        // unregistered it since the TOFU entry was persisted).
+        let key = "https://issuer.example.com|urn:eu.europa.ec.eudi:pid:1"
+        let json = try! JSONEncoder().encode([key: "fido2"])
+        store.wscdTofuMappingJson = String(data: json, encoding: .utf8)
+
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["r2ps"]
+        )
+        XCTAssertEqual(result, "r2ps", "a TOFU entry for an unregistered plugin must not be reused - must fall through to what's actually registered")
+    }
+
     // 3. Default-mapping hit.
     func testDefaultMappingHitIsUsedAndPersistedAsTofu() async throws {
         let store = InMemorySessionStore()
@@ -127,6 +147,23 @@ final class WscdSelectionPolicyTests: XCTestCase {
             availablePluginIds: ["softkey", "fido2"]
         )
         XCTAssertEqual(result, "fido2", "insufficient default mapping must fall through to auto single-match")
+    }
+
+    func testDefaultMappingEntryNoLongerRegisteredIsIgnored() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let key = "https://issuer.example.com|urn:eu.europa.ec.eudi:pid:1"
+        // Mapped plugin ("fido2") meets the tier but isn't actually registered.
+        let policy = WscdSelectionPolicy(sessionStore: store, defaultMapping: [key: "fido2"])
+
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["r2ps"]
+        )
+        XCTAssertEqual(result, "r2ps", "a default mapping entry for an unregistered plugin must not be used - must fall through to what's actually registered")
+        XCTAssertFalse(store.wscdTofuMappingJson?.contains("fido2") ?? false, "the unregistered mapped plugin must not be persisted as TOFU")
     }
 
     // 4. Auto single-match.
@@ -181,6 +218,25 @@ final class WscdSelectionPolicyTests: XCTestCase {
         )
         XCTAssertNil(result)
         XCTAssertNil(store.wscdTofuMappingJson, "a cancelled choice must not be persisted as TOFU")
+    }
+
+    // 5. Ask-user, host callback returns a pluginId outside the eligible
+    // list it was given (e.g. a host UI bug) - must be treated like
+    // `.cancelled`, not trusted and persisted as-is.
+    func testMultipleEligibleChoiceOutsideEligibleListIsTreatedAsCancelled() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        // "softkey" doesn't meet the required tier, so it's never in `eligible`.
+        let policy = WscdSelectionPolicy(sessionStore: store, requestChoice: { _, _, _ in .chosen(pluginId: "softkey") })
+
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "org.iso.18013.5.1.mDL",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["softkey", "fido2", "r2ps"]
+        )
+        XCTAssertNil(result)
+        XCTAssertNil(store.wscdTofuMappingJson, "an invalid choice must not be persisted as TOFU")
     }
 
     // 5. No callback configured at all - best-effort nil, not a crash.
