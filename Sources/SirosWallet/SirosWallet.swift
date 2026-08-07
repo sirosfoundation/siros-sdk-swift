@@ -212,6 +212,20 @@ public final class SirosWallet: @unchecked Sendable {
     let mddlSchemaFetcher: MddlSchemaFetcher
     private let accountRegistry: AccountRegistry
 
+    /// go-wallet-backend's credential-type registry service base URL, for
+    /// `vctmFetcher`/`mddlSchemaFetcher`'s registry-service fetch strategy.
+    /// Uses `config.registryUrl` when the integrator set one explicitly,
+    /// otherwise derives it from `config.backendUrl` - the registry route is
+    /// mounted under a `/registry` path prefix on the same host/port as the
+    /// rest of go-wallet-backend's public API. Not `private` so
+    /// `SirosWallet+Notifications.swift` (a separate file, same module) can
+    /// use it too, matching `mddlSchemaFetcher`'s own visibility above.
+    var resolvedRegistryUrl: String {
+        if let registryUrl = config.registryUrl { return registryUrl }
+        let trimmedBackendUrl = config.backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "\(trimmedBackendUrl)/registry"
+    }
+
     // Internal (not private) so `@testable import` can seed a fake client
     // directly, matching this file's existing precedent for other testable
     // internals (e.g. `cachedWia`, `currentWalletInstanceId()`).
@@ -993,7 +1007,9 @@ public final class SirosWallet: @unchecked Sendable {
             backgroundColor: credDisplay?.backgroundColor ?? issuerDisplay?.backgroundColor,
             textColor: credDisplay?.textColor ?? issuerDisplay?.textColor,
             logoUri: credDisplay?.logo?.uri,
-            issuerLogoUri: issuerDisplay?.logo?.uri
+            issuerLogoUri: issuerDisplay?.logo?.uri,
+            vct: config.vct,
+            doctype: config.doctype
         )
     }
 
@@ -1273,11 +1289,15 @@ public final class SirosWallet: @unchecked Sendable {
         // this offer's actual format simply fails to decode and stays nil.
         let vctm = try? await vctmFetcher.fetch(
             issuerUrl: offer.credentialIssuerIdentifier,
-            scope: offer.credentialConfigurationId
+            scope: offer.credentialConfigurationId,
+            vct: offer.vct,
+            registryUrl: resolvedRegistryUrl
         )
         let mddlSchema = await mddlSchemaFetcher.fetch(
             issuerUrl: offer.credentialIssuerIdentifier,
-            scope: offer.credentialConfigurationId
+            scope: offer.credentialConfigurationId,
+            doctype: offer.doctype,
+            registryUrl: resolvedRegistryUrl
         )
         lock.lock()
         activeVctm = vctm
@@ -1328,11 +1348,15 @@ public final class SirosWallet: @unchecked Sendable {
             lock.lock(); activeOffer = offer; lock.unlock()
             let vctm = try? await vctmFetcher.fetch(
                 issuerUrl: offer.credentialIssuerIdentifier,
-                scope: offer.credentialConfigurationId
+                scope: offer.credentialConfigurationId,
+                vct: offer.vct,
+                registryUrl: resolvedRegistryUrl
             )
             let mddlSchema = await mddlSchemaFetcher.fetch(
                 issuerUrl: offer.credentialIssuerIdentifier,
-                scope: offer.credentialConfigurationId
+                scope: offer.credentialConfigurationId,
+                doctype: offer.doctype,
+                registryUrl: resolvedRegistryUrl
             )
             lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
         }

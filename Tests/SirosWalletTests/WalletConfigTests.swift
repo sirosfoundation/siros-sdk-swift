@@ -18,6 +18,15 @@ final class WalletConfigTests: XCTestCase {
         XCTAssertNil(config.availableKeystores, "backward compatible: no multi-plugin selection unless opted in")
         XCTAssertNil(config.defaultWscdMapping)
         XCTAssertNil(config.requestWscdChoice)
+        XCTAssertNil(config.registryUrl, "nil is the common case - derived from backendUrl by SirosWallet.resolvedRegistryUrl")
+    }
+
+    func testRegistryUrlCanBeSetExplicitly() {
+        var config = WalletConfig(backendUrl: "https://wallet.example.com")
+        XCTAssertNil(config.registryUrl)
+
+        config.registryUrl = "https://registry.example.com"
+        XCTAssertEqual(config.registryUrl, "https://registry.example.com")
     }
 
     func testWscdSelectionFieldsCanBeSet() {

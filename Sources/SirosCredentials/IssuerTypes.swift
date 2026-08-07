@@ -173,6 +173,19 @@ public struct CredentialOffer: Sendable, Equatable {
     public let preAuthorizedCode: String?
     public let txCode: String?
 
+    /// The SD-JWT VC `vct` this configuration issues, when the issuer's
+    /// `credential_configurations_supported` entry declared one - known
+    /// upfront from issuer metadata, before any credential is actually
+    /// issued. Lets `VctmFetcher.fetch` try its registry-service strategy
+    /// immediately instead of only after a credential has been received.
+    public let vct: String?
+
+    /// The ISO 18013-5 mdoc `doctype` this configuration issues, when the
+    /// issuer's `credential_configurations_supported` entry declared one -
+    /// the mdoc analogue of `vct` above, used the same way by
+    /// `MddlSchemaFetcher.fetch`.
+    public let doctype: String?
+
     public init(
         credentialConfigurationId: String,
         credentialIssuerIdentifier: String,
@@ -184,7 +197,9 @@ public struct CredentialOffer: Sendable, Equatable {
         logoUri: String? = nil,
         issuerLogoUri: String? = nil,
         preAuthorizedCode: String? = nil,
-        txCode: String? = nil
+        txCode: String? = nil,
+        vct: String? = nil,
+        doctype: String? = nil
     ) {
         self.credentialConfigurationId = credentialConfigurationId
         self.credentialIssuerIdentifier = credentialIssuerIdentifier
@@ -197,5 +212,7 @@ public struct CredentialOffer: Sendable, Equatable {
         self.issuerLogoUri = issuerLogoUri
         self.preAuthorizedCode = preAuthorizedCode
         self.txCode = txCode
+        self.vct = vct
+        self.doctype = doctype
     }
 }
