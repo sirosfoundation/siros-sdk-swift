@@ -149,8 +149,13 @@ public final class WscdSelectionPolicy {
             return mapped
         }
 
-        // 4/5/6. Compute eligibility over what's actually registered.
-        let eligible = availablePluginIds.filter { isSufficient($0, for: requiredTier) }
+        // 4/5/6. Compute eligibility over what's actually registered. Sorted
+        // (rather than `availablePluginIds`'s incoming order, which callers
+        // frequently derive from `Dictionary.keys` and is therefore not
+        // guaranteed stable) so the host's choice-prompt UI sees the same
+        // ordering across calls instead of one that varies with dictionary
+        // iteration order.
+        let eligible = availablePluginIds.filter { isSufficient($0, for: requiredTier) }.sorted()
 
         if eligible.count == 1 {
             persistTofu(key: key, pluginId: eligible[0])

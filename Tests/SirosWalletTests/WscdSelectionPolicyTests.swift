@@ -204,6 +204,27 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertEqual(Set(capturedEligible ?? []), Set(["fido2", "r2ps"]))
     }
 
+    // `availablePluginIds` is frequently derived from `Dictionary.keys`
+    // (non-deterministic order) - the eligible subset passed to the choice
+    // callback must be sorted so the host's picker UI sees a stable order
+    // across calls instead of one that varies with dictionary iteration.
+    func testEligiblePluginIdsPassedToChoiceCallbackAreSorted() async throws {
+        var capturedEligible: [String]?
+        let policy = makePolicy(requestChoice: { _, _, eligible in
+            capturedEligible = eligible
+            return .cancelled
+        })
+
+        _ = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "org.iso.18013.5.1.mDL",
+            requiredTier: "iso_18045_high",
+            // Deliberately not pre-sorted.
+            availablePluginIds: ["r2ps", "fido2"]
+        )
+        XCTAssertEqual(capturedEligible, ["fido2", "r2ps"], "must be sorted regardless of input order")
+    }
+
     // 5. Ask-user, multiple eligible - cancelled.
     func testMultipleEligibleCancelledReturnsNilAndDoesNotPersist() async throws {
         let store = InMemorySessionStore()
