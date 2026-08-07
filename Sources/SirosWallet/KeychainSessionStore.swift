@@ -85,10 +85,6 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         get { read("instanceKeyId") }
         set { write("instanceKeyId", newValue) }
     }
-    public var fido2AttestationRegisteredKeyId: String? {
-        get { read("fido2AttestationRegisteredKeyId") }
-        set { write("fido2AttestationRegisteredKeyId", newValue) }
-    }
     // Deliberately NOT run through read/write (which scope by
     // activeAccountId) - see the protocol doc comment. `clearAll()`'s
     // existing blanket SecItemDelete (no kSecAttrAccount filter, matches
@@ -109,7 +105,16 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         let keys = ["appToken", "refreshToken", "userId", "displayName",
                     "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
                     "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag",
-                    "instanceKeyId", "fido2AttestationRegisteredKeyId"]
+                    "instanceKeyId",
+                    // Legacy key, no longer written (the per-instance-key
+                    // FIDO2 registration dedupe it backed was removed in
+                    // favor of per-credential-key registration - see
+                    // SirosWallet.registerFido2AttestationsForBatch).
+                    // Kept in this deletion list only so upgraded installs
+                    // that still have this Keychain item from an older
+                    // version get it cleaned up on logout/account switch
+                    // instead of leaking it forever.
+                    "fido2AttestationRegisteredKeyId"]
         lock.lock(); defer { lock.unlock() }
         for key in keys {
             let scopedKey = "\(id)/\(key)"

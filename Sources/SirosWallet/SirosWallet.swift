@@ -1044,47 +1044,9 @@ public final class SirosWallet: @unchecked Sendable {
             )
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
             lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
-            await maybeRegisterFido2Attestation(keyId: keyId, wia: wia, client: client)
             return wia
         } catch {
             return nil
-        }
-    }
-
-    /// Register this instance key's FIDO2/CTAP2 hardware attestation with
-    /// the backend once, the first time a WIA is issued for it - so the
-    /// backend can durably mark the wallet instance as hardware-key-attested
-    /// (see `FIDO2AttestationService` in go-wallet-backend). A no-op for
-    /// software-backed keys (`keystore.attestationChain` returns nil for
-    /// those). Best-effort: any failure here must never block WIA issuance,
-    /// and is simply retried on the next call (nothing is persisted as
-    /// "registered" until the backend call actually succeeds).
-    ///
-    /// Deliberately called from `ensureWalletInstanceAttestation` rather
-    /// than `ensureInstanceKeyId` - registration needs `wallet_instance_id`
-    /// (the WIA's `cnf.jkt`), which doesn't exist until a WIA has actually
-    /// been issued for this key.
-    private func maybeRegisterFido2Attestation(keyId: String, wia: String, client: BackendApiClient) async {
-        if sessionStore.fido2AttestationRegisteredKeyId == keyId { return }
-        guard let chain = try? await keystore.attestationChain(keyId: keyId) else { return }
-        guard let attestationObject = chain.certificates.first else { return }
-        guard let cnf = CredentialUtils.parseJwtPayload(wia)?["cnf"] as? [String: Any],
-              let walletInstanceId = cnf["jkt"] as? String else { return }
-        do {
-            // Takes the caller's already-unwrapped `client` rather than
-            // re-reading `self.apiClient` - a real Copilot-review finding:
-            // `apiClient?.registerFido2Attestation(...)` would silently
-            // no-op (not throw) if apiClient had gone nil since the caller
-            // checked it, and the next line would still mark the key
-            // registered even though nothing was actually sent.
-            try await client.registerFido2Attestation(
-                walletInstanceId: walletInstanceId,
-                attestationObject: attestationObject,
-                clientDataHash: chain.clientDataHash
-            )
-            sessionStore.fido2AttestationRegisteredKeyId = keyId
-        } catch {
-            print("[SirosWallet] FIDO2 attestation registration failed, will retry on next WIA issuance: \(error)")
         }
     }
 
@@ -1816,6 +1778,7 @@ public final class SirosWallet: @unchecked Sendable {
         guard let client else { return nil }
         do {
             let keypairs = try await keystore.generateKeypairs(count: count)
+            await registerFido2AttestationsForBatch(keypairs: keypairs, client: client)
             var secDict: [String: Any]?
             if let keyId = keypairs.first?.keyId, let props = await keystore.securityProperties(keyId: keyId) {
                 secDict = [
@@ -1839,6 +1802,56 @@ public final class SirosWallet: @unchecked Sendable {
             return BackendAttestationResult(jwt: jwt, keyIds: keypairs.map { $0.keyId })
         } catch {
             return nil
+        }
+    }
+
+    /// Register each freshly-generated credential key's FIDO2/CTAP2 hardware
+    /// attestation with the backend, keyed by that specific key - NOT the
+    /// wallet's own identity key (see go-wallet-backend's `KeyAttestationStore`
+    /// doc for why this must be per-credential-key: the identity key and
+    /// credential-issuance keys are separate keys, not guaranteed to share a
+    /// WSCD plugin, so registering only the identity key's attestation would
+    /// incorrectly leave the actual credential keys - the ones a KA request's
+    /// `attested_keys`/`security_properties` claim is really about -
+    /// unattested).
+    ///
+    /// A no-op per key when `keystore`'s active plugin isn't hardware-backed
+    /// (`attestationChain` returns nil for those - most commonly the whole
+    /// batch, since `generateKeypairs` uses whichever single plugin is
+    /// currently active for every key in one call). Best-effort per key: a
+    /// registration failure for one key must never block the others, or the
+    /// overall KA request that follows - it's simply retried the next time a
+    /// fresh batch happens to reuse the same plugin (there's no "already
+    /// registered" dedup here, unlike the old identity-key path: these keys
+    /// are one-shot, used once for this batch, so there's nothing to dedupe
+    /// against).
+    ///
+    /// Requires a cached WIA to supply `wallet_instance_id` for the
+    /// registration record's auditing/scoping - peeks `cachedWia` directly
+    /// (any `attestation_source`, not gated to native platform attestation
+    /// like `currentWalletInstanceId` - that gate is specifically about the
+    /// KA security_properties clamp-lift, unrelated to this). No cached WIA
+    /// means nothing to register against, so this is a no-op entirely.
+    private func registerFido2AttestationsForBatch(keypairs: [KeypairInfo], client: BackendApiClient) async {
+        let now = Int(Date().timeIntervalSince1970)
+        lock.lock(); let wia = cachedWia; let expiresAt = cachedWiaExpiresAt; lock.unlock()
+        guard let wia, expiresAt - now > 60,
+              let cnf = CredentialUtils.parseJwtPayload(wia)?["cnf"] as? [String: Any],
+              let walletInstanceId = cnf["jkt"] as? String else { return }
+        for kp in keypairs {
+            guard let chain = try? await keystore.attestationChain(keyId: kp.keyId),
+                  let attestationObject = chain.certificates.first else { continue }
+            do {
+                try await client.registerFido2Attestation(
+                    walletInstanceId: walletInstanceId,
+                    attestationObject: attestationObject,
+                    clientDataHash: chain.clientDataHash
+                )
+            } catch {
+                #if canImport(os)
+                logger.warning("FIDO2 attestation registration failed for key \(kp.keyId), continuing: \(error.localizedDescription)")
+                #endif
+            }
         }
     }
 

@@ -32,15 +32,6 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     /// register a new "instance" on every flow.
     var instanceKeyId: String? { get set }
 
-    /// The `instanceKeyId` whose FIDO2/CTAP2 hardware attestation has
-    /// already been registered with the backend (see
-    /// `SirosWallet.maybeRegisterFido2Attestation`) - nil until an
-    /// attestation object has been submitted at least once for the current
-    /// `instanceKeyId`. Compared against `instanceKeyId` directly rather
-    /// than a bare boolean, so an instance-key rotation naturally requires
-    /// re-registration instead of silently skipping it.
-    var fido2AttestationRegisteredKeyId: String? { get set }
-
     /// This install's persisted Apple App Attest key ID (see
     /// `AppAttestProvider`), if one has been generated - App Attest keys
     /// are generated exactly once PER INSTALL (not per-account, unlike every
@@ -100,10 +91,6 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public var privateDataJwe: String? { get { get("privateDataJwe") } set { set("privateDataJwe", newValue) } }
     public var privateDataEtag: String? { get { get("privateDataEtag") } set { set("privateDataEtag", newValue) } }
     public var instanceKeyId: String? { get { get("instanceKeyId") } set { set("instanceKeyId", newValue) } }
-    public var fido2AttestationRegisteredKeyId: String? {
-        get { get("fido2AttestationRegisteredKeyId") }
-        set { set("fido2AttestationRegisteredKeyId", newValue) }
-    }
 
     // Deliberately NOT account-scoped (see the protocol doc comment) - a
     // fixed key with no account prefix, so it survives `clearAccount()` and
