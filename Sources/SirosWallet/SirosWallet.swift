@@ -1044,7 +1044,7 @@ public final class SirosWallet: @unchecked Sendable {
             )
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
             lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
-            await maybeRegisterFido2Attestation(keyId: keyId, wia: wia)
+            await maybeRegisterFido2Attestation(keyId: keyId, wia: wia, client: client)
             return wia
         } catch {
             return nil
@@ -1064,14 +1064,20 @@ public final class SirosWallet: @unchecked Sendable {
     /// than `ensureInstanceKeyId` - registration needs `wallet_instance_id`
     /// (the WIA's `cnf.jkt`), which doesn't exist until a WIA has actually
     /// been issued for this key.
-    private func maybeRegisterFido2Attestation(keyId: String, wia: String) async {
+    private func maybeRegisterFido2Attestation(keyId: String, wia: String, client: BackendApiClient) async {
         if sessionStore.fido2AttestationRegisteredKeyId == keyId { return }
         guard let chain = try? await keystore.attestationChain(keyId: keyId) else { return }
         guard let attestationObject = chain.certificates.first else { return }
         guard let cnf = CredentialUtils.parseJwtPayload(wia)?["cnf"] as? [String: Any],
               let walletInstanceId = cnf["jkt"] as? String else { return }
         do {
-            try await apiClient?.registerFido2Attestation(
+            // Takes the caller's already-unwrapped `client` rather than
+            // re-reading `self.apiClient` - a real Copilot-review finding:
+            // `apiClient?.registerFido2Attestation(...)` would silently
+            // no-op (not throw) if apiClient had gone nil since the caller
+            // checked it, and the next line would still mark the key
+            // registered even though nothing was actually sent.
+            try await client.registerFido2Attestation(
                 walletInstanceId: walletInstanceId,
                 attestationObject: attestationObject,
                 clientDataHash: chain.clientDataHash
