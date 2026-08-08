@@ -70,8 +70,8 @@ let package = Package(
         // XCFramework's module.modulemap).
         .binaryTarget(
             name: "siros_wscd_managerFFI",
-            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.6.4/siros_wscd_manager.xcframework.zip",
-            checksum: "992ab8704ccf9862f3705aca1f7952831ae6e5341d71968b8f2917fae7f186ea"
+            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.6.5/siros_wscd_manager.xcframework.zip",
+            checksum: "ecc0e660a374f8cf6e08a1c4c7078009fee832171450a74a5887cb74da4cc444"
         ),
 
         // --- Keystore: JWE-encrypted key management ---
