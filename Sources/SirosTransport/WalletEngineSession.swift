@@ -121,12 +121,20 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         self._matchRequests = AsyncStream { mrCont = $0 }
         self.matchRequestContinuation = mrCont
 
+        // Unlike flowProgress/flowComplete/flowErrors/signRequests/
+        // matchRequests (all drained internally by SirosWallet's own `for
+        // await` loops), pushMessages/notificationAcks are host-app-facing,
+        // opt-in APIs - nothing in this SDK consumes them itself. A host app
+        // that never calls pushMessages()/notificationAcks() would otherwise
+        // grow these streams' default `.unbounded` buffer for the entire
+        // connection lifetime. Bounding to the most recent 64 caps that
+        // growth without affecting a host app that drains them promptly.
         var pCont: AsyncStream<PushMessage>.Continuation!
-        self._pushMessages = AsyncStream { pCont = $0 }
+        self._pushMessages = AsyncStream(bufferingPolicy: .bufferingNewest(64)) { pCont = $0 }
         self.pushContinuation = pCont
 
         var naCont: AsyncStream<NotificationAckMessage>.Continuation!
-        self._notificationAcks = AsyncStream { naCont = $0 }
+        self._notificationAcks = AsyncStream(bufferingPolicy: .bufferingNewest(64)) { naCont = $0 }
         self.notificationAckContinuation = naCont
     }
 
