@@ -20,19 +20,34 @@ import siros_wscd_managerFFI
 /// Implementations that show UI should use platform mechanisms to
 /// block until the user completes the interaction.
 public protocol WscdAuthProvider: AnyObject, Sendable {
-    /// Request the user's PIN (e.g. for OPAQUE authentication).
+    /// Request the user's PIN (e.g. for OPAQUE authentication, or a CTAP2
+    /// authenticator's ClientPin).
+    /// - Parameter pluginId: Which registered WSCD plugin (e.g. "fido2",
+    ///   "r2ps") is asking - a single `WscdAuthProvider` can back multiple
+    ///   plugins with very different PIN semantics (a real hardware secret
+    ///   vs. a fixed debug-only test value), so implementations MUST
+    ///   dispatch on this rather than guessing from ambient app/UI state.
+    ///   Confirmed via live hardware testing on the Kotlin SDK: guessing
+    ///   from a "currently selected dev-screen tab" signal silently sent
+    ///   the wrong plugin's PIN to a real YubiKey for an entire session,
+    ///   which the authenticator correctly rejected every time with no
+    ///   indication of the real cause.
     /// - Returns: The PIN as raw bytes (UTF-8 encoded).
     /// - Throws: If the user cancels.
-    func requestPin() throws -> Data
+    func requestPin(pluginId: String) throws -> Data
 
     /// Request a WebAuthn assertion.
     /// - Parameters:
+    ///   - pluginId: Which registered WSCD plugin is asking - see
+    ///     `requestPin`'s doc comment for why implementations must
+    ///     dispatch on this rather than guessing.
     ///   - challenge: The authentication challenge bytes.
     ///   - rpId: The Relying Party ID.
     ///   - allowedCredentials: List of allowed credential IDs.
     /// - Returns: The CBOR-encoded authenticator assertion response.
     /// - Throws: If the user cancels or no credential is available.
     func requestWebauthnAssertion(
+        pluginId: String,
         challenge: Data,
         rpId: String,
         allowedCredentials: [Data]
@@ -300,14 +315,15 @@ final class AuthCallbackBridge: FfiAuthCallback, @unchecked Sendable {
         self.provider = provider
     }
 
-    func requestPin() throws -> Data {
+    func requestPin(pluginId: String) throws -> Data {
         guard let provider = provider else {
             throw FfiWscdError.AuthCancelled(msg: "No AuthProvider configured")
         }
-        return try provider.requestPin()
+        return try provider.requestPin(pluginId: pluginId)
     }
 
     func requestWebauthnAssertion(
+        pluginId: String,
         challenge: Data,
         rpId: String,
         allowedCredentials: [Data]
@@ -316,6 +332,7 @@ final class AuthCallbackBridge: FfiAuthCallback, @unchecked Sendable {
             throw FfiWscdError.AuthCancelled(msg: "No AuthProvider configured")
         }
         return try provider.requestWebauthnAssertion(
+            pluginId: pluginId,
             challenge: challenge,
             rpId: rpId,
             allowedCredentials: allowedCredentials

@@ -546,6 +546,24 @@ public protocol FfiWscdManagerProtocol : AnyObject {
     func destroyLifecycle(request: FfiDestroyLifecycleRequest, auth: FfiAuthCallback, progress: FfiProgressCallback) throws  -> FfiDestructionOutcome
     
     /**
+     * Export the FIDO2 plugin's key state (credential handles + public
+     * keys) for the host app to persist and later restore via
+     * [`register_fido2_plugin_with_state`].
+     */
+    func exportFido2State() throws  -> Data
+    
+    /**
+     * Export a key's public key as a JSON-encoded JWK string.
+     *
+     * Unlike `generate_key`'s return value (cached host-side right after
+     * generation), this looks the key up on the manager directly - the only
+     * way to recover a key's public JWK when it was created via a path other
+     * than `generate_key` (e.g. `register_lifecycle`/`activate_lifecycle`),
+     * or in a host process that didn't cache it itself.
+     */
+    func exportPublicKey(kid: String) throws  -> String
+    
+    /**
      * Export softkey plugin container as JSON bytes (caller wraps in JWE).
      *
      * Exports the actual StoredKey data (including private material)
@@ -589,6 +607,17 @@ public protocol FfiWscdManagerProtocol : AnyObject {
      * handles USB/BLE/NFC communication with the FIDO2 authenticator.
      */
     func registerFido2Plugin(transport: FfiCtap2Transport) throws 
+    
+    /**
+     * Register the FIDO2 previewSign plugin restored from a previously
+     * [`export_fido2_state`]-exported blob (key handles + public keys only,
+     * no private material - that never leaves the authenticator). The host
+     * app must persist that blob itself and pass it back here on the next
+     * launch, or every enrolled FIDO2 key becomes unreachable (its `kid`
+     * still exists in credential/session metadata, but the manager has no
+     * record of the credential handle needed to sign with it again).
+     */
+    func registerFido2PluginWithState(transport: FfiCtap2Transport, state: Data) throws 
     
     /**
      * Register lifecycle bindings for a context.
@@ -744,6 +773,35 @@ open func destroyLifecycle(request: FfiDestroyLifecycleRequest, auth: FfiAuthCal
 }
     
     /**
+     * Export the FIDO2 plugin's key state (credential handles + public
+     * keys) for the host app to persist and later restore via
+     * [`register_fido2_plugin_with_state`].
+     */
+open func exportFido2State()throws  -> Data {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiWscdError.lift) {
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_fido2_state(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Export a key's public key as a JSON-encoded JWK string.
+     *
+     * Unlike `generate_key`'s return value (cached host-side right after
+     * generation), this looks the key up on the manager directly - the only
+     * way to recover a key's public JWK when it was created via a path other
+     * than `generate_key` (e.g. `register_lifecycle`/`activate_lifecycle`),
+     * or in a host process that didn't cache it itself.
+     */
+open func exportPublicKey(kid: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiWscdError.lift) {
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_public_key(self.uniffiClonePointer(),
+        FfiConverterString.lower(kid),$0
+    )
+})
+}
+    
+    /**
      * Export softkey plugin container as JSON bytes (caller wraps in JWE).
      *
      * Exports the actual StoredKey data (including private material)
@@ -827,6 +885,23 @@ open func migrateKey(kid: String, targetPluginId: String, auth: FfiAuthCallback)
 open func registerFido2Plugin(transport: FfiCtap2Transport)throws  {try rustCallWithError(FfiConverterTypeFfiWscdError.lift) {
     uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(self.uniffiClonePointer(),
         FfiConverterCallbackInterfaceFfiCtap2Transport.lower(transport),$0
+    )
+}
+}
+    
+    /**
+     * Register the FIDO2 previewSign plugin restored from a previously
+     * [`export_fido2_state`]-exported blob (key handles + public keys only,
+     * no private material - that never leaves the authenticator). The host
+     * app must persist that blob itself and pass it back here on the next
+     * launch, or every enrolled FIDO2 key becomes unreachable (its `kid`
+     * still exists in credential/session metadata, but the manager has no
+     * record of the credential handle needed to sign with it again).
+     */
+open func registerFido2PluginWithState(transport: FfiCtap2Transport, state: Data)throws  {try rustCallWithError(FfiConverterTypeFfiWscdError.lift) {
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin_with_state(self.uniffiClonePointer(),
+        FfiConverterCallbackInterfaceFfiCtap2Transport.lower(transport),
+        FfiConverterData.lower(state),$0
     )
 }
 }
@@ -1141,7 +1216,7 @@ public struct FfiConverterTypeFfiAttestationChain: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttestationChain {
         return
             try FfiAttestationChain(
-                certificates: FfiConverterSequenceData.read(from: &buf),
+                certificates: FfiConverterSequenceData.read(from: &buf), 
                 clientDataHash: FfiConverterData.read(from: &buf)
         )
     }
@@ -3085,9 +3160,9 @@ extension FfiWscdError: Foundation.LocalizedError {
 
 public protocol FfiAuthCallback : AnyObject {
     
-    func requestPin() throws  -> Data
+    func requestPin(pluginId: String) throws  -> Data
     
-    func requestWebauthnAssertion(challenge: Data, rpId: String, allowedCredentials: [Data]) throws  -> Data
+    func requestWebauthnAssertion(pluginId: String, challenge: Data, rpId: String, allowedCredentials: [Data]) throws  -> Data
     
 }
 
@@ -3107,6 +3182,7 @@ fileprivate struct UniffiCallbackInterfaceFfiAuthCallback {
     static var vtable: UniffiVTableCallbackInterfaceFfiAuthCallback = UniffiVTableCallbackInterfaceFfiAuthCallback(
         requestPin: { (
             uniffiHandle: UInt64,
+            pluginId: RustBuffer,
             uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -3116,6 +3192,7 @@ fileprivate struct UniffiCallbackInterfaceFfiAuthCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return try uniffiObj.requestPin(
+                     pluginId: try FfiConverterString.lift(pluginId)
                 )
             }
 
@@ -3130,6 +3207,7 @@ fileprivate struct UniffiCallbackInterfaceFfiAuthCallback {
         },
         requestWebauthnAssertion: { (
             uniffiHandle: UInt64,
+            pluginId: RustBuffer,
             challenge: RustBuffer,
             rpId: RustBuffer,
             allowedCredentials: RustBuffer,
@@ -3142,6 +3220,7 @@ fileprivate struct UniffiCallbackInterfaceFfiAuthCallback {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return try uniffiObj.requestWebauthnAssertion(
+                     pluginId: try FfiConverterString.lift(pluginId),
                      challenge: try FfiConverterData.lift(challenge),
                      rpId: try FfiConverterString.lift(rpId),
                      allowedCredentials: try FfiConverterSequenceData.lift(allowedCredentials)
@@ -3681,6 +3760,18 @@ public func extractPreviewsignSignature(authenticatorData: Data)throws  -> Data 
     )
 })
 }
+/**
+ * This crate's own version (`CARGO_PKG_VERSION`), for host apps to
+ * display in diagnostics/dev screens - the single source of truth,
+ * regardless of how a build resolved the dependency (published vs
+ * `mavenLocal`/local `Package.swift` override).
+ */
+public func wscdManagerVersion() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_siros_wscd_manager_fn_func_wscd_manager_version($0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -3703,6 +3794,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_func_extract_previewsign_signature() != 41377) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_siros_wscd_manager_checksum_func_wscd_manager_version() != 29401) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_activate_lifecycle() != 28478) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3713,6 +3807,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_destroy_lifecycle() != 23469) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state() != 37798) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_public_key() != 14419) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_softkey_container() != 4318) {
@@ -3736,6 +3836,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin() != 25606) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin_with_state() != 38216) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_lifecycle() != 59574) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3757,10 +3860,10 @@ private var initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_constructor_ffiwscdmanager_new() != 22870) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() != 31779) {
+    if (uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() != 17826) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 26796) {
+    if (uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 63746) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_send_command() != 64354) {
