@@ -543,7 +543,17 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
               let text = String(data: data, encoding: .utf8) else {
             return
         }
-        ws.send(.string(text)) { _ in }
+        // Mirrors the handshake send's own completion handler (above): a
+        // send failure here means the same dead socket the receive loop
+        // would otherwise independently notice and reconnect from - discarding
+        // the error silently (the previous `{ _ in }`) just delayed detection
+        // until the next inbound frame timed out instead of reacting to it
+        // immediately.
+        ws.send(.string(text)) { [weak self] error in
+            if error != nil {
+                self?.scheduleReconnect()
+            }
+        }
     }
 
     private func setState(_ state: State) {

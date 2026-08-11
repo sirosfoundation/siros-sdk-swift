@@ -2299,7 +2299,7 @@ public final class SirosWallet: @unchecked Sendable {
                 let credsToInclude = msg.params.credentialsToInclude
 
                 // Validate audience matches trusted verifier identity
-                validateAudience(flowId: msg.flowId, audience: audience)
+                try validateAudience(flowId: msg.flowId, audience: audience)
 
                 if let credsToInclude, !credsToInclude.isEmpty {
                     let allCreds = await credentialStore.getAll()
@@ -2357,6 +2357,7 @@ public final class SirosWallet: @unchecked Sendable {
             #if canImport(os)
             logger.error("Error handling sign request: \(error.localizedDescription)")
             #endif
+            reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
         }
     }
 
@@ -2523,15 +2524,21 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     /// Validates that the audience for VP signing matches the trusted verifier identity.
-    /// Logs a warning if there's a mismatch (defense-in-depth against MITM).
-    private func validateAudience(flowId: String, audience: String) {
+    ///
+    /// Throws (rather than merely logging) on mismatch - confirmed the same
+    /// gap exists in the Kotlin SDK's own validateAudience, found via code
+    /// review: a mismatch was only ever printed as a warning, so
+    /// handleSignRequest proceeded to sign and send the VP token regardless,
+    /// defeating the audience-binding protection this function's name
+    /// implies it provides.
+    private func validateAudience(flowId: String, audience: String) throws {
         lock.lock()
         let trustResult = lastTrustResults[flowId]
         lock.unlock()
 
         guard let trustResult, let expectedId = trustResult.identifier else { return }
         if !audience.isEmpty && !expectedId.isEmpty && audience != expectedId {
-            print("[SirosWallet] ⚠️ Audience mismatch for flow \(flowId): sign_request audience='\(audience)' != trusted identifier='\(expectedId)'")
+            throw SirosError.wallet(message: "Audience mismatch for flow \(flowId): sign_request audience='\(audience)' != trusted identifier='\(expectedId)'")
         }
     }
 
@@ -2612,6 +2619,32 @@ public final class SirosWallet: @unchecked Sendable {
             } else {
                 engine.sendTrustResult(flowId: flowId, trusted: false, reason: error.localizedDescription)
             }
+        }
+    }
+
+    /// Report a flow-terminating failure immediately (e.g. a keystore/WSCD
+    /// exception, or an audience-mismatch, raised while handling a sign
+    /// request) instead of leaving the flow to die silently until the
+    /// engine's own reply timeout fires.
+    ///
+    /// Mirrors the Kotlin SDK's reportSignFailure, added after the same real
+    /// FIDO2 CTAP2_ERR_PIN_INVALID bug was found via live hardware testing:
+    /// handleSignRequest's catch block previously only logged
+    /// (logger.error), so the engine waited indefinitely for a sign_response
+    /// that would never arrive.
+    private func reportSignFailure(flowId: String, message: String) {
+        lock.lock(); let listener = eventListener; lock.unlock()
+        listener?.onFlowError(flowId: flowId, errorMessage: message)
+
+        switch state {
+        case .flowActive(let userId, let displayName, _, _, _, _),
+             .ready(let userId, let displayName, _, _):
+            Task {
+                let creds = await credentialStore.getAll()
+                setState(.ready(userId: userId, displayName: displayName, credentials: creds))
+            }
+        default:
+            break
         }
     }
 
