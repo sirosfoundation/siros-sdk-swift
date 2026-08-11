@@ -1370,12 +1370,15 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
+        lock.lock()
         if issuanceInFlight {
+            lock.unlock()
             throw SirosError.wallet(message: "Another issuance is already in progress")
         }
         issuanceInFlight = true
+        activeOffer = offer
+        lock.unlock()
         do {
-            lock.lock(); activeOffer = offer; lock.unlock()
 
             // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
             // like `activeVctm`'s existing fetch: whichever one doesn't match
@@ -1445,10 +1448,13 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
+        lock.lock()
         if issuanceInFlight {
+            lock.unlock()
             throw SirosError.wallet(message: "Another issuance is already in progress")
         }
         issuanceInFlight = true
+        lock.unlock()
         do {
             if let offer = await resolveOfferForDisplay(offerUri) {
                 lock.lock(); activeOffer = offer; lock.unlock()
@@ -1648,6 +1654,15 @@ public final class SirosWallet: @unchecked Sendable {
         } catch {
             trustResult = trustCache.get(identifier: subjectId)
                 ?? TrustResult(trusted: false, reason: error.localizedDescription, identifier: subjectId)
+        }
+
+        // Unlike the QR/redirect flow, there is no engine round-trip here to
+        // gate on (trust is evaluated and enforced entirely wallet-side) - a
+        // request from an untrusted or trust-eval-failed verifier must be
+        // rejected before any credential is matched or signed, not merely
+        // have its trust result computed and ignored.
+        guard trustResult.trusted else {
+            throw SirosError.wallet(message: "Verifier '\(subjectId)' is not trusted: \(trustResult.reason ?? "no reason given")")
         }
 
         let allCreds = await credentialStore.getAll()
@@ -2498,6 +2513,11 @@ public final class SirosWallet: @unchecked Sendable {
             return SignSubFlowResult(proofs: proofs)
 
         case "sign_presentation":
+            // Same defense-in-depth audience check as the legacy engine
+            // transport's handleSignRequest - this transport previously
+            // skipped it entirely, so a WMP-relayed sign_presentation was
+            // never checked against the trust result computed for this flow.
+            try validateAudience(flowId: flowId, audience: params.audience)
             let vpToken = try await keystore.signPresentation(
                 nonce: params.nonce,
                 audience: params.audience,
@@ -2552,6 +2572,19 @@ public final class SirosWallet: @unchecked Sendable {
             return SirosTransport.TrustResult(trusted: false, reason: "No API client")
         }
 
+        // WMP carries both issuance (generate_proof) and presentation
+        // (sign_presentation) sign requests over the same profile - the
+        // action name must follow subject_type like the legacy engine path's
+        // handleTrustEvaluation does, not be hardcoded to "credential-issuer"
+        // for every subject (a real bug: a verifier evaluated over WMP was
+        // being checked against the issuer trust policy instead of the
+        // verifier one).
+        var subjectType: String?
+        if case .string(let t) = request["subject_type"] {
+            subjectType = t
+        }
+        let actionName = subjectType == "credential_verifier" ? "credential-verifier" : "credential-issuer"
+
         do {
             let kmType: String
             if case .object_(let km) = request["key_material"],
@@ -2564,10 +2597,26 @@ public final class SirosWallet: @unchecked Sendable {
             let evaluationRequest: [String: Any] = [
                 "subject": ["type": "key", "id": subjectId],
                 "resource": ["type": kmType, "id": subjectId],
-                "action": ["name": "credential-issuer"],
+                "action": ["name": actionName],
             ]
             let response = try await client.evaluateTrust(evaluationRequest)
             let decision = response["decision"] as? Bool ?? false
+            let context = response["context"] as? [String: Any]
+
+            // Store for the later sign_presentation step's validateAudience
+            // check, mirroring handleTrustEvaluation - without this, WMP
+            // presentations had no audience-binding defense-in-depth at all.
+            lock.lock()
+            lastTrustResults[flowId] = TrustResult(
+                trusted: decision,
+                framework: context?["framework"] as? String,
+                reason: (context?["reason"] as? String) ?? (context?["message"] as? String),
+                entityName: context?["entity_name"] as? String,
+                entityLogo: context?["logo_uri"] as? String,
+                identifier: subjectId
+            )
+            lock.unlock()
+
             return SirosTransport.TrustResult(trusted: decision)
         } catch {
             return SirosTransport.TrustResult(trusted: false, reason: error.localizedDescription)
@@ -2732,7 +2781,15 @@ public final class SirosWallet: @unchecked Sendable {
         let allCreds = await credentialStore.getAll()
         lock.lock()
         let listener = eventListener
-        let trustResult = lastTrustResults.removeValue(forKey: msg.flowId)
+        // Read only - do NOT remove. The later `sign_presentation` step
+        // (`handleSignRequest` -> `validateAudience`) still needs this
+        // entry; credential selection (this handler) always runs before
+        // signing in the engine's own step ordering, so removing it here
+        // silently defeated `validateAudience`'s defense-in-depth check for
+        // every presentation - it always saw a nil trust result and
+        // no-op'd. `validateAudience` itself removes the entry once it's
+        // actually consumed.
+        let trustResult = lastTrustResults[msg.flowId]
         lock.unlock()
 
         let selectedIds: [Int64]
@@ -2900,7 +2957,10 @@ public final class SirosWallet: @unchecked Sendable {
     /// implies it provides.
     private func validateAudience(flowId: String, audience: String) throws {
         lock.lock()
-        let trustResult = lastTrustResults[flowId]
+        // Consume (remove) the entry here, at actual point of use, instead
+        // of at credential-selection time - see `handleMatchRequest`'s
+        // comment for why removing it earlier defeated this check entirely.
+        let trustResult = lastTrustResults.removeValue(forKey: flowId)
         lock.unlock()
 
         guard let trustResult, let expectedId = trustResult.identifier else { return }

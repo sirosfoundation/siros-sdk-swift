@@ -178,7 +178,12 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         let handoverInfo: CBOR = .array([
             .utf8String(clientId),
             .utf8String(nonce),
-            verifierJwkThumbprint.map { CBOR.utf8String($0) } ?? .null,
+            // Per OpenID4VP's mdoc profile, this element MUST be a CBOR Byte
+            // String of the raw thumbprint digest, not a text string of its
+            // base64url form (a real bug: encoding it as text made the
+            // wallet's handover hash disagree with any spec-conformant
+            // verifier's - see the matching Kotlin fix).
+            verifierJwkThumbprint.map { .byteString([UInt8](EncryptedContainer.base64UrlDecode($0))) } ?? .null,
             .utf8String(responseUri),
         ])
         let handoverHash = sha256(handoverInfo.encode())
@@ -215,7 +220,11 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         let handoverInfo: CBOR = .array([
             .utf8String(origin),
             .utf8String(nonce),
-            encryptionPublicJwkThumbprint.map { CBOR.utf8String($0) } ?? .null,
+            // Same fix as `buildSessionTranscript` above: OpenID4VP 1.0
+            // Appendix B.2.6.2 requires the JWK thumbprint as a raw-digest
+            // CBOR byte string, not a text string of its base64url form.
+            // This sibling call site had the original bug independently.
+            encryptionPublicJwkThumbprint.map { .byteString([UInt8](EncryptedContainer.base64UrlDecode($0))) } ?? .null,
         ])
         let handoverHash = sha256(handoverInfo.encode())
 
