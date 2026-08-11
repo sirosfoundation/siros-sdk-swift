@@ -1,9 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
+#if canImport(CoreBluetooth)
 import Foundation
 import CoreBluetooth
 import SirosCredentials
-import SirosKeystore
 
 /// ISO 18013-5 §8.3.3.1.1/§11.1.3 "mdoc central client mode": the mdoc acts
 /// as the BLE GATT CLIENT, scanning for and connecting to a reader that
@@ -20,7 +20,7 @@ import SirosKeystore
 /// the reverse, regardless of which side - mdoc or reader - holds the GATT
 /// client/server role for a given transaction).
 ///
-/// Ported from the Kotlin SDK sample app's `BleCentralClient.kt`, using
+/// Ported from the Kotlin SDK's `BleCentralClient.kt`, using
 /// `CoreBluetooth`'s `CBCentralManager`/`CBPeripheral` instead of Android's
 /// `BluetoothLeScanner`/`BluetoothGatt`.
 ///
@@ -45,10 +45,8 @@ import SirosKeystore
 /// role this class plays - it cannot stand in as a peripheral to test
 /// against).
 /// Needs testing against either a real ISO 18013-5 reader or a purpose-built
-/// BLE-peripheral test script before relying on it. This is a brand-new
-/// port with no prior Swift version to carry forward any hardware
-/// verification from, unlike `BlePeripheralServer`.
-final class BleCentralClient: NSObject {
+/// BLE-peripheral test script before relying on it.
+public final class BleCentralClient: NSObject {
 
     // Table 6 - mdoc reader service characteristics (present when the reader is the GATT server).
     static let stateUUID = CBUUID(string: "00000005-A123-48CE-896B-4C76973373E6")
@@ -78,8 +76,11 @@ final class BleCentralClient: NSObject {
     private var identVerified = false
     private var notifyReady: Set<CBUUID> = []
     private var wroteStateStart = false
+    /// Resumed by `peripheralIsReady(toSendWriteWithoutResponse:)` - see
+    /// `waitUntilReadyToWrite`'s doc comment for why this throttling exists.
+    private var writeReadyContinuation: CheckedContinuation<Void, Never>?
 
-    init(
+    public init(
         engagement: DeviceEngagement.Engagement,
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
@@ -108,7 +109,7 @@ final class BleCentralClient: NSObject {
     /// Start scanning for a reader advertising this engagement's central-client-mode service UUID.
     /// Actual scanning starts once `centralManagerDidUpdateState` reports `.poweredOn`, matching
     /// `BlePeripheralServer.start()`'s deferred-until-poweredOn pattern.
-    func start() {
+    public func start() {
         guard engagement.centralClientModeUuid != nil else {
             onLog("engagement does not offer central client mode")
             onComplete(false)
@@ -117,7 +118,7 @@ final class BleCentralClient: NSObject {
         centralManager = CBCentralManager(delegate: self, queue: nil)
     }
 
-    func stop() {
+    public func stop() {
         if let peripheral {
             centralManager?.cancelPeripheralConnection(peripheral)
         }
@@ -143,24 +144,33 @@ final class BleCentralClient: NSObject {
         peripheral.writeValue(Data([Self.stateStart]), for: stateCharacteristic, type: .withoutResponse)
     }
 
+    /// Suspends until CoreBluetooth's internal transmit queue can accept
+    /// another `.withoutResponse` write. Unlike Android's
+    /// `BluetoothGatt.writeCharacteristic` (which returns `false` and blocks
+    /// on `onCharacteristicWrite` when its own queue is full - a real bug
+    /// this SDK found and fixed via hardware testing when unpaced), CoreBluetooth's
+    /// `.withoutResponse` write is fire-and-forget with no per-write
+    /// delivery confirmation to await - but it silently DROPS a write
+    /// issued while `canSendWriteWithoutResponse` is false rather than
+    /// queuing it, so a large multi-chunk `DeviceResponse` written in a
+    /// tight loop can lose chunks exactly the same way the Android bug did,
+    /// just via a different mechanism. `BlePeripheralServer`'s
+    /// `flushPendingNotifications`/`peripheralManagerIsReady` already
+    /// handles this correctly on the peripheral side; this is the
+    /// equivalent throttle for the central-role write path.
+    private func waitUntilReadyToWrite() async {
+        guard let peripheral, !peripheral.canSendWriteWithoutResponse else { return }
+        await withCheckedContinuation { continuation in
+            writeReadyContinuation = continuation
+        }
+    }
+
     /// Writes the encrypted response to `Client2Server`, chunked, then signals
     /// STATE_END on `State` - matching peripheral-server-mode's more careful
     /// state handling (Kotlin's `BleCentralClient.kt` originally omitted this;
     /// a strict reader could otherwise keep the transaction open waiting for
     /// it unnecessarily).
-    ///
-    /// Unlike `BlePeripheralServer.flushPendingNotifications`'s
-    /// `CBPeripheralManager.updateValue(...)` (which returns `Bool` and is
-    /// checked there), `CBPeripheral.writeValue(_:for:type:)` for
-    /// `.withoutResponse` writes is fire-and-forget on CoreBluetooth - it
-    /// returns `Void`, with no synchronous success/failure signal to check
-    /// (Android's mirror-image `BluetoothGatt.writeCharacteristic` DOES
-    /// return a `Boolean`, which the Kotlin SDK this was ported from checks -
-    /// that check has no CoreBluetooth equivalent to port here). CoreBluetooth
-    /// does expose `peripheralIsReady(toSendWriteWithoutResponse:)` for
-    /// write-side backpressure, but no per-write delivery confirmation, so
-    /// there is nothing further to validate at this call site.
-    private func sendData(_ message: [UInt8]) {
+    private func sendData(_ message: [UInt8]) async {
         guard let characteristic = client2ServerCharacteristic, let peripheral else { return }
         // Floored at `defaultMtu - 3` (20 bytes): `BleMessageChunker.chunk`
         // requires `maxChunkSize > 1`, and an unexpected/invalid negotiated
@@ -169,9 +179,11 @@ final class BleCentralClient: NSObject {
         let maxChunkSize = max(min(peripheral.maximumWriteValueLength(for: .withoutResponse), 512), Self.defaultMtu - 3)
         let chunks = BleMessageChunker.chunk(message, maxChunkSize: maxChunkSize)
         for chunk in chunks {
+            await waitUntilReadyToWrite()
             peripheral.writeValue(Data(chunk), for: characteristic, type: .withoutResponse)
         }
         if let stateCharacteristic {
+            await waitUntilReadyToWrite()
             peripheral.writeValue(Data([Self.stateEnd]), for: stateCharacteristic, type: .withoutResponse)
         }
     }
@@ -179,7 +191,7 @@ final class BleCentralClient: NSObject {
 
 extension BleCentralClient: CBCentralManagerDelegate {
 
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central.state == .poweredOn else {
             if central.state == .unauthorized || central.state == .unsupported {
                 onLog("Bluetooth is not available/authorized")
@@ -192,25 +204,25 @@ extension BleCentralClient: CBCentralManagerDelegate {
         central.scanForPeripherals(withServices: [CBUUID(nsuuid: serviceUuid)], options: nil)
     }
 
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+    public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         central.stopScan()
         self.peripheral = peripheral
         peripheral.delegate = self
         central.connect(peripheral, options: nil)
     }
 
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         onStep("reader_connected")
         guard let serviceUuid = engagement.centralClientModeUuid else { return }
         peripheral.discoverServices([CBUUID(nsuuid: serviceUuid)])
     }
 
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+    public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         onLog("Failed to connect to reader: \(error?.localizedDescription ?? "unknown error")")
         onComplete(false)
     }
 
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+    public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         if !session.established {
             onLog("Reader disconnected before completing a presentation")
             onComplete(false)
@@ -220,7 +232,7 @@ extension BleCentralClient: CBCentralManagerDelegate {
 
 extension BleCentralClient: CBPeripheralDelegate {
 
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+    public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error {
             onLog("Failed to discover services: \(error.localizedDescription)")
             onComplete(false)
@@ -238,7 +250,7 @@ extension BleCentralClient: CBPeripheralDelegate {
         )
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+    public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error {
             onLog("Failed to discover characteristics: \(error.localizedDescription)")
             onComplete(false)
@@ -263,7 +275,7 @@ extension BleCentralClient: CBPeripheralDelegate {
         peripheral.setNotifyValue(true, for: server2ClientCharacteristic)
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+    public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
             onLog("Failed to enable notifications for \(characteristic.uuid): \(error.localizedDescription)")
             return
@@ -273,7 +285,7 @@ extension BleCentralClient: CBPeripheralDelegate {
         maybeWriteStateStart(peripheral)
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+    public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
             onLog("Failed to read/receive \(characteristic.uuid): \(error.localizedDescription)")
             return
@@ -302,7 +314,7 @@ extension BleCentralClient: CBPeripheralDelegate {
                     }
                     switch try await session.handleSessionEstablishment(message) {
                     case .response(let sessionData):
-                        sendData([UInt8](sessionData))
+                        await sendData([UInt8](sessionData))
                         onComplete(true)
                     case .denied:
                         onComplete(false)
@@ -319,4 +331,12 @@ extension BleCentralClient: CBPeripheralDelegate {
             break
         }
     }
+
+    /// Resumes any write suspended in `waitUntilReadyToWrite` once
+    /// CoreBluetooth's internal transmit queue has drained.
+    public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        writeReadyContinuation?.resume()
+        writeReadyContinuation = nil
+    }
 }
+#endif
