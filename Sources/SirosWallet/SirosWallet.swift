@@ -1591,6 +1591,302 @@ public final class SirosWallet: @unchecked Sendable {
         engine.startPresentation(requestUri: requestUri)
     }
 
+    /// The final payload to hand back to the OS/browser for a W3C Digital
+    /// Credentials API presentation - the platform's own credential-provider
+    /// bridge (Android's `PendingIntentHandler`, or the equivalent wherever
+    /// iOS eventually wires up native DC API OS integration - a separate,
+    /// larger, already-tracked gap, not addressed here) wraps `responseJson`
+    /// as the `DigitalCredential`'s response data.
+    ///
+    /// For `response_mode=dc_api` (unencrypted): `{"vp_token": {...}}`.
+    /// For `response_mode=dc_api.jwt`: `{"response": "<jwe-compact>"}` per
+    /// OpenID4VP 1.0 Appendix A.3.2.
+    public struct DCAPIPresentationResult: Sendable {
+        public let responseJson: String
+        public let credentialIds: [Int64]
+
+        public init(responseJson: String, credentialIds: [Int64]) {
+            self.responseJson = responseJson
+            self.credentialIds = credentialIds
+        }
+    }
+
+    /// Process an incoming W3C Digital Credentials API (DC API) OpenID4VP
+    /// presentation request entirely client-side - mirrors the Kotlin SDK's
+    /// `handleDCAPIRequest` architecture rather than the
+    /// `startPresentation`/engine-relay pattern: there is no
+    /// `WalletEngineSession` involvement and no DC-API-specific backend call.
+    /// The only backend calls made are the SAME generic trust-evaluation
+    /// (`evaluateTrustDirect`) and presentation-history persistence the
+    /// redirect flow already uses.
+    ///
+    /// - Parameters:
+    ///   - rawRequestJson: the raw request data string from the OS/browser -
+    ///     either a raw OpenID4VP request JSON object (unsigned protocol
+    ///     variant) or `{"request": "<JWT>"}` (signed/multisigned JAR variant).
+    ///   - origin: the browser/page origin that made the
+    ///     `navigator.credentials.get()` call, as verified by the platform -
+    ///     NOT read from the request body, which is untrusted until the
+    ///     platform attests it.
+    /// - Throws: `DCAPIRequestException` if the request is malformed or (for
+    ///   the signed variant) fails JWS verification; `SirosError.wallet` if
+    ///   no credential in the wallet is eligible to satisfy it.
+    public func handleDCAPIRequest(rawRequestJson: String, origin: String) async throws -> DCAPIPresentationResult {
+        let request = try DCAPIRequestParser.parse(rawRequestJson)
+
+        let subjectId = request.clientId ?? origin
+        let trustResult: TrustResult
+        do {
+            trustResult = try await evaluateTrustDirect(
+                subjectId: subjectId,
+                subjectType: "credential_verifier",
+                keyMaterialType: request.keyMaterial?.x5c != nil ? "x5c" : (request.keyMaterial?.jwk != nil ? "jwk" : nil),
+                x5c: request.keyMaterial?.x5c,
+                jwk: request.keyMaterial?.jwk,
+                context: nil
+            )
+        } catch {
+            trustResult = trustCache.get(identifier: subjectId)
+                ?? TrustResult(trusted: false, reason: error.localizedDescription, identifier: subjectId)
+        }
+
+        let allCreds = await credentialStore.getAll()
+        let dcqlOutput: CredentialMatcher.DcqlMatchOutput
+        if let dcqlQuery = request.dcqlQuery {
+            dcqlOutput = CredentialMatcher.matchDcql(dcqlQuery: dcqlQuery, credentials: allCreds)
+        } else {
+            dcqlOutput = CredentialMatcher.DcqlMatchOutput(
+                queryResults: [CredentialMatcher.MatchResult(
+                    queryId: "_default", format: nil, candidates: allCreds, requestedClaims: []
+                )],
+                credentialSets: nil,
+                satisfiableOptions: []
+            )
+        }
+        let matchResults = dcqlOutput.queryResults
+        var seenIds = Set<Int64>()
+        let candidates = matchResults.flatMap { $0.candidates }.filter { cred in
+            guard !seenIds.contains(cred.id) else { return false }
+            seenIds.insert(cred.id)
+            return true
+        }
+
+        // Unlike the QR/redirect flow, credential selection and consent
+        // already happened natively - the OS's own credential picker showed
+        // the matching registered entries and the user picked one before
+        // this call was ever reached. Routing through eventListener's
+        // interactive onCredentialSelectionRequired here would suspend
+        // waiting for an in-app consent screen that this headless flow
+        // never shows.
+        let eligible = CredentialUtils.eligibleInstances(
+            instances: candidates,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
+        let selectedIds = eligible.map(\.id)
+
+        if selectedIds.isEmpty {
+            throw SirosError.wallet(message: candidates.isEmpty
+                ? "No credential in the wallet matches the request"
+                : "No eligible copies of the requested credential remain - renew it to get more"
+            )
+        }
+
+        // "origin:<value>" per OpenID4VP 1.0 Appendix A is only used for the
+        // VP token audience claim at signing time - trust evaluation above
+        // uses the bare origin.
+        let audience = "origin:\(origin)"
+        var encryptionJwk: [String: Any]?
+        if request.responseMode == "dc_api.jwt" {
+            guard let jwk = Self.findEncryptionJwk(request.clientMetadata) else {
+                throw SirosError.wallet(message: "dc_api.jwt response_mode requires client_metadata.jwks with an encryption key")
+            }
+            encryptionJwk = jwk
+        }
+        // `DCAPIResponseEncryption` is entirely CryptoKit-gated (Apple
+        // platforms only, matching this module's existing convention e.g.
+        // `EncryptedContainer`) - `nil` here on an unsupported platform still
+        // lets an unencrypted `dc_api` presentation proceed; `dc_api.jwt`
+        // itself is rejected below with a clear error instead.
+        var encryptionThumbprint: String?
+        #if canImport(CryptoKit)
+        encryptionThumbprint = encryptionJwk.flatMap { DCAPIResponseEncryption.jwkThumbprint($0) }
+        #endif
+
+        // Per OpenID4VP 1.0 (#response_parameters), vp_token's value for each
+        // DCQL query id MUST be a JSON array of one or more Presentations -
+        // even when `multiple` is omitted/false, the array MUST still
+        // contain exactly one Presentation, never a bare string. A real bug,
+        // confirmed via Multipaz's own server source
+        // (multipaz-verifier-server's handleDcGetDataOpenID4VP does
+        // `value.jsonArray.map{...}` for the openid4vp-v1-signed/-unsigned
+        // protocol versions): putting a bare string here throws inside their
+        // server and surfaces as an opaque HTTP 500.
+        var tokensByQueryId: [String: [String]] = [:]
+        var queryIdOrder: [String] = []
+        for id in selectedIds {
+            guard let cred = allCreds.first(where: { $0.id == id }) else { continue }
+            let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
+            let queryId = matchResult?.queryId ?? "_default"
+            let disclosedClaims = matchResult?.requestedClaims.compactMap(\.last)
+
+            let token: String
+            if cred.format == "mso_mdoc" {
+                guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                    throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+                }
+                let deviceResponse = try await keystore.signMdocPresentationForDCAPI(
+                    credentialBytes: credBytes,
+                    disclosedClaims: disclosedClaims,
+                    nonce: request.nonce,
+                    origin: origin,
+                    encryptionPublicJwkThumbprint: encryptionThumbprint,
+                    kid: cred.kid
+                )
+                token = Self.b64UrlEncode(deviceResponse)
+            } else {
+                token = try await keystore.signVpToken(
+                    credential: cred.raw,
+                    disclosedClaims: disclosedClaims,
+                    nonce: request.nonce,
+                    audience: audience,
+                    kid: cred.kid
+                )
+            }
+
+            if tokensByQueryId[queryId] == nil {
+                tokensByQueryId[queryId] = []
+                queryIdOrder.append(queryId)
+            }
+            tokensByQueryId[queryId]?.append(token)
+        }
+
+        var vpTokenObj: [String: Any] = [:]
+        for queryId in queryIdOrder {
+            vpTokenObj[queryId] = tokensByQueryId[queryId] ?? []
+        }
+
+        var responseBody: [String: Any] = ["vp_token": vpTokenObj]
+        // The verifier's only means of correlating this response back to the
+        // right authorization session - the response arrives via the DC API
+        // callback, a wholly separate channel from the original request,
+        // with no other correlator available. Omitting this (a real bug:
+        // request.state was parsed but never echoed back) left the verifier
+        // decrypting a JWE it had no way to attribute to any session.
+        if let state = request.state {
+            responseBody["state"] = state
+        }
+        guard let responseBodyData = try? JSONSerialization.data(withJSONObject: responseBody),
+              let responseBodyJson = String(data: responseBodyData, encoding: .utf8) else {
+            throw SirosError.wallet(message: "Failed to serialize DC API response body")
+        }
+
+        let responseData: [String: Any]
+        if request.responseMode == "dc_api.jwt", let encryptionJwk {
+            #if canImport(CryptoKit)
+            let jwe = try DCAPIResponseEncryption.encryptResponse(responseJson: responseBodyJson, verifierJwk: encryptionJwk)
+            responseData = ["response": jwe]
+            #else
+            throw SirosError.wallet(message: "dc_api.jwt response encryption requires CryptoKit (unsupported on this platform)")
+            #endif
+        } else {
+            responseData = responseBody
+        }
+
+        // The platform's own reference wallet
+        // (https://github.com/digitalcredentialsdev/CMWallet) wraps its
+        // response in this exact {"protocol": ..., "data": {...}} envelope
+        // before handing it back - the mirror image of the {"requests":
+        // [{"protocol", "data"}]} envelope the request itself arrives in
+        // (see `DCAPIRequestParser`). Returning the bare `data` object on its
+        // own leaves the platform with no declared protocol to associate the
+        // response with.
+        let finalResponse: [String: Any] = ["protocol": request.protocolIdentifier, "data": responseData]
+        guard let finalResponseData = try? JSONSerialization.data(withJSONObject: finalResponse),
+              let finalResponseJson = String(data: finalResponseData, encoding: .utf8) else {
+            throw SirosError.wallet(message: "Failed to serialize DC API response envelope")
+        }
+
+        var seenClaims = Set<String>()
+        let requestedClaims = matchResults.flatMap { $0.requestedClaims.flatMap { $0 } }.filter { seenClaims.insert($0).inserted }
+
+        await recordPresentation(PresentationRecord(
+            id: randomUint32Id(),
+            flowId: "dc-api-\(UUID().uuidString)",
+            verifierName: trustResult.entityName,
+            credentialIds: selectedIds,
+            credentialNames: selectedIds.compactMap { id in allCreds.first(where: { $0.id == id })?.metadata?.name },
+            requestedClaims: requestedClaims,
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+        ))
+
+        return DCAPIPresentationResult(responseJson: finalResponseJson, credentialIds: selectedIds)
+    }
+
+    /// Direct (non-engine-relayed) trust evaluation, for flows like
+    /// `handleDCAPIRequest` that have no `WalletEngineSession` involvement at
+    /// all - mirrors `handleTrustEvaluation`'s request shape/AuthZEN
+    /// action-name mapping exactly.
+    private func evaluateTrustDirect(
+        subjectId: String,
+        subjectType: String?,
+        keyMaterialType: String?,
+        x5c: [String]?,
+        jwk: [String: Any]?,
+        context: [String: Any]?
+    ) async throws -> TrustResult {
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else { throw SirosError.wallet(message: "Not connected") }
+
+        var resource: [String: Any] = [
+            "type": keyMaterialType ?? "x5c",
+            "id": subjectId,
+        ]
+        if let x5c {
+            resource["key"] = x5c
+        } else if let jwk {
+            resource["key"] = [jwk]
+        }
+
+        var evaluationRequest: [String: Any] = [
+            "subject": ["type": "key", "id": subjectId],
+            "resource": resource,
+            "action": ["name": subjectType == "credential_verifier" ? "credential-verifier" : "credential-issuer"],
+        ]
+        if let context {
+            evaluationRequest["context"] = context
+        }
+
+        let response = try await client.evaluateTrust(evaluationRequest)
+        let decision = response["decision"] as? Bool ?? false
+        let respContext = response["context"] as? [String: Any]
+
+        // Mirrors the Kotlin SDK's `evaluateTrustDirect` exactly: unlike
+        // `handleTrustEvaluation` (the engine-relayed path), this direct-call
+        // variant deliberately does NOT populate `trustCache` on success -
+        // only `handleDCAPIRequest`'s catch block reads it, as a fallback
+        // when the live call itself fails.
+        return TrustResult(
+            trusted: decision,
+            framework: respContext?["framework"] as? String,
+            reason: (respContext?["reason"] as? String) ?? (respContext?["message"] as? String),
+            entityName: respContext?["entity_name"] as? String,
+            entityLogo: respContext?["logo_uri"] as? String,
+            clientIdScheme: nil,
+            identifier: subjectId,
+            domain: respContext?["domain"] as? String
+        )
+    }
+
+    /// Find the verifier's response-encryption key (`use: "enc"`) from DC API `client_metadata.jwks`.
+    private static func findEncryptionJwk(_ clientMetadata: [String: Any]?) -> [String: Any]? {
+        guard let jwks = clientMetadata?["jwks"] as? [String: Any],
+              let keys = jwks["keys"] as? [[String: Any]] else {
+            return nil
+        }
+        return keys.first(where: { ($0["use"] as? String) == "enc" }) ?? keys.first
+    }
+
     /// Force a fresh engine WebSocket connection before starting a new flow,
     /// rather than trusting a connection that may have gone idle since the
     /// last one - mirrors `completeAuthorization`'s existing zombie-connection
