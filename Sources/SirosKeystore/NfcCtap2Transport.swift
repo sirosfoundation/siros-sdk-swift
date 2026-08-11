@@ -45,6 +45,17 @@ public final class NfcCtap2Transport: NSObject, Ctap2TransportProvider, @uncheck
         guard NFCTagReaderSession.readingAvailable else {
             throw Ctap2TransportError.notAvailable
         }
+        // A second connect() call while a previous one is still pending
+        // (e.g. a caller retries before the user has tapped the tag, with no
+        // intervening disconnect()) must not silently overwrite
+        // connectContinuation - both NFCTagReaderSession instances would
+        // share `self` as delegate, so the FIRST session's
+        // didDetect/didInvalidateWithError could resolve the SECOND call's
+        // continuation, leaving the first caller's `await connect()` hanging
+        // forever on a continuation that's never resumed.
+        guard connectContinuation == nil else {
+            throw Ctap2TransportError.connectionFailed("connect() already in progress")
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.connectContinuation = continuation
             let session = NFCTagReaderSession(pollingOption: [.iso14443], delegate: self, queue: nil)
