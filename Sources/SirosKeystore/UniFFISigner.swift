@@ -376,7 +376,24 @@ private final class Ctap2TransportBridge: FfiCtap2Transport, @unchecked Sendable
         Task {
             do {
                 try await self.ensureConnected()
-                result = .success(try await self.provider.send(command: command))
+                do {
+                    result = .success(try await self.provider.send(command: command))
+                } catch {
+                    // A transient physical disconnect (unplug/replug, PIN-
+                    // lockout recovery) used to wedge every subsequent
+                    // CTAP2 call with deviceDisconnected until app restart -
+                    // `connected` was set true on the first successful
+                    // connect() and never reset, so ensureConnected() kept
+                    // short-circuiting forever. Mirrors the Kotlin SDK's
+                    // fix for the same real hardware-confirmed bug: reset,
+                    // reconnect, and retry once before giving up.
+                    self.connectLock.lock()
+                    self.connected = false
+                    self.connectLock.unlock()
+                    try? await self.provider.disconnect()
+                    try await self.ensureConnected()
+                    result = .success(try await self.provider.send(command: command))
+                }
             } catch {
                 result = .failure(error)
             }
