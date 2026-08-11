@@ -134,6 +134,11 @@ final class WalletViewModel: ObservableObject {
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingPresentation`'s
     /// pattern above.
     @Published var pendingWscdChoice: PendingWscdChoice?
+    /// Non-nil while a FIDO2 ClientPin prompt (see `SampleAppAuthProvider.requestPin`)
+    /// is awaiting the user's PIN - drives `Fido2PinEntryView` via
+    /// `.sheet(item:)` in `ContentView`, mirroring `pendingWscdChoice`'s
+    /// pattern above.
+    @Published var pendingFido2PinEntry: PendingFido2PinEntry?
 
     /// Set the instant a QR-scanned (or pasted/deep-linked) offer/request URI
     /// is classified and handed off to the SDK's issuance/presentation start
@@ -596,6 +601,19 @@ final class WalletViewModel: ObservableObject {
         wscdChoiceContinuationBox = nil
     }
 
+    /// Resolves `pendingFido2PinEntry` as cancelled if the sheet is
+    /// dismissed without the user tapping Submit/Cancel (e.g. swiping it
+    /// away) - see `dismissWscdChoice`'s identical rationale. `respond` is
+    /// safe to call more than once here since `SampleAppAuthProvider`
+    /// signals its semaphore at most once regardless (matching
+    /// `WscdChoiceContinuationBox.resumeOnce`'s guard, just inlined instead
+    /// of boxed since this callback is synchronous, not a continuation).
+    func dismissFido2PinEntry() {
+        let pending = pendingFido2PinEntry
+        pendingFido2PinEntry = nil
+        pending?.respond(nil)
+    }
+
     /// Start issuance from a credential offer URI (for testing/automation).
     func startIssuance(_ offerUri: String) {
         Task {
@@ -933,6 +951,13 @@ final class WalletViewModel: ObservableObject {
     }
 
     #if canImport(siros_wscd_managerFFI)
+    /// Lazily-created so it can hold a weak reference back to `self`
+    /// without `buildWscdSigner` needing to construct a fresh one per call
+    /// (every plugin's `UniFFISigner` shares this one instance, matching
+    /// how a single Kotlin `AuthProvider` object backs every plugin there
+    /// too).
+    private lazy var wscdAuthProvider = SampleAppAuthProvider(viewModel: self)
+
     /// Builds a WSCD-backed `Signer` for a single plugin ID, using exactly
     /// the `FfiWscdConfig`/`UniFFISigner`/R2PS-registration construction
     /// `rebuildWalletIfNeeded` always used for its one `selectedPluginId`
@@ -942,7 +967,16 @@ final class WalletViewModel: ObservableObject {
     private func buildWscdSigner(forPlugin pluginId: String) -> UniFFISigner? {
         do {
             let wscdConfig = FfiWscdConfig(defaultPlugin: pluginId)
-            let signer = try UniFFISigner(config: wscdConfig)
+            let signer = try UniFFISigner(config: wscdConfig, authProvider: wscdAuthProvider)
+
+            if pluginId == "fido2" {
+                // No USB HID host mode is available to third-party iOS
+                // apps (a real platform constraint, not a gap to fix), so
+                // unlike the Kotlin sample app's USB/NFC race
+                // (CompositeCtap2Transport), there's only one real
+                // transport to register here.
+                try signer.registerFido2Plugin(transport: NfcCtap2Transport())
+            }
 
             if pluginId == "r2ps" {
                 // Ephemeral P-256 key pair for the R2PS message envelope
@@ -1149,6 +1183,78 @@ final class WalletViewModel: ObservableObject {
         }
     }
 }
+
+#if canImport(siros_wscd_managerFFI)
+// MARK: - SampleAppAuthProvider
+
+/// Bridges `WscdAuthProvider`'s synchronous, FFI-thread-blocking callbacks
+/// (see its doc comment) to the sample app's SwiftUI PIN-entry sheet, using
+/// the same `DispatchSemaphore` + `Task { @MainActor in ... }` technique as
+/// `Ctap2TransportBridge.ctap2SendCommand` - `requestPin` is called
+/// synchronously from the FFI queue, not `async`, so `requestWscdChoice`'s
+/// plain `withCheckedContinuation` bridge (for the genuinely async
+/// `RequestWscdChoice` callback) doesn't apply here.
+private final class SampleAppAuthProvider: WscdAuthProvider, @unchecked Sendable {
+    private weak var viewModel: WalletViewModel?
+
+    init(viewModel: WalletViewModel) {
+        self.viewModel = viewModel
+    }
+
+    func requestPin(pluginId: String) throws -> Data {
+        guard pluginId == "fido2" else {
+            // Every non-FIDO2 plugin (currently just "r2ps") uses a fixed
+            // debug-only test PIN in this sample app - matches the Kotlin
+            // sample app's `AuthProvider.requestPin` fallback exactly. See
+            // `WscdAuthProvider.requestPin`'s doc comment for why dispatch
+            // MUST be on `pluginId` and not ambient state: a real hardware
+            // PIN was silently sent to the wrong plugin for an entire
+            // hardware-testing session before that fix.
+            return Data("test-pin-1234".utf8)
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<Data, Error> = .failure(FfiWscdError.AuthCancelled(msg: "No WalletViewModel"))
+
+        Task { @MainActor in
+            guard let viewModel else {
+                semaphore.signal()
+                return
+            }
+            viewModel.pendingFido2PinEntry = PendingFido2PinEntry(respond: { pin in
+                // Clear first so the sheet dismisses on Submit too, not
+                // just Cancel - `dismissFido2PinEntry`'s onDismiss-driven
+                // call is then a harmless no-op, mirroring
+                // `requestWscdChoice`'s identical `respond` closure.
+                viewModel.pendingFido2PinEntry = nil
+                if let pin, !pin.isEmpty {
+                    result = .success(Data(pin.utf8))
+                } else {
+                    result = .failure(FfiWscdError.AuthCancelled(msg: "User cancelled PIN entry"))
+                }
+                semaphore.signal()
+            })
+        }
+
+        semaphore.wait()
+        switch result {
+        case .success(let data): return data
+        case .failure(let error): throw error
+        }
+    }
+
+    func requestWebauthnAssertion(
+        pluginId: String,
+        challenge: Data,
+        rpId: String,
+        allowedCredentials: [Data]
+    ) throws -> Data {
+        // No WebAuthn-assertion-based plugin ceremony is exercised by this
+        // sample app today (R2PS uses OPAQUE, FIDO2 uses ClientPin above).
+        throw FfiWscdError.AuthCancelled(msg: "WebAuthn assertion not implemented in sample app")
+    }
+}
+#endif
 
 // MARK: - WalletEventListener
 

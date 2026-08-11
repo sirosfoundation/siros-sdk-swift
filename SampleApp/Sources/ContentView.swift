@@ -60,6 +60,15 @@ struct ContentView: View {
         }) { choice in
             WscdChoiceSheet(choice: choice)
         }
+        // Same top-level rationale as `pendingWscdChoice` above - a FIDO2
+        // ClientPin prompt (see `SampleAppAuthProvider.requestPin`) can fire
+        // during any signing operation regardless of which screen is
+        // showing underneath.
+        .sheet(item: $viewModel.pendingFido2PinEntry, onDismiss: {
+            viewModel.dismissFido2PinEntry()
+        }) { pending in
+            Fido2PinEntryView(pending: pending)
+        }
     }
 }
 
