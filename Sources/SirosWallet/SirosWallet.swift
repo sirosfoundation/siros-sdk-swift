@@ -2007,7 +2007,13 @@ public final class SirosWallet: @unchecked Sendable {
     public func completeAuthorization(flowId: String, code: String, state: String) {
         lock.lock()
         let engine = engineSession
-        let pending = pendingAuthorizations.removeValue(forKey: flowId)
+        // Peek, don't remove yet - removing before the state check below
+        // meant a mismatched (e.g. attacker-forged) callback destroyed the
+        // real, still-pending context, so any later legitimate completion
+        // attempt for the same flowId fell through to the no-context branch,
+        // which sends the flow action straight through with no CSRF check
+        // at all. Only remove once the check actually passes.
+        let pending = pendingAuthorizations[flowId]
         let tokens = authTokens
         let listener = eventListener
         lock.unlock()
@@ -2027,6 +2033,8 @@ public final class SirosWallet: @unchecked Sendable {
             listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch")
             return
         }
+
+        lock.lock(); pendingAuthorizations.removeValue(forKey: flowId); lock.unlock()
 
         Task {
             do {
