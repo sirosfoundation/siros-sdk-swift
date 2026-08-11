@@ -146,7 +146,8 @@ extension SirosWallet {
                 listener?.onCredentialReceived(credential: stored)
             }
         }
-        lock.lock(); activeOffer = nil; activeVctm = nil; activeAttestedKeyIds = nil; lock.unlock()
+        // Terminal path for this issuance - see `resetIssuanceGuards()`.
+        resetIssuanceGuards()
 
         await persistAndSyncKeystore()
 

@@ -255,6 +255,13 @@ public final class SirosWallet: @unchecked Sendable {
     /// batch credential was actually bound to, and silently used an arbitrary
     /// one (see `WscdKeystoreAdapter.selectSigningKey`'s doc comment).
     var activeAttestedKeyIds: [String]?
+    /// Ambient (not flow-ID-keyed) guard against overlapping issuance
+    /// attempts - set at the top of `startIssuanceByOffer`/`startIssuance`
+    /// and checked there too, throwing if already `true`. Not `private` for
+    /// the same cross-file-extension-access reason as `activeOffer` etc.
+    /// above; guarded by the same `lock`. See `resetIssuanceGuards()` for
+    /// why every terminal path must clear it.
+    var issuanceInFlight = false
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
@@ -1363,70 +1370,16 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
-        lock.lock(); activeOffer = offer; lock.unlock()
-
-        // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
-        // like `activeVctm`'s existing fetch: whichever one doesn't match
-        // this offer's actual format simply fails to decode and stays nil.
-        let vctm = try? await vctmFetcher.fetch(
-            issuerUrl: offer.credentialIssuerIdentifier,
-            scope: offer.credentialConfigurationId,
-            vct: offer.vct,
-            registryUrl: resolvedRegistryUrl
-        )
-        let mddlSchema = await mddlSchemaFetcher.fetch(
-            issuerUrl: offer.credentialIssuerIdentifier,
-            scope: offer.credentialConfigurationId,
-            doctype: offer.doctype,
-            registryUrl: resolvedRegistryUrl
-        )
-        lock.lock()
-        activeVctm = vctm
-        activeMddlSchema = mddlSchema
-        lock.unlock()
-
-        var credOffer: [String: AnyCodable] = [
-            "credential_issuer": .string(offer.credentialIssuerIdentifier),
-            "credential_configuration_ids": .array([.string(offer.credentialConfigurationId)]),
-        ]
-
-        var grants: [String: AnyCodable] = [:]
-        if let preAuth = offer.preAuthorizedCode {
-            var preAuthGrant: [String: AnyCodable] = ["pre-authorized_code": .string(preAuth)]
-            if offer.txCode != nil {
-                preAuthGrant["tx_code"] = .object_(["input_mode": .string("text")])
-            }
-            grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"] = .object_(preAuthGrant)
-        } else {
-            grants["authorization_code"] = .object_([:])
+        if issuanceInFlight {
+            throw SirosError.wallet(message: "Another issuance is already in progress")
         }
-        credOffer["grants"] = .object_(grants)
-
-        let offerJson: String
-        if let data = try? JSONEncoder().encode(credOffer),
-           let s = String(data: data, encoding: .utf8) {
-            offerJson = s
-        } else {
-            offerJson = "{}"
-        }
-
-        let clientAttestation = await resolveClientAttestation(issuerUrl: offer.credentialIssuerIdentifier)
-        engine.startIssuance(
-            offer: offerJson,
-            redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
-            clientAttestation: clientAttestation?.0,
-            clientAttestationPoP: clientAttestation?.1
-        )
-    }
-
-    /// Start issuance with a raw offer URI or JSON.
-    public func startIssuance(offerUri: String) async throws {
-        guard let engine = engineSession else {
-            throw SirosError.wallet(message: "Not connected")
-        }
-        try await ensureEngineConnected(engine)
-        if let offer = await resolveOfferForDisplay(offerUri) {
+        issuanceInFlight = true
+        do {
             lock.lock(); activeOffer = offer; lock.unlock()
+
+            // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
+            // like `activeVctm`'s existing fetch: whichever one doesn't match
+            // this offer's actual format simply fails to decode and stays nil.
             let vctm = try? await vctmFetcher.fetch(
                 issuerUrl: offer.credentialIssuerIdentifier,
                 scope: offer.credentialConfigurationId,
@@ -1439,41 +1392,121 @@ public final class SirosWallet: @unchecked Sendable {
                 doctype: offer.doctype,
                 registryUrl: resolvedRegistryUrl
             )
-            lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
-        }
-        // Resolve OAuth Client Attestation once, independent of whether the
-        // display-metadata resolution above succeeded - a client that can't
-        // be shown a name/logo should still get an attestation attached.
-        var attestation: String?
-        var attestationPoP: String?
-        if let header = await extractOfferHeader(offerUri),
-           let pair = await resolveClientAttestation(issuerUrl: header.credentialIssuer) {
-            attestation = pair.0
-            attestationPoP = pair.1
-        }
-        if offerUri.hasPrefix("openid-credential-offer://") {
-            // Deep-link URI with inline offer - send as "offer" so the engine
-            // extracts the credential_offer query parameter instead of HTTP-fetching.
-            engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
-        } else if offerUri.hasPrefix("http") {
-            // Universal-link-style offer: the credential_offer/credential_offer_uri
-            // live in the URI's own query string (e.g. an issuer's wallet-redirect
-            // page), so the URI itself is not fetchable as the offer JSON - unlike
-            // the engine's openid-credential-offer:// handling, it only strips
-            // that query param for that exact scheme, so it must be extracted here.
-            let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
-            func queryValue(_ name: String) -> String? {
-                queryItems.first(where: { $0.name == name })?.value
-            }
-            if let credentialOffer = queryValue("credential_offer") {
-                engine.startIssuance(offer: credentialOffer, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
-            } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                engine.startIssuance(credentialOfferUri: credentialOfferUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            lock.lock()
+            activeVctm = vctm
+            activeMddlSchema = mddlSchema
+            lock.unlock()
+
+            var credOffer: [String: AnyCodable] = [
+                "credential_issuer": .string(offer.credentialIssuerIdentifier),
+                "credential_configuration_ids": .array([.string(offer.credentialConfigurationId)]),
+            ]
+
+            var grants: [String: AnyCodable] = [:]
+            if let preAuth = offer.preAuthorizedCode {
+                var preAuthGrant: [String: AnyCodable] = ["pre-authorized_code": .string(preAuth)]
+                if offer.txCode != nil {
+                    preAuthGrant["tx_code"] = .object_(["input_mode": .string("text")])
+                }
+                grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"] = .object_(preAuthGrant)
             } else {
-                engine.startIssuance(credentialOfferUri: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                grants["authorization_code"] = .object_([:])
             }
-        } else {
-            engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            credOffer["grants"] = .object_(grants)
+
+            let offerJson: String
+            if let data = try? JSONEncoder().encode(credOffer),
+               let s = String(data: data, encoding: .utf8) {
+                offerJson = s
+            } else {
+                offerJson = "{}"
+            }
+
+            let clientAttestation = await resolveClientAttestation(issuerUrl: offer.credentialIssuerIdentifier)
+            engine.startIssuance(
+                offer: offerJson,
+                redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
+                clientAttestation: clientAttestation?.0,
+                clientAttestationPoP: clientAttestation?.1
+            )
+        } catch {
+            // A synchronous start failure here means the flow was never
+            // registered server-side, so nothing will ever clear the guard
+            // via the normal flow_complete/flow_error path - without this,
+            // every future issuance attempt would be permanently blocked.
+            resetIssuanceGuards()
+            throw error
+        }
+    }
+
+    /// Start issuance with a raw offer URI or JSON.
+    public func startIssuance(offerUri: String) async throws {
+        guard let engine = engineSession else {
+            throw SirosError.wallet(message: "Not connected")
+        }
+        try await ensureEngineConnected(engine)
+        if issuanceInFlight {
+            throw SirosError.wallet(message: "Another issuance is already in progress")
+        }
+        issuanceInFlight = true
+        do {
+            if let offer = await resolveOfferForDisplay(offerUri) {
+                lock.lock(); activeOffer = offer; lock.unlock()
+                let vctm = try? await vctmFetcher.fetch(
+                    issuerUrl: offer.credentialIssuerIdentifier,
+                    scope: offer.credentialConfigurationId,
+                    vct: offer.vct,
+                    registryUrl: resolvedRegistryUrl
+                )
+                let mddlSchema = await mddlSchemaFetcher.fetch(
+                    issuerUrl: offer.credentialIssuerIdentifier,
+                    scope: offer.credentialConfigurationId,
+                    doctype: offer.doctype,
+                    registryUrl: resolvedRegistryUrl
+                )
+                lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
+            }
+            // Resolve OAuth Client Attestation once, independent of whether the
+            // display-metadata resolution above succeeded - a client that can't
+            // be shown a name/logo should still get an attestation attached.
+            var attestation: String?
+            var attestationPoP: String?
+            if let header = await extractOfferHeader(offerUri),
+               let pair = await resolveClientAttestation(issuerUrl: header.credentialIssuer) {
+                attestation = pair.0
+                attestationPoP = pair.1
+            }
+            if offerUri.hasPrefix("openid-credential-offer://") {
+                // Deep-link URI with inline offer - send as "offer" so the engine
+                // extracts the credential_offer query parameter instead of HTTP-fetching.
+                engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            } else if offerUri.hasPrefix("http") {
+                // Universal-link-style offer: the credential_offer/credential_offer_uri
+                // live in the URI's own query string (e.g. an issuer's wallet-redirect
+                // page), so the URI itself is not fetchable as the offer JSON - unlike
+                // the engine's openid-credential-offer:// handling, it only strips
+                // that query param for that exact scheme, so it must be extracted here.
+                let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
+                func queryValue(_ name: String) -> String? {
+                    queryItems.first(where: { $0.name == name })?.value
+                }
+                if let credentialOffer = queryValue("credential_offer") {
+                    engine.startIssuance(offer: credentialOffer, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                } else if let credentialOfferUri = queryValue("credential_offer_uri") {
+                    engine.startIssuance(credentialOfferUri: credentialOfferUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                } else {
+                    engine.startIssuance(credentialOfferUri: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                }
+            } else {
+                engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            }
+        } catch {
+            // A synchronous start failure here means the flow was never
+            // registered server-side, so nothing will ever clear the guard
+            // via the normal flow_complete/flow_error path - without this,
+            // every future issuance attempt would be permanently blocked.
+            resetIssuanceGuards()
+            throw error
         }
     }
 
@@ -1573,12 +1606,46 @@ public final class SirosWallet: @unchecked Sendable {
         try await engine.awaitConnected()
     }
 
+    /// Clear the ambient issuance-in-progress guard fields, unconditionally.
+    ///
+    /// Every terminal path for an issuance attempt must call this - a
+    /// `flow_complete`/`flow_error` from the engine, a client-side
+    /// termination (e.g. `reportSignFailure`), a synchronous start failure,
+    /// or the user cancelling before the engine ever assigned a flow ID at
+    /// all (see `cancelCurrentFlow`'s doc comment for why that last case is
+    /// real, not just defensive). Not `private`, for the same
+    /// cross-file-extension-access reason as `activeOffer` etc.
+    func resetIssuanceGuards() {
+        lock.lock()
+        activeOffer = nil
+        activeVctm = nil
+        activeAttestedKeyIds = nil
+        issuanceInFlight = false
+        lock.unlock()
+    }
+
     /// Cancel the current flow.
+    ///
+    /// `resetIssuanceGuards()` is called unconditionally, not just inside the
+    /// `.flowActive` branch - a slow/unresponsive issuer leaves the wallet in
+    /// `.ready` the whole time `startIssuance`/`startIssuanceByOffer` is
+    /// awaiting the engine's first progress message, since the engine
+    /// doesn't assign (and report) a flow ID until then. Gating the local
+    /// guard reset on `.flowActive` too meant cancelling during exactly that
+    /// window did nothing at all - not even a local reset - permanently
+    /// stranding `issuanceInFlight` at `true` and blocking every subsequent
+    /// issuance attempt until the app process was killed (real bug hit
+    /// against a slow Geneva interop test issuer). The backend `cancelFlow`
+    /// send stays gated on `.flowActive`, since only then does a real
+    /// `flowId` exist to send to the server - the local guard reset does
+    /// not need one, and is a no-op if no issuance was ever in flight, so
+    /// it's always safe to call unconditionally.
     public func cancelCurrentFlow() {
         if case .flowActive(let userId, let displayName, let flowId, _, _, let creds) = state {
             try? engineSession?.cancelFlow(flowId: flowId)
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
         }
+        resetIssuanceGuards()
     }
 
     // MARK: - Identity Verification
@@ -1867,9 +1934,13 @@ public final class SirosWallet: @unchecked Sendable {
                 return await self.handleWmpTrustEvaluation(flowId: flowId, payload: payload)
             },
             onComplete: { [weak self] flowId, _ in
+                // Terminal path for this issuance over the WMP transport too -
+                // see `resetIssuanceGuards()`.
+                self?.resetIssuanceGuards()
                 self?.eventListener?.onFlowComplete(flowId: flowId)
             },
             onError: { [weak self] flowId, code, message in
+                self?.resetIssuanceGuards()
                 self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")")
             }
         ))
@@ -2636,6 +2707,11 @@ public final class SirosWallet: @unchecked Sendable {
         lock.lock(); let listener = eventListener; lock.unlock()
         listener?.onFlowError(flowId: flowId, errorMessage: message)
 
+        // A terminal path for whatever issuance may have been in flight - a
+        // no-op for a presentation sign-request failure, which never sets
+        // these fields in the first place. See `resetIssuanceGuards()`.
+        resetIssuanceGuards()
+
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),
              .ready(let userId, let displayName, _, _):
@@ -2652,6 +2728,11 @@ public final class SirosWallet: @unchecked Sendable {
         let fid = msg.flowId ?? "unknown"
         lock.lock(); let listener = eventListener; lock.unlock()
         listener?.onFlowError(flowId: fid, errorMessage: msg.error.message)
+
+        // Terminal path for whatever issuance may have been in flight -
+        // a no-op for a presentation flow error, which never sets these
+        // fields. See `resetIssuanceGuards()`.
+        resetIssuanceGuards()
 
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),
