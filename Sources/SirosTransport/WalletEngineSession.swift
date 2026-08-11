@@ -536,8 +536,17 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     }
 
     private func send<T: Encodable>(_ message: T) {
+        // Crashing the whole process here (the original `preconditionFailure`)
+        // meant any caller racing a concurrent `disconnect()` - or invoked
+        // just after a dropped connection the receive loop hasn't yet
+        // reacted to - brought down the entire app rather than just failing
+        // this one send. `send` is called from many public, non-throwing
+        // methods (sendTrustResult, sendMatchResponse, sendSignResponse,
+        // etc.), so log-and-return matches the encode-failure branch just
+        // below rather than crashing.
         guard let ws = webSocketTask else {
-            preconditionFailure("Not connected")
+            print("[WalletEngineSession] ⚠️ send: not connected, dropping message")
+            return
         }
         guard let data = try? encoder.encode(message),
               let text = String(data: data, encoding: .utf8) else {
