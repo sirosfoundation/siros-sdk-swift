@@ -207,6 +207,33 @@ public final class SirosWallet: @unchecked Sendable {
         wscdSelectionPolicy.clearGlobalUserOverride()
     }
 
+    /// A hardware-backed WSCD plugin's persisted key metadata, synced via
+    /// privatedata (see `WscdKeystoreAdapter.exportWscdCredentialsState`'s
+    /// doc comment) - `nil` before any key has ever been exported for this
+    /// plugin. The host app should pass this to
+    /// `WscdManager.registerFido2PluginWithState` instead of
+    /// `WscdManager.registerFido2Plugin` whenever it's non-nil, so a key
+    /// enrolled on ANY device sharing this account - not just the one that
+    /// originally enrolled it - stays addressable. Deliberately NOT backed by
+    /// device-local storage: CTAP2 roaming authenticators (e.g. a YubiKey)
+    /// are enrolled once but usable from any device.
+    public func wscdCredentials(pluginId: String) async -> String? {
+        guard let adapter = keystore as? WscdKeystoreAdapter else { return nil }
+        return await adapter.exportWscdCredentialsState()[pluginId]
+    }
+
+    /// Record a WSCD plugin's freshly-exported key metadata (see
+    /// `WscdManager.exportFido2State`) and sync it to the backend, so it
+    /// survives to the next `wscdCredentials` call on any device sharing
+    /// this account. Call after every enrollment/key-generation that could
+    /// have changed the plugin's state.
+    public func saveWscdCredentials(pluginId: String, state: String) async {
+        if let adapter = keystore as? WscdKeystoreAdapter {
+            await adapter.setWscdCredentialsState(pluginId: pluginId, state: state)
+        }
+        await persistAndSyncKeystore()
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher

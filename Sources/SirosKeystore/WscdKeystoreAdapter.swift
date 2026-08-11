@@ -38,10 +38,27 @@ public struct TransactionDataItem: Sendable {
 public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, WscdManager {
 
     private let signer: Signer
-    private let mutex = NSLock()
-    private var _isUnlocked = false
-    private var credentials: [Int64: String] = [:]
-    private var presentationRecords: [Int64: String] = [:]
+
+    /// Owns the PRF-protected container (mainKey/prfKeys/jwe -> V3
+    /// WalletStateContainer) for this adapter's *credentials* - the WSCD
+    /// manages its own signing-key protection, but SIROS ID's core tenet is
+    /// that private data, including issued credentials, is always protected
+    /// by the passkey's PRF-derived secret independent of whichever WSCD
+    /// backs key signing. Reusing `JweKeystore` here (rather than an
+    /// adapter-local format) guarantees byte-for-byte compatibility with
+    /// wallet-frontend and JweKeystore-backed native clients per
+    /// privatedata-spec - the SAME passkey must unlock the SAME credentials
+    /// on any client. It's also what lets `S.wscdCredentials` (see
+    /// `exportWscdCredentialsState`/`setWscdCredentialsState`) actually
+    /// round-trip through backend sync for a WSCD-backed wallet, rather than
+    /// only existing in this process's memory.
+    ///
+    /// Unlike Kotlin's `WscdKeystoreAdapter`, this adapter's `Signer`
+    /// protocol has no `exportPrivateKeypairs`/`importPrivateKeypairs`
+    /// precedent yet, so a "softkey" plugin's own private key material isn't
+    /// folded into `credentialsKeystore.keys` here - a known gap, not
+    /// introduced by this change.
+    private let credentialsKeystore = JweKeystore()
 
     /// Non-nil only when `signer` is itself WSCD-backed (i.e. a
     /// `UniFFISigner`) - a plain software `Signer` has no lifecycle or
@@ -94,9 +111,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     // MARK: - KeystoreManager conformance
 
     public var isUnlocked: Bool {
-        mutex.lock()
-        defer { mutex.unlock() }
-        return _isUnlocked
+        credentialsKeystore.isUnlocked
     }
 
     public func unlock(
@@ -105,18 +120,37 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         hkdfSalt: Data,
         hkdfInfo: Data
     ) async throws {
-        // WSCD-backed keystores don't use PRF unlock —
-        // the WSCD manages its own key protection.
-        // Mark as unlocked; the WSCD handles auth via its own callbacks.
-        mutex.lock()
-        defer { mutex.unlock() }
-        _isUnlocked = true
+        // The WSCD manages its own signing-key protection (no PRF unlock for
+        // key material itself), but this adapter's *credentials* (and now
+        // `S.wscdCredentials`) are still PRF-protected via
+        // `credentialsKeystore` - see its doc comment.
+        try await credentialsKeystore.unlock(
+            prfOutput: prfOutput,
+            encryptedContainer: encryptedContainer,
+            hkdfSalt: hkdfSalt,
+            hkdfInfo: hkdfInfo
+        )
     }
 
     public func lock() {
-        mutex.lock()
-        defer { mutex.unlock() }
-        _isUnlocked = false
+        credentialsKeystore.lock()
+    }
+
+    /// The persisted (privatedata-synced) copy of every hardware-backed WSCD
+    /// plugin's key metadata - see `JweKeystore.exportWscdCredentials`'s doc
+    /// comment. Read this after `unlock` to restore a previously-enrolled
+    /// key via e.g. `registerFido2PluginWithState`, rather than
+    /// `exportFido2State` which only reflects the CURRENT process's live
+    /// plugin state.
+    public func exportWscdCredentialsState() async -> [String: String] {
+        await credentialsKeystore.exportWscdCredentials()
+    }
+
+    /// Record a WSCD plugin's freshly-exported key metadata so it round-trips
+    /// through privatedata on the next `exportEncryptedContainer` - see
+    /// `JweKeystore.setWscdCredentials`.
+    public func setWscdCredentialsState(pluginId: String, state: String) async {
+        await credentialsKeystore.setWscdCredentials(pluginId: pluginId, state: state)
     }
 
     public func generateKey(algorithm: String) async throws -> String {
@@ -406,11 +440,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     }
 
     public func exportEncryptedContainer() async throws -> Data {
-        // WSCD keys are not exportable as a JWE container —
-        // they live in the hardware/remote HSM.
-        // Return a valid empty JSON object so callers that parse the result
-        // (e.g. syncPrivateDataToBackend) don't fail on empty data.
-        return Data("{}".utf8)
+        // WSCD signing keys themselves are not exportable as a JWE container
+        // - they live in the hardware/remote HSM - but this adapter's
+        // credentials, presentation records, and S.wscdCredentials ARE
+        // PRF-protected and backend-synced via credentialsKeystore (see its
+        // doc comment), exactly like a plain JweKeystore-backed wallet.
+        try await credentialsKeystore.exportEncryptedContainer()
     }
 
     public func listKeys() -> [KeyInfo] {
@@ -461,64 +496,40 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return try? await signer.securityProperties(keyId: keyId)
     }
 
-    // MARK: - Credential storage (local in-memory)
+    // MARK: - Credential storage (PRF-protected via credentialsKeystore)
 
     public func saveCredential(id: Int64, json: String) async throws {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        credentials[id] = json
+        try await credentialsKeystore.saveCredential(id: id, json: json)
     }
 
     public func getCredential(id: Int64) async throws -> String? {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        return credentials[id]
+        try await credentialsKeystore.getCredential(id: id)
     }
 
     public func getAllCredentials() async throws -> [Int64: String] {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        return credentials
+        try await credentialsKeystore.getAllCredentials()
     }
 
     public func deleteCredential(id: Int64) async throws {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        credentials.removeValue(forKey: id)
+        try await credentialsKeystore.deleteCredential(id: id)
     }
 
     public func clearCredentials() async throws {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        credentials.removeAll()
+        try await credentialsKeystore.clearCredentials()
     }
 
-    // MARK: - Presentation history storage (local in-memory)
+    // MARK: - Presentation history storage (PRF-protected via credentialsKeystore)
 
     public func savePresentationRecord(id: Int64, json: String) async throws {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        presentationRecords[id] = json
+        try await credentialsKeystore.savePresentationRecord(id: id, json: json)
     }
 
     public func getAllPresentationRecords() async throws -> [Int64: String] {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        return presentationRecords
+        try await credentialsKeystore.getAllPresentationRecords()
     }
 
     public func clearPresentationRecords() async throws {
-        try checkUnlocked()
-        mutex.lock()
-        defer { mutex.unlock() }
-        presentationRecords.removeAll()
+        try await credentialsKeystore.clearPresentationRecords()
     }
 
     public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
@@ -589,9 +600,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     // MARK: - Private helpers
 
     private func checkUnlocked() throws {
-        mutex.lock()
-        defer { mutex.unlock() }
-        guard _isUnlocked else {
+        guard credentialsKeystore.isUnlocked else {
             throw KeystoreError.locked
         }
     }
