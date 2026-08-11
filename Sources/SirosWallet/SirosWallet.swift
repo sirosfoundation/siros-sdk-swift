@@ -1640,7 +1640,15 @@ public final class SirosWallet: @unchecked Sendable {
     public func handleDCAPIRequest(rawRequestJson: String, origin: String) async throws -> DCAPIPresentationResult {
         let request = try DCAPIRequestParser.parse(rawRequestJson)
 
-        let subjectId = request.clientId ?? origin
+        // request.clientId is only cryptographically bound to anything when
+        // the request is signed (keyMaterial != nil, verified against the
+        // JWS header's own key in DCAPIRequestParser) - for the unsigned
+        // variant it's just a caller-supplied field in the untrusted request
+        // body. Using it there let a malicious page set client_id to some
+        // other, possibly-whitelisted verifier's identity and have trust
+        // (and presentation history) evaluated against that spoofed identity
+        // instead of the platform-attested origin.
+        let subjectId = request.keyMaterial != nil ? (request.clientId ?? origin) : origin
         let trustResult: TrustResult
         do {
             trustResult = try await evaluateTrustDirect(
