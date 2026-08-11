@@ -189,9 +189,22 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
             self.cacheLock.lock()
             let cached = self.publicKeyCache[keyId]
             self.cacheLock.unlock()
-            guard let jwkData = cached else {
-                throw UniFFISignerError.publicKeyNotCached(keyId: keyId)
+            if let jwkData = cached {
+                return jwkData
             }
+            // A cache miss doesn't mean the key doesn't exist - only
+            // generateKey populates publicKeyCache, so a key created via
+            // registerLifecycle/activateLifecycle, or one generated in a
+            // prior process (this cache is process-memory-only), has no
+            // entry here even though the Rust core still has it. `ffi`'s own
+            // exportPublicKey(kid:) is documented as the recovery path for
+            // exactly this case - fall back to it, and cache the result so
+            // subsequent calls in this process don't need to.
+            let jwk = try self.ffi.exportPublicKey(kid: keyId)
+            let jwkData = Data(jwk.utf8)
+            self.cacheLock.lock()
+            self.publicKeyCache[keyId] = jwkData
+            self.cacheLock.unlock()
             return jwkData
         }
     }
