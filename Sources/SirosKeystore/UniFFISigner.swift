@@ -129,6 +129,26 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         try ffi.registerFido2Plugin(transport: Ctap2TransportBridge(transport))
     }
 
+    /// Register the FIDO2 previewSign plugin, restoring a previously-
+    /// enrolled key's metadata (`state`, from a prior `exportFido2State()`
+    /// call - possibly on a different device sharing this account, since
+    /// CTAP2 roaming authenticators aren't tied to one device) instead of
+    /// starting with no known keys.
+    public func registerFido2PluginWithState(transport: Ctap2TransportProvider, state: Data) throws {
+        try ffi.registerFido2PluginWithState(transport: Ctap2TransportBridge(transport), state: state)
+    }
+
+    /// Export the FIDO2 plugin's current key metadata (key handles + public
+    /// keys only, never private key material - the private key never
+    /// leaves the physical authenticator) for persisting via
+    /// `SirosWallet.saveWscdCredentials`, so it survives to the next
+    /// `registerFido2PluginWithState` call on any device sharing this
+    /// account. Call after every enrollment/key-generation that could have
+    /// changed the plugin's state.
+    public func exportFido2State() throws -> Data {
+        try ffi.exportFido2State()
+    }
+
     // MARK: - Signer conformance
 
     public func generateKey(algorithm: String) async throws -> String {

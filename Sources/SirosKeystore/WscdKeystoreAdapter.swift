@@ -104,6 +104,14 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         try requireWscdManager().registerFido2Plugin(transport: transport)
     }
 
+    public func registerFido2PluginWithState(transport: Ctap2TransportProvider, state: Data) throws {
+        try requireWscdManager().registerFido2PluginWithState(transport: transport, state: state)
+    }
+
+    public func exportFido2State() throws -> Data {
+        try requireWscdManager().exportFido2State()
+    }
+
     public func registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) throws {
         try requireWscdManager().registerR2psPlugin(config: config, transport: transport)
     }
