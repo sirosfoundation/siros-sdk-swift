@@ -61,7 +61,7 @@ final class WalletViewModel: ObservableObject {
     /// logged, and skipped - the existing best-effort path) instead of
     /// silently substituting the wrong key. A dev wiring up a real R2PS
     /// server should paste its actual public key here (or via the
-    /// "R2PS Server Public Key" field in `WscaDeveloperView`).
+    /// "R2PS Server Public Key" field in `WscdSettingsView`).
     @Published var r2psServerPublicKeyPem: String = ""
     /// Core wallet policy (not a UI-only preference like the toggles above) -
     /// persisted here, but enforced by `SirosWallet` itself (see
@@ -77,7 +77,7 @@ final class WalletViewModel: ObservableObject {
 
     /// Dev/host-app config for `WscdSelectionPolicy`'s multi-plugin
     /// selection (`WalletConfig.availableKeystores`) - gated behind an
-    /// explicit developer toggle (`WscaDeveloperView`'s "WSCD Selection
+    /// explicit developer toggle (`WscdSettingsView`'s "WSCD Selection
     /// Policy" section) rather than always building a `KeystoreManager` for
     /// every known plugin ID: a plain single-plugin run only ever needs
     /// `selectedPluginId`'s one plugin, so constructing the others
@@ -90,7 +90,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     /// Host-app-supplied `WalletConfig.defaultWscdMapping` - dev config
-    /// (`WscaDeveloperView`'s "WSCD Selection Policy" section), not an
+    /// (`WscdSettingsView`'s "WSCD Selection Policy" section), not an
     /// end-user Settings toggle, since it's a shortcut for an integrator
     /// that already knows the right plugin for a given (issuer,
     /// credentialType) pair to skip the `RequestWscdChoice` prompt entirely
@@ -539,7 +539,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     /// Adds/overwrites one `WalletConfig.defaultWscdMapping` entry - dev
-    /// config (`WscaDeveloperView`), not persisted TOFU state. Requires a
+    /// config (`WscdSettingsView`), not persisted TOFU state. Requires a
     /// fresh `rebuildWalletIfNeeded()` (e.g. next login) to actually take
     /// effect, same as `selectedPluginId`.
     func addWscdDefaultMapping(issuer: String, credentialType: String, pluginId: String) {
@@ -1070,7 +1070,7 @@ final class WalletViewModel: ObservableObject {
             }
             // Only populate `availableKeystores` beyond the selected plugin
             // when the dev has explicitly opted into multi-plugin selection
-            // (`WscaDeveloperView`'s toggle) - see `wscdMultiPluginEnabled`'s
+            // (`WscdSettingsView`'s toggle) - see `wscdMultiPluginEnabled`'s
             // doc comment for why this isn't unconditional.
             if pluginId == selectedPluginId || wscdMultiPluginEnabled {
                 availableKeystores[pluginId] = adapter

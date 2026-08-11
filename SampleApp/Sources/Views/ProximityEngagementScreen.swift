@@ -469,7 +469,7 @@ private struct ProximityConsentSheet: View {
                         // current choice) rather than a native SwiftUI
                         // `Picker` - matches this repo's existing
                         // tap-to-select convention for small in-app choice
-                        // lists (see `WscaDeveloperView.swift`'s
+                        // lists (see `WscdSettingsView.swift`'s
                         // `PluginChip`), adapted to full-width rows since
                         // each option here needs a full credential name.
                         ForEach(consent.matchingFamilies, id: \.representative.id) { family in

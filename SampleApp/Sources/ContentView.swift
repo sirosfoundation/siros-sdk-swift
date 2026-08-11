@@ -27,7 +27,7 @@ struct ContentView: View {
                 } else if viewModel.showAddCredential {
                     AddCredentialView()
                 } else if viewModel.showWscaDeveloper {
-                    WscaDeveloperView()
+                    WscdSettingsView()
                 } else {
                     MainTabView()
                 }

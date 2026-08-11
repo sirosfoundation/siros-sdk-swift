@@ -1,7 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import SwiftUI
-import SirosKeystore
 import SirosCredentials
 
 struct SettingsView: View {
@@ -37,115 +36,25 @@ struct SettingsView: View {
                     Text(L10n.string("settings.credentialConsumptionDescription"))
                 }
 
-                // WSCD key-storage choices (TOFU mapping) section - see
-                // `WscdSelectionPolicy`'s doc comment. Read-only display +
-                // per-entry/clear-all, matching the credential consumption
-                // section's plain-List-row convention above. The actual
-                // dev-only `defaultWscdMapping`/multi-plugin toggle lives in
-                // `WscaDeveloperView` instead - see its own doc comment for
-                // why that split makes sense.
-                if !viewModel.wscdTofuMappingSnapshot.isEmpty {
-                    Section {
-                        ForEach(viewModel.wscdTofuMappingSnapshot.sorted(by: { $0.key < $1.key }), id: \.key) { key, pluginId in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(key)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Text(pluginId)
-                                        .font(.body.weight(.medium))
-                                }
-                                Spacer()
-                                Button(action: { viewModel.clearWscdTofuMapping(forKey: key) }) {
-                                    Image(systemName: "xmark.circle")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                        Button(role: .destructive, action: { viewModel.clearAllWscdTofuMappings() }) {
-                            Text("Clear All")
-                        }
-                    } header: {
-                        Text("Security Key Choices")
-                    } footer: {
-                        Text("Which security key was picked for each credential you've received. Clearing an entry asks again next time.")
-                    }
-                }
-
-                // Global user preference - a deliberate "always use X"
-                // choice, distinct from the TOFU section above (see
-                // `WscdRememberScope`'s doc comment): this is never
-                // auto-picked by the SDK, only ever set here or from the
-                // choice sheet's "Always" option, and it outranks TOFU for
-                // every issuer that doesn't have its own more specific
-                // per-issuer override below.
+                // WSCD (security key/keystore) settings - a single entry
+                // point into the consolidated `WscdSettingsView`, which now
+                // owns everything that used to be spread across four
+                // separate sections here (Security Key Choices/TOFU,
+                // Preferred Security Key, Per-Issuer Overrides, WSCD
+                // Lifecycle/Enroll) plus the old standalone "WSCA Developer"
+                // screen - see `WscdSettingsView.swift`'s doc comment for the
+                // full consolidation. Enroll/Rotate/Destroy/Refresh live in
+                // that screen's collapsible Developer section, since they're
+                // diagnostic/test actions, not something an end user taps
+                // routinely.
                 Section {
-                    Picker("Preferred security key", selection: Binding(
-                        get: { viewModel.wscdGlobalOverrideSnapshot ?? "" },
-                        set: { newValue in
-                            if newValue.isEmpty {
-                                viewModel.clearWscdGlobalOverride()
-                            } else {
-                                viewModel.setWscdGlobalOverride(pluginId: newValue)
-                            }
-                        }
-                    )) {
-                        Text("No preference").tag("")
-                        ForEach(Array(WscdPluginCapabilities.pluginTiers.keys.sorted()), id: \.self) { pluginId in
-                            Text(pluginId).tag(pluginId)
-                        }
+                    Button(action: { viewModel.openWscaDeveloper() }) {
+                        Label("WSCD Settings", systemImage: "key")
                     }
                 } header: {
-                    Text("Preferred Security Key")
+                    Text("Security Key (WSCD)")
                 } footer: {
-                    Text("Always use this security key when it meets a credential's requirement, even if a lower-assurance key would also qualify.")
-                }
-
-                // Per-issuer user overrides - distinct from both the TOFU
-                // section (auto-remembered) and the global preference above
-                // (applies everywhere): each entry here is a deliberate
-                // "always use X for this specific issuer" choice that wins
-                // over both.
-                if !viewModel.wscdUserOverridesSnapshot.isEmpty {
-                    Section {
-                        ForEach(viewModel.wscdUserOverridesSnapshot.sorted(by: { $0.key < $1.key }), id: \.key) { key, pluginId in
-                            let parts = key.split(separator: "|", maxSplits: 1)
-                            let issuer = parts.first.map(String.init) ?? key
-                            let credentialType = parts.count > 1 ? String(parts[1]) : ""
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(key)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Picker("Security key", selection: Binding(
-                                        get: { pluginId },
-                                        set: { viewModel.setWscdUserOverride(issuer: issuer, credentialType: credentialType, pluginId: $0) }
-                                    )) {
-                                        ForEach(Array(WscdPluginCapabilities.pluginTiers.keys.sorted()), id: \.self) { candidate in
-                                            Text(candidate).tag(candidate)
-                                        }
-                                    }
-                                    .labelsHidden()
-                                    .pickerStyle(.menu)
-                                }
-                                Spacer()
-                                Button(action: { viewModel.clearWscdUserOverride(issuer: issuer, credentialType: credentialType) }) {
-                                    Image(systemName: "xmark.circle")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                    } header: {
-                        Text("Per-Issuer Overrides")
-                    } footer: {
-                        Text("A deliberate choice to always use a specific security key for a specific issuer/credential type - set from the security key prompt's \"This issuer\" option.")
-                    }
+                    Text("Which secure key storage (software, R2PS remote HSM, or a FIDO2 security key) backs each credential, plus enrollment and developer diagnostics.")
                 }
 
                 // Passkeys section
@@ -206,25 +115,6 @@ struct SettingsView: View {
                     }
                 }
 
-                // WSCD Lifecycle
-                Section("WSCD Lifecycle") {
-                    LabeledContent("State", value: viewModel.lifecycleState.map(String.init(describing:)) ?? "Not enrolled")
-
-                    Button(action: { viewModel.enrollWscd() }) {
-                        HStack {
-                            if viewModel.enrollmentInProgress {
-                                ProgressView()
-                            }
-                            Text("Enroll WSCD")
-                        }
-                    }
-                    .disabled(viewModel.enrollmentInProgress || (viewModel.lifecycleState != nil && viewModel.lifecycleState != .destroyed))
-
-                    Button("WSCA Developer") {
-                        viewModel.openWscaDeveloper()
-                    }
-                }
-
                 // Disconnect
                 Section {
                     Button(role: .destructive, action: { viewModel.disconnect() }) {
@@ -248,8 +138,6 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 viewModel.listPasskeysForUI()
-                viewModel.refreshWscdTofuMapping()
-                viewModel.refreshWscdUserOverrides()
             }
         }
     }
