@@ -2717,12 +2717,21 @@ public final class SirosWallet: @unchecked Sendable {
         }
         let engine = Self.createEngineSession(engineBase, config.tenantId)
         lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
-        engine.connect(appToken: appToken) { [weak self] in
+        engine.connect(appToken: appToken, tokenProvider: { [weak self] in
             guard let tokens = self?.authTokens else {
                 throw SirosError.wallet(message: "Not connected")
             }
             return try await tokens.ensureBackendToken().raw
-        }
+        }, onTokenRejected: { [weak self] in
+            // See `WalletEngineSession.onTokenRejected`'s doc comment: this
+            // is the reconnect path's counterpart to
+            // `BackendApiClient.request`'s 401 handling - both must feed
+            // `AuthTokens.registerTokenRejection` so repeated rejections
+            // (from either transport) actually accumulate toward the same
+            // forced-logout threshold, instead of only being visible to
+            // whichever path happened to notice first.
+            self?.authTokens?.registerTokenRejection(AuthTokens.tokenBackend)
+        })
         try await engine.awaitConnected()
 
         // Catches WalletEngineSession.State.reauthRequired transitions from
