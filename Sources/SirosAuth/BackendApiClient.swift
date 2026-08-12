@@ -292,13 +292,29 @@ public final class BackendApiClient: @unchecked Sendable {
             "X-Tenant-ID": tenantId,
             "Content-Type": "application/json",
         ]
-        if let tokens = currentAuthTokens() {
+        let tokens = currentAuthTokens()
+        if let tokens {
             let token = try await tokens.ensureBackendToken()
             headers["Authorization"] = "Bearer \(token.raw)"
         } else if let token = currentAppToken() {
             headers["Authorization"] = "Bearer \(token)"
         }
-        return try await httpFn(method, url, headers, body)
+        do {
+            return try await httpFn(method, url, headers, body)
+        } catch {
+            // A 401 here means the backend token itself was rejected (expired/
+            // revoked/session invalidated server-side) - `AuthTokens.
+            // registerTokenRejection` was previously never called from
+            // anywhere (dead code), so repeated silent 401s never triggered
+            // `onSessionRejected`/a forced logout, leaving a stale session
+            // looking "connected" indefinitely. Only applies to the
+            // `AuthTokens`-managed path: the legacy bare `appToken` path has
+            // no `AuthTokens` instance to register against.
+            if let tokens, case let SirosError.backendApi(code, _, _) = error, code == 401 {
+                tokens.registerTokenRejection(AuthTokens.tokenBackend)
+            }
+            throw error
+        }
     }
 
     private func currentAppToken() -> String? {

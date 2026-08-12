@@ -27,7 +27,7 @@ jobs:
       matrix:
         include:
           - language: swift
-            runner: macos-15
+            runner: macos-26
           - language: actions
             runner: ubuntu-latest
     steps:

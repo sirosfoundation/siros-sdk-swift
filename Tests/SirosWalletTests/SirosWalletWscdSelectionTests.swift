@@ -29,6 +29,12 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     let label: String
     private(set) var generateKeypairsCallCount = 0
     private(set) var generateKeyAttestationCallCount = 0
+    /// Overrides `generateProof`'s return value, one entry per call in
+    /// order (falls back to `"\(label)-proof"` once exhausted) - lets a test
+    /// hand back a realistic JWT (with an embedded `jwk.kid` header) instead
+    /// of the default placeholder string.
+    var proofJwtOverrides: [String] = []
+    private var proofCallCount = 0
 
     init(label: String) { self.label = label }
 
@@ -37,7 +43,10 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     func lock() {}
     func generateKey(algorithm: String) async throws -> String { "\(label)-key" }
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { Data() }
-    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String { "\(label)-proof" }
+    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        defer { proofCallCount += 1 }
+        return proofCallCount < proofJwtOverrides.count ? proofJwtOverrides[proofCallCount] : "\(label)-proof"
+    }
     func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String { "" }
     func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String, kid: String?) async throws -> String { "" }
     func exportEncryptedContainer() async throws -> Data { Data() }
@@ -262,5 +271,90 @@ final class SirosWalletWscdSelectionTests: XCTestCase {
         XCTAssertEqual(fidoKeystore.generateKeyAttestationCallCount, 1)
         XCTAssertEqual(defaultKeystore.generateKeypairsCallCount, 0, "must never touch the default keystore once a plugin is resolved")
         XCTAssertEqual(defaultKeystore.generateKeyAttestationCallCount, 0, "the self-signed fallback must not silently use self.keystore")
+    }
+
+    // MARK: - `generateProofs`' `extractProofKeyId` recovery (jwt proof type)
+    //
+    // Regression coverage for the bug fixed in `SirosWallet.extractProofKeyId`
+    // (see its doc comment at `SirosWallet.swift:2407-2423`): for the "jwt"
+    // proof type, `activeAttestedKeyIds` must be populated from the proof
+    // JWT's own `jwk.kid` header claim, since `KeystoreManager.generateProof`
+    // doesn't return the key ID directly. Mirrors the equivalent, already-
+    // merged Kotlin regression tests.
+
+    /// Builds a fake `jwt`-proof-type proof-of-possession JWT with the given
+    /// `kid` embedded in its `jwk` header claim - matching the real shape
+    /// `extractProofKeyId` parses (header.payload.signature, header carrying
+    /// `alg`/`typ`/`jwk`). The payload and signature segments are irrelevant
+    /// to `extractProofKeyId` (it only ever looks at the header), so they're
+    /// left as unparsed placeholders.
+    private func fakeProofJwt(kid: String) -> String {
+        let header: [String: Any] = [
+            "typ": "openid4vci-proof+jwt",
+            "alg": "ES256",
+            "jwk": [
+                "kty": "EC",
+                "crv": "P-256",
+                "kid": kid,
+                "x": "eA",
+                "y": "eQ",
+            ],
+        ]
+        let headerData = try! JSONSerialization.data(withJSONObject: header)
+        let headerB64 = WebAuthnAuthClient.base64UrlEncode(headerData)
+        let payloadB64 = WebAuthnAuthClient.base64UrlEncode(Data("{}".utf8))
+        return "\(headerB64).\(payloadB64).sig"
+    }
+
+    func testGenerateProofsSingleJwtRecoversKeyIdFromJwkHeader() async throws {
+        let keystore = StubKeystoreManager(label: "default")
+        keystore.proofJwtOverrides = [fakeProofJwt(kid: "sw-0")]
+
+        let config = WalletConfig(backendUrl: "https://example.invalid")
+        let wallet = SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: keystore)
+        let w = wallet!
+
+        let proofs = try await w.generateProofs(
+            audience: "https://issuer.example.com",
+            nonce: "n",
+            count: 1,
+            proofTypesSupported: nil,
+            proofTypeHint: "jwt"
+        )
+
+        XCTAssertEqual(proofs.count, 1)
+        XCTAssertEqual(proofs[0].attestedKeyIds, ["sw-0"])
+    }
+
+    func testGenerateProofsBatchOfThreeJwtsEachRecoverOwnKeyIdInOrder() async throws {
+        let keystore = StubKeystoreManager(label: "default")
+        keystore.proofJwtOverrides = [
+            fakeProofJwt(kid: "sw-0"),
+            fakeProofJwt(kid: "sw-1"),
+            fakeProofJwt(kid: "sw-2"),
+        ]
+
+        let config = WalletConfig(backendUrl: "https://example.invalid")
+        let wallet = SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: keystore)
+        let w = wallet!
+
+        let proofs = try await w.generateProofs(
+            audience: "https://issuer.example.com",
+            nonce: "n",
+            count: 3,
+            proofTypesSupported: nil,
+            proofTypeHint: "jwt"
+        )
+
+        XCTAssertEqual(proofs.count, 3)
+        // Each proof carries its OWN single-element attestedKeyIds list, in
+        // call order - the concatenation into the batch-wide
+        // `activeAttestedKeyIds` happens in the private
+        // handleWmpSignRequest/handleSignRequest call sites, not reachable
+        // from here, so asserting the per-proof lists is what actually
+        // proves the fix.
+        XCTAssertEqual(proofs[0].attestedKeyIds, ["sw-0"])
+        XCTAssertEqual(proofs[1].attestedKeyIds, ["sw-1"])
+        XCTAssertEqual(proofs[2].attestedKeyIds, ["sw-2"])
     }
 }

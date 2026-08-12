@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+import SirosCredentials
 @testable import SirosAuth
 
 final class BackendApiClientTests: XCTestCase {
@@ -208,5 +209,79 @@ final class BackendApiClientTests: XCTestCase {
             let bodyStr = String(data: body, encoding: .utf8) ?? ""
             XCTAssertTrue(bodyStr.contains("refresh-abc"))
         }
+    }
+
+    // MARK: - registerTokenRejection wiring (401 responses)
+    //
+    // Regression coverage for `request(_:path:body:)`'s previously-missing
+    // call into `AuthTokens.registerTokenRejection` on a 401 - see
+    // `AuthTokensTests.swift`'s doc comment for the full bug history.
+
+    private func buildJwt(_ payload: String) -> String {
+        let header = Data(#"{"alg":"RS256","typ":"JWT"}"#.utf8).base64URLEncoded
+        let body = Data(payload.utf8).base64URLEncoded
+        let sig = Data("fake".utf8).base64URLEncoded
+        return "\(header).\(body).\(sig)"
+    }
+
+    /// `AuthTokens` backed by an `AuthServerClient` that always successfully
+    /// mints the same (long-lived) backend token - isolates these tests to
+    /// exercise only `BackendApiClient.request`'s own 401-handling, not
+    /// token-minting itself.
+    private func makeAuthTokens() -> AuthTokens {
+        let exp = Int(Date().timeIntervalSince1970) + 3600
+        let jwt = buildJwt(#"{"sub":"u","aud":"wallet-backend","tenant_id":"default","tac":"rwlid","exp":\#(exp)}"#)
+        let authClient = AuthServerClient(baseUrl: "https://auth.example.com", tenantId: "default") { _, _, _, _ in
+            try! JSONSerialization.data(withJSONObject: ["access_token": jwt, "token_type": "Bearer", "expires_in": 3600])
+        }
+        return AuthTokens(authServerClient: authClient, tenantId: "default")
+    }
+
+    func testRepeatedFourOhOneResponsesRegisterTokenRejection() async throws {
+        let tokens = makeAuthTokens()
+        var rejectedCount = 0
+        tokens.onSessionRejected = { rejectedCount += 1 }
+
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: { _, _, _, _ in
+            throw SirosError.backendApi(code: 401, message: "unauthorized", body: nil)
+        })
+        client.setAuthTokens(tokens)
+
+        for _ in 0..<3 {
+            do {
+                _ = try await client.getAccountInfo()
+                XCTFail("expected the 401 to propagate")
+            } catch SirosError.backendApi(let code, _, _) {
+                XCTAssertEqual(code, 401)
+            }
+        }
+
+        XCTAssertEqual(rejectedCount, 1, "3 rejections within the window must trigger onSessionRejected exactly once")
+    }
+
+    func testNonFourOhOneErrorsDoNotRegisterTokenRejection() async throws {
+        let tokens = makeAuthTokens()
+        var rejectedCount = 0
+        tokens.onSessionRejected = { rejectedCount += 1 }
+
+        let client = BackendApiClient(baseUrl: "https://api.example.com", httpFn: { _, _, _, _ in
+            throw SirosError.backendApi(code: 500, message: "server error", body: nil)
+        })
+        client.setAuthTokens(tokens)
+
+        for _ in 0..<5 {
+            _ = try? await client.getAccountInfo()
+        }
+
+        XCTAssertEqual(rejectedCount, 0, "a 500 is a server problem, not evidence the token itself was rejected")
+    }
+}
+
+private extension Data {
+    var base64URLEncoded: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }

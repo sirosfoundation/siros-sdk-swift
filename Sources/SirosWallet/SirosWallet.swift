@@ -2398,9 +2398,28 @@ public final class SirosWallet: @unchecked Sendable {
         var proofs: [GeneratedProofData] = []
         for _ in 0..<count {
             let jwt = try await keystore.generateProof(audience: audience, nonce: nonce, freshKey: count > 1)
-            proofs.append(GeneratedProofData(proofType: "jwt", jwt: jwt))
+            let keyId = Self.extractProofKeyId(jwt: jwt)
+            proofs.append(GeneratedProofData(proofType: "jwt", jwt: jwt, attestedKeyIds: keyId.map { [$0] }))
         }
         return proofs
+    }
+
+    /// Recover the signing key's `kid` from a `jwt`-proof-type proof-of-possession
+    /// JWT's embedded `jwk` header claim, since `KeystoreManager.generateProof`
+    /// doesn't return it directly. Without this, `activeAttestedKeyIds` stayed
+    /// nil for every credential issued via the (preferred, common) `jwt` proof
+    /// path - a real bug found via live proximity-presentation testing on the
+    /// Kotlin SDK (confirmed to share the identical architecture here): with
+    /// `credential.kid` nil, `WscdKeystoreAdapter.selectSigningKey` falls back
+    /// to "first available key" among ALL WSCD keys, which is only correct by
+    /// chance whenever more than one key exists - `deviceSignature` verification
+    /// then fails unpredictably depending on `signer.listKeys()`'s ordering.
+    private static func extractProofKeyId(jwt: String) -> String? {
+        guard let headerPart = jwt.split(separator: ".", maxSplits: 1).first else { return nil }
+        guard let headerData = CredentialUtils.base64UrlDecode(String(headerPart)) else { return nil }
+        guard let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any] else { return nil }
+        guard let jwk = header["jwk"] as? [String: Any] else { return nil }
+        return jwk["kid"] as? String
     }
 
     /// Ask go-wallet-backend's real, x5c-chained Key Attestation endpoint
@@ -2561,7 +2580,15 @@ public final class SirosWallet: @unchecked Sendable {
                 proofTypesSupported: nil,
                 proofTypeHint: params.proofType
             )
-            lock.lock(); activeAttestedKeyIds = generated.first(where: { $0.attestedKeyIds != nil })?.attestedKeyIds; lock.unlock()
+            // The "attestation" proof type returns a single GeneratedProofData
+            // whose attestedKeyIds already covers the whole batch in order; the
+            // "jwt" proof type returns one GeneratedProofData PER credential,
+            // each carrying its own single-element attestedKeyIds - flatMap
+            // concatenates either shape into one batch-order list. Taking only
+            // the first entry's list (as this used to) silently dropped every
+            // index past 0 for a "jwt" batch of more than one credential.
+            let flattenedKeyIds = generated.flatMap { $0.attestedKeyIds ?? [] }
+            lock.lock(); activeAttestedKeyIds = flattenedKeyIds.isEmpty ? nil : flattenedKeyIds; lock.unlock()
             let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
             return SignSubFlowResult(proofs: proofs)
 
@@ -2690,12 +2717,27 @@ public final class SirosWallet: @unchecked Sendable {
         }
         let engine = Self.createEngineSession(engineBase, config.tenantId)
         lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
-        engine.connect(appToken: appToken) { [weak self] in
+        engine.connect(appToken: appToken, tokenProvider: { [weak self] in
             guard let tokens = self?.authTokens else {
                 throw SirosError.wallet(message: "Not connected")
             }
             return try await tokens.ensureBackendToken().raw
-        }
+        }, onTokenRejected: { [weak self] error in
+            // See `WalletEngineSession.onTokenRejected`'s doc comment: this
+            // is the reconnect path's counterpart to
+            // `BackendApiClient.request`'s 401 handling - both must feed
+            // `AuthTokens.registerTokenRejection` so repeated rejections
+            // (from either transport) actually accumulate toward the same
+            // forced-logout threshold, instead of only being visible to
+            // whichever path happened to notice first. Only a genuine 401
+            // counts, mirroring `BackendApiClient.request`'s exact check -
+            // `ensureBackendToken()` can also fail for reasons that aren't a
+            // real rejection (e.g. a transient network error reaching the
+            // auth server), and those must not accumulate toward the
+            // forced-logout threshold the same way an actual rejection does.
+            guard case let SirosError.backendApi(code, _, _) = error, code == 401 else { return }
+            self?.authTokens?.registerTokenRejection(AuthTokens.tokenBackend)
+        })
         try await engine.awaitConnected()
 
         // Catches WalletEngineSession.State.reauthRequired transitions from
@@ -2758,7 +2800,15 @@ public final class SirosWallet: @unchecked Sendable {
                     proofTypesSupported: msg.params.proofTypesSupported,
                     proofTypeHint: msg.params.proofType
                 )
-                lock.lock(); activeAttestedKeyIds = generated.first(where: { $0.attestedKeyIds != nil })?.attestedKeyIds; lock.unlock()
+                // The "attestation" proof type returns a single GeneratedProofData
+                // whose attestedKeyIds already covers the whole batch in order; the
+                // "jwt" proof type returns one GeneratedProofData PER credential,
+                // each carrying its own single-element attestedKeyIds - flatMap
+                // concatenates either shape into one batch-order list. Taking only
+                // the first entry's list (as this used to) silently dropped every
+                // index past 0 for a "jwt" batch of more than one credential.
+                let flattenedKeyIds = generated.flatMap { $0.attestedKeyIds ?? [] }
+                lock.lock(); activeAttestedKeyIds = flattenedKeyIds.isEmpty ? nil : flattenedKeyIds; lock.unlock()
                 let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 

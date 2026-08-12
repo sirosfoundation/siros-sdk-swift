@@ -65,6 +65,24 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// duplicate that logic. Nil preserves the old (non-refreshing) behavior
     /// for callers that haven't opted in.
     private var tokenProvider: (() async throws -> String)?
+    /// Notified whenever `tokenProvider` itself throws during a reconnect
+    /// attempt (see `refreshTokenOrSignalReauth`). `WalletEngineSession`
+    /// lives in `SirosTransport`, which `SirosAuth` (home of `AuthTokens`
+    /// and its rejection-counting `registerTokenRejection`) itself depends
+    /// on - so this can't reference `AuthTokens` directly without a circular
+    /// target dependency. A plain closure lets the caller (`SirosWallet`,
+    /// which already holds both this session and its `AuthTokens` instance -
+    /// see `connectEngine`) wire the two together, the same indirection
+    /// `tokenProvider` itself already uses for the analogous problem.
+    ///
+    /// The thrown `Error` is passed through (rather than a bare `Void`
+    /// signal) because `tokenProvider` can fail for reasons that are NOT a
+    /// real token rejection - a transient network blip talking to the auth
+    /// server, for instance - and the caller is the one able to distinguish
+    /// those (it knows the concrete error type `SirosTransport` can't
+    /// depend on) before deciding whether this should count toward
+    /// `registerTokenRejection`'s forced-logout threshold.
+    private var onTokenRejected: ((Error) -> Void)?
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 5
     private let baseReconnectDelayMs: UInt64 = 1000
@@ -186,11 +204,18 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     ///     automatic reconnect attempt - see `tokenProvider`'s doc comment.
     ///     Omit only if the caller genuinely has no refresh mechanism to
     ///     offer; every real `SirosWallet` call site should pass one.
-    public func connect(appToken: String, tokenProvider: (() async throws -> String)? = nil) {
+    ///   - onTokenRejected: notified when `tokenProvider` itself throws
+    ///     during a reconnect attempt - see `onTokenRejected`'s doc comment.
+    public func connect(
+        appToken: String,
+        tokenProvider: (() async throws -> String)? = nil,
+        onTokenRejected: ((Error) -> Void)? = nil
+    ) {
         guard _state != .connected else { return }
         setState(.connecting)
         lastAppToken = appToken
         self.tokenProvider = tokenProvider
+        self.onTokenRejected = onTokenRejected
         reconnectAttempts = 0
         doConnect(appToken: appToken)
     }
@@ -286,6 +311,16 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             lastAppToken = fresh
             return fresh
         } catch {
+            // Regardless of why the refresh failed, this reconnect attempt
+            // can't proceed without a fresh token - transition to
+            // .reauthRequired either way. But NOT every failure here is a
+            // real token rejection worth counting toward
+            // `AuthTokens.registerTokenRejection`'s forced-logout threshold
+            // (see `onTokenRejected`'s doc comment) - a transient network
+            // blip talking to the auth server would otherwise accumulate
+            // the same as a genuine 401, so the error is handed to the
+            // caller to make that distinction rather than assumed here.
+            onTokenRejected?(error)
             setState(.reauthRequired)
             return nil
         }
@@ -539,6 +574,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     public func disconnect() {
         lastAppToken = nil
         tokenProvider = nil
+        onTokenRejected = nil
         webSocketTask?.cancel(with: .normalClosure, reason: "client disconnect".data(using: .utf8))
         webSocketTask = nil
         sessionId = nil

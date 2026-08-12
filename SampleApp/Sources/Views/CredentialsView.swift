@@ -45,18 +45,27 @@ struct CredentialsView: View {
                 )
                 .padding(.horizontal, 16)
             } else {
-                TabView {
-                    ForEach(entries, id: \.credential.id) { entry in
-                        CredentialCardView(
-                            credential: entry.credential,
-                            instances: entry.instances,
-                            onClick: { viewModel.openCredentialDetail(entry.credential) },
-                            onRenewClick: { viewModel.renewCredential(entry.credential) }
-                        )
-                        .padding(.horizontal, 16)
+                // Vertically-scrolling list rather than a horizontal
+                // one-at-a-time pager: phone screens are tall, not wide, so
+                // a horizontal `TabView` page wastes the ample vertical
+                // screen estate available for showing multiple credentials
+                // at once (live-testing feedback from the user). Kept
+                // conceptually aligned with the equivalent fix in the
+                // Kotlin sample app's `CredentialsTab`.
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(spacing: 16) {
+                        ForEach(entries, id: \.credential.id) { entry in
+                            CredentialCardView(
+                                credential: entry.credential,
+                                instances: entry.instances,
+                                onClick: { viewModel.openCredentialDetail(entry.credential) },
+                                onRenewClick: { viewModel.renewCredential(entry.credential) }
+                            )
+                            .padding(.horizontal, 16)
+                        }
                     }
+                    .padding(.bottom, 16)
                 }
-                .tabViewStyle(.page(indexDisplayMode: .always))
             }
 
             Spacer()

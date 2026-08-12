@@ -48,6 +48,13 @@ public final class AuthTokens: @unchecked Sendable {
     private var tokens: [String: AccessToken] = [:]
     private var rejections: [String: [Date]] = [:]
 
+    // Internal (not private) so `@testable import` can verify
+    // `registerTokenRejection`'s rejection-window pruning without a real
+    // test waiting out the real `rejectionWindowSeconds` - matching this
+    // SDK's existing injectable-for-testing precedent (e.g.
+    // `SirosWallet.createEngineSession`). Defaults to the real wall clock.
+    var now: () -> Date = Date.init
+
     public static let tokenBackend = "backend"
     public static let tokenAnonymous = "anonymous"
 
@@ -148,7 +155,7 @@ public final class AuthTokens: @unchecked Sendable {
     /// invokes `onSessionRejected`.
     public func registerTokenRejection(_ name: String) {
         lock.lock()
-        let now = Date()
+        let now = self.now()
 
         // Clear the rejected token from cache so it won't be re-served
         tokens.removeValue(forKey: name)
