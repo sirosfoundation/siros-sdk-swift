@@ -207,6 +207,42 @@ public final class SirosWallet: @unchecked Sendable {
         wscdSelectionPolicy.clearGlobalUserOverride()
     }
 
+    /// A hardware-backed WSCD plugin's persisted key metadata, synced via
+    /// privatedata (see `WscdKeystoreAdapter.exportWscdCredentialsState`'s
+    /// doc comment) - `nil` before any key has ever been exported for this
+    /// plugin. The host app should pass this to
+    /// `WscdManager.registerFido2PluginWithState` instead of
+    /// `WscdManager.registerFido2Plugin` whenever it's non-nil, so a key
+    /// enrolled on ANY device sharing this account - not just the one that
+    /// originally enrolled it - stays addressable. Deliberately NOT backed by
+    /// device-local storage: CTAP2 roaming authenticators (e.g. a YubiKey)
+    /// are enrolled once but usable from any device.
+    public func wscdCredentials(pluginId: String) async -> String? {
+        #if canImport(CryptoKit)
+        guard let adapter = keystore as? WscdKeystoreAdapter else { return nil }
+        return await adapter.exportWscdCredentialsState()[pluginId]
+        #else
+        // `WscdKeystoreAdapter` is only defined where CryptoKit is
+        // available (see its `#if canImport(CryptoKit)` guard) - on other
+        // platforms there's no WSCD-backed keystore to read state from.
+        return nil
+        #endif
+    }
+
+    /// Record a WSCD plugin's freshly-exported key metadata (see
+    /// `WscdManager.exportFido2State`) and sync it to the backend, so it
+    /// survives to the next `wscdCredentials` call on any device sharing
+    /// this account. Call after every enrollment/key-generation that could
+    /// have changed the plugin's state.
+    public func saveWscdCredentials(pluginId: String, state: String) async {
+        #if canImport(CryptoKit)
+        if let adapter = keystore as? WscdKeystoreAdapter {
+            await adapter.setWscdCredentialsState(pluginId: pluginId, state: state)
+        }
+        #endif
+        await persistAndSyncKeystore()
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
@@ -255,6 +291,13 @@ public final class SirosWallet: @unchecked Sendable {
     /// batch credential was actually bound to, and silently used an arbitrary
     /// one (see `WscdKeystoreAdapter.selectSigningKey`'s doc comment).
     var activeAttestedKeyIds: [String]?
+    /// Ambient (not flow-ID-keyed) guard against overlapping issuance
+    /// attempts - set at the top of `startIssuanceByOffer`/`startIssuance`
+    /// and checked there too, throwing if already `true`. Not `private` for
+    /// the same cross-file-extension-access reason as `activeOffer` etc.
+    /// above; guarded by the same `lock`. See `resetIssuanceGuards()` for
+    /// why every terminal path must clear it.
+    var issuanceInFlight = false
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
@@ -1363,70 +1406,19 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
-        lock.lock(); activeOffer = offer; lock.unlock()
-
-        // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
-        // like `activeVctm`'s existing fetch: whichever one doesn't match
-        // this offer's actual format simply fails to decode and stays nil.
-        let vctm = try? await vctmFetcher.fetch(
-            issuerUrl: offer.credentialIssuerIdentifier,
-            scope: offer.credentialConfigurationId,
-            vct: offer.vct,
-            registryUrl: resolvedRegistryUrl
-        )
-        let mddlSchema = await mddlSchemaFetcher.fetch(
-            issuerUrl: offer.credentialIssuerIdentifier,
-            scope: offer.credentialConfigurationId,
-            doctype: offer.doctype,
-            registryUrl: resolvedRegistryUrl
-        )
         lock.lock()
-        activeVctm = vctm
-        activeMddlSchema = mddlSchema
+        if issuanceInFlight {
+            lock.unlock()
+            throw SirosError.wallet(message: "Another issuance is already in progress")
+        }
+        issuanceInFlight = true
+        activeOffer = offer
         lock.unlock()
+        do {
 
-        var credOffer: [String: AnyCodable] = [
-            "credential_issuer": .string(offer.credentialIssuerIdentifier),
-            "credential_configuration_ids": .array([.string(offer.credentialConfigurationId)]),
-        ]
-
-        var grants: [String: AnyCodable] = [:]
-        if let preAuth = offer.preAuthorizedCode {
-            var preAuthGrant: [String: AnyCodable] = ["pre-authorized_code": .string(preAuth)]
-            if offer.txCode != nil {
-                preAuthGrant["tx_code"] = .object_(["input_mode": .string("text")])
-            }
-            grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"] = .object_(preAuthGrant)
-        } else {
-            grants["authorization_code"] = .object_([:])
-        }
-        credOffer["grants"] = .object_(grants)
-
-        let offerJson: String
-        if let data = try? JSONEncoder().encode(credOffer),
-           let s = String(data: data, encoding: .utf8) {
-            offerJson = s
-        } else {
-            offerJson = "{}"
-        }
-
-        let clientAttestation = await resolveClientAttestation(issuerUrl: offer.credentialIssuerIdentifier)
-        engine.startIssuance(
-            offer: offerJson,
-            redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
-            clientAttestation: clientAttestation?.0,
-            clientAttestationPoP: clientAttestation?.1
-        )
-    }
-
-    /// Start issuance with a raw offer URI or JSON.
-    public func startIssuance(offerUri: String) async throws {
-        guard let engine = engineSession else {
-            throw SirosError.wallet(message: "Not connected")
-        }
-        try await ensureEngineConnected(engine)
-        if let offer = await resolveOfferForDisplay(offerUri) {
-            lock.lock(); activeOffer = offer; lock.unlock()
+            // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
+            // like `activeVctm`'s existing fetch: whichever one doesn't match
+            // this offer's actual format simply fails to decode and stays nil.
             let vctm = try? await vctmFetcher.fetch(
                 issuerUrl: offer.credentialIssuerIdentifier,
                 scope: offer.credentialConfigurationId,
@@ -1439,41 +1431,124 @@ public final class SirosWallet: @unchecked Sendable {
                 doctype: offer.doctype,
                 registryUrl: resolvedRegistryUrl
             )
-            lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
-        }
-        // Resolve OAuth Client Attestation once, independent of whether the
-        // display-metadata resolution above succeeded - a client that can't
-        // be shown a name/logo should still get an attestation attached.
-        var attestation: String?
-        var attestationPoP: String?
-        if let header = await extractOfferHeader(offerUri),
-           let pair = await resolveClientAttestation(issuerUrl: header.credentialIssuer) {
-            attestation = pair.0
-            attestationPoP = pair.1
-        }
-        if offerUri.hasPrefix("openid-credential-offer://") {
-            // Deep-link URI with inline offer - send as "offer" so the engine
-            // extracts the credential_offer query parameter instead of HTTP-fetching.
-            engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
-        } else if offerUri.hasPrefix("http") {
-            // Universal-link-style offer: the credential_offer/credential_offer_uri
-            // live in the URI's own query string (e.g. an issuer's wallet-redirect
-            // page), so the URI itself is not fetchable as the offer JSON - unlike
-            // the engine's openid-credential-offer:// handling, it only strips
-            // that query param for that exact scheme, so it must be extracted here.
-            let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
-            func queryValue(_ name: String) -> String? {
-                queryItems.first(where: { $0.name == name })?.value
-            }
-            if let credentialOffer = queryValue("credential_offer") {
-                engine.startIssuance(offer: credentialOffer, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
-            } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                engine.startIssuance(credentialOfferUri: credentialOfferUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            lock.lock()
+            activeVctm = vctm
+            activeMddlSchema = mddlSchema
+            lock.unlock()
+
+            var credOffer: [String: AnyCodable] = [
+                "credential_issuer": .string(offer.credentialIssuerIdentifier),
+                "credential_configuration_ids": .array([.string(offer.credentialConfigurationId)]),
+            ]
+
+            var grants: [String: AnyCodable] = [:]
+            if let preAuth = offer.preAuthorizedCode {
+                var preAuthGrant: [String: AnyCodable] = ["pre-authorized_code": .string(preAuth)]
+                if offer.txCode != nil {
+                    preAuthGrant["tx_code"] = .object_(["input_mode": .string("text")])
+                }
+                grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"] = .object_(preAuthGrant)
             } else {
-                engine.startIssuance(credentialOfferUri: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                grants["authorization_code"] = .object_([:])
             }
-        } else {
-            engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            credOffer["grants"] = .object_(grants)
+
+            let offerJson: String
+            if let data = try? JSONEncoder().encode(credOffer),
+               let s = String(data: data, encoding: .utf8) {
+                offerJson = s
+            } else {
+                offerJson = "{}"
+            }
+
+            let clientAttestation = await resolveClientAttestation(issuerUrl: offer.credentialIssuerIdentifier)
+            engine.startIssuance(
+                offer: offerJson,
+                redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
+                clientAttestation: clientAttestation?.0,
+                clientAttestationPoP: clientAttestation?.1
+            )
+        } catch {
+            // A synchronous start failure here means the flow was never
+            // registered server-side, so nothing will ever clear the guard
+            // via the normal flow_complete/flow_error path - without this,
+            // every future issuance attempt would be permanently blocked.
+            resetIssuanceGuards()
+            throw error
+        }
+    }
+
+    /// Start issuance with a raw offer URI or JSON.
+    public func startIssuance(offerUri: String) async throws {
+        guard let engine = engineSession else {
+            throw SirosError.wallet(message: "Not connected")
+        }
+        try await ensureEngineConnected(engine)
+        lock.lock()
+        if issuanceInFlight {
+            lock.unlock()
+            throw SirosError.wallet(message: "Another issuance is already in progress")
+        }
+        issuanceInFlight = true
+        lock.unlock()
+        do {
+            if let offer = await resolveOfferForDisplay(offerUri) {
+                lock.lock(); activeOffer = offer; lock.unlock()
+                let vctm = try? await vctmFetcher.fetch(
+                    issuerUrl: offer.credentialIssuerIdentifier,
+                    scope: offer.credentialConfigurationId,
+                    vct: offer.vct,
+                    registryUrl: resolvedRegistryUrl
+                )
+                let mddlSchema = await mddlSchemaFetcher.fetch(
+                    issuerUrl: offer.credentialIssuerIdentifier,
+                    scope: offer.credentialConfigurationId,
+                    doctype: offer.doctype,
+                    registryUrl: resolvedRegistryUrl
+                )
+                lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
+            }
+            // Resolve OAuth Client Attestation once, independent of whether the
+            // display-metadata resolution above succeeded - a client that can't
+            // be shown a name/logo should still get an attestation attached.
+            var attestation: String?
+            var attestationPoP: String?
+            if let header = await extractOfferHeader(offerUri),
+               let pair = await resolveClientAttestation(issuerUrl: header.credentialIssuer) {
+                attestation = pair.0
+                attestationPoP = pair.1
+            }
+            if offerUri.hasPrefix("openid-credential-offer://") {
+                // Deep-link URI with inline offer - send as "offer" so the engine
+                // extracts the credential_offer query parameter instead of HTTP-fetching.
+                engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            } else if offerUri.hasPrefix("http") {
+                // Universal-link-style offer: the credential_offer/credential_offer_uri
+                // live in the URI's own query string (e.g. an issuer's wallet-redirect
+                // page), so the URI itself is not fetchable as the offer JSON - unlike
+                // the engine's openid-credential-offer:// handling, it only strips
+                // that query param for that exact scheme, so it must be extracted here.
+                let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
+                func queryValue(_ name: String) -> String? {
+                    queryItems.first(where: { $0.name == name })?.value
+                }
+                if let credentialOffer = queryValue("credential_offer") {
+                    engine.startIssuance(offer: credentialOffer, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                } else if let credentialOfferUri = queryValue("credential_offer_uri") {
+                    engine.startIssuance(credentialOfferUri: credentialOfferUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                } else {
+                    engine.startIssuance(credentialOfferUri: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                }
+            } else {
+                engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+            }
+        } catch {
+            // A synchronous start failure here means the flow was never
+            // registered server-side, so nothing will ever clear the guard
+            // via the normal flow_complete/flow_error path - without this,
+            // every future issuance attempt would be permanently blocked.
+            resetIssuanceGuards()
+            throw error
         }
     }
 
@@ -1558,6 +1633,319 @@ public final class SirosWallet: @unchecked Sendable {
         engine.startPresentation(requestUri: requestUri)
     }
 
+    /// The final payload to hand back to the OS/browser for a W3C Digital
+    /// Credentials API presentation - the platform's own credential-provider
+    /// bridge (Android's `PendingIntentHandler`, or the equivalent wherever
+    /// iOS eventually wires up native DC API OS integration - a separate,
+    /// larger, already-tracked gap, not addressed here) wraps `responseJson`
+    /// as the `DigitalCredential`'s response data.
+    ///
+    /// For `response_mode=dc_api` (unencrypted): `{"vp_token": {...}}`.
+    /// For `response_mode=dc_api.jwt`: `{"response": "<jwe-compact>"}` per
+    /// OpenID4VP 1.0 Appendix A.3.2.
+    public struct DCAPIPresentationResult: Sendable {
+        public let responseJson: String
+        public let credentialIds: [Int64]
+
+        public init(responseJson: String, credentialIds: [Int64]) {
+            self.responseJson = responseJson
+            self.credentialIds = credentialIds
+        }
+    }
+
+    /// Process an incoming W3C Digital Credentials API (DC API) OpenID4VP
+    /// presentation request entirely client-side - mirrors the Kotlin SDK's
+    /// `handleDCAPIRequest` architecture rather than the
+    /// `startPresentation`/engine-relay pattern: there is no
+    /// `WalletEngineSession` involvement and no DC-API-specific backend call.
+    /// The only backend calls made are the SAME generic trust-evaluation
+    /// (`evaluateTrustDirect`) and presentation-history persistence the
+    /// redirect flow already uses.
+    ///
+    /// - Parameters:
+    ///   - rawRequestJson: the raw request data string from the OS/browser -
+    ///     either a raw OpenID4VP request JSON object (unsigned protocol
+    ///     variant) or `{"request": "<JWT>"}` (signed/multisigned JAR variant).
+    ///   - origin: the browser/page origin that made the
+    ///     `navigator.credentials.get()` call, as verified by the platform -
+    ///     NOT read from the request body, which is untrusted until the
+    ///     platform attests it.
+    /// - Throws: `DCAPIRequestException` if the request is malformed or (for
+    ///   the signed variant) fails JWS verification; `SirosError.wallet` if
+    ///   no credential in the wallet is eligible to satisfy it.
+    public func handleDCAPIRequest(rawRequestJson: String, origin: String) async throws -> DCAPIPresentationResult {
+        let request = try DCAPIRequestParser.parse(rawRequestJson)
+
+        // request.clientId is only cryptographically bound to anything when
+        // the request is signed (keyMaterial != nil, verified against the
+        // JWS header's own key in DCAPIRequestParser) - for the unsigned
+        // variant it's just a caller-supplied field in the untrusted request
+        // body. Using it there let a malicious page set client_id to some
+        // other, possibly-whitelisted verifier's identity and have trust
+        // (and presentation history) evaluated against that spoofed identity
+        // instead of the platform-attested origin.
+        let subjectId = request.keyMaterial != nil ? (request.clientId ?? origin) : origin
+        let trustResult: TrustResult
+        do {
+            trustResult = try await evaluateTrustDirect(
+                subjectId: subjectId,
+                subjectType: "credential_verifier",
+                keyMaterialType: request.keyMaterial?.x5c != nil ? "x5c" : (request.keyMaterial?.jwk != nil ? "jwk" : nil),
+                x5c: request.keyMaterial?.x5c,
+                jwk: request.keyMaterial?.jwk,
+                context: nil
+            )
+        } catch {
+            trustResult = trustCache.get(identifier: subjectId)
+                ?? TrustResult(trusted: false, reason: error.localizedDescription, identifier: subjectId)
+        }
+
+        // Unlike the QR/redirect flow, there is no engine round-trip here to
+        // gate on (trust is evaluated and enforced entirely wallet-side) - a
+        // request from an untrusted or trust-eval-failed verifier must be
+        // rejected before any credential is matched or signed, not merely
+        // have its trust result computed and ignored.
+        guard trustResult.trusted else {
+            throw SirosError.wallet(message: "Verifier '\(subjectId)' is not trusted: \(trustResult.reason ?? "no reason given")")
+        }
+
+        let allCreds = await credentialStore.getAll()
+        let dcqlOutput: CredentialMatcher.DcqlMatchOutput
+        if let dcqlQuery = request.dcqlQuery {
+            dcqlOutput = CredentialMatcher.matchDcql(dcqlQuery: dcqlQuery, credentials: allCreds)
+        } else {
+            dcqlOutput = CredentialMatcher.DcqlMatchOutput(
+                queryResults: [CredentialMatcher.MatchResult(
+                    queryId: "_default", format: nil, candidates: allCreds, requestedClaims: []
+                )],
+                credentialSets: nil,
+                satisfiableOptions: []
+            )
+        }
+        let matchResults = dcqlOutput.queryResults
+        var seenIds = Set<Int64>()
+        let candidates = matchResults.flatMap { $0.candidates }.filter { cred in
+            guard !seenIds.contains(cred.id) else { return false }
+            seenIds.insert(cred.id)
+            return true
+        }
+
+        // Unlike the QR/redirect flow, credential selection and consent
+        // already happened natively - the OS's own credential picker showed
+        // the matching registered entries and the user picked one before
+        // this call was ever reached. Routing through eventListener's
+        // interactive onCredentialSelectionRequired here would suspend
+        // waiting for an in-app consent screen that this headless flow
+        // never shows.
+        let eligible = CredentialUtils.eligibleInstances(
+            instances: candidates,
+            policy: credentialConsumptionPolicy,
+            presentationHistory: presentationHistory
+        )
+        let selectedIds = eligible.map(\.id)
+
+        if selectedIds.isEmpty {
+            throw SirosError.wallet(message: candidates.isEmpty
+                ? "No credential in the wallet matches the request"
+                : "No eligible copies of the requested credential remain - renew it to get more"
+            )
+        }
+
+        // "origin:<value>" per OpenID4VP 1.0 Appendix A is only used for the
+        // VP token audience claim at signing time - trust evaluation above
+        // uses the bare origin.
+        let audience = "origin:\(origin)"
+        var encryptionJwk: [String: Any]?
+        if request.responseMode == "dc_api.jwt" {
+            guard let jwk = Self.findEncryptionJwk(request.clientMetadata) else {
+                throw SirosError.wallet(message: "dc_api.jwt response_mode requires client_metadata.jwks with an encryption key")
+            }
+            encryptionJwk = jwk
+        }
+        // `DCAPIResponseEncryption` is entirely CryptoKit-gated (Apple
+        // platforms only, matching this module's existing convention e.g.
+        // `EncryptedContainer`) - `nil` here on an unsupported platform still
+        // lets an unencrypted `dc_api` presentation proceed; `dc_api.jwt`
+        // itself is rejected below with a clear error instead.
+        var encryptionThumbprint: String?
+        #if canImport(CryptoKit)
+        encryptionThumbprint = encryptionJwk.flatMap { DCAPIResponseEncryption.jwkThumbprint($0) }
+        #endif
+
+        // Per OpenID4VP 1.0 (#response_parameters), vp_token's value for each
+        // DCQL query id MUST be a JSON array of one or more Presentations -
+        // even when `multiple` is omitted/false, the array MUST still
+        // contain exactly one Presentation, never a bare string. A real bug,
+        // confirmed via Multipaz's own server source
+        // (multipaz-verifier-server's handleDcGetDataOpenID4VP does
+        // `value.jsonArray.map{...}` for the openid4vp-v1-signed/-unsigned
+        // protocol versions): putting a bare string here throws inside their
+        // server and surfaces as an opaque HTTP 500.
+        var tokensByQueryId: [String: [String]] = [:]
+        var queryIdOrder: [String] = []
+        for id in selectedIds {
+            guard let cred = allCreds.first(where: { $0.id == id }) else { continue }
+            let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
+            let queryId = matchResult?.queryId ?? "_default"
+            let disclosedClaims = matchResult?.requestedClaims.compactMap(\.last)
+
+            let token: String
+            if cred.format == "mso_mdoc" {
+                guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                    throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+                }
+                let deviceResponse = try await keystore.signMdocPresentationForDCAPI(
+                    credentialBytes: credBytes,
+                    disclosedClaims: disclosedClaims,
+                    nonce: request.nonce,
+                    origin: origin,
+                    encryptionPublicJwkThumbprint: encryptionThumbprint,
+                    kid: cred.kid
+                )
+                token = Self.b64UrlEncode(deviceResponse)
+            } else {
+                token = try await keystore.signVpToken(
+                    credential: cred.raw,
+                    disclosedClaims: disclosedClaims,
+                    nonce: request.nonce,
+                    audience: audience,
+                    kid: cred.kid
+                )
+            }
+
+            if tokensByQueryId[queryId] == nil {
+                tokensByQueryId[queryId] = []
+                queryIdOrder.append(queryId)
+            }
+            tokensByQueryId[queryId]?.append(token)
+        }
+
+        var vpTokenObj: [String: Any] = [:]
+        for queryId in queryIdOrder {
+            vpTokenObj[queryId] = tokensByQueryId[queryId] ?? []
+        }
+
+        var responseBody: [String: Any] = ["vp_token": vpTokenObj]
+        // The verifier's only means of correlating this response back to the
+        // right authorization session - the response arrives via the DC API
+        // callback, a wholly separate channel from the original request,
+        // with no other correlator available. Omitting this (a real bug:
+        // request.state was parsed but never echoed back) left the verifier
+        // decrypting a JWE it had no way to attribute to any session.
+        if let state = request.state {
+            responseBody["state"] = state
+        }
+        guard let responseBodyData = try? JSONSerialization.data(withJSONObject: responseBody),
+              let responseBodyJson = String(data: responseBodyData, encoding: .utf8) else {
+            throw SirosError.wallet(message: "Failed to serialize DC API response body")
+        }
+
+        let responseData: [String: Any]
+        if request.responseMode == "dc_api.jwt", let encryptionJwk {
+            #if canImport(CryptoKit)
+            let jwe = try DCAPIResponseEncryption.encryptResponse(responseJson: responseBodyJson, verifierJwk: encryptionJwk)
+            responseData = ["response": jwe]
+            #else
+            throw SirosError.wallet(message: "dc_api.jwt response encryption requires CryptoKit (unsupported on this platform)")
+            #endif
+        } else {
+            responseData = responseBody
+        }
+
+        // The platform's own reference wallet
+        // (https://github.com/digitalcredentialsdev/CMWallet) wraps its
+        // response in this exact {"protocol": ..., "data": {...}} envelope
+        // before handing it back - the mirror image of the {"requests":
+        // [{"protocol", "data"}]} envelope the request itself arrives in
+        // (see `DCAPIRequestParser`). Returning the bare `data` object on its
+        // own leaves the platform with no declared protocol to associate the
+        // response with.
+        let finalResponse: [String: Any] = ["protocol": request.protocolIdentifier, "data": responseData]
+        guard let finalResponseData = try? JSONSerialization.data(withJSONObject: finalResponse),
+              let finalResponseJson = String(data: finalResponseData, encoding: .utf8) else {
+            throw SirosError.wallet(message: "Failed to serialize DC API response envelope")
+        }
+
+        var seenClaims = Set<String>()
+        let requestedClaims = matchResults.flatMap { $0.requestedClaims.flatMap { $0 } }.filter { seenClaims.insert($0).inserted }
+
+        await recordPresentation(PresentationRecord(
+            id: randomUint32Id(),
+            flowId: "dc-api-\(UUID().uuidString)",
+            verifierName: trustResult.entityName,
+            credentialIds: selectedIds,
+            credentialNames: selectedIds.compactMap { id in allCreds.first(where: { $0.id == id })?.metadata?.name },
+            requestedClaims: requestedClaims,
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+        ))
+
+        return DCAPIPresentationResult(responseJson: finalResponseJson, credentialIds: selectedIds)
+    }
+
+    /// Direct (non-engine-relayed) trust evaluation, for flows like
+    /// `handleDCAPIRequest` that have no `WalletEngineSession` involvement at
+    /// all - mirrors `handleTrustEvaluation`'s request shape/AuthZEN
+    /// action-name mapping exactly.
+    private func evaluateTrustDirect(
+        subjectId: String,
+        subjectType: String?,
+        keyMaterialType: String?,
+        x5c: [String]?,
+        jwk: [String: Any]?,
+        context: [String: Any]?
+    ) async throws -> TrustResult {
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else { throw SirosError.wallet(message: "Not connected") }
+
+        var resource: [String: Any] = [
+            "type": keyMaterialType ?? "x5c",
+            "id": subjectId,
+        ]
+        if let x5c {
+            resource["key"] = x5c
+        } else if let jwk {
+            resource["key"] = [jwk]
+        }
+
+        var evaluationRequest: [String: Any] = [
+            "subject": ["type": "key", "id": subjectId],
+            "resource": resource,
+            "action": ["name": subjectType == "credential_verifier" ? "credential-verifier" : "credential-issuer"],
+        ]
+        if let context {
+            evaluationRequest["context"] = context
+        }
+
+        let response = try await client.evaluateTrust(evaluationRequest)
+        let decision = response["decision"] as? Bool ?? false
+        let respContext = response["context"] as? [String: Any]
+
+        // Mirrors the Kotlin SDK's `evaluateTrustDirect` exactly: unlike
+        // `handleTrustEvaluation` (the engine-relayed path), this direct-call
+        // variant deliberately does NOT populate `trustCache` on success -
+        // only `handleDCAPIRequest`'s catch block reads it, as a fallback
+        // when the live call itself fails.
+        return TrustResult(
+            trusted: decision,
+            framework: respContext?["framework"] as? String,
+            reason: (respContext?["reason"] as? String) ?? (respContext?["message"] as? String),
+            entityName: respContext?["entity_name"] as? String,
+            entityLogo: respContext?["logo_uri"] as? String,
+            clientIdScheme: nil,
+            identifier: subjectId,
+            domain: respContext?["domain"] as? String
+        )
+    }
+
+    /// Find the verifier's response-encryption key (`use: "enc"`) from DC API `client_metadata.jwks`.
+    private static func findEncryptionJwk(_ clientMetadata: [String: Any]?) -> [String: Any]? {
+        guard let jwks = clientMetadata?["jwks"] as? [String: Any],
+              let keys = jwks["keys"] as? [[String: Any]] else {
+            return nil
+        }
+        return keys.first(where: { ($0["use"] as? String) == "enc" }) ?? keys.first
+    }
+
     /// Force a fresh engine WebSocket connection before starting a new flow,
     /// rather than trusting a connection that may have gone idle since the
     /// last one - mirrors `completeAuthorization`'s existing zombie-connection
@@ -1573,12 +1961,47 @@ public final class SirosWallet: @unchecked Sendable {
         try await engine.awaitConnected()
     }
 
+    /// Clear the ambient issuance-in-progress guard fields, unconditionally.
+    ///
+    /// Every terminal path for an issuance attempt must call this - a
+    /// `flow_complete`/`flow_error` from the engine, a client-side
+    /// termination (e.g. `reportSignFailure`), a synchronous start failure,
+    /// or the user cancelling before the engine ever assigned a flow ID at
+    /// all (see `cancelCurrentFlow`'s doc comment for why that last case is
+    /// real, not just defensive). Not `private`, for the same
+    /// cross-file-extension-access reason as `activeOffer` etc.
+    func resetIssuanceGuards() {
+        lock.lock()
+        activeOffer = nil
+        activeVctm = nil
+        activeMddlSchema = nil
+        activeAttestedKeyIds = nil
+        issuanceInFlight = false
+        lock.unlock()
+    }
+
     /// Cancel the current flow.
+    ///
+    /// `resetIssuanceGuards()` is called unconditionally, not just inside the
+    /// `.flowActive` branch - a slow/unresponsive issuer leaves the wallet in
+    /// `.ready` the whole time `startIssuance`/`startIssuanceByOffer` is
+    /// awaiting the engine's first progress message, since the engine
+    /// doesn't assign (and report) a flow ID until then. Gating the local
+    /// guard reset on `.flowActive` too meant cancelling during exactly that
+    /// window did nothing at all - not even a local reset - permanently
+    /// stranding `issuanceInFlight` at `true` and blocking every subsequent
+    /// issuance attempt until the app process was killed (real bug hit
+    /// against a slow Geneva interop test issuer). The backend `cancelFlow`
+    /// send stays gated on `.flowActive`, since only then does a real
+    /// `flowId` exist to send to the server - the local guard reset does
+    /// not need one, and is a no-op if no issuance was ever in flight, so
+    /// it's always safe to call unconditionally.
     public func cancelCurrentFlow() {
         if case .flowActive(let userId, let displayName, let flowId, _, _, let creds) = state {
             try? engineSession?.cancelFlow(flowId: flowId)
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
         }
+        resetIssuanceGuards()
     }
 
     // MARK: - Identity Verification
@@ -1621,7 +2044,13 @@ public final class SirosWallet: @unchecked Sendable {
     public func completeAuthorization(flowId: String, code: String, state: String) {
         lock.lock()
         let engine = engineSession
-        let pending = pendingAuthorizations.removeValue(forKey: flowId)
+        // Peek, don't remove yet - removing before the state check below
+        // meant a mismatched (e.g. attacker-forged) callback destroyed the
+        // real, still-pending context, so any later legitimate completion
+        // attempt for the same flowId fell through to the no-context branch,
+        // which sends the flow action straight through with no CSRF check
+        // at all. Only remove once the check actually passes.
+        let pending = pendingAuthorizations[flowId]
         let tokens = authTokens
         let listener = eventListener
         lock.unlock()
@@ -1641,6 +2070,8 @@ public final class SirosWallet: @unchecked Sendable {
             listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch")
             return
         }
+
+        lock.lock(); pendingAuthorizations.removeValue(forKey: flowId); lock.unlock()
 
         Task {
             do {
@@ -1867,9 +2298,13 @@ public final class SirosWallet: @unchecked Sendable {
                 return await self.handleWmpTrustEvaluation(flowId: flowId, payload: payload)
             },
             onComplete: { [weak self] flowId, _ in
+                // Terminal path for this issuance over the WMP transport too -
+                // see `resetIssuanceGuards()`.
+                self?.resetIssuanceGuards()
                 self?.eventListener?.onFlowComplete(flowId: flowId)
             },
             onError: { [weak self] flowId, code, message in
+                self?.resetIssuanceGuards()
                 self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")")
             }
         ))
@@ -2131,6 +2566,11 @@ public final class SirosWallet: @unchecked Sendable {
             return SignSubFlowResult(proofs: proofs)
 
         case "sign_presentation":
+            // Same defense-in-depth audience check as the legacy engine
+            // transport's handleSignRequest - this transport previously
+            // skipped it entirely, so a WMP-relayed sign_presentation was
+            // never checked against the trust result computed for this flow.
+            try validateAudience(flowId: flowId, audience: params.audience)
             let vpToken = try await keystore.signPresentation(
                 nonce: params.nonce,
                 audience: params.audience,
@@ -2185,6 +2625,19 @@ public final class SirosWallet: @unchecked Sendable {
             return SirosTransport.TrustResult(trusted: false, reason: "No API client")
         }
 
+        // WMP carries both issuance (generate_proof) and presentation
+        // (sign_presentation) sign requests over the same profile - the
+        // action name must follow subject_type like the legacy engine path's
+        // handleTrustEvaluation does, not be hardcoded to "credential-issuer"
+        // for every subject (a real bug: a verifier evaluated over WMP was
+        // being checked against the issuer trust policy instead of the
+        // verifier one).
+        var subjectType: String?
+        if case .string(let t) = request["subject_type"] {
+            subjectType = t
+        }
+        let actionName = subjectType == "credential_verifier" ? "credential-verifier" : "credential-issuer"
+
         do {
             let kmType: String
             if case .object_(let km) = request["key_material"],
@@ -2197,10 +2650,26 @@ public final class SirosWallet: @unchecked Sendable {
             let evaluationRequest: [String: Any] = [
                 "subject": ["type": "key", "id": subjectId],
                 "resource": ["type": kmType, "id": subjectId],
-                "action": ["name": "credential-issuer"],
+                "action": ["name": actionName],
             ]
             let response = try await client.evaluateTrust(evaluationRequest)
             let decision = response["decision"] as? Bool ?? false
+            let context = response["context"] as? [String: Any]
+
+            // Store for the later sign_presentation step's validateAudience
+            // check, mirroring handleTrustEvaluation - without this, WMP
+            // presentations had no audience-binding defense-in-depth at all.
+            lock.lock()
+            lastTrustResults[flowId] = TrustResult(
+                trusted: decision,
+                framework: context?["framework"] as? String,
+                reason: (context?["reason"] as? String) ?? (context?["message"] as? String),
+                entityName: context?["entity_name"] as? String,
+                entityLogo: context?["logo_uri"] as? String,
+                identifier: subjectId
+            )
+            lock.unlock()
+
             return SirosTransport.TrustResult(trusted: decision)
         } catch {
             return SirosTransport.TrustResult(trusted: false, reason: error.localizedDescription)
@@ -2365,7 +2834,15 @@ public final class SirosWallet: @unchecked Sendable {
         let allCreds = await credentialStore.getAll()
         lock.lock()
         let listener = eventListener
-        let trustResult = lastTrustResults.removeValue(forKey: msg.flowId)
+        // Read only - do NOT remove. The later `sign_presentation` step
+        // (`handleSignRequest` -> `validateAudience`) still needs this
+        // entry; credential selection (this handler) always runs before
+        // signing in the engine's own step ordering, so removing it here
+        // silently defeated `validateAudience`'s defense-in-depth check for
+        // every presentation - it always saw a nil trust result and
+        // no-op'd. `validateAudience` itself removes the entry once it's
+        // actually consumed.
+        let trustResult = lastTrustResults[msg.flowId]
         lock.unlock()
 
         let selectedIds: [Int64]
@@ -2533,7 +3010,10 @@ public final class SirosWallet: @unchecked Sendable {
     /// implies it provides.
     private func validateAudience(flowId: String, audience: String) throws {
         lock.lock()
-        let trustResult = lastTrustResults[flowId]
+        // Consume (remove) the entry here, at actual point of use, instead
+        // of at credential-selection time - see `handleMatchRequest`'s
+        // comment for why removing it earlier defeated this check entirely.
+        let trustResult = lastTrustResults.removeValue(forKey: flowId)
         lock.unlock()
 
         guard let trustResult, let expectedId = trustResult.identifier else { return }
@@ -2636,6 +3116,11 @@ public final class SirosWallet: @unchecked Sendable {
         lock.lock(); let listener = eventListener; lock.unlock()
         listener?.onFlowError(flowId: flowId, errorMessage: message)
 
+        // A terminal path for whatever issuance may have been in flight - a
+        // no-op for a presentation sign-request failure, which never sets
+        // these fields in the first place. See `resetIssuanceGuards()`.
+        resetIssuanceGuards()
+
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),
              .ready(let userId, let displayName, _, _):
@@ -2652,6 +3137,11 @@ public final class SirosWallet: @unchecked Sendable {
         let fid = msg.flowId ?? "unknown"
         lock.lock(); let listener = eventListener; lock.unlock()
         listener?.onFlowError(flowId: fid, errorMessage: msg.error.message)
+
+        // Terminal path for whatever issuance may have been in flight -
+        // a no-op for a presentation flow error, which never sets these
+        // fields. See `resetIssuanceGuards()`.
+        resetIssuanceGuards()
 
         switch state {
         case .flowActive(let userId, let displayName, _, _, _, _),

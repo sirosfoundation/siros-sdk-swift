@@ -129,7 +129,34 @@ public final class MdocProximitySession {
     /// True once session keys have been successfully derived for this session.
     public var established: Bool { deviceCipher != nil }
 
+    /// Guards against two overlapping `handleSessionEstablishment` calls for
+    /// this session (e.g. a reader retransmitting `SessionEstablishment`
+    /// before the first call has finished deriving keys - session-key
+    /// derivation genuinely takes non-zero time: ECDH + HKDF + CBOR
+    /// parsing). Without this, a second concurrent call could race on
+    /// `deviceCipher`, in the worst case building a signed/encrypted
+    /// response with a cipher instance that then gets overwritten by the
+    /// other call before it's ever used to encrypt.
+    private let establishmentLock = NSLock()
+    private var handlingEstablishment = false
+
     public func handleSessionEstablishment(_ message: [UInt8]) async throws -> Result {
+        establishmentLock.lock()
+        if handlingEstablishment {
+            establishmentLock.unlock()
+            #if canImport(os)
+            logger.warning("\(self.logTag, privacy: .public): dropping overlapping SessionEstablishment - one is already in progress")
+            #endif
+            return .failed(reason: "session establishment already in progress")
+        }
+        handlingEstablishment = true
+        establishmentLock.unlock()
+        defer {
+            establishmentLock.lock()
+            handlingEstablishment = false
+            establishmentLock.unlock()
+        }
+
         onStep("parsing_request")
         let established = try ProximitySessionMessages.parseSessionEstablishment(message)
         let eReaderPublicKey = try ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)

@@ -31,6 +31,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     private var containerMetadata: ContainerData?
     // Preserve full WalletStateContainer for round-trip fidelity
     private var preservedWalletState: [String: Any]?
+    // Hardware-backed WSCD plugins' exported key metadata (kid ->
+    // credential_handle/pubkey mappings, never private key material), keyed
+    // by plugin ID - see privatedata-spec SPEC.md §6.1 "S.wscdCredentials".
+    // This is what makes a FIDO2 (or future R2PS) hardware key addressable
+    // again from ANY device sharing this account, not just the one that
+    // enrolled it - a roaming CTAP2 authenticator can be tapped/plugged into
+    // a different device entirely, and every device needs the same mapping.
+    private var wscdCredentials: [String: String] = [:]
 
     public init() {}
 
@@ -139,6 +147,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         keys.removeAll()
         credentials.removeAll()
         presentationRecords.removeAll()
+        wscdCredentials.removeAll()
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
@@ -357,6 +366,26 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         mutex.lock()
         defer { mutex.unlock() }
         return keys.map { KeyInfo(keyId: $0.key, algorithm: "ES256") }
+    }
+
+    /// Every hardware-backed WSCD plugin's persisted key metadata, keyed by
+    /// plugin ID (see `wscdCredentials`'s doc comment) - read after `unlock`
+    /// to restore a previously-enrolled key (e.g. via
+    /// `WscdManager.registerFido2PluginWithState`).
+    public func exportWscdCredentials() async -> [String: String] {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return wscdCredentials
+    }
+
+    /// Record a WSCD plugin's freshly-exported key metadata so the next
+    /// `exportEncryptedContainer` call folds it into `S.wscdCredentials` and
+    /// it survives to the next `unlock` (on this device or any other sharing
+    /// this account).
+    public func setWscdCredentials(pluginId: String, state: String) async {
+        mutex.lock()
+        defer { mutex.unlock() }
+        wscdCredentials[pluginId] = state
     }
 
     // MARK: - Credential storage
@@ -628,6 +657,17 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
                 }
             }
         }
+
+        // Parse wscdCredentials: { [pluginId]: "<opaque exported state>" } -
+        // privatedata-spec §6.1, a native-SDK-only extension (see
+        // wscdCredentials field's own doc comment above).
+        if let wscdCredsObj = state["wscdCredentials"] as? [String: Any] {
+            for (pluginId, value) in wscdCredsObj {
+                if let str = value as? String {
+                    wscdCredentials[pluginId] = str
+                }
+            }
+        }
     }
 
     /// Coerce a JSON value (parsed via `JSONSerialization`, so numbers surface
@@ -813,17 +853,28 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         ]
         let credentialIssuanceSessions = existingS?["credentialIssuanceSessions"] as? [Any] ?? []
 
+        var sDict: [String: Any] = [
+            "schemaVersion": 3,
+            "keypairs": keypairs,
+            "credentials": creds,
+            "presentations": presentations,
+            "settings": settings,
+            "credentialIssuanceSessions": credentialIssuanceSessions,
+        ]
+
+        // wscdCredentials (privatedata-spec §6.1, native-SDK-only extension)
+        // - wscdCredentials the in-memory dictionary IS the source of truth
+        // once loaded (see loadFromWalletStateV3), no need to merge against
+        // existingState separately. Omitted entirely (not emitted as `{}`)
+        // when empty.
+        if !wscdCredentials.isEmpty {
+            sDict["wscdCredentials"] = wscdCredentials
+        }
+
         return [
             "lastEventHash": lastEventHash,
             "events": events,
-            "S": [
-                "schemaVersion": 3,
-                "keypairs": keypairs,
-                "credentials": creds,
-                "presentations": presentations,
-                "settings": settings,
-                "credentialIssuanceSessions": credentialIssuanceSessions,
-            ] as [String: Any],
+            "S": sDict,
         ]
     }
 
@@ -945,6 +996,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func listKeys() -> [KeyInfo] { [] }
+    public func exportWscdCredentials() async -> [String: String] { [:] }
+    public func setWscdCredentials(pluginId: String, state: String) async {}
     public func saveCredential(id: Int64, json: String) async throws {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }

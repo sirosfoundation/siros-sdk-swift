@@ -381,6 +381,33 @@ final class WalletViewModel: ObservableObject {
                 )
                 lifecycleState = actOutcome.state
                 lifecycleContextId = contextId
+
+                // Persist the FIDO2 plugin's key metadata via privatedata so
+                // this key stays addressable on any device sharing this
+                // account - CTAP2 roaming authenticators (e.g. a YubiKey)
+                // aren't tied to the device that enrolled them. Only wallet
+                // exists by this point (unlike buildWscdSigner's initial,
+                // eager keystore construction, which runs before `wallet`
+                // does and so can't restore saved state the same way -
+                // a real, accepted limitation mirrored from the Kotlin SDK,
+                // not something newly introduced here).
+                if pluginId == "fido2" {
+                    do {
+                        let stateData = try manager.exportFido2State()
+                        // Stored as a UTF-8 string, not base64 - matches the
+                        // Kotlin SDK's convention (exportFido2State's Data is
+                        // already the plugin's JSON state encoded as UTF-8;
+                        // registerFido2PluginWithState expects the same
+                        // encoding back).
+                        if let stateString = String(data: stateData, encoding: .utf8) {
+                            await wallet?.saveWscdCredentials(pluginId: "fido2", state: stateString)
+                        } else {
+                            print("FIDO2 plugin state was not valid UTF-8 - not saving")
+                        }
+                    } catch {
+                        print("Failed to export/save FIDO2 plugin state: \(error)")
+                    }
+                }
             } catch {
                 setError("Enrollment failed: \(error.localizedDescription)")
             }

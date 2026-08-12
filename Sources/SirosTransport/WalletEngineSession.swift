@@ -4,6 +4,9 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(os)
+import os
+#endif
 
 /// WebSocket session client for the wallet backend engine protocol.
 ///
@@ -26,6 +29,13 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         case reauthRequired
         case failed
     }
+
+    #if canImport(os)
+    private let logger = Logger(subsystem: "org.siros.sdk", category: "WalletEngineSession")
+    private func logWarning(_ msg: String) { logger.warning("\(msg)") }
+    #else
+    private func logWarning(_ msg: String) { print("[WalletEngineSession WARNING] \(msg)") }
+    #endif
 
     private let baseUrl: String
     private let tenantId: String
@@ -121,12 +131,20 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         self._matchRequests = AsyncStream { mrCont = $0 }
         self.matchRequestContinuation = mrCont
 
+        // Unlike flowProgress/flowComplete/flowErrors/signRequests/
+        // matchRequests (all drained internally by SirosWallet's own `for
+        // await` loops), pushMessages/notificationAcks are host-app-facing,
+        // opt-in APIs - nothing in this SDK consumes them itself. A host app
+        // that never calls pushMessages()/notificationAcks() would otherwise
+        // grow these streams' default `.unbounded` buffer for the entire
+        // connection lifetime. Bounding to the most recent 64 caps that
+        // growth without affecting a host app that drains them promptly.
         var pCont: AsyncStream<PushMessage>.Continuation!
-        self._pushMessages = AsyncStream { pCont = $0 }
+        self._pushMessages = AsyncStream(bufferingPolicy: .bufferingNewest(64)) { pCont = $0 }
         self.pushContinuation = pCont
 
         var naCont: AsyncStream<NotificationAckMessage>.Continuation!
-        self._notificationAcks = AsyncStream { naCont = $0 }
+        self._notificationAcks = AsyncStream(bufferingPolicy: .bufferingNewest(64)) { naCont = $0 }
         self.notificationAckContinuation = naCont
     }
 
@@ -536,8 +554,17 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     }
 
     private func send<T: Encodable>(_ message: T) {
+        // Crashing the whole process here (the original `preconditionFailure`)
+        // meant any caller racing a concurrent `disconnect()` - or invoked
+        // just after a dropped connection the receive loop hasn't yet
+        // reacted to - brought down the entire app rather than just failing
+        // this one send. `send` is called from many public, non-throwing
+        // methods (sendTrustResult, sendMatchResponse, sendSignResponse,
+        // etc.), so log-and-return matches the encode-failure branch just
+        // below rather than crashing.
         guard let ws = webSocketTask else {
-            preconditionFailure("Not connected")
+            logWarning("send: not connected, dropping message")
+            return
         }
         guard let data = try? encoder.encode(message),
               let text = String(data: data, encoding: .utf8) else {

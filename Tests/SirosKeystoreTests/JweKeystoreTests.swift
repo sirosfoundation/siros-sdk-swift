@@ -377,6 +377,31 @@ final class JweKeystoreTests: XCTestCase {
         XCTAssertTrue(restored?.contains("header.payload.sig") == true)
         XCTAssertEqual(keystore.listKeys().count, 1)
     }
+
+    // MARK: - wscdCredentials round trip
+
+    func testWscdCredentialsRoundTripThroughExportAndReimport() async throws {
+        let keystore = JweKeystore()
+        try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+
+        // Matches PreviewSignPlugin::export_state()'s JSON shape (opaque to
+        // this SDK) - privatedata-spec §6.1 S.wscdCredentials, the
+        // native-SDK-only extension letting a FIDO2 (roaming authenticator)
+        // key stay addressable from any device sharing this account.
+        let fido2State = "{\"keys\":[{\"kid\":\"fido-0\",\"credential_id\":\"AQID\",\"key_handle\":\"BAUG\"}],\"next_id\":1}"
+        await keystore.setWscdCredentials(pluginId: "fido2", state: fido2State)
+        let beforeExport = await keystore.exportWscdCredentials()
+        XCTAssertEqual(beforeExport["fido2"], fido2State)
+
+        let exported = try await keystore.exportEncryptedContainer()
+        keystore.lock()
+        let afterLock = await keystore.exportWscdCredentials()
+        XCTAssertTrue(afterLock.isEmpty)
+
+        try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: exported, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+        let afterReimport = await keystore.exportWscdCredentials()
+        XCTAssertEqual(afterReimport["fido2"], fido2State)
+    }
 }
 
 #else

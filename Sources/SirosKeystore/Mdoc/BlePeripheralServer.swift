@@ -1,9 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
+#if canImport(CoreBluetooth)
 import Foundation
 import CoreBluetooth
 import SirosCredentials
-import SirosKeystore
 
 /// ISO 18013-5 §8.3.3.1.1/§11.1.3 "mdoc peripheral server mode": the mdoc
 /// acts as the BLE GATT server, advertising
@@ -16,7 +16,7 @@ import SirosKeystore
 /// this class notifies the encrypted `SessionData` response back via
 /// `Server2Client`.
 ///
-/// Ported from the Kotlin SDK sample app's `BlePeripheralServer.kt`, using
+/// Ported from the Kotlin SDK's `BlePeripheralServer.kt`, using
 /// `CoreBluetooth`'s `CBPeripheralManager` instead of Android's
 /// `BluetoothGattServer`/`BluetoothLeAdvertiser` - unlike NFC HCE (see
 /// `NfcHandoverSelect`'s doc comment), iOS DOES support BLE peripheral
@@ -25,23 +25,21 @@ import SirosKeystore
 ///
 /// "mdoc central client mode" (this device scanning for and connecting to a
 /// reader's own GATT server) is implemented separately in `BleCentralClient`,
-/// which runs alongside this class - see `ProximityEngagementScreen`, which
-/// wires both simultaneously since it isn't known in advance which mode a
-/// given reader will pick.
+/// which runs alongside this class - the host app is expected to wire both
+/// simultaneously since it isn't known in advance which mode a given reader
+/// will pick.
 ///
 /// The proximity protocol itself (session establishment, credential
-/// matching, consent, signing) lives in `MdocProximitySession` (SDK-level,
-/// shared with `BleCentralClient`) - this class only handles BLE/GATT
-/// transport.
+/// matching, consent, signing) lives in `MdocProximitySession` (shared with
+/// `BleCentralClient`) - this class only handles BLE/GATT transport.
 ///
 /// UNVERIFIED ON REAL HARDWARE beyond compiling - this class has only been
 /// verified by code review and reasoning about the CoreBluetooth API
-/// surface - it has not been compiled (this repo's Linux dev environment
-/// cannot build iOS app targets at all) or exercised against a real mdoc
-/// reader. Test on a real iOS device against a real reader (e.g.
+/// surface - it has not been exercised against a real mdoc reader. Test on
+/// a real iOS device against a real reader (e.g.
 /// `sirosfoundation/siros-verifier-app`, Google's `multipaz`, or
 /// digital-credentials.dev) before relying on this.
-final class BlePeripheralServer: NSObject {
+public final class BlePeripheralServer: NSObject {
 
     static let stateUUID = CBUUID(string: "00000001-A123-48CE-896B-4C76973373E6")
     static let client2ServerUUID = CBUUID(string: "00000002-A123-48CE-896B-4C76973373E6")
@@ -85,7 +83,7 @@ final class BlePeripheralServer: NSObject {
     /// Kotlin SDK's `BlePeripheralServer.DEFAULT_MTU`.
     private static let defaultMtu = 23
 
-    init(
+    public init(
         engagement: DeviceEngagement.Engagement,
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
@@ -126,11 +124,11 @@ final class BlePeripheralServer: NSObject {
     /// happens once `peripheralManagerDidUpdateState` reports `.poweredOn` -
     /// CoreBluetooth rejects `add(_:)`/`startAdvertising(_:)` calls made
     /// before that.
-    func start() {
+    public func start() {
         peripheralManager = CBPeripheralManager(delegate: self, queue: nil)
     }
 
-    func stop() {
+    public func stop() {
         peripheralManager?.stopAdvertising()
         peripheralManager?.removeAllServices()
         peripheralManager = nil
@@ -243,7 +241,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
     /// if the user later grants Bluetooth access and the OS re-invokes it
     /// with `.poweredOn`), not cached into a separate `@State` boolean that
     /// could go stale. Nothing to reset here.
-    func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
+    public func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral.state == .poweredOn else {
             if peripheral.state == .unauthorized || peripheral.state == .unsupported {
                 onLog("Bluetooth is not available/authorized")
@@ -295,7 +293,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
         peripheral.add(service)
     }
 
-    func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
+    public func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         if let error {
             onLog("Failed to add GATT service: \(error.localizedDescription)")
             completeOnce(false)
@@ -309,7 +307,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
         onStep("waiting_for_reader")
     }
 
-    func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+    public func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
         if let error {
             onLog("BLE advertise failed to start: \(error.localizedDescription)")
             completeOnce(false)
@@ -325,7 +323,7 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
     /// (reliably happens before it writes SessionEstablishment data), so
     /// this is used as the `"reader_connected"` progress step trigger,
     /// guarded to fire only once per session via `reportedReaderConnected`.
-    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
+    public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         onLog("Reader subscribed to \(characteristic.uuid)")
         if !reportedReaderConnected {
             reportedReaderConnected = true
@@ -333,11 +331,11 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
         }
     }
 
-    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
+    public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         onLog("Reader unsubscribed from \(characteristic.uuid)")
     }
 
-    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
+    public func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         // Apple's documented convention for a batch write: respond once for
         // the entire batch, passing the FIRST request in `requests`.
         if let first = requests.first {
@@ -356,7 +354,8 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
         }
     }
 
-    func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
+    public func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
         flushPendingNotifications()
     }
 }
+#endif

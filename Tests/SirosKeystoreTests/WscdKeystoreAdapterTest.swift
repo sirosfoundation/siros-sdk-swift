@@ -80,6 +80,34 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertFalse(adapter.isUnlocked)
     }
 
+    // MARK: - wscdCredentials
+
+    /// Mirrors `JweKeystoreTests.testWscdCredentialsRoundTripThroughExportAndReimport`
+    /// one layer up: `WscdKeystoreAdapter.exportWscdCredentialsState`/
+    /// `setWscdCredentialsState` must actually round-trip through this
+    /// adapter's own `exportEncryptedContainer` (backed by its internal
+    /// `credentialsKeystore`), not just exist as inert forwarding methods -
+    /// this is what lets a FIDO2 key enrolled via this WSCD-backed keystore
+    /// stay addressable after an app restart / on another device.
+    func testWscdCredentialsStateRoundTripsThroughAdapterExport() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+
+        let fido2State = "{\"keys\":[{\"kid\":\"fido-0\",\"credential_id\":\"AQID\"}],\"next_id\":1}"
+        await adapter.setWscdCredentialsState(pluginId: "fido2", state: fido2State)
+        let before = await adapter.exportWscdCredentialsState()
+        XCTAssertEqual(before["fido2"], fido2State)
+
+        let exported = try await adapter.exportEncryptedContainer()
+        adapter.lock()
+        XCTAssertFalse(adapter.isUnlocked)
+
+        let reloaded = WscdKeystoreAdapter(signer: MockSigner())
+        try await reloaded.unlock(prfOutput: Data(), encryptedContainer: exported, hkdfSalt: Data(), hkdfInfo: Data())
+        let after = await reloaded.exportWscdCredentialsState()
+        XCTAssertEqual(after["fido2"], fido2State)
+    }
+
     // MARK: - generateKeyAttestation
 
     /// Raw WSCD vocabulary ("hardware"/"pin") must be translated to the

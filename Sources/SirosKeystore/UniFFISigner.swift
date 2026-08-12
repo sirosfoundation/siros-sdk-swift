@@ -129,6 +129,26 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         try ffi.registerFido2Plugin(transport: Ctap2TransportBridge(transport))
     }
 
+    /// Register the FIDO2 previewSign plugin, restoring a previously-
+    /// enrolled key's metadata (`state`, from a prior `exportFido2State()`
+    /// call - possibly on a different device sharing this account, since
+    /// CTAP2 roaming authenticators aren't tied to one device) instead of
+    /// starting with no known keys.
+    public func registerFido2PluginWithState(transport: Ctap2TransportProvider, state: Data) throws {
+        try ffi.registerFido2PluginWithState(transport: Ctap2TransportBridge(transport), state: state)
+    }
+
+    /// Export the FIDO2 plugin's current key metadata (key handles + public
+    /// keys only, never private key material - the private key never
+    /// leaves the physical authenticator) for persisting via
+    /// `SirosWallet.saveWscdCredentials`, so it survives to the next
+    /// `registerFido2PluginWithState` call on any device sharing this
+    /// account. Call after every enrollment/key-generation that could have
+    /// changed the plugin's state.
+    public func exportFido2State() throws -> Data {
+        try ffi.exportFido2State()
+    }
+
     // MARK: - Signer conformance
 
     public func generateKey(algorithm: String) async throws -> String {
@@ -189,9 +209,22 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
             self.cacheLock.lock()
             let cached = self.publicKeyCache[keyId]
             self.cacheLock.unlock()
-            guard let jwkData = cached else {
-                throw UniFFISignerError.publicKeyNotCached(keyId: keyId)
+            if let jwkData = cached {
+                return jwkData
             }
+            // A cache miss doesn't mean the key doesn't exist - only
+            // generateKey populates publicKeyCache, so a key created via
+            // registerLifecycle/activateLifecycle, or one generated in a
+            // prior process (this cache is process-memory-only), has no
+            // entry here even though the Rust core still has it. `ffi`'s own
+            // exportPublicKey(kid:) is documented as the recovery path for
+            // exactly this case - fall back to it, and cache the result so
+            // subsequent calls in this process don't need to.
+            let jwk = try self.ffi.exportPublicKey(kid: keyId)
+            let jwkData = Data(jwk.utf8)
+            self.cacheLock.lock()
+            self.publicKeyCache[keyId] = jwkData
+            self.cacheLock.unlock()
             return jwkData
         }
     }

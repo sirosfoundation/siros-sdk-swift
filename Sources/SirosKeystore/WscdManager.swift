@@ -18,6 +18,20 @@ public protocol WscdManager: SignerLifecycleManager {
     /// raw command/response bytes over USB/BLE/NFC.
     func registerFido2Plugin(transport: Ctap2TransportProvider) throws
 
+    /// Register the FIDO2 previewSign plugin, restoring a previously-
+    /// enrolled key's metadata (`state`, from a prior `exportFido2State()`
+    /// call - possibly on a different device sharing this account, since
+    /// CTAP2 roaming authenticators aren't tied to one device) instead of
+    /// starting with no known keys.
+    func registerFido2PluginWithState(transport: Ctap2TransportProvider, state: Data) throws
+
+    /// Export the FIDO2 plugin's current key metadata (key handles + public
+    /// keys only, never private key material) for persisting via
+    /// `SirosWallet.saveWscdCredentials`, so it survives to the next
+    /// `registerFido2PluginWithState` call on any device sharing this
+    /// account.
+    func exportFido2State() throws -> Data
+
     /// Register the R2PS remote HSM plugin.
     func registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) throws
 }

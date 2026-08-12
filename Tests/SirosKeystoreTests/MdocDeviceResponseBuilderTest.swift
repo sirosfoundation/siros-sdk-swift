@@ -220,7 +220,10 @@ final class MdocDeviceResponseBuilderTest: XCTestCase {
         let nonce = "dc-api-nonce"
         let thumbprint = "enc-thumbprint"
 
-        let handoverInfo: CBOR = .array([.utf8String(origin), .utf8String(nonce), .utf8String(thumbprint)])
+        let handoverInfo: CBOR = .array([
+            .utf8String(origin), .utf8String(nonce),
+            .byteString([UInt8](EncryptedContainer.base64UrlDecode(thumbprint))),
+        ])
         let expectedHash = Array(SHA256.hash(data: handoverInfo.encode()))
 
         var signingInput: [UInt8]?
