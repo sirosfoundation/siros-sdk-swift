@@ -15,7 +15,7 @@ on:
 jobs:
   test-macos:
     name: Test (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Build & Test with Coverage
@@ -58,7 +58,7 @@ jobs:
 
   build-ios:
     name: Build (iOS)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Build for iOS Simulator
@@ -82,7 +82,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Install SwiftLint
@@ -92,7 +92,7 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Build DocC documentation

@@ -30,7 +30,7 @@ on:
 jobs:
   screenshot-test:
     if: false  # Enable when swift-snapshot-testing is configured
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Run snapshot tests
