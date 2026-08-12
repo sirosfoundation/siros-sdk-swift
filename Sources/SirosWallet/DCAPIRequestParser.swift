@@ -36,8 +36,12 @@ public struct DCAPIRequestKeyMaterial: @unchecked Sendable {
 }
 
 /// A parsed W3C Digital Credentials API OpenID4VP request (OpenID4VP 1.0
-/// Appendix A). `clientId` is `nil` for the unsigned protocol variant (the
-/// verified browser origin stands in for it - see `SirosWallet.handleDCAPIRequest`).
+/// Appendix A). For the unsigned protocol variant, `clientId` is whatever
+/// the untrusted request body claims (or `nil` if omitted) - it has NOT
+/// been verified against any signature and MUST NOT be trusted for
+/// authentication; the verified browser origin stands in for it instead
+/// (see `SirosWallet.handleDCAPIRequest`). Only the signed/multisigned
+/// variant's `clientId` is backed by a JWS-verified `keyMaterial`.
 public struct DCAPIRequest: @unchecked Sendable {
     public let clientId: String?
     public let responseMode: String

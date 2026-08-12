@@ -4,6 +4,9 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(os)
+import os
+#endif
 
 /// WebSocket session client for the wallet backend engine protocol.
 ///
@@ -26,6 +29,13 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         case reauthRequired
         case failed
     }
+
+    #if canImport(os)
+    private let logger = Logger(subsystem: "org.siros.sdk", category: "WalletEngineSession")
+    private func logWarning(_ msg: String) { logger.warning("\(msg)") }
+    #else
+    private func logWarning(_ msg: String) { print("[WalletEngineSession WARNING] \(msg)") }
+    #endif
 
     private let baseUrl: String
     private let tenantId: String
@@ -553,7 +563,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         // etc.), so log-and-return matches the encode-failure branch just
         // below rather than crashing.
         guard let ws = webSocketTask else {
-            print("[WalletEngineSession] ⚠️ send: not connected, dropping message")
+            logWarning("send: not connected, dropping message")
             return
         }
         guard let data = try? encoder.encode(message),

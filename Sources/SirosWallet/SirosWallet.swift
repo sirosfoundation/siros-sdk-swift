@@ -1974,6 +1974,7 @@ public final class SirosWallet: @unchecked Sendable {
         lock.lock()
         activeOffer = nil
         activeVctm = nil
+        activeMddlSchema = nil
         activeAttestedKeyIds = nil
         issuanceInFlight = false
         lock.unlock()
