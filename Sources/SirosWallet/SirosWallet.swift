@@ -2722,14 +2722,20 @@ public final class SirosWallet: @unchecked Sendable {
                 throw SirosError.wallet(message: "Not connected")
             }
             return try await tokens.ensureBackendToken().raw
-        }, onTokenRejected: { [weak self] in
+        }, onTokenRejected: { [weak self] error in
             // See `WalletEngineSession.onTokenRejected`'s doc comment: this
             // is the reconnect path's counterpart to
             // `BackendApiClient.request`'s 401 handling - both must feed
             // `AuthTokens.registerTokenRejection` so repeated rejections
             // (from either transport) actually accumulate toward the same
             // forced-logout threshold, instead of only being visible to
-            // whichever path happened to notice first.
+            // whichever path happened to notice first. Only a genuine 401
+            // counts, mirroring `BackendApiClient.request`'s exact check -
+            // `ensureBackendToken()` can also fail for reasons that aren't a
+            // real rejection (e.g. a transient network error reaching the
+            // auth server), and those must not accumulate toward the
+            // forced-logout threshold the same way an actual rejection does.
+            guard case let SirosError.backendApi(code, _, _) = error, code == 401 else { return }
             self?.authTokens?.registerTokenRejection(AuthTokens.tokenBackend)
         })
         try await engine.awaitConnected()
@@ -2795,14 +2801,14 @@ public final class SirosWallet: @unchecked Sendable {
                     proofTypeHint: msg.params.proofType
                 )
                 // The "attestation" proof type returns a single GeneratedProofData
-            // whose attestedKeyIds already covers the whole batch in order; the
-            // "jwt" proof type returns one GeneratedProofData PER credential,
-            // each carrying its own single-element attestedKeyIds - flatMap
-            // concatenates either shape into one batch-order list. Taking only
-            // the first entry's list (as this used to) silently dropped every
-            // index past 0 for a "jwt" batch of more than one credential.
-            let flattenedKeyIds = generated.flatMap { $0.attestedKeyIds ?? [] }
-            lock.lock(); activeAttestedKeyIds = flattenedKeyIds.isEmpty ? nil : flattenedKeyIds; lock.unlock()
+                // whose attestedKeyIds already covers the whole batch in order; the
+                // "jwt" proof type returns one GeneratedProofData PER credential,
+                // each carrying its own single-element attestedKeyIds - flatMap
+                // concatenates either shape into one batch-order list. Taking only
+                // the first entry's list (as this used to) silently dropped every
+                // index past 0 for a "jwt" batch of more than one credential.
+                let flattenedKeyIds = generated.flatMap { $0.attestedKeyIds ?? [] }
+                lock.lock(); activeAttestedKeyIds = flattenedKeyIds.isEmpty ? nil : flattenedKeyIds; lock.unlock()
                 let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
