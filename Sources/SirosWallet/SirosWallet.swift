@@ -218,8 +218,15 @@ public final class SirosWallet: @unchecked Sendable {
     /// device-local storage: CTAP2 roaming authenticators (e.g. a YubiKey)
     /// are enrolled once but usable from any device.
     public func wscdCredentials(pluginId: String) async -> String? {
+        #if canImport(CryptoKit)
         guard let adapter = keystore as? WscdKeystoreAdapter else { return nil }
         return await adapter.exportWscdCredentialsState()[pluginId]
+        #else
+        // `WscdKeystoreAdapter` is only defined where CryptoKit is
+        // available (see its `#if canImport(CryptoKit)` guard) - on other
+        // platforms there's no WSCD-backed keystore to read state from.
+        return nil
+        #endif
     }
 
     /// Record a WSCD plugin's freshly-exported key metadata (see
@@ -228,9 +235,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// this account. Call after every enrollment/key-generation that could
     /// have changed the plugin's state.
     public func saveWscdCredentials(pluginId: String, state: String) async {
+        #if canImport(CryptoKit)
         if let adapter = keystore as? WscdKeystoreAdapter {
             await adapter.setWscdCredentialsState(pluginId: pluginId, state: state)
         }
+        #endif
         await persistAndSyncKeystore()
     }
 
