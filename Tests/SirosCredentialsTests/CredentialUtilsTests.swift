@@ -552,4 +552,18 @@ final class CredentialUtilsTests: XCTestCase {
         XCTAssertEqual(diff.removed, [claim("nationality", "SE")])
         XCTAssertTrue(diff.hasChanges)
     }
+
+    func testComputeAttributeDiffToleratesDuplicateKeysWithoutCrashing() {
+        // extractClaims can produce duplicate DisplayClaim.key values (e.g.
+        // duplicated VCTM paths) - this must not crash (a real Copilot
+        // review finding: Dictionary(uniqueKeysWithValues:) traps on a
+        // duplicate key), and must resolve deterministically to the first
+        // occurrence.
+        let before = [claim("given_name", "Alex"), claim("given_name", "AlexDuplicate")]
+        let after = [claim("given_name", "Alex")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: after)
+
+        XCTAssertFalse(diff.hasChanges)
+    }
 }

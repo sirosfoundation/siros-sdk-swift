@@ -41,7 +41,8 @@ extension SirosWallet {
         // sentinel on either client.
         let batchId = Int64(Date().timeIntervalSince1970 * 1000)
 
-        let (oldRenewedClaims, wasRenewal) = await supersedeRenewalSourceBatchIfNeeded()
+        let (oldBatchId, oldRenewedClaims) = await snapshotRenewalSourceBatch()
+        let wasRenewal = oldBatchId != nil
 
         // Tracks whether any credential in this batch actually made it into
         // the store, so a flow that "completes" per the engine but whose
@@ -60,10 +61,23 @@ extension SirosWallet {
             }
         }
 
+        // Only now that the new batch is confirmed stored is it safe to
+        // delete the one it supersedes - deleting it any earlier (e.g.
+        // right after snapshotting, before knowing whether the renewal's
+        // credential(s) actually parsed/validated) would destroy the user's
+        // only copy on a failed renewal. See snapshotRenewalSourceBatch's
+        // doc comment.
+        if storedCount > 0, let oldBatchId {
+            await deleteRenewalSourceBatch(oldBatchId)
+        }
+
         await captureRefreshTokenIfPresent(msg: msg, offer: offer, batchId: batchId)
         await notifyRenewalAttributeDiffIfNeeded(wasRenewal: wasRenewal, oldClaims: oldRenewedClaims, batchId: batchId)
 
         // Terminal path for this issuance - see `resetIssuanceGuards()`.
+        // Also clears `pendingRenewalSourceBatchId` (see its own clearing in
+        // `resetIssuanceGuards()`), whether this renewal attempt succeeded
+        // or failed - either way the attempt is over.
         resetIssuanceGuards()
 
         await persistAndSyncKeystore()
@@ -94,30 +108,37 @@ extension SirosWallet {
     }
 
     // Credential re-issuance/renewal plan (Phase 2): if this flow_complete is
-    // a renewal's, the batch it's about to store supersedes the one
-    // renewCredential() was called for - delete that old batch's credential
-    // entries AND its privatedata refresh_token entry (per privatedata-spec
-    // §6.2 - a stale entry pointing at a no-longer-existing batch must not
-    // linger) instead of leaving a duplicate alongside the new one. Snapshot
-    // the old batch's claims (before deleting it) so they can be diffed
-    // against the new batch's once stored - AttributeDiffService-equivalent,
-    // see onCredentialRenewedWithAttributeDiff's doc comment.
-    private func supersedeRenewalSourceBatchIfNeeded() async -> (oldClaims: [DisplayClaim]?, wasRenewal: Bool) {
+    // a renewal's, peek at (but do NOT yet delete) the batch it's about to
+    // supersede - just note its id and snapshot its claims (for the
+    // attribute diff once the new batch is stored). Deleting it is
+    // `deleteRenewalSourceBatch`'s job, and MUST only happen once the new
+    // batch has actually been stored successfully (see handleFlowComplete):
+    // deleting it here, unconditionally, would mean a renewal whose returned
+    // credential(s) all fail to parse/validate destroys the user's only copy
+    // of the credential instead of leaving it in place - a real data-loss
+    // bug a Copilot review caught on this exact function.
+    private func snapshotRenewalSourceBatch() async -> (oldBatchId: Int64?, oldClaims: [DisplayClaim]?) {
         lock.lock(); let renewalSourceBatchId = pendingRenewalSourceBatchId; lock.unlock()
-        var oldRenewedClaims: [DisplayClaim]?
-        if let oldBatchId = renewalSourceBatchId {
-            let existing = await credentialStore.getAll()
-            if let oldRepresentative = existing.first(where: { $0.batchId == oldBatchId && $0.instanceId == 0 }) {
-                oldRenewedClaims = CredentialUtils.extractClaims(oldRepresentative)
-            }
-            for cred in existing where cred.batchId == oldBatchId {
-                await credentialStore.delete(cred.id)
-            }
-            await removeCredentialRefreshToken(batchId: oldBatchId)
+        guard let oldBatchId = renewalSourceBatchId else { return (nil, nil) }
+        let existing = await credentialStore.getAll()
+        let oldRenewedClaims = existing
+            .first(where: { $0.batchId == oldBatchId && $0.instanceId == 0 })
+            .map { CredentialUtils.extractClaims($0) }
+        return (oldBatchId, oldRenewedClaims)
+    }
+
+    // Delete `oldBatchId`'s credential entries AND its privatedata
+    // refresh_token entry (per privatedata-spec §6.2 - a stale entry
+    // pointing at a no-longer-existing batch must not linger) now that the
+    // batch that supersedes it is confirmed stored - see
+    // `snapshotRenewalSourceBatch`'s doc comment for why this must not run
+    // any earlier.
+    private func deleteRenewalSourceBatch(_ oldBatchId: Int64) async {
+        let existing = await credentialStore.getAll()
+        for cred in existing where cred.batchId == oldBatchId {
+            await credentialStore.delete(cred.id)
         }
-        let wasRenewal = renewalSourceBatchId != nil
-        lock.lock(); pendingRenewalSourceBatchId = nil; lock.unlock()
-        return (oldRenewedClaims, wasRenewal)
+        await removeCredentialRefreshToken(batchId: oldBatchId)
     }
 
     private func storeIssuedCredential(

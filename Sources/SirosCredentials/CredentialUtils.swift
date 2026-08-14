@@ -540,8 +540,13 @@ public enum CredentialUtils {
     /// renewal) and reports what changed, matching Kotlin's
     /// `CredentialUtils.computeAttributeDiff` exactly.
     public static func computeAttributeDiff(before: [DisplayClaim], after: [DisplayClaim]) -> CredentialAttributeDiff {
-        let beforeByKey = Dictionary(uniqueKeysWithValues: before.map { ($0.key, $0) })
-        let afterByKey = Dictionary(uniqueKeysWithValues: after.map { ($0.key, $0) })
+        // `extractClaims` can produce duplicate `DisplayClaim.key` values
+        // (e.g. duplicated VCTM paths) - `Dictionary(uniqueKeysWithValues:)`
+        // traps at runtime on a duplicate key, so a renewal could crash the
+        // app while diffing claims. `uniquingKeysWith` (keeping the first
+        // occurrence, deterministically) tolerates that instead of crashing.
+        let beforeByKey = Dictionary(before.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let afterByKey = Dictionary(after.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         let changed: [AttributeChange] = afterByKey.keys.filter { beforeByKey[$0] != nil }.compactMap { key in
             guard let old = beforeByKey[key], let new = afterByKey[key], old.value != new.value else { return nil }
             return AttributeChange(key: key, label: new.label, oldValue: old.value, newValue: new.value)
