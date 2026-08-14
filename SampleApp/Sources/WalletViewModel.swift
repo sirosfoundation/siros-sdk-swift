@@ -892,8 +892,16 @@ final class WalletViewModel: ObservableObject {
             do {
                 try await wallet?.renewCredential(batchId: credential.batchId)
                 return
+            } catch SirosError.renewalUnavailable {
+                // The one specifically recoverable case - fall through to
+                // full re-issuance below. Any other failure (not connected,
+                // another issuance already in progress, network error) is
+                // surfaced directly instead, since silently attempting a
+                // full re-issuance would misreport a transient failure as
+                // if refresh-based renewal simply weren't available.
             } catch {
-                // Fall through to full re-issuance below.
+                setError(error.localizedDescription)
+                return
             }
             guard let issuerId = credential.credentialIssuerIdentifier,
                   let configId = credential.credentialConfigurationId else {

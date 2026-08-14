@@ -87,9 +87,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     // "S.credentialRefreshTokens". The issuer binds refresh_token to the
     // exact DPoP key used at initial issuance (RFC 9449/ARF ISSU_65), so
     // dpopJwk must be presented back unchanged on every renewal of the same
-    // batch, never regenerated - the backend never persists this key
-    // itself (see feedback_backend_key_persistence_principle memory), only
-    // the client does, via this field.
+    // batch, never regenerated - long-term storage of this key belongs only
+    // on the client (this field); the backend never persists it, since it
+    // only ever needs it ephemerally to forward a single renewal request.
     private var credentialRefreshTokens: [Int64: CredentialRefreshTokenEntry] = [:]
 
     public init() {}

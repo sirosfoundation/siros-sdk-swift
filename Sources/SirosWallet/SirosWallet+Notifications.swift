@@ -219,15 +219,25 @@ extension SirosWallet {
     // (S.credentialRefreshTokens - see setCredentialRefreshToken's doc
     // comment) so renewCredential() can use it later, including after an app
     // restart or on a different device sharing this account.
+    //
+    // `offer` (activeOffer) is best-effort display metadata - on a renewal
+    // it's rebuilt by re-fetching issuer metadata (see renewCredential's doc
+    // comment) and is left nil if that fetch fails. Falling back to
+    // `msg.credentialIssuer`/`msg.selectedCredentialConfigurationId` (which
+    // the engine always sends alongside `refreshToken`) means a flaky
+    // metadata fetch doesn't also silently break the next renewal by never
+    // storing its refresh_token at all.
     private func captureRefreshTokenIfPresent(msg: FlowCompleteMessage, offer: CredentialOffer?, batchId: Int64) async {
-        guard let token = msg.refreshToken, let currentOffer = offer else { return }
+        guard let token = msg.refreshToken else { return }
+        guard let issuerIdentifier = offer?.credentialIssuerIdentifier ?? msg.credentialIssuer,
+              let configId = offer?.credentialConfigurationId ?? msg.selectedCredentialConfigurationId else { return }
         await setCredentialRefreshToken(
             batchId: batchId,
             entry: CredentialRefreshTokenEntry(
                 refreshToken: token,
                 dpopJwk: msg.dpopJwk,
-                credentialIssuerIdentifier: currentOffer.credentialIssuerIdentifier,
-                credentialConfigurationId: currentOffer.credentialConfigurationId
+                credentialIssuerIdentifier: issuerIdentifier,
+                credentialConfigurationId: configId
             )
         )
     }

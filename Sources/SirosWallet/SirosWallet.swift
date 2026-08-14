@@ -1618,34 +1618,58 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
-        let candidates = await exportCredentialRefreshTokens()
-        guard let candidate = candidates[batchId] else {
-            throw SirosError.wallet(message: "No refresh_token stored for batch \(batchId) - it may not be renewable, or was already renewed")
-        }
-        #if canImport(os)
-        logger.debug("Starting renewal for batch=\(batchId) issuer=\(candidate.credentialIssuerIdentifier)")
-        #endif
-        do {
-            let metadata = try await fetchIssuerMetadata(issuerUrl: candidate.credentialIssuerIdentifier)
-            lock.lock()
-            activeOffer = Self.buildCredentialOffer(
-                issuerUrl: candidate.credentialIssuerIdentifier,
-                configId: candidate.credentialConfigurationId,
-                metadata: metadata
-            )
+        // A renewal is issuance-shaped (it ends up at the same
+        // `flow_complete` path and mutates the same `activeOffer`/
+        // `pendingRenewalSourceBatchId` shared state) so it must
+        // participate in the same overlap guard as
+        // `startIssuance`/`startIssuanceByOffer`, or a concurrent renewal
+        // + fresh issuance could corrupt each other's shared state.
+        lock.lock()
+        if issuanceInFlight {
             lock.unlock()
-        } catch {
-            #if canImport(os)
-            logger.warning("Failed to refresh issuer metadata for renewal display; card will show raw format: \(error.localizedDescription)")
-            #endif
+            throw SirosError.wallet(message: "Another issuance is already in progress")
         }
-        lock.lock(); pendingRenewalSourceBatchId = batchId; lock.unlock()
-        engine.startRenewal(
-            refreshToken: candidate.refreshToken,
-            credentialIssuer: candidate.credentialIssuerIdentifier,
-            selectedCredentialConfigurationId: candidate.credentialConfigurationId,
-            dpopJwk: candidate.dpopJwk
-        )
+        issuanceInFlight = true
+        lock.unlock()
+        do {
+            let candidates = await exportCredentialRefreshTokens()
+            guard let candidate = candidates[batchId] else {
+                throw SirosError.renewalUnavailable(batchId: batchId)
+            }
+            #if canImport(os)
+            logger.debug("Starting renewal for batch=\(batchId) issuer=\(candidate.credentialIssuerIdentifier)")
+            #endif
+            do {
+                let metadata = try await fetchIssuerMetadata(issuerUrl: candidate.credentialIssuerIdentifier)
+                lock.lock()
+                activeOffer = Self.buildCredentialOffer(
+                    issuerUrl: candidate.credentialIssuerIdentifier,
+                    configId: candidate.credentialConfigurationId,
+                    metadata: metadata
+                )
+                lock.unlock()
+            } catch {
+                #if canImport(os)
+                logger.warning("Failed to refresh issuer metadata for renewal display; card will show raw format: \(error.localizedDescription)")
+                #endif
+            }
+            lock.lock(); pendingRenewalSourceBatchId = batchId; lock.unlock()
+            engine.startRenewal(
+                refreshToken: candidate.refreshToken,
+                credentialIssuer: candidate.credentialIssuerIdentifier,
+                selectedCredentialConfigurationId: candidate.credentialConfigurationId,
+                dpopJwk: candidate.dpopJwk
+            )
+        } catch {
+            // Same rationale as `startIssuance`'s catch block: a synchronous
+            // failure here (e.g. no refresh_token on file for this batch)
+            // means no flow was ever registered server-side, so nothing
+            // will clear the guard via the normal flow_complete/flow_error
+            // path - without this, every future issuance/renewal attempt
+            // would be permanently blocked.
+            resetIssuanceGuards()
+            throw error
+        }
     }
 
     /// Start issuance with a raw offer URI or JSON.
@@ -2147,6 +2171,14 @@ public final class SirosWallet: @unchecked Sendable {
         activeMddlSchema = nil
         activeAttestedKeyIds = nil
         issuanceInFlight = false
+        // A failed/cancelled renewal must not leave this pointing at a
+        // batch that a later, unrelated flow_complete would then be
+        // misinterpreted as superseding (see `renewCredential`'s doc
+        // comment and `SirosWallet+Notifications.swift`'s
+        // `supersedeRenewalSourceBatchIfNeeded`) - every terminal path
+        // (success or error) routes through here, same as `activeOffer`
+        // etc. above.
+        pendingRenewalSourceBatchId = nil
         lock.unlock()
     }
 
