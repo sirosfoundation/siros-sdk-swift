@@ -653,116 +653,127 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     private func loadFromWalletStateV3(_ state: [String: Any]) {
-        if let keypairsArray = state["keypairs"] as? [[String: Any]] {
-            for entry in keypairsArray {
-                guard let keypairObj = entry["keypair"] as? [String: Any],
-                      let kid = keypairObj["kid"] as? String,
-                      let privateKeyJwk = keypairObj["privateKey"] as? [String: Any],
-                      let dStr = privateKeyJwk["d"] as? String else { continue }
-                let dData = EncryptedContainer.base64UrlDecode(dStr)
-                if let key = try? P256.Signing.PrivateKey(rawRepresentation: dData) {
-                    keys[kid] = key
-                }
+        loadKeypairs(from: state)
+        loadCredentials(from: state)
+        loadPresentations(from: state)
+        loadWscdCredentials(from: state)
+        loadCredentialRefreshTokens(from: state)
+    }
+
+    private func loadKeypairs(from state: [String: Any]) {
+        guard let keypairsArray = state["keypairs"] as? [[String: Any]] else { return }
+        for entry in keypairsArray {
+            guard let keypairObj = entry["keypair"] as? [String: Any],
+                  let kid = keypairObj["kid"] as? String,
+                  let privateKeyJwk = keypairObj["privateKey"] as? [String: Any],
+                  let dStr = privateKeyJwk["d"] as? String else { continue }
+            let dData = EncryptedContainer.base64UrlDecode(dStr)
+            if let key = try? P256.Signing.PrivateKey(rawRepresentation: dData) {
+                keys[kid] = key
             }
         }
+    }
 
-        // credentialId/batchId are privatedata-spec `number`s on the wire
-        // (matching wallet-frontend's WalletStateCredential exactly) - read
-        // via asInt64/asInt (which accept both NSNumber and String) rather
-        // than a strict numeric cast, so a value that arrives quoted (e.g.
-        // from a not-yet-migrated container) still parses instead of
-        // silently dropping the entry.
-        if let credsArray = state["credentials"] as? [[String: Any]] {
-            for entry in credsArray {
-                guard let credId = Self.asInt64(entry["credentialId"]),
-                      let data = entry["data"] as? String else { continue }
-                let credKid = entry["kid"] as? String
-                let credFormat = (entry["format"] as? String) ?? ""
-                let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
-                let credConfigId = entry["credentialConfigurationId"] as? String
-                let batchId = Self.asInt64(entry["batchId"]) ?? 0
-                let instanceId = Self.asInt(entry["instanceId"]) ?? 0
+    // credentialId/batchId are privatedata-spec `number`s on the wire
+    // (matching wallet-frontend's WalletStateCredential exactly) - read
+    // via asInt64/asInt (which accept both NSNumber and String) rather
+    // than a strict numeric cast, so a value that arrives quoted (e.g.
+    // from a not-yet-migrated container) still parses instead of
+    // silently dropping the entry.
+    private func loadCredentials(from state: [String: Any]) {
+        guard let credsArray = state["credentials"] as? [[String: Any]] else { return }
+        for entry in credsArray {
+            guard let credId = Self.asInt64(entry["credentialId"]),
+                  let data = entry["data"] as? String else { continue }
+            let credKid = entry["kid"] as? String
+            let credFormat = (entry["format"] as? String) ?? ""
+            let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
+            let credConfigId = entry["credentialConfigurationId"] as? String
+            let batchId = Self.asInt64(entry["batchId"]) ?? 0
+            let instanceId = Self.asInt(entry["instanceId"]) ?? 0
 
-                // Reconstruct a StoredCredential-shaped JSON blob (snake_case
-                // matching StoredCredential's CodingKeys) to preserve kid/
-                // batchId/instanceId/etc binding - credentialIssuerIdentifier/
-                // credentialConfigurationId are part of privatedata-spec's
-                // normative fields (already written by buildWalletStateV3()
-                // below) - reconstructing them here too is what lets
-                // SirosWallet re-fetch VCTM display metadata after a fresh
-                // login.
-                var storedDict: [String: Any] = [
-                    "id": credId,
-                    "format": credFormat,
-                    "raw": data,
-                    "batch_id": batchId,
-                    "instance_id": instanceId,
-                ]
-                if let credKid, !credKid.isEmpty { storedDict["kid"] = credKid }
-                if let credIssuerIdent, !credIssuerIdent.isEmpty {
-                    storedDict["credential_issuer_identifier"] = credIssuerIdent
-                }
-                if let credConfigId, !credConfigId.isEmpty {
-                    storedDict["credential_configuration_id"] = credConfigId
-                }
+            // Reconstruct a StoredCredential-shaped JSON blob (snake_case
+            // matching StoredCredential's CodingKeys) to preserve kid/
+            // batchId/instanceId/etc binding - credentialIssuerIdentifier/
+            // credentialConfigurationId are part of privatedata-spec's
+            // normative fields (already written by buildWalletStateV3()
+            // below) - reconstructing them here too is what lets
+            // SirosWallet re-fetch VCTM display metadata after a fresh
+            // login.
+            var storedDict: [String: Any] = [
+                "id": credId,
+                "format": credFormat,
+                "raw": data,
+                "batch_id": batchId,
+                "instance_id": instanceId,
+            ]
+            if let credKid, !credKid.isEmpty { storedDict["kid"] = credKid }
+            if let credIssuerIdent, !credIssuerIdent.isEmpty {
+                storedDict["credential_issuer_identifier"] = credIssuerIdent
+            }
+            if let credConfigId, !credConfigId.isEmpty {
+                storedDict["credential_configuration_id"] = credConfigId
+            }
 
-                if let storedData = try? JSONSerialization.data(withJSONObject: storedDict),
-                   let storedJson = String(data: storedData, encoding: .utf8) {
-                    credentials[credId] = storedJson
-                }
+            if let storedData = try? JSONSerialization.data(withJSONObject: storedDict),
+               let storedJson = String(data: storedData, encoding: .utf8) {
+                credentials[credId] = storedJson
             }
         }
+    }
 
-        // Parse presentations: [{ presentationId, transactionId, data,
-        // usedCredentialIds, presentationTimestampSeconds, audience }] -
-        // privatedata-spec's normative shape (wallet-frontend's
-        // WalletStatePresentation). transactionId/data have no
-        // PresentationRecord counterpart (see its doc comment) and are
-        // intentionally dropped on reload, not round-tripped.
-        if let presentationsArray = state["presentations"] as? [[String: Any]] {
-            for entry in presentationsArray {
-                guard let presId = Self.asInt64(entry["presentationId"]) else { continue }
-                let usedCredentialIds = (entry["usedCredentialIds"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
-                let timestampSeconds = Self.asInt64(entry["presentationTimestampSeconds"]) ?? 0
-                let audience = entry["audience"] as? String
+    // Parse presentations: [{ presentationId, transactionId, data,
+    // usedCredentialIds, presentationTimestampSeconds, audience }] -
+    // privatedata-spec's normative shape (wallet-frontend's
+    // WalletStatePresentation). transactionId/data have no
+    // PresentationRecord counterpart (see its doc comment) and are
+    // intentionally dropped on reload, not round-tripped.
+    private func loadPresentations(from state: [String: Any]) {
+        guard let presentationsArray = state["presentations"] as? [[String: Any]] else { return }
+        for entry in presentationsArray {
+            guard let presId = Self.asInt64(entry["presentationId"]) else { continue }
+            let usedCredentialIds = (entry["usedCredentialIds"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
+            let timestampSeconds = Self.asInt64(entry["presentationTimestampSeconds"]) ?? 0
+            let audience = entry["audience"] as? String
 
-                var recordDict: [String: Any] = [
-                    "id": presId,
-                    "flow_id": "",
-                    "credential_ids": usedCredentialIds,
-                    "timestamp": timestampSeconds * 1000,
-                ]
-                if let audience, !audience.isEmpty { recordDict["verifier_name"] = audience }
+            var recordDict: [String: Any] = [
+                "id": presId,
+                "flow_id": "",
+                "credential_ids": usedCredentialIds,
+                "timestamp": timestampSeconds * 1000,
+            ]
+            if let audience, !audience.isEmpty { recordDict["verifier_name"] = audience }
 
-                if let recordData = try? JSONSerialization.data(withJSONObject: recordDict),
-                   let recordJson = String(data: recordData, encoding: .utf8) {
-                    presentationRecords[presId] = recordJson
-                }
+            if let recordData = try? JSONSerialization.data(withJSONObject: recordDict),
+               let recordJson = String(data: recordData, encoding: .utf8) {
+                presentationRecords[presId] = recordJson
             }
         }
+    }
 
-        // Parse wscdCredentials: { [pluginId]: "<opaque exported state>" } -
-        // privatedata-spec §6.1, a native-SDK-only extension (see
-        // wscdCredentials field's own doc comment above).
-        if let wscdCredsObj = state["wscdCredentials"] as? [String: Any] {
-            for (pluginId, value) in wscdCredsObj {
-                if let str = value as? String {
-                    wscdCredentials[pluginId] = str
-                }
+    // Parse wscdCredentials: { [pluginId]: "<opaque exported state>" } -
+    // privatedata-spec §6.1, a native-SDK-only extension (see
+    // wscdCredentials field's own doc comment above).
+    private func loadWscdCredentials(from state: [String: Any]) {
+        guard let wscdCredsObj = state["wscdCredentials"] as? [String: Any] else { return }
+        for (pluginId, value) in wscdCredsObj {
+            if let str = value as? String {
+                wscdCredentials[pluginId] = str
             }
         }
+    }
 
-        // Parse credentialRefreshTokens: { [batchId]: {refreshToken, dpopJwk,
-        // credentialIssuerIdentifier, credentialConfigurationId} } -
-        // privatedata-spec §6.2, a native-SDK-only extension (see
-        // credentialRefreshTokens field's own doc comment above).
-        if let refreshTokensObj = state["credentialRefreshTokens"] as? [String: Any] {
-            for (batchIdStr, value) in refreshTokensObj {
-                guard let batchId = Int64(batchIdStr),
-                      let entryObj = value as? [String: Any],
-                      let entry = CredentialRefreshTokenEntry.fromJsonObject(entryObj) else { continue }
-                credentialRefreshTokens[batchId] = entry
-            }
+    // Parse credentialRefreshTokens: { [batchId]: {refreshToken, dpopJwk,
+    // credentialIssuerIdentifier, credentialConfigurationId} } -
+    // privatedata-spec §6.2, a native-SDK-only extension (see
+    // credentialRefreshTokens field's own doc comment above).
+    private func loadCredentialRefreshTokens(from state: [String: Any]) {
+        guard let refreshTokensObj = state["credentialRefreshTokens"] as? [String: Any] else { return }
+        for (batchIdStr, value) in refreshTokensObj {
+            guard let batchId = Int64(batchIdStr),
+                  let entryObj = value as? [String: Any],
+                  let entry = CredentialRefreshTokenEntry.fromJsonObject(entryObj) else { continue }
+            credentialRefreshTokens[batchId] = entry
         }
     }
 

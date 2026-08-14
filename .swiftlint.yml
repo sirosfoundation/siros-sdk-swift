@@ -21,6 +21,7 @@ excluded:
   - .build
   - Package.swift
   - Tests/
+  - Sources/SirosKeystore/Generated
 
 force_cast: warning
 force_try: warning
