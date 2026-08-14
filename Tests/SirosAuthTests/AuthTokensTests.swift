@@ -112,6 +112,16 @@ final class AuthTokensTests: XCTestCase {
         XCTAssertEqual(rejectedCount, 0, "clear() must reset the rejection count, not just the cached tokens")
     }
 
+    /// Builds an `AuthTokens` whose `AuthServerClient` always fails its
+    /// token request with the given HTTP status - the shared shape behind
+    /// the three "AS token endpoint 401" tests below.
+    private func makeTokensFailingWith(code: Int) -> AuthTokens {
+        let client = AuthServerClient(baseUrl: "https://auth.example.invalid", tenantId: "test") { _, _, _, _ in
+            throw SirosError.backendApi(code: code, message: "AS request failed: \(code) — /auth/token", body: nil)
+        }
+        return AuthTokens(authServerClient: client, tenantId: "test")
+    }
+
     /// Covers the gap found live in task #245: a raw "AS request failed 401 -
     /// /auth/token" surfaced with no re-auth flow firing when a user tapped
     /// "add credential" with an expired AS session. Unlike
@@ -119,10 +129,7 @@ final class AuthTokensTests: XCTestCase {
     /// from the AS's own token endpoint is unambiguous and must fire
     /// `onSessionRejected` on the very first occurrence.
     func testFourZeroOneFromAsTokenEndpointTriggersSessionRejectedImmediately() async {
-        let client = AuthServerClient(baseUrl: "https://auth.example.invalid", tenantId: "test") { _, _, _, _ in
-            throw SirosError.backendApi(code: 401, message: "AS request failed: 401 — /auth/token", body: nil)
-        }
-        let tokens = AuthTokens(authServerClient: client, tenantId: "test")
+        let tokens = makeTokensFailingWith(code: 401)
         var rejectedCount = 0
         tokens.onSessionRejected = { rejectedCount += 1 }
 
@@ -137,10 +144,7 @@ final class AuthTokensTests: XCTestCase {
     }
 
     func testFourZeroOneFromAsTokenEndpointDuringForceRefreshAlsoTriggersSessionRejected() async {
-        let client = AuthServerClient(baseUrl: "https://auth.example.invalid", tenantId: "test") { _, _, _, _ in
-            throw SirosError.backendApi(code: 401, message: "AS request failed: 401 — /auth/token", body: nil)
-        }
-        let tokens = AuthTokens(authServerClient: client, tenantId: "test")
+        let tokens = makeTokensFailingWith(code: 401)
         var rejectedCount = 0
         tokens.onSessionRejected = { rejectedCount += 1 }
 
@@ -155,10 +159,7 @@ final class AuthTokensTests: XCTestCase {
     }
 
     func testNonFourZeroOneAsTokenFailureDoesNotTriggerSessionRejected() async {
-        let client = AuthServerClient(baseUrl: "https://auth.example.invalid", tenantId: "test") { _, _, _, _ in
-            throw SirosError.backendApi(code: 500, message: "AS request failed: 500 — /auth/token", body: nil)
-        }
-        let tokens = AuthTokens(authServerClient: client, tenantId: "test")
+        let tokens = makeTokensFailingWith(code: 500)
         var rejectedCount = 0
         tokens.onSessionRejected = { rejectedCount += 1 }
 
