@@ -3,11 +3,18 @@
 import Foundation
 #if canImport(CryptoKit)
 import CryptoKit
-#endif
+#else
 // swift-crypto's `Crypto` module mirrors CryptoKit's API 1:1 (including the
 // `SHA256` type used below) - it exists purely so this file compiles and
 // runs identically on Linux, where CryptoKit itself isn't available at all.
+// Package.swift scopes the `Crypto` product to Linux only, so this import
+// must be mutually exclusive with CryptoKit's, not unconditional - an
+// unconditional `import Crypto` fails to resolve on macOS/iOS, where the
+// product isn't linked at all (only surfaced once this file was actually
+// built on the Mac mini for the first time, matching ZkCircuitClient.swift's
+// own already-correct `#if canImport(CryptoKit) ... #else ... #endif` gating).
 import Crypto
+#endif
 
 /// A verifier's request for one ZK proof system, mirroring multipaz's own
 /// `ZkSystemSpec`/`ZkSystemRepository` design: a generic id/system/params bag
