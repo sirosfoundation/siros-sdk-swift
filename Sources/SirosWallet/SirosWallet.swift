@@ -128,7 +128,11 @@ public final class SirosWallet: @unchecked Sendable {
     private let config: WalletConfig
     private let authProvider: AuthProvider
     private let sessionStore: SessionStoreProtocol
-    private let keystore: KeystoreManager
+    // Not `private`: `SirosWallet+Renewal.swift` (a separate file, same
+    // module) needs it too - Swift's `private` is file-scoped, not
+    // module-scoped, matching this file's existing `activeOffer` etc.
+    // convention.
+    let keystore: KeystoreManager
 
     /// WSCD hardware-key lifecycle (enroll/rotate/destroy) and
     /// additional-plugin registration (FIDO2 rawSign, R2PS remote HSM) -
@@ -243,50 +247,11 @@ public final class SirosWallet: @unchecked Sendable {
         await persistAndSyncKeystore()
     }
 
-    /// Every credential batch's durable OID4VCI renewal candidate
-    /// (`S.credentialRefreshTokens` - privatedata-spec §6.2), unlike
-    /// `wscdCredentials` this applies regardless of which concrete
-    /// `KeystoreManager` backs `keystore` - both the default `JweKeystore`
-    /// and `WscdKeystoreAdapter` (which internally delegates to its own
-    /// `JweKeystore` for credential/privatedata storage, separately from
-    /// whatever WSCD backs key signing) expose it.
-    // Not `private`: `SirosWallet+Notifications.swift` (a separate file,
-    // same module) needs these too - Swift's `private` is file-scoped, not
-    // module-scoped, matching this file's existing `activeOffer` etc.
-    // convention above.
-    func exportCredentialRefreshTokens() async -> [Int64: CredentialRefreshTokenEntry] {
-        #if canImport(CryptoKit)
-        if let jwe = keystore as? JweKeystore {
-            return await jwe.exportCredentialRefreshTokens()
-        }
-        if let adapter = keystore as? WscdKeystoreAdapter {
-            return await adapter.exportCredentialRefreshTokens()
-        }
-        #endif
-        return [:]
-    }
-
-    func setCredentialRefreshToken(batchId: Int64, entry: CredentialRefreshTokenEntry) async {
-        #if canImport(CryptoKit)
-        if let jwe = keystore as? JweKeystore {
-            await jwe.setCredentialRefreshToken(batchId: batchId, entry: entry)
-        }
-        if let adapter = keystore as? WscdKeystoreAdapter {
-            await adapter.setCredentialRefreshToken(batchId: batchId, entry: entry)
-        }
-        #endif
-    }
-
-    func removeCredentialRefreshToken(batchId: Int64) async {
-        #if canImport(CryptoKit)
-        if let jwe = keystore as? JweKeystore {
-            await jwe.removeCredentialRefreshToken(batchId: batchId)
-        }
-        if let adapter = keystore as? WscdKeystoreAdapter {
-            await adapter.removeCredentialRefreshToken(batchId: batchId)
-        }
-        #endif
-    }
+    // exportCredentialRefreshTokens/setCredentialRefreshToken/
+    // removeCredentialRefreshToken (credential re-issuance/renewal plan,
+    // Phase 2) now live in SirosWallet+Renewal.swift, alongside the rest of
+    // that plan's logic - see this file's `keystore` doc comment for why
+    // `keystore` itself had to stay internal (not private).
 
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
@@ -417,40 +382,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// settings store, matching how `credentialConsumptionPolicy` itself is
     /// currently handled.
     public var renewThresholds: [String: Int] = [:]
-
-    private func renewThresholdFor(_ credentialConfigurationId: String?) -> Int {
-        guard let credentialConfigurationId else { return CredentialUtils.renewThreshold }
-        return renewThresholds[credentialConfigurationId] ?? CredentialUtils.renewThreshold
-    }
-
-    /// After `consumedCredentialIds` were just presented (see
-    /// `recordPresentation`), check whether any of their batches dropped to
-    /// or below its renew threshold and fire
-    /// `WalletEventListener.onCredentialNearExpiry` if so - the
-    /// proactive-renewal trigger (plan §4.3).
-    private func checkRenewThresholds(consumedCredentialIds: [Int64]) async {
-        let allCredentials = await credentialStore.getAll()
-        var affectedBatchIds: [Int64] = []
-        for id in consumedCredentialIds {
-            if let batchId = allCredentials.first(where: { $0.id == id })?.batchId, !affectedBatchIds.contains(batchId) {
-                affectedBatchIds.append(batchId)
-            }
-        }
-        for batchId in affectedBatchIds {
-            let batchInstances = allCredentials.filter { $0.batchId == batchId }
-            guard let representative = batchInstances.first(where: { $0.instanceId == 0 }) ?? batchInstances.first else { continue }
-            let threshold = renewThresholdFor(representative.credentialConfigurationId)
-            let eligible = CredentialUtils.eligibleInstances(
-                instances: batchInstances,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            )
-            if eligible.count <= threshold {
-                lock.lock(); let listener = eventListener; lock.unlock()
-                listener?.onCredentialNearExpiry(credential: representative, eligibleRemaining: eligible.count, threshold: threshold)
-            }
-        }
-    }
+    // `renewThresholdFor`/`checkRenewThresholds` that read this live in
+    // `SirosWallet+Renewal.swift` (credential re-issuance/renewal plan,
+    // Phase 2) - kept together with the rest of that plan's logic; this
+    // stored property itself has to stay here since Swift extensions can't
+    // add stored properties to a type.
 
     /// Reload presentation history from the encrypted container after unlock.
     private func reloadPresentationHistory() async {
@@ -1253,7 +1189,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// via `apiClient`, which only knows issuers registered with this
     /// wallet's own backend) - needed to resolve display metadata for
     /// arbitrary/third-party issuers named in a scanned credential offer.
-    private func fetchIssuerMetadata(issuerUrl: String) async throws -> IssuerMetadata {
+    // Not `private`: `SirosWallet+Renewal.swift`'s `renewCredential` needs
+    // it too - same cross-file-extension-access reason as `keystore` above.
+    func fetchIssuerMetadata(issuerUrl: String) async throws -> IssuerMetadata {
         let trimmed = issuerUrl.hasSuffix("/") ? String(issuerUrl.dropLast()) : issuerUrl
         guard let url = URL(string: trimmed + "/.well-known/openid-credential-issuer") else {
             throw SirosError.wallet(message: "Invalid issuer URL: \(issuerUrl)")
@@ -1585,88 +1523,6 @@ public final class SirosWallet: @unchecked Sendable {
             // registered server-side, so nothing will ever clear the guard
             // via the normal flow_complete/flow_error path - without this,
             // every future issuance attempt would be permanently blocked.
-            resetIssuanceGuards()
-            throw error
-        }
-    }
-
-    /// Renew a credential batch via OID4VCI's `refresh_token` grant
-    /// (credential re-issuance/renewal plan, Phase 2), using the
-    /// refresh_token/DPoP key durably captured for it in `privatedata`
-    /// (`S.credentialRefreshTokens` - see `exportCredentialRefreshTokens`)
-    /// at the time it (or its most recent prior renewal) was issued.
-    ///
-    /// Throws `SirosError.wallet` if no renewal candidate is stored for
-    /// `batchId` - either it was never captured (the issuer didn't return a
-    /// refresh_token), or it's already been consumed/superseded.
-    /// `reissuanceKid` is left unset for now - the server-side
-    /// same-wallet-unit continuity mechanism (re-signing `generate_proof`
-    /// with the original credential's key) is tracked separately and not yet
-    /// wired into this call site.
-    ///
-    /// A renewal's `flow_complete` is handled by the exact same code path as
-    /// a fresh issuance's, which reads display metadata (logo/issuer
-    /// name/friendly credential name) off `activeOffer` - but a renewal
-    /// never parses a fresh credential_offer, so `activeOffer` would
-    /// otherwise be left nil/stale from whatever the *previous* flow reset
-    /// it to. Re-fetch and rebuild it here from the stored issuer/config id
-    /// so the renewed card displays correctly rather than falling back to
-    /// raw wire values (e.g. the bare "mso_mdoc" format string instead of
-    /// "mDL").
-    public func renewCredential(batchId: Int64) async throws {
-        guard let engine = engineSession else {
-            throw SirosError.wallet(message: "Not connected")
-        }
-        try await ensureEngineConnected(engine)
-        // A renewal is issuance-shaped (it ends up at the same
-        // `flow_complete` path and mutates the same `activeOffer`/
-        // `pendingRenewalSourceBatchId` shared state) so it must
-        // participate in the same overlap guard as
-        // `startIssuance`/`startIssuanceByOffer`, or a concurrent renewal
-        // + fresh issuance could corrupt each other's shared state.
-        lock.lock()
-        if issuanceInFlight {
-            lock.unlock()
-            throw SirosError.wallet(message: "Another issuance is already in progress")
-        }
-        issuanceInFlight = true
-        lock.unlock()
-        do {
-            let candidates = await exportCredentialRefreshTokens()
-            guard let candidate = candidates[batchId] else {
-                throw SirosError.renewalUnavailable(batchId: batchId)
-            }
-            #if canImport(os)
-            logger.debug("Starting renewal for batch=\(batchId) issuer=\(candidate.credentialIssuerIdentifier)")
-            #endif
-            do {
-                let metadata = try await fetchIssuerMetadata(issuerUrl: candidate.credentialIssuerIdentifier)
-                lock.lock()
-                activeOffer = Self.buildCredentialOffer(
-                    issuerUrl: candidate.credentialIssuerIdentifier,
-                    configId: candidate.credentialConfigurationId,
-                    metadata: metadata
-                )
-                lock.unlock()
-            } catch {
-                #if canImport(os)
-                logger.warning("Failed to refresh issuer metadata for renewal display; card will show raw format: \(error.localizedDescription)")
-                #endif
-            }
-            lock.lock(); pendingRenewalSourceBatchId = batchId; lock.unlock()
-            engine.startRenewal(
-                refreshToken: candidate.refreshToken,
-                credentialIssuer: candidate.credentialIssuerIdentifier,
-                selectedCredentialConfigurationId: candidate.credentialConfigurationId,
-                dpopJwk: candidate.dpopJwk
-            )
-        } catch {
-            // Same rationale as `startIssuance`'s catch block: a synchronous
-            // failure here (e.g. no refresh_token on file for this batch)
-            // means no flow was ever registered server-side, so nothing
-            // will clear the guard via the normal flow_complete/flow_error
-            // path - without this, every future issuance/renewal attempt
-            // would be permanently blocked.
             resetIssuanceGuards()
             throw error
         }
@@ -2146,7 +2002,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// handling. A connection left open across a backend restart or any other
     /// silent network drop can look connected while actually discarding every
     /// send, and that failure mode isn't unique to the post-OAuth-redirect gap.
-    private func ensureEngineConnected(_ engine: WalletEngineSession) async throws {
+    // Not `private`: `SirosWallet+Renewal.swift`'s `renewCredential` needs
+    // it too - same cross-file-extension-access reason as `keystore` above.
+    func ensureEngineConnected(_ engine: WalletEngineSession) async throws {
         guard let tokens = authTokens else {
             throw SirosError.wallet(message: "Not connected")
         }
