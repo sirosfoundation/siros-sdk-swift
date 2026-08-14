@@ -872,25 +872,40 @@ final class WalletViewModel: ObservableObject {
         ).map(\.id)
     }
 
-    /// Re-request a fresh batch of `credential` directly from its own
-    /// issuer/config (already stored on it - see
+    /// Renew `credential`'s batch, for `CredentialCardView`'s "Renew" action
+    /// (always shown - credential re-issuance/renewal plan §4.4: the user
+    /// never sees whether a silent refresh_token-based renewal or a full
+    /// re-issuance is what actually happens, only that "renew" worked or
+    /// didn't).
+    ///
+    /// Tries `SirosWallet.renewCredential(batchId:)` (silent OID4VCI
+    /// `refresh_token` grant) first. If that fails - no refresh_token was
+    /// ever captured for this batch, or it's already been consumed - falls
+    /// back to a full re-issuance from the credential's own issuer/config
+    /// (already stored on it - see
     /// `StoredCredential.credentialIssuerIdentifier`/`StoredCredential.credentialConfigurationId`),
-    /// skipping the generic issuer-browsing screen entirely - for
-    /// `CredentialCardView`'s "Renew" action once every batch instance has
-    /// been used up (see `CredentialUtils.eligibleInstances`).
+    /// skipping the generic issuer-browsing screen entirely. Only shows the
+    /// "No refresh possible" error for the residual case where even that
+    /// fallback isn't possible (issuer info missing entirely).
     func renewCredential(_ credential: StoredCredential) {
-        guard let issuerId = credential.credentialIssuerIdentifier,
-              let configId = credential.credentialConfigurationId else {
-            setError("Cannot renew this credential - issuer information is missing")
-            return
-        }
-        let offer = CredentialOffer(
-            credentialConfigurationId: configId,
-            credentialIssuerIdentifier: issuerId,
-            credentialName: credential.metadata?.name ?? credential.format,
-            issuerName: credential.metadata?.issuer?.name ?? issuerId
-        )
         Task {
+            do {
+                try await wallet?.renewCredential(batchId: credential.batchId)
+                return
+            } catch {
+                // Fall through to full re-issuance below.
+            }
+            guard let issuerId = credential.credentialIssuerIdentifier,
+                  let configId = credential.credentialConfigurationId else {
+                setError("No refresh possible")
+                return
+            }
+            let offer = CredentialOffer(
+                credentialConfigurationId: configId,
+                credentialIssuerIdentifier: issuerId,
+                credentialName: credential.metadata?.name ?? credential.format,
+                issuerName: credential.metadata?.issuer?.name ?? issuerId
+            )
             do {
                 try await wallet?.startIssuanceByOffer(offer)
             } catch {

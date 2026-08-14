@@ -8,6 +8,48 @@ import CryptoKit
 import CommonCrypto
 #endif
 
+/// A durable OID4VCI renewal candidate for one credential batch - see
+/// privatedata-spec SPEC.md §6.2 "S.credentialRefreshTokens". `dpopJwk` MUST
+/// be presented back unchanged on every renewal of the same batch (RFC
+/// 9449/ARF ISSU_65 key-binding), never regenerated client-side.
+public struct CredentialRefreshTokenEntry: Sendable, Equatable {
+    public let refreshToken: String
+    public let dpopJwk: String?
+    public let credentialIssuerIdentifier: String
+    public let credentialConfigurationId: String
+
+    public init(refreshToken: String, dpopJwk: String?, credentialIssuerIdentifier: String, credentialConfigurationId: String) {
+        self.refreshToken = refreshToken
+        self.dpopJwk = dpopJwk
+        self.credentialIssuerIdentifier = credentialIssuerIdentifier
+        self.credentialConfigurationId = credentialConfigurationId
+    }
+
+    fileprivate func toJsonObject() -> [String: Any] {
+        var dict: [String: Any] = [
+            "refreshToken": refreshToken,
+            "credentialIssuerIdentifier": credentialIssuerIdentifier,
+            "credentialConfigurationId": credentialConfigurationId,
+        ]
+        if let dpopJwk { dict["dpopJwk"] = dpopJwk }
+        return dict
+    }
+
+    fileprivate static func fromJsonObject(_ obj: [String: Any]) -> CredentialRefreshTokenEntry? {
+        guard let refreshToken = obj["refreshToken"] as? String,
+              let credentialIssuerIdentifier = obj["credentialIssuerIdentifier"] as? String,
+              let credentialConfigurationId = obj["credentialConfigurationId"] as? String else {
+            return nil
+        }
+        return CredentialRefreshTokenEntry(
+            refreshToken: refreshToken,
+            dpopJwk: obj["dpopJwk"] as? String,
+            credentialIssuerIdentifier: credentialIssuerIdentifier,
+            credentialConfigurationId: credentialConfigurationId,
+        )
+    }
+}
+
 /// JWE-based keystore implementation fully compatible with the wallet-frontend
 /// encrypted container format.
 ///
@@ -39,6 +81,16 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     // enrolled it - a roaming CTAP2 authenticator can be tapped/plugged into
     // a different device entirely, and every device needs the same mapping.
     private var wscdCredentials: [String: String] = [:]
+    // OID4VCI renewal (credential re-issuance/renewal plan, Phase 2) -
+    // refresh_token + the DPoP key it's bound to, keyed by the credential
+    // batch's batchId - see privatedata-spec SPEC.md §6.2
+    // "S.credentialRefreshTokens". The issuer binds refresh_token to the
+    // exact DPoP key used at initial issuance (RFC 9449/ARF ISSU_65), so
+    // dpopJwk must be presented back unchanged on every renewal of the same
+    // batch, never regenerated - the backend never persists this key
+    // itself (see feedback_backend_key_persistence_principle memory), only
+    // the client does, via this field.
+    private var credentialRefreshTokens: [Int64: CredentialRefreshTokenEntry] = [:]
 
     public init() {}
 
@@ -148,6 +200,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         credentials.removeAll()
         presentationRecords.removeAll()
         wscdCredentials.removeAll()
+        credentialRefreshTokens.removeAll()
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
@@ -386,6 +439,36 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         mutex.lock()
         defer { mutex.unlock() }
         wscdCredentials[pluginId] = state
+    }
+
+    /// Every credential batch's durable renewal candidate, keyed by
+    /// batchId (see `CredentialRefreshTokenEntry`'s doc comment) - read
+    /// after `unlock` to look up the refresh_token/DPoP key for a renewal
+    /// request without depending on in-memory state surviving a restart.
+    public func exportCredentialRefreshTokens() async -> [Int64: CredentialRefreshTokenEntry] {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return credentialRefreshTokens
+    }
+
+    /// Record (or overwrite) a credential batch's renewal candidate so the
+    /// next `exportEncryptedContainer` call folds it into
+    /// `S.credentialRefreshTokens` and it survives to the next `unlock`.
+    public func setCredentialRefreshToken(batchId: Int64, entry: CredentialRefreshTokenEntry) async {
+        mutex.lock()
+        defer { mutex.unlock() }
+        credentialRefreshTokens[batchId] = entry
+    }
+
+    /// Remove a batch's renewal candidate - MUST be called whenever that
+    /// batch's credentials are deleted (e.g. superseded by a successful
+    /// renewal, or the user removes the credential), per
+    /// privatedata-spec §6.2's requirement that a stale entry pointing at
+    /// a no-longer-existing batch never lingers.
+    public func removeCredentialRefreshToken(batchId: Int64) async {
+        mutex.lock()
+        defer { mutex.unlock() }
+        credentialRefreshTokens.removeValue(forKey: batchId)
     }
 
     // MARK: - Credential storage
@@ -668,6 +751,19 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
                 }
             }
         }
+
+        // Parse credentialRefreshTokens: { [batchId]: {refreshToken, dpopJwk,
+        // credentialIssuerIdentifier, credentialConfigurationId} } -
+        // privatedata-spec §6.2, a native-SDK-only extension (see
+        // credentialRefreshTokens field's own doc comment above).
+        if let refreshTokensObj = state["credentialRefreshTokens"] as? [String: Any] {
+            for (batchIdStr, value) in refreshTokensObj {
+                guard let batchId = Int64(batchIdStr),
+                      let entryObj = value as? [String: Any],
+                      let entry = CredentialRefreshTokenEntry.fromJsonObject(entryObj) else { continue }
+                credentialRefreshTokens[batchId] = entry
+            }
+        }
     }
 
     /// Coerce a JSON value (parsed via `JSONSerialization`, so numbers surface
@@ -869,6 +965,15 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         // when empty.
         if !wscdCredentials.isEmpty {
             sDict["wscdCredentials"] = wscdCredentials
+        }
+
+        // credentialRefreshTokens (privatedata-spec §6.2, native-SDK-only
+        // extension) - same "in-memory dictionary IS the source of truth
+        // once loaded" rationale as wscdCredentials above.
+        if !credentialRefreshTokens.isEmpty {
+            sDict["credentialRefreshTokens"] = credentialRefreshTokens.reduce(into: [String: Any]()) { result, entry in
+                result[String(entry.key)] = entry.value.toJsonObject()
+            }
         }
 
         return [

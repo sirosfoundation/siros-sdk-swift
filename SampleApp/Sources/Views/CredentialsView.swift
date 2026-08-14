@@ -44,6 +44,7 @@ struct CredentialsView: View {
                     onRenewClick: { viewModel.renewCredential(entry.credential) }
                 )
                 .padding(.horizontal, 16)
+                .credentialContextMenu(entry.credential, viewModel: viewModel)
             } else {
                 // Vertically-scrolling list rather than a horizontal
                 // one-at-a-time pager: phone screens are tall, not wide, so
@@ -62,6 +63,7 @@ struct CredentialsView: View {
                                 onRenewClick: { viewModel.renewCredential(entry.credential) }
                             )
                             .padding(.horizontal, 16)
+                            .credentialContextMenu(entry.credential, viewModel: viewModel)
                         }
                     }
                     .padding(.bottom, 16)
@@ -107,5 +109,48 @@ struct CredentialsView: View {
         .onTapGesture {
             viewModel.openAddCredential()
         }
+    }
+}
+
+private struct CredentialContextMenuModifier: ViewModifier {
+    let credential: StoredCredential
+    let viewModel: WalletViewModel
+    @State private var showDeleteConfirmation = false
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                Button {
+                    viewModel.renewCredential(credential)
+                } label: {
+                    Label("Renew", systemImage: "arrow.clockwise")
+                }
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .confirmationDialog(
+                "Delete Credential",
+                isPresented: $showDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    viewModel.deleteCredential(credential.id)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to delete \"\(credential.metadata?.name ?? credential.format)\"? This cannot be undone.")
+            }
+    }
+}
+
+private extension View {
+    /// Long-press action menu (Renew/Delete) for a credential card - SwiftUI's
+    /// native `.contextMenu` gesture, matching the Kotlin sample app's
+    /// long-press bottom sheet.
+    func credentialContextMenu(_ credential: StoredCredential, viewModel: WalletViewModel) -> some View {
+        modifier(CredentialContextMenuModifier(credential: credential, viewModel: viewModel))
     }
 }

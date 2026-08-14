@@ -243,6 +243,51 @@ public final class SirosWallet: @unchecked Sendable {
         await persistAndSyncKeystore()
     }
 
+    /// Every credential batch's durable OID4VCI renewal candidate
+    /// (`S.credentialRefreshTokens` - privatedata-spec §6.2), unlike
+    /// `wscdCredentials` this applies regardless of which concrete
+    /// `KeystoreManager` backs `keystore` - both the default `JweKeystore`
+    /// and `WscdKeystoreAdapter` (which internally delegates to its own
+    /// `JweKeystore` for credential/privatedata storage, separately from
+    /// whatever WSCD backs key signing) expose it.
+    // Not `private`: `SirosWallet+Notifications.swift` (a separate file,
+    // same module) needs these too - Swift's `private` is file-scoped, not
+    // module-scoped, matching this file's existing `activeOffer` etc.
+    // convention above.
+    func exportCredentialRefreshTokens() async -> [Int64: CredentialRefreshTokenEntry] {
+        #if canImport(CryptoKit)
+        if let jwe = keystore as? JweKeystore {
+            return await jwe.exportCredentialRefreshTokens()
+        }
+        if let adapter = keystore as? WscdKeystoreAdapter {
+            return await adapter.exportCredentialRefreshTokens()
+        }
+        #endif
+        return [:]
+    }
+
+    func setCredentialRefreshToken(batchId: Int64, entry: CredentialRefreshTokenEntry) async {
+        #if canImport(CryptoKit)
+        if let jwe = keystore as? JweKeystore {
+            await jwe.setCredentialRefreshToken(batchId: batchId, entry: entry)
+        }
+        if let adapter = keystore as? WscdKeystoreAdapter {
+            await adapter.setCredentialRefreshToken(batchId: batchId, entry: entry)
+        }
+        #endif
+    }
+
+    func removeCredentialRefreshToken(batchId: Int64) async {
+        #if canImport(CryptoKit)
+        if let jwe = keystore as? JweKeystore {
+            await jwe.removeCredentialRefreshToken(batchId: batchId)
+        }
+        if let adapter = keystore as? WscdKeystoreAdapter {
+            await adapter.removeCredentialRefreshToken(batchId: batchId)
+        }
+        #endif
+    }
+
     let credentialStore: CredentialStore
     private let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
@@ -305,6 +350,11 @@ public final class SirosWallet: @unchecked Sendable {
     /// above; guarded by the same `lock`. See `resetIssuanceGuards()` for
     /// why every terminal path must clear it.
     var issuanceInFlight = false
+    /// When set, the next `flow_complete` is a renewal's - see
+    /// `renewCredential`/`SirosWallet+Notifications.swift`'s `handleFlowComplete`.
+    /// Not `private` for the same cross-file-extension-access reason as
+    /// `activeOffer` etc. above; guarded by the same `lock`.
+    var pendingRenewalSourceBatchId: Int64?
     private var engineTasks: [Task<Void, Never>] = []
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
@@ -354,6 +404,50 @@ public final class SirosWallet: @unchecked Sendable {
             if let data = try? JSONEncoder().encode(record), let raw = String(data: data, encoding: .utf8) {
                 try? await keystore.savePresentationRecord(id: record.id, json: raw)
                 await persistAndSyncKeystore()
+            }
+        }
+        await checkRenewThresholds(consumedCredentialIds: record.credentialIds)
+    }
+
+    /// Per-credential-configuration-id override for
+    /// `CredentialUtils.renewThreshold` (plan §4.3: "near-expiry threshold
+    /// is a per-credential user preference," not a global constant). Not
+    /// durably persisted in this pass - callers wanting persistence across
+    /// restarts should re-set this on wallet construction from their own
+    /// settings store, matching how `credentialConsumptionPolicy` itself is
+    /// currently handled.
+    public var renewThresholds: [String: Int] = [:]
+
+    private func renewThresholdFor(_ credentialConfigurationId: String?) -> Int {
+        guard let credentialConfigurationId else { return CredentialUtils.renewThreshold }
+        return renewThresholds[credentialConfigurationId] ?? CredentialUtils.renewThreshold
+    }
+
+    /// After `consumedCredentialIds` were just presented (see
+    /// `recordPresentation`), check whether any of their batches dropped to
+    /// or below its renew threshold and fire
+    /// `WalletEventListener.onCredentialNearExpiry` if so - the
+    /// proactive-renewal trigger (plan §4.3).
+    private func checkRenewThresholds(consumedCredentialIds: [Int64]) async {
+        let allCredentials = await credentialStore.getAll()
+        var affectedBatchIds: [Int64] = []
+        for id in consumedCredentialIds {
+            if let batchId = allCredentials.first(where: { $0.id == id })?.batchId, !affectedBatchIds.contains(batchId) {
+                affectedBatchIds.append(batchId)
+            }
+        }
+        for batchId in affectedBatchIds {
+            let batchInstances = allCredentials.filter { $0.batchId == batchId }
+            guard let representative = batchInstances.first(where: { $0.instanceId == 0 }) ?? batchInstances.first else { continue }
+            let threshold = renewThresholdFor(representative.credentialConfigurationId)
+            let eligible = CredentialUtils.eligibleInstances(
+                instances: batchInstances,
+                policy: credentialConsumptionPolicy,
+                presentationHistory: presentationHistory
+            )
+            if eligible.count <= threshold {
+                lock.lock(); let listener = eventListener; lock.unlock()
+                listener?.onCredentialNearExpiry(credential: representative, eligibleRemaining: eligible.count, threshold: threshold)
             }
         }
     }
@@ -991,7 +1085,17 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Delete a credential by ID and sync to backend.
     public func deleteCredential(_ credentialId: Int64) async {
+        let deletedBatchId = await credentialStore.getAll().first { $0.id == credentialId }?.batchId
         await credentialStore.delete(credentialId)
+        // If that was the last instance of its batch, its refresh_token
+        // entry (if any) is now orphaned - privatedata-spec §6.2 requires
+        // it not linger pointing at a batch that no longer exists.
+        if let batchId = deletedBatchId {
+            let remaining = await credentialStore.getAll()
+            if !remaining.contains(where: { $0.batchId == batchId }) {
+                await removeCredentialRefreshToken(batchId: batchId)
+            }
+        }
         if case .ready(let userId, let displayName, _, _) = state {
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
@@ -1484,6 +1588,64 @@ public final class SirosWallet: @unchecked Sendable {
             resetIssuanceGuards()
             throw error
         }
+    }
+
+    /// Renew a credential batch via OID4VCI's `refresh_token` grant
+    /// (credential re-issuance/renewal plan, Phase 2), using the
+    /// refresh_token/DPoP key durably captured for it in `privatedata`
+    /// (`S.credentialRefreshTokens` - see `exportCredentialRefreshTokens`)
+    /// at the time it (or its most recent prior renewal) was issued.
+    ///
+    /// Throws `SirosError.wallet` if no renewal candidate is stored for
+    /// `batchId` - either it was never captured (the issuer didn't return a
+    /// refresh_token), or it's already been consumed/superseded.
+    /// `reissuanceKid` is left unset for now - the server-side
+    /// same-wallet-unit continuity mechanism (re-signing `generate_proof`
+    /// with the original credential's key) is tracked separately and not yet
+    /// wired into this call site.
+    ///
+    /// A renewal's `flow_complete` is handled by the exact same code path as
+    /// a fresh issuance's, which reads display metadata (logo/issuer
+    /// name/friendly credential name) off `activeOffer` - but a renewal
+    /// never parses a fresh credential_offer, so `activeOffer` would
+    /// otherwise be left nil/stale from whatever the *previous* flow reset
+    /// it to. Re-fetch and rebuild it here from the stored issuer/config id
+    /// so the renewed card displays correctly rather than falling back to
+    /// raw wire values (e.g. the bare "mso_mdoc" format string instead of
+    /// "mDL").
+    public func renewCredential(batchId: Int64) async throws {
+        guard let engine = engineSession else {
+            throw SirosError.wallet(message: "Not connected")
+        }
+        try await ensureEngineConnected(engine)
+        let candidates = await exportCredentialRefreshTokens()
+        guard let candidate = candidates[batchId] else {
+            throw SirosError.wallet(message: "No refresh_token stored for batch \(batchId) - it may not be renewable, or was already renewed")
+        }
+        #if canImport(os)
+        logger.debug("Starting renewal for batch=\(batchId) issuer=\(candidate.credentialIssuerIdentifier)")
+        #endif
+        do {
+            let metadata = try await fetchIssuerMetadata(issuerUrl: candidate.credentialIssuerIdentifier)
+            lock.lock()
+            activeOffer = Self.buildCredentialOffer(
+                issuerUrl: candidate.credentialIssuerIdentifier,
+                configId: candidate.credentialConfigurationId,
+                metadata: metadata
+            )
+            lock.unlock()
+        } catch {
+            #if canImport(os)
+            logger.warning("Failed to refresh issuer metadata for renewal display; card will show raw format: \(error.localizedDescription)")
+            #endif
+        }
+        lock.lock(); pendingRenewalSourceBatchId = batchId; lock.unlock()
+        engine.startRenewal(
+            refreshToken: candidate.refreshToken,
+            credentialIssuer: candidate.credentialIssuerIdentifier,
+            selectedCredentialConfigurationId: candidate.credentialConfigurationId,
+            dpopJwk: candidate.dpopJwk
+        )
     }
 
     /// Start issuance with a raw offer URI or JSON.

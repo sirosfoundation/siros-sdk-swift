@@ -161,6 +161,23 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         await credentialsKeystore.setWscdCredentials(pluginId: pluginId, state: state)
     }
 
+    /// The persisted (privatedata-synced) renewal candidates for every
+    /// credential batch - see `JweKeystore.exportCredentialRefreshTokens`'s
+    /// doc comment.
+    public func exportCredentialRefreshTokens() async -> [Int64: CredentialRefreshTokenEntry] {
+        await credentialsKeystore.exportCredentialRefreshTokens()
+    }
+
+    /// See `JweKeystore.setCredentialRefreshToken`.
+    public func setCredentialRefreshToken(batchId: Int64, entry: CredentialRefreshTokenEntry) async {
+        await credentialsKeystore.setCredentialRefreshToken(batchId: batchId, entry: entry)
+    }
+
+    /// See `JweKeystore.removeCredentialRefreshToken`.
+    public func removeCredentialRefreshToken(batchId: Int64) async {
+        await credentialsKeystore.removeCredentialRefreshToken(batchId: batchId)
+    }
+
     public func generateKey(algorithm: String) async throws -> String {
         try checkUnlocked()
         return try await signer.generateKey(algorithm: algorithm)

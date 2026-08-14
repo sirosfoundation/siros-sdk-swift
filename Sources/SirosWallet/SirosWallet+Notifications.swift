@@ -3,6 +3,7 @@
 import Foundation
 import SirosCredentials
 import SirosTransport
+import SirosKeystore
 
 /// A randomly-generated uint32-range identifier, matching wallet-frontend's
 /// `credentialId: number` (privatedata-spec §6) - not a UUID. Cross-client
@@ -46,6 +47,32 @@ extension SirosWallet {
         // response is its own batch of at least one, there is no "no batch"
         // sentinel on either client.
         let batchId = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Credential re-issuance/renewal plan (Phase 2): this flow_complete
+        // is a renewal's, so the batch it's about to store supersedes the
+        // one renewCredential() was called for - delete that old batch's
+        // credential entries AND its privatedata refresh_token entry (per
+        // privatedata-spec §6.2 - a stale entry pointing at a
+        // no-longer-existing batch must not linger) instead of leaving a
+        // duplicate alongside the new one.
+        // Snapshot the old batch's claims (before deleting it) so they can
+        // be diffed against the new batch's once stored -
+        // AttributeDiffService-equivalent, see
+        // onCredentialRenewedWithAttributeDiff's doc comment.
+        lock.lock(); let renewalSourceBatchId = pendingRenewalSourceBatchId; lock.unlock()
+        var oldRenewedClaims: [DisplayClaim]?
+        if let oldBatchId = renewalSourceBatchId {
+            let existing = await credentialStore.getAll()
+            if let oldRepresentative = existing.first(where: { $0.batchId == oldBatchId && $0.instanceId == 0 }) {
+                oldRenewedClaims = CredentialUtils.extractClaims(oldRepresentative)
+            }
+            for cred in existing where cred.batchId == oldBatchId {
+                await credentialStore.delete(cred.id)
+            }
+            await removeCredentialRefreshToken(batchId: oldBatchId)
+        }
+        let wasRenewal = renewalSourceBatchId != nil
+        lock.lock(); pendingRenewalSourceBatchId = nil; lock.unlock()
 
         if let credentials = msg.credentials {
             for (index, cred) in credentials.enumerated() {
@@ -146,6 +173,40 @@ extension SirosWallet {
                 listener?.onCredentialReceived(credential: stored)
             }
         }
+
+        // Credential re-issuance/renewal plan (Phase 2): durably capture
+        // this batch's refresh_token + DPoP key in privatedata
+        // (S.credentialRefreshTokens - see setCredentialRefreshToken's doc
+        // comment) so renewCredential() can use it later, including after an
+        // app restart or on a different device sharing this account.
+        if let token = msg.refreshToken, let currentOffer = offer {
+            await setCredentialRefreshToken(
+                batchId: batchId,
+                entry: CredentialRefreshTokenEntry(
+                    refreshToken: token,
+                    dpopJwk: msg.dpopJwk,
+                    credentialIssuerIdentifier: currentOffer.credentialIssuerIdentifier,
+                    credentialConfigurationId: currentOffer.credentialConfigurationId
+                )
+            )
+        }
+
+        // AttributeDiffService-equivalent (ISSU_59): if this was a renewal,
+        // compare the new batch's claims against the old one's - a silent
+        // renewal only stays silent when nothing actually changed. See
+        // onCredentialRenewedWithAttributeDiff's doc comment for why this
+        // fires in addition to (not instead of) onCredentialReceived.
+        if wasRenewal, let oldClaims = oldRenewedClaims {
+            let allNow = await credentialStore.getAll()
+            if let newRepresentative = allNow.first(where: { $0.batchId == batchId && $0.instanceId == 0 }) {
+                let diff = CredentialUtils.computeAttributeDiff(before: oldClaims, after: CredentialUtils.extractClaims(newRepresentative))
+                if diff.hasChanges {
+                    lock.lock(); let listener = eventListener; lock.unlock()
+                    listener?.onCredentialRenewedWithAttributeDiff(credential: newRepresentative, diff: diff)
+                }
+            }
+        }
+
         // Terminal path for this issuance - see `resetIssuanceGuards()`.
         resetIssuanceGuards()
 

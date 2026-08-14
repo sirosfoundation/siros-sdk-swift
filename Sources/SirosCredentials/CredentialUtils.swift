@@ -34,6 +34,38 @@ public struct DisplayClaim: Sendable, Equatable {
     }
 }
 
+/// One claim whose value changed between two versions of the same credential.
+public struct AttributeChange: Sendable, Equatable {
+    public let key: String
+    public let label: String
+    public let oldValue: String
+    public let newValue: String
+
+    public init(key: String, label: String, oldValue: String, newValue: String) {
+        self.key = key
+        self.label = label
+        self.oldValue = oldValue
+        self.newValue = newValue
+    }
+}
+
+/// The result of ``CredentialUtils/computeAttributeDiff(before:after:)``.
+/// `hasChanges` is false (the fully-silent-renewal case per plan §4.4) only
+/// when all three lists are empty.
+public struct CredentialAttributeDiff: Sendable, Equatable {
+    public let changed: [AttributeChange]
+    public let added: [DisplayClaim]
+    public let removed: [DisplayClaim]
+
+    public init(changed: [AttributeChange], added: [DisplayClaim], removed: [DisplayClaim]) {
+        self.changed = changed
+        self.added = added
+        self.removed = removed
+    }
+
+    public var hasChanges: Bool { !changed.isEmpty || !added.isEmpty || !removed.isEmpty }
+}
+
 /// The individually-decoded parts of a raw SD-JWT VC string, for display.
 ///
 /// Each field is the decoded JSON text (not yet pretty-printed - callers
@@ -488,6 +520,36 @@ public enum CredentialUtils {
     /// offer to renew/re-issue the credential rather than let it silently run
     /// out. Not user-configurable in this pass - just the stated default.
     public static let renewThreshold = 0
+
+    /// True when `instances`' eligible (unused) count under `policy`/
+    /// `presentationHistory` has dropped to or below `threshold` - the
+    /// proactive-renewal trigger (plan §4.3). Note `CredentialConsumptionPolicy.neverConsume`
+    /// makes `eligibleInstances` always return every instance, so this only
+    /// ever fires under a consuming policy.
+    public static func isBelowRenewThreshold(
+        instances: [StoredCredential],
+        policy: CredentialConsumptionPolicy,
+        presentationHistory: [PresentationRecord],
+        threshold: Int = renewThreshold
+    ) -> Bool {
+        eligibleInstances(instances: instances, policy: policy, presentationHistory: presentationHistory).count <= threshold
+    }
+
+    /// Compares two versions of the same credential's claims (by `key`, not
+    /// list position - VCTM claim ordering isn't guaranteed stable across a
+    /// renewal) and reports what changed, matching Kotlin's
+    /// `CredentialUtils.computeAttributeDiff` exactly.
+    public static func computeAttributeDiff(before: [DisplayClaim], after: [DisplayClaim]) -> CredentialAttributeDiff {
+        let beforeByKey = Dictionary(uniqueKeysWithValues: before.map { ($0.key, $0) })
+        let afterByKey = Dictionary(uniqueKeysWithValues: after.map { ($0.key, $0) })
+        let changed: [AttributeChange] = afterByKey.keys.filter { beforeByKey[$0] != nil }.compactMap { key in
+            guard let old = beforeByKey[key], let new = afterByKey[key], old.value != new.value else { return nil }
+            return AttributeChange(key: key, label: new.label, oldValue: old.value, newValue: new.value)
+        }
+        let added = afterByKey.keys.filter { beforeByKey[$0] == nil }.map { afterByKey[$0]! }
+        let removed = beforeByKey.keys.filter { afterByKey[$0] == nil }.map { beforeByKey[$0]! }
+        return CredentialAttributeDiff(changed: changed, added: added, removed: removed)
+    }
 
     /// Group stored credentials into one ``CredentialFamily`` per
     /// `StoredCredential.batchId`, for callers (mdoc proximity consent) that

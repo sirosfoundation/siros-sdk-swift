@@ -64,6 +64,29 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// this means the whole session is gone - route the user to the login
     /// screen rather than surfacing a generic error message.
     func onReauthenticationRequired()
+
+    /// A credential batch was renewed (credential re-issuance/renewal plan,
+    /// Phase 2, `AttributeDiffService`-equivalent, ISSU_59) and at least one
+    /// claim differs from the batch it replaced. The renewal's own network
+    /// round-trip was silent (no user interaction), but ISSU_59 mandates
+    /// notifying the user of any claim change - the app should surface this
+    /// (e.g. wallet-frontend #73's consent/notification popup) even though
+    /// `onCredentialReceived` already fired for the new credential.
+    ///
+    /// Not called when a renewal completes with identical claims (the fully
+    /// silent case per plan §4.4) - only when `CredentialAttributeDiff.hasChanges`
+    /// is true.
+    func onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff)
+
+    /// A credential batch's eligible (unused) instance count has dropped to
+    /// or below its renew threshold (credential re-issuance/renewal plan
+    /// §4.3/wallet-frontend #72 parity - EUDI ARF ISSU_50/54's proactive
+    /// renewal trigger). The app should surface this as a near-expiry
+    /// banner/nudge (Phase 3 UX, not yet built here) rather than waiting for
+    /// the reactive fully-exhausted case. Fires at most once per drop below
+    /// threshold per `SirosWallet.recordPresentation` call - not repeated on
+    /// every recomposition.
+    func onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int)
 }
 
 /// Default implementations for optional callbacks.
@@ -77,4 +100,6 @@ public extension WalletEventListener {
         // No-op by default: implementers only need to override this if they
         // want to route the user to a login screen on forced logout.
     }
+    func onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
+    func onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}
 }

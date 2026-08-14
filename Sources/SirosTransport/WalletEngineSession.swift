@@ -407,6 +407,26 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         ))
     }
 
+    /// Start an OID4VCI renewal flow: exchange `refreshToken` for a fresh
+    /// credential batch instead of running a fresh authorization/pre-
+    /// authorized_code grant. See `FlowStartMessage`'s renewal field docs.
+    public func startRenewal(
+        refreshToken: String,
+        credentialIssuer: String,
+        selectedCredentialConfigurationId: String,
+        reissuanceKid: String? = nil,
+        dpopJwk: String? = nil
+    ) {
+        send(FlowStartMessage(
+            protocol: "oid4vci",
+            refreshToken: refreshToken,
+            credentialIssuer: credentialIssuer,
+            selectedCredentialConfigurationId: selectedCredentialConfigurationId,
+            reissuanceKid: reissuanceKid,
+            dpopJwk: dpopJwk
+        ))
+    }
+
     /// Start an OID4VP credential presentation flow.
     public func startPresentation(
         requestUri: String? = nil,

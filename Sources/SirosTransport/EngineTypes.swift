@@ -80,6 +80,29 @@ public struct FlowStartMessage: Codable, Sendable {
     /// server, proving possession of the instance key the WIA above is bound
     /// to (`cnf.jwk`/`cnf.jkt`). Forwarded as `OAuth-Client-Attestation-PoP`.
     public var clientAttestationPoP: String?
+    /// Renewal fields (credential re-issuance/renewal plan, Phase 1 Slice 2
+    /// - see go-wallet-backend's `internal/engine/oid4vci.go` `Execute`).
+    /// When `refreshToken` is set, this is a renewal request rather than a
+    /// fresh issuance: `offer`/`credentialOfferUri` are unused, and
+    /// `credentialIssuer`/`selectedCredentialConfigurationId` are required
+    /// instead (the client already knows both from the credential being
+    /// renewed).
+    public var refreshToken: String?
+    public var credentialIssuer: String?
+    public var selectedCredentialConfigurationId: String?
+    /// When set, asks the server to request a `generate_proof` signature
+    /// using this existing kid instead of a fresh one - same-wallet-unit
+    /// continuity evidence for a renewal. Optional even on a renewal
+    /// request.
+    public var reissuanceKid: String?
+    /// On a renewal request, the private DPoP JWK previously captured from
+    /// `FlowCompleteMessage.dpopJwk` for this same refresh_token. The
+    /// issuer's refresh_token grant binds the token to the exact DPoP key
+    /// used at initial issuance (RFC 9449/ARF ISSU_65 §6.6.6.2.2), so the
+    /// backend must reuse this key rather than generate a fresh one. Never
+    /// persisted by the SDK itself beyond whatever the caller does with it
+    /// (privatedata, Phase 2).
+    public var dpopJwk: String?
     public var timestamp: String?
 
     public init(
@@ -95,6 +118,11 @@ public struct FlowStartMessage: Codable, Sendable {
         codeVerifier: String? = nil,
         clientAttestation: String? = nil,
         clientAttestationPoP: String? = nil,
+        refreshToken: String? = nil,
+        credentialIssuer: String? = nil,
+        selectedCredentialConfigurationId: String? = nil,
+        reissuanceKid: String? = nil,
+        dpopJwk: String? = nil,
         timestamp: String? = nil
     ) {
         self.type = type
@@ -109,6 +137,11 @@ public struct FlowStartMessage: Codable, Sendable {
         self.codeVerifier = codeVerifier
         self.clientAttestation = clientAttestation
         self.clientAttestationPoP = clientAttestationPoP
+        self.refreshToken = refreshToken
+        self.credentialIssuer = credentialIssuer
+        self.selectedCredentialConfigurationId = selectedCredentialConfigurationId
+        self.reissuanceKid = reissuanceKid
+        self.dpopJwk = dpopJwk
         self.timestamp = timestamp
     }
 
@@ -122,6 +155,11 @@ public struct FlowStartMessage: Codable, Sendable {
         case codeVerifier = "code_verifier"
         case clientAttestation = "client_attestation"
         case clientAttestationPoP = "client_attestation_pop"
+        case refreshToken = "refresh_token"
+        case credentialIssuer = "credential_issuer"
+        case selectedCredentialConfigurationId = "selected_credential_configuration_id"
+        case reissuanceKid = "reissuance_kid"
+        case dpopJwk = "dpop_jwk"
     }
 }
 
@@ -300,6 +338,16 @@ public struct FlowCompleteMessage: Codable, Sendable {
     public var typeMetadata: AnyCodable?
     public var credentialIssuer: String?
     public var selectedCredentialConfigurationId: String?
+    /// OAuth refresh_token the issuer's token endpoint returned alongside
+    /// this batch, if any (OID4VCI issuance only). Captured durably into
+    /// `privatedata` (`S.credentialRefreshTokens`) by
+    /// `SirosWallet+Notifications.swift`'s `handleFlowComplete` so
+    /// `SirosWallet.renewCredential(batchId:)` can use it later.
+    public var refreshToken: String?
+    /// The private JWK of the ephemeral DPoP key this flow used for its
+    /// token exchange, present only alongside `refreshToken`. Must be
+    /// presented back as `FlowStartMessage.dpopJwk` on a renewal request.
+    public var dpopJwk: String?
     public var timestamp: String?
 
     enum CodingKeys: String, CodingKey {
@@ -309,6 +357,8 @@ public struct FlowCompleteMessage: Codable, Sendable {
         case typeMetadata = "type_metadata"
         case credentialIssuer = "credential_issuer"
         case selectedCredentialConfigurationId = "selected_credential_configuration_id"
+        case refreshToken = "refresh_token"
+        case dpopJwk = "dpop_jwk"
     }
 }
 
@@ -430,6 +480,10 @@ public struct SignRequestParams: Codable, Sendable {
     public var credentialsToInclude: [CredentialRef]?
     public var responseUri: String?
     public var verifierJwkThumbprint: String?
+    /// When set (a renewal's continuity proof), the client should sign the
+    /// `generate_proof` response with this existing kid instead of a fresh
+    /// key - see `FlowStartMessage.reissuanceKid`'s doc comment.
+    public var reissuanceKid: String?
 
     enum CodingKeys: String, CodingKey {
         case audience, nonce, issuer, count
@@ -438,6 +492,7 @@ public struct SignRequestParams: Codable, Sendable {
         case credentialsToInclude = "credentials_to_include"
         case responseUri = "response_uri"
         case verifierJwkThumbprint = "verifier_jwk_thumbprint"
+        case reissuanceKid = "reissuance_kid"
     }
 }
 

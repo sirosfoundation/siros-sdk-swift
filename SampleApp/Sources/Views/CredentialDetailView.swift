@@ -38,6 +38,13 @@ struct CredentialDetailView: View {
                     Button("Back") { viewModel.closeCredentialDetail() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        viewModel.renewCredential(credential)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(role: .destructive) {
                         showDeleteConfirmation = true
                     } label: {
