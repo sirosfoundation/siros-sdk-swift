@@ -26,6 +26,14 @@ let package = Package(
         // `Crypto` module is only actually compiled/linked in on Linux,
         // where CryptoKit doesn't exist at all.
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        // Circuits fetched from go-zk-circuits (see ZkCircuitClient,
+        // SirosCredentials) are zstd-compressed; zk-cred-longfellow's
+        // initializeProver expects already-decompressed bytes (confirmed
+        // against wallet-frontend's feat/longfellow-zk reference
+        // implementation) - decompression is the caller's responsibility,
+        // not the native crate's. facebook/zstd ships its own SPM manifest
+        // (a plain C target, no Swift wrapper) exposing this as `libzstd`.
+        .package(url: "https://github.com/facebook/zstd.git", from: "1.5.6"),
     ],
     targets: [
         // --- zk-cred-longfellow UniFFI bindings (XCFramework) ---
@@ -119,6 +127,10 @@ let package = Package(
                 // is correspondingly wrapped in `#if os(iOS)`.
                 .target(name: "siros_wscd_managerFFI", condition: .when(platforms: [.iOS])),
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+                // Only used by LongfellowZkProofSystem.swift, which is
+                // itself `#if os(iOS)`-gated (see that file) since the
+                // native zk_cred_longfellowFFI it wraps is iOS-only.
+                .product(name: "libzstd", package: "zstd", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosKeystore"
         ),

@@ -133,29 +133,60 @@ public protocol ZkProofSystem: Sendable {
     func matchingSpec(_ requestedSpecs: [ZkSystemSpec]) -> ZkSystemSpec?
 
     /// Generate a ZK proof of possession (and, if `verifierIdentity` is
-    /// non-nil, a pseudonym bound to it) over `document`.
+    /// non-nil, a pseudonym bound to it) over the credential in
+    /// `credentialBytes`.
+    ///
+    /// **Why this takes raw credential bytes + a signer, not a pre-assembled
+    /// DeviceResponse**: confirmed 2026-08-14 by reading `wallet-frontend`'s
+    /// `feat/longfellow-zk` branch (`MdocProverService.ts`, by the same
+    /// author as `zk-cred-longfellow`'s V8/PPID work) plus the Rust crate's
+    /// own `parse_device_response` - the native prover's `device_response`
+    /// parameter is "the mdoc's DeviceResponse, as CBOR data" **including a
+    /// real, normally-computed device signature** over `sessionTranscript`
+    /// (via the exact same `DeviceAuthentication`/`deviceSigned`
+    /// construction any non-ZK mdoc presentation already uses -
+    /// `parse_device_response` requires
+    /// `device_signed.device_auth.device_signature` to be present and errors
+    /// otherwise). The ZK proof does not replace the device signature; it
+    /// proves knowledge of a *valid* one (among other things) without
+    /// revealing it. This locally-assembled DeviceResponse bytes are a
+    /// private witness fed only to the local prover - unlike a normal
+    /// presentation's output, they are never sent to the verifier (only
+    /// `ZkProofResult.proofBytes` is) - so it should be built with full
+    /// disclosure (no claim filtering): the circuit itself, not this SDK,
+    /// selects which claims `requestedClaims` actually reveals.
     ///
     /// - Parameters:
     ///   - spec: the specific `ZkSystemSpec` to prove against - normally
     ///     whatever `matchingSpec` just returned for this same request.
-    ///   - document: the mdoc document being presented.
-    ///   - sessionTranscript: the OpenID4VP/DC-API session transcript this
-    ///     proof must be bound to (mirrors every non-ZK mdoc presentation's
-    ///     own session-transcript binding).
+    ///   - credentialBytes: the credential's raw stored bytes (a full
+    ///     DeviceResponse-shaped envelope, matching
+    ///     `MdocDeviceResponseBuilder`'s own constructor input in
+    ///     `Sources/SirosKeystore`).
+    ///   - sessionTranscript: the OpenID4VP/DC-API/proximity session
+    ///     transcript this proof must be bound to (mirrors every non-ZK mdoc
+    ///     presentation's own session-transcript binding) - already
+    ///     computed by the caller for whichever transport is in play; this
+    ///     call is transport-agnostic.
     ///   - requestedClaims: element identifiers the verifier asked to have
     ///     selectively disclosed within the proof.
     ///   - verifierIdentity: non-nil to also derive and include a pseudonym
     ///     bound to this verifier; `nil` for a plain proof of possession
     ///     with no pseudonym.
+    ///   - signer: signs raw bytes with the device key for the (private,
+    ///     never-transmitted) witness DeviceResponse's own device signature;
+    ///     must return a raw (not DER) signature - same contract as
+    ///     `MdocDeviceResponseBuilder`'s own `signer` parameter.
     ///   - priorState: opaque prover-side cache from a previous call to this
     ///     same credential+system (see `ZkProofResult.nextState`) - systems
     ///     without a reuse path (Longfellow) ignore it.
     func generateProof(
         spec: ZkSystemSpec,
-        document: DocumentMdoc,
+        credentialBytes: [UInt8],
         sessionTranscript: [UInt8],
         requestedClaims: [String],
         verifierIdentity: VerifierIdentity?,
+        signer: @Sendable @escaping ([UInt8]) async throws -> [UInt8],
         priorState: [UInt8]?
     ) async throws -> ZkProofResult
 }
