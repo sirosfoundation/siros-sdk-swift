@@ -448,4 +448,122 @@ final class CredentialUtilsTests: XCTestCase {
         XCTAssertEqual(result.first?.representative, cred)
         XCTAssertEqual(result.first?.instances, [cred])
     }
+
+    // MARK: - isBelowRenewThreshold (credential re-issuance/renewal plan §4.3)
+
+    func testIsBelowRenewThresholdFalseWhenEligibleCountExceedsDefaultThreshold() {
+        let instances = [consumptionCredential(id: 1, instanceId: 0), consumptionCredential(id: 2, instanceId: 1)]
+
+        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .consumeAll, presentationHistory: []))
+    }
+
+    func testIsBelowRenewThresholdTrueWhenEligibleCountDropsToDefaultThresholdOfZero() {
+        let a = consumptionCredential(id: 1, instanceId: 0)
+        let b = consumptionCredential(id: 2, instanceId: 1)
+        let history = [presentationRecord(1), presentationRecord(2)]
+
+        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history))
+    }
+
+    func testIsBelowRenewThresholdNeverConsumeNeverFiresSinceEveryInstanceStaysEligible() {
+        // .neverConsume makes eligibleInstances always return every instance
+        // regardless of history, so the threshold can never be crossed - see
+        // isBelowRenewThreshold's own doc comment.
+        let instances = [consumptionCredential(id: 1, instanceId: 0)]
+        let history = [presentationRecord(1), presentationRecord(1), presentationRecord(1)]
+
+        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .neverConsume, presentationHistory: history))
+    }
+
+    func testIsBelowRenewThresholdRespectsACustomThreshold() {
+        let a = consumptionCredential(id: 1, instanceId: 0)
+        let b = consumptionCredential(id: 2, instanceId: 1)
+        let history = [presentationRecord(1)]
+
+        // 1 eligible instance remains (b) - at or below a threshold of 1, but not 0.
+        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, threshold: 1))
+        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, threshold: 0))
+    }
+
+    // MARK: - computeAttributeDiff (AttributeDiffService-equivalent, ISSU_59)
+
+    private func claim(_ key: String, _ value: String, label: String? = nil) -> DisplayClaim {
+        DisplayClaim(key: key, label: label ?? key, value: value)
+    }
+
+    func testComputeAttributeDiffNoChangesWhenBeforeAndAfterAreIdentical() {
+        let before = [claim("given_name", "Alex"), claim("family_name", "Doe")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: before)
+
+        XCTAssertTrue(diff.changed.isEmpty)
+        XCTAssertTrue(diff.added.isEmpty)
+        XCTAssertTrue(diff.removed.isEmpty)
+        XCTAssertFalse(diff.hasChanges)
+    }
+
+    func testComputeAttributeDiffDetectsAChangedValueByKeyNotListPosition() {
+        // VCTM claim ordering isn't guaranteed stable across a renewal (see
+        // computeAttributeDiff's own doc comment) - reversing order here
+        // pins that matching is by key, not position.
+        let before = [claim("given_name", "Alex"), claim("age", "30")]
+        let after = [claim("age", "31"), claim("given_name", "Alex")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: after)
+
+        XCTAssertEqual(diff.changed, [AttributeChange(key: "age", label: "age", oldValue: "30", newValue: "31")])
+        XCTAssertTrue(diff.added.isEmpty)
+        XCTAssertTrue(diff.removed.isEmpty)
+        XCTAssertTrue(diff.hasChanges)
+    }
+
+    func testComputeAttributeDiffDetectsAnAddedClaim() {
+        let before = [claim("given_name", "Alex")]
+        let after = [claim("given_name", "Alex"), claim("nationality", "SE")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: after)
+
+        XCTAssertEqual(diff.added, [claim("nationality", "SE")])
+        XCTAssertTrue(diff.changed.isEmpty)
+        XCTAssertTrue(diff.removed.isEmpty)
+        XCTAssertTrue(diff.hasChanges)
+    }
+
+    func testComputeAttributeDiffDetectsARemovedClaim() {
+        let before = [claim("given_name", "Alex"), claim("nationality", "SE")]
+        let after = [claim("given_name", "Alex")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: after)
+
+        XCTAssertEqual(diff.removed, [claim("nationality", "SE")])
+        XCTAssertTrue(diff.changed.isEmpty)
+        XCTAssertTrue(diff.added.isEmpty)
+        XCTAssertTrue(diff.hasChanges)
+    }
+
+    func testComputeAttributeDiffCombinesChangedAddedAndRemovedInOneCall() {
+        let before = [claim("given_name", "Alex"), claim("age", "30"), claim("nationality", "SE")]
+        let after = [claim("given_name", "Alex"), claim("age", "31"), claim("email", "a@example.com")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: after)
+
+        XCTAssertEqual(diff.changed, [AttributeChange(key: "age", label: "age", oldValue: "30", newValue: "31")])
+        XCTAssertEqual(diff.added, [claim("email", "a@example.com")])
+        XCTAssertEqual(diff.removed, [claim("nationality", "SE")])
+        XCTAssertTrue(diff.hasChanges)
+    }
+
+    func testComputeAttributeDiffToleratesDuplicateKeysWithoutCrashing() {
+        // extractClaims can produce duplicate DisplayClaim.key values (e.g.
+        // duplicated VCTM paths) - this must not crash (a real Copilot
+        // review finding: Dictionary(uniqueKeysWithValues:) traps on a
+        // duplicate key), and must resolve deterministically to the first
+        // occurrence.
+        let before = [claim("given_name", "Alex"), claim("given_name", "AlexDuplicate")]
+        let after = [claim("given_name", "Alex")]
+
+        let diff = CredentialUtils.computeAttributeDiff(before: before, after: after)
+
+        XCTAssertFalse(diff.hasChanges)
+    }
 }

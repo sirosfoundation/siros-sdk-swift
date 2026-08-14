@@ -8,6 +8,48 @@ import CryptoKit
 import CommonCrypto
 #endif
 
+/// A durable OID4VCI renewal candidate for one credential batch - see
+/// privatedata-spec SPEC.md §6.2 "S.credentialRefreshTokens". `dpopJwk` MUST
+/// be presented back unchanged on every renewal of the same batch (RFC
+/// 9449/ARF ISSU_65 key-binding), never regenerated client-side.
+public struct CredentialRefreshTokenEntry: Sendable, Equatable {
+    public let refreshToken: String
+    public let dpopJwk: String?
+    public let credentialIssuerIdentifier: String
+    public let credentialConfigurationId: String
+
+    public init(refreshToken: String, dpopJwk: String?, credentialIssuerIdentifier: String, credentialConfigurationId: String) {
+        self.refreshToken = refreshToken
+        self.dpopJwk = dpopJwk
+        self.credentialIssuerIdentifier = credentialIssuerIdentifier
+        self.credentialConfigurationId = credentialConfigurationId
+    }
+
+    fileprivate func toJsonObject() -> [String: Any] {
+        var dict: [String: Any] = [
+            "refreshToken": refreshToken,
+            "credentialIssuerIdentifier": credentialIssuerIdentifier,
+            "credentialConfigurationId": credentialConfigurationId,
+        ]
+        if let dpopJwk { dict["dpopJwk"] = dpopJwk }
+        return dict
+    }
+
+    fileprivate static func fromJsonObject(_ obj: [String: Any]) -> CredentialRefreshTokenEntry? {
+        guard let refreshToken = obj["refreshToken"] as? String,
+              let credentialIssuerIdentifier = obj["credentialIssuerIdentifier"] as? String,
+              let credentialConfigurationId = obj["credentialConfigurationId"] as? String else {
+            return nil
+        }
+        return CredentialRefreshTokenEntry(
+            refreshToken: refreshToken,
+            dpopJwk: obj["dpopJwk"] as? String,
+            credentialIssuerIdentifier: credentialIssuerIdentifier,
+            credentialConfigurationId: credentialConfigurationId,
+        )
+    }
+}
+
 /// JWE-based keystore implementation fully compatible with the wallet-frontend
 /// encrypted container format.
 ///
@@ -39,6 +81,16 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     // enrolled it - a roaming CTAP2 authenticator can be tapped/plugged into
     // a different device entirely, and every device needs the same mapping.
     private var wscdCredentials: [String: String] = [:]
+    // OID4VCI renewal (credential re-issuance/renewal plan, Phase 2) -
+    // refresh_token + the DPoP key it's bound to, keyed by the credential
+    // batch's batchId - see privatedata-spec SPEC.md §6.2
+    // "S.credentialRefreshTokens". The issuer binds refresh_token to the
+    // exact DPoP key used at initial issuance (RFC 9449/ARF ISSU_65), so
+    // dpopJwk must be presented back unchanged on every renewal of the same
+    // batch, never regenerated - long-term storage of this key belongs only
+    // on the client (this field); the backend never persists it, since it
+    // only ever needs it ephemerally to forward a single renewal request.
+    private var credentialRefreshTokens: [Int64: CredentialRefreshTokenEntry] = [:]
 
     public init() {}
 
@@ -148,6 +200,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         credentials.removeAll()
         presentationRecords.removeAll()
         wscdCredentials.removeAll()
+        credentialRefreshTokens.removeAll()
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
@@ -388,6 +441,36 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         wscdCredentials[pluginId] = state
     }
 
+    /// Every credential batch's durable renewal candidate, keyed by
+    /// batchId (see `CredentialRefreshTokenEntry`'s doc comment) - read
+    /// after `unlock` to look up the refresh_token/DPoP key for a renewal
+    /// request without depending on in-memory state surviving a restart.
+    public func exportCredentialRefreshTokens() async -> [Int64: CredentialRefreshTokenEntry] {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return credentialRefreshTokens
+    }
+
+    /// Record (or overwrite) a credential batch's renewal candidate so the
+    /// next `exportEncryptedContainer` call folds it into
+    /// `S.credentialRefreshTokens` and it survives to the next `unlock`.
+    public func setCredentialRefreshToken(batchId: Int64, entry: CredentialRefreshTokenEntry) async {
+        mutex.lock()
+        defer { mutex.unlock() }
+        credentialRefreshTokens[batchId] = entry
+    }
+
+    /// Remove a batch's renewal candidate - MUST be called whenever that
+    /// batch's credentials are deleted (e.g. superseded by a successful
+    /// renewal, or the user removes the credential), per
+    /// privatedata-spec §6.2's requirement that a stale entry pointing at
+    /// a no-longer-existing batch never lingers.
+    public func removeCredentialRefreshToken(batchId: Int64) async {
+        mutex.lock()
+        defer { mutex.unlock() }
+        credentialRefreshTokens.removeValue(forKey: batchId)
+    }
+
     // MARK: - Credential storage
 
     public func saveCredential(id: Int64, json: String) async throws {
@@ -570,103 +653,127 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
     }
 
     private func loadFromWalletStateV3(_ state: [String: Any]) {
-        if let keypairsArray = state["keypairs"] as? [[String: Any]] {
-            for entry in keypairsArray {
-                guard let keypairObj = entry["keypair"] as? [String: Any],
-                      let kid = keypairObj["kid"] as? String,
-                      let privateKeyJwk = keypairObj["privateKey"] as? [String: Any],
-                      let dStr = privateKeyJwk["d"] as? String else { continue }
-                let dData = EncryptedContainer.base64UrlDecode(dStr)
-                if let key = try? P256.Signing.PrivateKey(rawRepresentation: dData) {
-                    keys[kid] = key
-                }
+        loadKeypairs(from: state)
+        loadCredentials(from: state)
+        loadPresentations(from: state)
+        loadWscdCredentials(from: state)
+        loadCredentialRefreshTokens(from: state)
+    }
+
+    private func loadKeypairs(from state: [String: Any]) {
+        guard let keypairsArray = state["keypairs"] as? [[String: Any]] else { return }
+        for entry in keypairsArray {
+            guard let keypairObj = entry["keypair"] as? [String: Any],
+                  let kid = keypairObj["kid"] as? String,
+                  let privateKeyJwk = keypairObj["privateKey"] as? [String: Any],
+                  let dStr = privateKeyJwk["d"] as? String else { continue }
+            let dData = EncryptedContainer.base64UrlDecode(dStr)
+            if let key = try? P256.Signing.PrivateKey(rawRepresentation: dData) {
+                keys[kid] = key
             }
         }
+    }
 
-        // credentialId/batchId are privatedata-spec `number`s on the wire
-        // (matching wallet-frontend's WalletStateCredential exactly) - read
-        // via asInt64/asInt (which accept both NSNumber and String) rather
-        // than a strict numeric cast, so a value that arrives quoted (e.g.
-        // from a not-yet-migrated container) still parses instead of
-        // silently dropping the entry.
-        if let credsArray = state["credentials"] as? [[String: Any]] {
-            for entry in credsArray {
-                guard let credId = Self.asInt64(entry["credentialId"]),
-                      let data = entry["data"] as? String else { continue }
-                let credKid = entry["kid"] as? String
-                let credFormat = (entry["format"] as? String) ?? ""
-                let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
-                let credConfigId = entry["credentialConfigurationId"] as? String
-                let batchId = Self.asInt64(entry["batchId"]) ?? 0
-                let instanceId = Self.asInt(entry["instanceId"]) ?? 0
+    // credentialId/batchId are privatedata-spec `number`s on the wire
+    // (matching wallet-frontend's WalletStateCredential exactly) - read
+    // via asInt64/asInt (which accept both NSNumber and String) rather
+    // than a strict numeric cast, so a value that arrives quoted (e.g.
+    // from a not-yet-migrated container) still parses instead of
+    // silently dropping the entry.
+    private func loadCredentials(from state: [String: Any]) {
+        guard let credsArray = state["credentials"] as? [[String: Any]] else { return }
+        for entry in credsArray {
+            guard let credId = Self.asInt64(entry["credentialId"]),
+                  let data = entry["data"] as? String else { continue }
+            let credKid = entry["kid"] as? String
+            let credFormat = (entry["format"] as? String) ?? ""
+            let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
+            let credConfigId = entry["credentialConfigurationId"] as? String
+            let batchId = Self.asInt64(entry["batchId"]) ?? 0
+            let instanceId = Self.asInt(entry["instanceId"]) ?? 0
 
-                // Reconstruct a StoredCredential-shaped JSON blob (snake_case
-                // matching StoredCredential's CodingKeys) to preserve kid/
-                // batchId/instanceId/etc binding - credentialIssuerIdentifier/
-                // credentialConfigurationId are part of privatedata-spec's
-                // normative fields (already written by buildWalletStateV3()
-                // below) - reconstructing them here too is what lets
-                // SirosWallet re-fetch VCTM display metadata after a fresh
-                // login.
-                var storedDict: [String: Any] = [
-                    "id": credId,
-                    "format": credFormat,
-                    "raw": data,
-                    "batch_id": batchId,
-                    "instance_id": instanceId,
-                ]
-                if let credKid, !credKid.isEmpty { storedDict["kid"] = credKid }
-                if let credIssuerIdent, !credIssuerIdent.isEmpty {
-                    storedDict["credential_issuer_identifier"] = credIssuerIdent
-                }
-                if let credConfigId, !credConfigId.isEmpty {
-                    storedDict["credential_configuration_id"] = credConfigId
-                }
+            // Reconstruct a StoredCredential-shaped JSON blob (snake_case
+            // matching StoredCredential's CodingKeys) to preserve kid/
+            // batchId/instanceId/etc binding - credentialIssuerIdentifier/
+            // credentialConfigurationId are part of privatedata-spec's
+            // normative fields (already written by buildWalletStateV3()
+            // below) - reconstructing them here too is what lets
+            // SirosWallet re-fetch VCTM display metadata after a fresh
+            // login.
+            var storedDict: [String: Any] = [
+                "id": credId,
+                "format": credFormat,
+                "raw": data,
+                "batch_id": batchId,
+                "instance_id": instanceId,
+            ]
+            if let credKid, !credKid.isEmpty { storedDict["kid"] = credKid }
+            if let credIssuerIdent, !credIssuerIdent.isEmpty {
+                storedDict["credential_issuer_identifier"] = credIssuerIdent
+            }
+            if let credConfigId, !credConfigId.isEmpty {
+                storedDict["credential_configuration_id"] = credConfigId
+            }
 
-                if let storedData = try? JSONSerialization.data(withJSONObject: storedDict),
-                   let storedJson = String(data: storedData, encoding: .utf8) {
-                    credentials[credId] = storedJson
-                }
+            if let storedData = try? JSONSerialization.data(withJSONObject: storedDict),
+               let storedJson = String(data: storedData, encoding: .utf8) {
+                credentials[credId] = storedJson
             }
         }
+    }
 
-        // Parse presentations: [{ presentationId, transactionId, data,
-        // usedCredentialIds, presentationTimestampSeconds, audience }] -
-        // privatedata-spec's normative shape (wallet-frontend's
-        // WalletStatePresentation). transactionId/data have no
-        // PresentationRecord counterpart (see its doc comment) and are
-        // intentionally dropped on reload, not round-tripped.
-        if let presentationsArray = state["presentations"] as? [[String: Any]] {
-            for entry in presentationsArray {
-                guard let presId = Self.asInt64(entry["presentationId"]) else { continue }
-                let usedCredentialIds = (entry["usedCredentialIds"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
-                let timestampSeconds = Self.asInt64(entry["presentationTimestampSeconds"]) ?? 0
-                let audience = entry["audience"] as? String
+    // Parse presentations: [{ presentationId, transactionId, data,
+    // usedCredentialIds, presentationTimestampSeconds, audience }] -
+    // privatedata-spec's normative shape (wallet-frontend's
+    // WalletStatePresentation). transactionId/data have no
+    // PresentationRecord counterpart (see its doc comment) and are
+    // intentionally dropped on reload, not round-tripped.
+    private func loadPresentations(from state: [String: Any]) {
+        guard let presentationsArray = state["presentations"] as? [[String: Any]] else { return }
+        for entry in presentationsArray {
+            guard let presId = Self.asInt64(entry["presentationId"]) else { continue }
+            let usedCredentialIds = (entry["usedCredentialIds"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
+            let timestampSeconds = Self.asInt64(entry["presentationTimestampSeconds"]) ?? 0
+            let audience = entry["audience"] as? String
 
-                var recordDict: [String: Any] = [
-                    "id": presId,
-                    "flow_id": "",
-                    "credential_ids": usedCredentialIds,
-                    "timestamp": timestampSeconds * 1000,
-                ]
-                if let audience, !audience.isEmpty { recordDict["verifier_name"] = audience }
+            var recordDict: [String: Any] = [
+                "id": presId,
+                "flow_id": "",
+                "credential_ids": usedCredentialIds,
+                "timestamp": timestampSeconds * 1000,
+            ]
+            if let audience, !audience.isEmpty { recordDict["verifier_name"] = audience }
 
-                if let recordData = try? JSONSerialization.data(withJSONObject: recordDict),
-                   let recordJson = String(data: recordData, encoding: .utf8) {
-                    presentationRecords[presId] = recordJson
-                }
+            if let recordData = try? JSONSerialization.data(withJSONObject: recordDict),
+               let recordJson = String(data: recordData, encoding: .utf8) {
+                presentationRecords[presId] = recordJson
             }
         }
+    }
 
-        // Parse wscdCredentials: { [pluginId]: "<opaque exported state>" } -
-        // privatedata-spec §6.1, a native-SDK-only extension (see
-        // wscdCredentials field's own doc comment above).
-        if let wscdCredsObj = state["wscdCredentials"] as? [String: Any] {
-            for (pluginId, value) in wscdCredsObj {
-                if let str = value as? String {
-                    wscdCredentials[pluginId] = str
-                }
+    // Parse wscdCredentials: { [pluginId]: "<opaque exported state>" } -
+    // privatedata-spec §6.1, a native-SDK-only extension (see
+    // wscdCredentials field's own doc comment above).
+    private func loadWscdCredentials(from state: [String: Any]) {
+        guard let wscdCredsObj = state["wscdCredentials"] as? [String: Any] else { return }
+        for (pluginId, value) in wscdCredsObj {
+            if let str = value as? String {
+                wscdCredentials[pluginId] = str
             }
+        }
+    }
+
+    // Parse credentialRefreshTokens: { [batchId]: {refreshToken, dpopJwk,
+    // credentialIssuerIdentifier, credentialConfigurationId} } -
+    // privatedata-spec §6.2, a native-SDK-only extension (see
+    // credentialRefreshTokens field's own doc comment above).
+    private func loadCredentialRefreshTokens(from state: [String: Any]) {
+        guard let refreshTokensObj = state["credentialRefreshTokens"] as? [String: Any] else { return }
+        for (batchIdStr, value) in refreshTokensObj {
+            guard let batchId = Int64(batchIdStr),
+                  let entryObj = value as? [String: Any],
+                  let entry = CredentialRefreshTokenEntry.fromJsonObject(entryObj) else { continue }
+            credentialRefreshTokens[batchId] = entry
         }
     }
 
@@ -869,6 +976,15 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         // when empty.
         if !wscdCredentials.isEmpty {
             sDict["wscdCredentials"] = wscdCredentials
+        }
+
+        // credentialRefreshTokens (privatedata-spec §6.2, native-SDK-only
+        // extension) - same "in-memory dictionary IS the source of truth
+        // once loaded" rationale as wscdCredentials above.
+        if !credentialRefreshTokens.isEmpty {
+            sDict["credentialRefreshTokens"] = credentialRefreshTokens.reduce(into: [String: Any]()) { result, entry in
+                result[String(entry.key)] = entry.value.toJsonObject()
+            }
         }
 
         return [

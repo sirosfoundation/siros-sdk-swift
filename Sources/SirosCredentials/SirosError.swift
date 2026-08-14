@@ -17,6 +17,15 @@ public enum SirosError: Error, Sendable {
     case keystore(message: String, underlying: Error? = nil)
     case wallet(message: String, underlying: Error? = nil)
     case backendApi(code: Int, message: String, body: String? = nil)
+    /// `SirosWallet.renewCredential(batchId:)`'s one specifically
+    /// recoverable failure: no refresh_token is on file for this batch (it
+    /// was never captured, or already consumed by a prior renewal) - a
+    /// distinct case (rather than folding this into `.wallet`) so a caller
+    /// can tell "fall back to full re-issuance" apart from every other
+    /// failure (not connected, another issuance in progress, network
+    /// error), which should surface to the user instead of being silently
+    /// retried as a full re-issuance.
+    case renewalUnavailable(batchId: Int64)
 
     /// Machine-readable error code for i18n mapping.
     public var errorCode: String {
@@ -26,6 +35,7 @@ public enum SirosError: Error, Sendable {
         case .keystore: return "keystore_error"
         case .wallet: return "wallet_error"
         case .backendApi(let code, _, _): return "backend_api_\(code)"
+        case .renewalUnavailable: return "renewal_unavailable"
         }
     }
 }
@@ -38,6 +48,8 @@ extension SirosError: LocalizedError {
         case .keystore(let message, _): return message
         case .wallet(let message, _): return message
         case .backendApi(let code, let message, _): return "\(code): \(message)"
+        case .renewalUnavailable(let batchId):
+            return "No refresh_token stored for batch \(batchId) - it may not be renewable, or was already renewed"
         }
     }
 }
