@@ -28,6 +28,18 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
+        // --- zk-cred-longfellow UniFFI bindings (XCFramework) ---
+        // Built by `make xcframework` in the zk-cred-longfellow crate; the
+        // module name is the crate name + "FFI" (`zk_cred_longfellowFFI`),
+        // matching siros_wscd_managerFFI's own naming convention below -
+        // confirmed by inspecting the real published XCFramework's
+        // module.modulemap.
+        .binaryTarget(
+            name: "zk_cred_longfellowFFI",
+            url: "https://github.com/sirosfoundation/zk-cred-longfellow/releases/download/v0.1.0/zk_cred_longfellow.xcframework.zip",
+            checksum: "b58de78069255bfab61c207fb8799b034042766afa5bb2f4573387415af6770d"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -39,6 +51,13 @@ let package = Package(
                 // dependencies of its own, so this doesn't introduce a cycle.
                 "SirosTransport",
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+                // zk_cred_longfellowFFI's XCFramework only ships iOS slices
+                // (device + simulator) - no macOS slice exists, and this
+                // package's CI builds/tests the whole thing on bare macOS
+                // too, so this dependency must be scoped to iOS only.
+                // FFI-dependent code in this target is correspondingly
+                // wrapped in `#if os(iOS)` (see Generated/zk_cred_longfellow.swift).
+                .target(name: "zk_cred_longfellowFFI", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosCredentials"
         ),
