@@ -12,6 +12,20 @@ public struct WalletConfig: Sendable {
     /// The wallet backend URL (e.g. "https://wallet.sirosid.dev").
     public var backendUrl: String
 
+    /// Ordered list of base URLs each expected to serve the same
+    /// `go-zk-circuits` `/v1` catalog (a primary hosting service plus any
+    /// mirror/fallback hosts) - see `ZkCircuitClient`'s doc comment for why
+    /// this is a list tried in order, not a single URL: unlike a
+    /// registry-aggregation setting, these are mirrors of one catalog, so
+    /// the SDK tries each in turn and stops at the first success rather
+    /// than merging results. Defaults to
+    /// `[ZkCircuitClient.defaultZkCircuitUrl]` (the real deployed service,
+    /// `https://zk-circuits.fly.dev`). Not yet wired into any active ZK
+    /// proof-generation flow - no such flow exists yet - this only makes a
+    /// configured `ZkCircuitClient` available on `SirosWallet` for future
+    /// phases of the Longfellow ZKP work.
+    public var zkCircuitUrls: [String]
+
     /// Tenant identifier. Defaults to "default".
     public var tenantId: String
 
@@ -100,7 +114,8 @@ public struct WalletConfig: Sendable {
         availableKeystores: [String: KeystoreManager]? = nil,
         defaultWscdMapping: [String: String]? = nil,
         requestWscdChoice: RequestWscdChoice? = nil,
-        registryUrl: String? = nil
+        registryUrl: String? = nil,
+        zkCircuitUrls: [String] = [ZkCircuitClient.defaultZkCircuitUrl]
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -114,6 +129,7 @@ public struct WalletConfig: Sendable {
         self.defaultWscdMapping = defaultWscdMapping
         self.requestWscdChoice = requestWscdChoice
         self.registryUrl = registryUrl
+        self.zkCircuitUrls = zkCircuitUrls
     }
 
     /// Discover the engine base URL from the backend's

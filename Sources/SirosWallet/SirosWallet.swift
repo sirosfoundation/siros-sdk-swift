@@ -248,6 +248,13 @@ public final class SirosWallet: @unchecked Sendable {
     let mddlSchemaFetcher: MddlSchemaFetcher
     private let accountRegistry: AccountRegistry
 
+    /// Client for go-zk-circuits' `/v1` REST API, built from
+    /// `config.zkCircuitUrls`. Not wired into any flow yet - no ZK
+    /// proof-generation system exists in this SDK yet - this only makes a
+    /// configured client available for future Longfellow-ZKP-pseudonym
+    /// phases.
+    public let zkCircuitClient: ZkCircuitClient
+
     /// go-wallet-backend's credential-type registry service base URL, for
     /// `vctmFetcher`/`mddlSchemaFetcher`'s registry-service fetch strategy.
     /// Uses `config.registryUrl` when the integrator set one explicitly,
@@ -457,6 +464,7 @@ public final class SirosWallet: @unchecked Sendable {
         )
         self.vctmFetcher = VctmFetcher(httpGet: typeMetadataGet)
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
+        self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
 
         tokens.onSessionRejected = { [weak self] in
             self?.handleReauthenticationRequired()

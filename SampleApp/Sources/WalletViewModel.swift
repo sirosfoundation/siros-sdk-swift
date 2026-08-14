@@ -37,6 +37,19 @@ final class WalletViewModel: ObservableObject {
     @Published var tenantId: String {
         didSet { UserDefaults.standard.set(tenantId, forKey: "siros_tenant_id") }
     }
+
+    /// Ordered list of go-zk-circuits `/v1` catalog hosting URLs (mirrors of
+    /// the same catalog, tried in order - see `ZkCircuitClient`'s doc
+    /// comment), mirroring `backendUrl`'s settings pattern. JSON-encoded
+    /// into a single UserDefaults string, the same technique
+    /// `wscdDefaultMapping` below uses for its `[String: String]`.
+    @Published var zkCircuitUrls: [String] {
+        didSet {
+            guard let data = try? JSONEncoder().encode(zkCircuitUrls),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            UserDefaults.standard.set(json, forKey: "siros_zk_circuit_urls_json")
+        }
+    }
     @Published var useWmpProtocol: Bool {
         didSet { UserDefaults.standard.set(useWmpProtocol, forKey: "siros_use_wmp_protocol") }
     }
@@ -266,6 +279,10 @@ final class WalletViewModel: ObservableObject {
         self.wscdDefaultMapping = defaults.string(forKey: "siros_wscd_default_mapping_json")
             .flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        self.zkCircuitUrls = defaults.string(forKey: "siros_zk_circuit_urls_json")
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode([String].self, from: $0) }
+            .flatMap { $0.isEmpty ? nil : $0 } ?? [ZkCircuitClient.defaultZkCircuitUrl]
     }
 
     // MARK: - Public actions
@@ -1134,7 +1151,8 @@ final class WalletViewModel: ObservableObject {
             useWmpProtocol: useWmpProtocol,
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,
-            requestWscdChoice: resolvedRequestWscdChoice
+            requestWscdChoice: resolvedRequestWscdChoice,
+            zkCircuitUrls: zkCircuitUrls
         )
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider

@@ -15,6 +15,7 @@ struct SettingsView: View {
                     LabeledContent("Signed in as", value: viewModel.displayName ?? viewModel.userId ?? "—")
                     LabeledContent("Backend", value: viewModel.backendUrl)
                     LabeledContent("Tenant", value: viewModel.tenantId)
+                    LabeledContent("ZK Circuit Hosting", value: viewModel.zkCircuitUrls.joined(separator: ", "))
                     LabeledContent("Credentials", value: "\(viewModel.credentials.count)")
                     LabeledContent("Transport", value: viewModel.useWmpProtocol ? "WMP (JSON-RPC 2.0)" : "Legacy")
                 }
