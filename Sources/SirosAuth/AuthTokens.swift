@@ -97,17 +97,7 @@ public final class AuthTokens: @unchecked Sendable {
             throw SirosError.auth(message: "Unknown token kind: \(name)")
         }
 
-        let token: AccessToken
-        do {
-            if kind.anonymous {
-                token = try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
-            } else {
-                token = try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)
-            }
-        } catch {
-            handleAsTokenFailure(error)
-            throw error
-        }
+        let token = try await requestToken(for: kind)
 
         lock.lock()
         tokens[name] = token
@@ -141,23 +131,29 @@ public final class AuthTokens: @unchecked Sendable {
             throw SirosError.auth(message: "Unknown token kind: \(name)")
         }
 
-        let token: AccessToken
-        do {
-            if kind.anonymous {
-                token = try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
-            } else {
-                token = try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)
-            }
-        } catch {
-            handleAsTokenFailure(error)
-            throw error
-        }
+        let token = try await requestToken(for: kind)
 
         lock.lock()
         tokens[name] = token
         lock.unlock()
 
         return token
+    }
+
+    /// The actual AS request behind both `ensureToken` and `forceRefreshToken`
+    /// - factored out because both need identical handling of a 401 straight
+    /// from the AS's own token endpoint (see `handleAsTokenFailure` below).
+    private func requestToken(for kind: TokenKind) async throws -> AccessToken {
+        do {
+            if kind.anonymous {
+                return try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
+            } else {
+                return try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)
+            }
+        } catch {
+            handleAsTokenFailure(error)
+            throw error
+        }
     }
 
     /// A 401 straight from the AS's own `/auth/token` endpoint (i.e. minting a
