@@ -33,6 +33,34 @@ public enum ClientIdScheme: Sendable {
         }
     }
 
+    /// A user-facing identifier with the scheme prefix stripped - a raw
+    /// client_id like "x509_san_dns:verifier.multipaz.org" is meaningless to
+    /// a user; the hostname alone is what matters. Falls back to
+    /// `identifier` when no hostname can be extracted (e.g. a non-web DID, or
+    /// an x509_hash-style value that's a certificate hash, not a name).
+    public var displayName: String {
+        switch self {
+        case .x509SanDns(let hostname):
+            return hostname
+        case .x509SanUri(let uri):
+            return URL(string: uri)?.host ?? uri
+        case .https(let url):
+            return URL(string: url)?.host ?? url
+        case .did(let did, let method):
+            // did:web:example.com[:path...] -> example.com - path segments
+            // after the host are colon-separated per the did:web spec.
+            if method == "web" {
+                let rest = did.dropFirst("did:web:".count)
+                return String(rest.split(separator: ":").first ?? Substring(rest))
+            }
+            return did
+        case .verifierAttestation(let subject):
+            return subject
+        case .preRegistered(let clientId):
+            return clientId
+        }
+    }
+
     /// Parse a raw client_id string into a typed `ClientIdScheme`.
     ///
     /// Mirrors the parsing logic in wallet-frontend's `parseClientIdScheme`.

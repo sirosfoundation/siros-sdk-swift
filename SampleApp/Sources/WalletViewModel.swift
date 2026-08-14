@@ -1301,7 +1301,7 @@ extension WalletViewModel: WalletEventListener {
         }
     }
 
-    nonisolated func onFlowComplete(flowId: String) {
+    nonisolated func onFlowComplete(flowId: String, redirectUri: String?) {
         Task { @MainActor in
             if self.receivedCredentialCount > 0 {
                 self.infoMessage = L10n.string("flow.credentialsReceived", self.receivedCredentialCount)
@@ -1315,14 +1315,36 @@ extension WalletViewModel: WalletEventListener {
                 self.infoMessage = L10n.string("flow.presentationSent")
                 self.showInfo = true
             }
+
+            // Some verifiers (e.g. verifier.multipaz.org) return a
+            // redirect_uri with their direct_post.jwt response so the
+            // user's browser can be sent back to the verifier's own result
+            // page. Without this, the flow just silently ends on the
+            // wallet side with no way back to the verifier.
+            self.openVerifierRedirect(redirectUri)
         }
     }
 
-    nonisolated func onFlowError(flowId: String, errorMessage: String) {
+    nonisolated func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
         Task { @MainActor in
             self.receivedCredentialCount = 0
             self.setError(errorMessage)
+
+            // Mirrors onFlowComplete above - a verifier can return a
+            // redirect_uri from its error-response endpoint too (e.g. on
+            // user-decline), so the user isn't left stranded in the wallet
+            // just because the flow ended in an error rather than success.
+            self.openVerifierRedirect(redirectUri)
         }
+    }
+
+    /// Opens a verifier-provided redirect_uri (from flow completion or decline) in the browser.
+    @MainActor
+    private func openVerifierRedirect(_ redirectUri: String?) {
+        guard let redirectUri, let url = URL(string: redirectUri) else { return }
+        #if canImport(UIKit)
+        UIApplication.shared.open(url)
+        #endif
     }
 
     nonisolated func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {
