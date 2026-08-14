@@ -27,7 +27,17 @@ struct PresentationConsentView: View {
         let eligibleIds = Set(viewModel.eligibleCredentialIds(from: request.candidates))
         let isExhausted = !request.candidates.isEmpty && eligibleIds.isEmpty
 
-        let totalSteps = request.candidates.count + 2 // preview + per-cred + summary
+        // A batch-issued credential contributes multiple interchangeable
+        // StoredCredential copies (same batchId/credentialConfigurationId)
+        // to `candidates` - one wizard step per raw candidate would show the
+        // user 5 near-identical "choices" for what is really one credential
+        // type. Collapse to one representative per unique credential type;
+        // eligibleIds (used at Share time) still considers every raw
+        // candidate, so the SDK - not the user - picks which physical copy
+        // is actually used.
+        let displayCandidates = uniqueRepresentativeCandidates(request.candidates)
+
+        let totalSteps = displayCandidates.count + 2 // preview + per-cred + summary
 
         return AnyView(
             VStack(spacing: 16) {
@@ -38,12 +48,12 @@ struct PresentationConsentView: View {
                 // Content
                 Group {
                     if currentStep == 0 {
-                        previewStep(request, isExhausted: isExhausted)
-                    } else if currentStep <= request.candidates.count {
-                        let cred = request.candidates[currentStep - 1]
+                        previewStep(request, displayCandidates: displayCandidates, isExhausted: isExhausted)
+                    } else if currentStep <= displayCandidates.count {
+                        let cred = displayCandidates[currentStep - 1]
                         claimSelectionStep(credential: cred, requestedClaims: request.requestedClaims)
                     } else {
-                        summaryStep(request)
+                        summaryStep(request, displayCandidates: displayCandidates)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -98,14 +108,14 @@ struct PresentationConsentView: View {
                 .padding(.bottom)
             }
             .padding(.top, 16)
-            .onAppear { initializeSelections(request) }
+            .onAppear { initializeSelections(displayCandidates, requestedClaims: request.requestedClaims) }
         )
     }
 
     // MARK: - Step 1: Preview
 
     @ViewBuilder
-    private func previewStep(_ request: PresentationRequest, isExhausted: Bool) -> some View {
+    private func previewStep(_ request: PresentationRequest, displayCandidates: [StoredCredential], isExhausted: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
@@ -128,7 +138,7 @@ struct PresentationConsentView: View {
                     .font(.body)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(request.candidates, id: \.id) { cred in
+                    ForEach(displayCandidates, id: \.id) { cred in
                         credentialCard(cred, claimCount: request.requestedClaims.flatMap { $0 }.count)
                     }
                     if isExhausted {
@@ -218,7 +228,7 @@ struct PresentationConsentView: View {
     // MARK: - Step 3: Summary
 
     @ViewBuilder
-    private func summaryStep(_ request: PresentationRequest) -> some View {
+    private func summaryStep(_ request: PresentationRequest, displayCandidates: [StoredCredential]) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Image(systemName: "checkmark.circle.fill")
@@ -233,7 +243,7 @@ struct PresentationConsentView: View {
                     .font(.body)
                     .foregroundColor(SirosTheme.onSurfaceVariant)
 
-                ForEach(request.candidates, id: \.id) { cred in
+                ForEach(displayCandidates, id: \.id) { cred in
                     let claimMetaMap = Dictionary(
                         uniqueKeysWithValues: (cred.metadata?.claims ?? []).map { ($0.path.joined(separator: "."), $0) }
                     )
@@ -263,18 +273,34 @@ struct PresentationConsentView: View {
 
     // MARK: - Helpers
 
-    private func initializeSelections(_ request: PresentationRequest) {
-        for cred in request.candidates {
+    private func initializeSelections(_ displayCandidates: [StoredCredential], requestedClaims: [[String]]) {
+        for cred in displayCandidates {
             let claimMetaMap = Dictionary(
                 uniqueKeysWithValues: (cred.metadata?.claims ?? []).map { ($0.path.joined(separator: "."), $0) }
             )
-            for claim in request.requestedClaims.flatMap({ $0 }) {
+            for claim in requestedClaims.flatMap({ $0 }) {
                 let meta = claimMetaMap[claim]
                 let key = "\(cred.id):\(claim)"
                 let isRequired = meta?.mandatory == true || meta?.sd == "always"
                 claimSelections[key] = isRequired || meta?.sd != "never"
             }
         }
+    }
+
+    /// Collapses raw candidates down to one representative per unique
+    /// credential type, so a batch-issued credential's interchangeable
+    /// copies (same batchId/credentialConfigurationId) don't each get their
+    /// own wizard step - see the call site's comment for why.
+    private func uniqueRepresentativeCandidates(_ candidates: [StoredCredential]) -> [StoredCredential] {
+        var seen = Set<String>()
+        var result: [StoredCredential] = []
+        for cred in candidates {
+            let key = cred.credentialConfigurationId ?? "\(cred.format):\(cred.batchId)"
+            if seen.insert(key).inserted {
+                result.append(cred)
+            }
+        }
+        return result
     }
 
     @ViewBuilder
