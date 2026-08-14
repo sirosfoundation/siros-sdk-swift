@@ -2,6 +2,7 @@
 
 import XCTest
 @testable import SirosAuth
+@testable import SirosCredentials
 
 /// Regression tests for `AuthTokens.registerTokenRejection`'s rejection
 /// counting/window logic.
@@ -109,5 +110,66 @@ final class AuthTokensTests: XCTestCase {
         tokens.registerTokenRejection(AuthTokens.tokenBackend)
 
         XCTAssertEqual(rejectedCount, 0, "clear() must reset the rejection count, not just the cached tokens")
+    }
+
+    /// Builds an `AuthTokens` whose `AuthServerClient` always fails its
+    /// token request with the given HTTP status - the shared shape behind
+    /// the three "AS token endpoint 401" tests below.
+    private func makeTokensFailingWith(code: Int) -> AuthTokens {
+        let client = AuthServerClient(baseUrl: "https://auth.example.invalid", tenantId: "test") { _, _, _, _ in
+            throw SirosError.backendApi(code: code, message: "AS request failed: \(code) — /auth/token", body: nil)
+        }
+        return AuthTokens(authServerClient: client, tenantId: "test")
+    }
+
+    /// Covers the gap found live in task #245: a raw "AS request failed 401 -
+    /// /auth/token" surfaced with no re-auth flow firing when a user tapped
+    /// "add credential" with an expired AS session. Unlike
+    /// `registerTokenRejection`'s 3-strikes REST-401 case, a 401 straight
+    /// from the AS's own token endpoint is unambiguous and must fire
+    /// `onSessionRejected` on the very first occurrence.
+    func testFourZeroOneFromAsTokenEndpointTriggersSessionRejectedImmediately() async {
+        let tokens = makeTokensFailingWith(code: 401)
+        var rejectedCount = 0
+        tokens.onSessionRejected = { rejectedCount += 1 }
+
+        do {
+            _ = try await tokens.ensureBackendToken()
+            XCTFail("expected the AS 401 to propagate")
+        } catch {
+            // Expected - the original failure still propagates to the caller.
+        }
+
+        XCTAssertEqual(rejectedCount, 1)
+    }
+
+    func testFourZeroOneFromAsTokenEndpointDuringForceRefreshAlsoTriggersSessionRejected() async {
+        let tokens = makeTokensFailingWith(code: 401)
+        var rejectedCount = 0
+        tokens.onSessionRejected = { rejectedCount += 1 }
+
+        do {
+            _ = try await tokens.forceRefreshToken(AuthTokens.tokenBackend)
+            XCTFail("expected the AS 401 to propagate")
+        } catch {
+            // Expected.
+        }
+
+        XCTAssertEqual(rejectedCount, 1)
+    }
+
+    func testNonFourZeroOneAsTokenFailureDoesNotTriggerSessionRejected() async {
+        let tokens = makeTokensFailingWith(code: 500)
+        var rejectedCount = 0
+        tokens.onSessionRejected = { rejectedCount += 1 }
+
+        do {
+            _ = try await tokens.ensureBackendToken()
+            XCTFail("expected the AS 500 to propagate")
+        } catch {
+            // Expected.
+        }
+
+        XCTAssertEqual(rejectedCount, 0)
     }
 }

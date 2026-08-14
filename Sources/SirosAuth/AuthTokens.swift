@@ -97,12 +97,7 @@ public final class AuthTokens: @unchecked Sendable {
             throw SirosError.auth(message: "Unknown token kind: \(name)")
         }
 
-        let token: AccessToken
-        if kind.anonymous {
-            token = try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
-        } else {
-            token = try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)
-        }
+        let token = try await requestToken(for: kind)
 
         lock.lock()
         tokens[name] = token
@@ -136,18 +131,48 @@ public final class AuthTokens: @unchecked Sendable {
             throw SirosError.auth(message: "Unknown token kind: \(name)")
         }
 
-        let token: AccessToken
-        if kind.anonymous {
-            token = try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
-        } else {
-            token = try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)
-        }
+        let token = try await requestToken(for: kind)
 
         lock.lock()
         tokens[name] = token
         lock.unlock()
 
         return token
+    }
+
+    /// The actual AS request behind both `ensureToken` and `forceRefreshToken`
+    /// - factored out because both need identical handling of a 401 straight
+    /// from the AS's own token endpoint (see `handleAsTokenFailure` below).
+    private func requestToken(for kind: TokenKind) async throws -> AccessToken {
+        do {
+            if kind.anonymous {
+                return try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
+            } else {
+                return try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)
+            }
+        } catch {
+            handleAsTokenFailure(error)
+            throw error
+        }
+    }
+
+    /// A 401 straight from the AS's own `/auth/token` endpoint (i.e. minting a
+    /// *new* token failed, not just a previously-issued one being rejected
+    /// later by a backend API call) means the AS itself has already declared
+    /// the session dead - unlike `registerTokenRejection`'s REST-401 case,
+    /// there's no ambiguity to wait out via `rejectionThreshold`/
+    /// `rejectionWindowSeconds`, so this fires `onSessionRejected` immediately.
+    ///
+    /// Without this, a call like "add credential" made with an AS session
+    /// that's expired (but whose locally-cached access token hadn't yet hit
+    /// its own claimed expiry, or had none cached at all) would throw a raw
+    /// error straight out of `ensureToken`/`forceRefreshToken` with no
+    /// logout/re-login ever triggered - confirmed via a live "AS request
+    /// failed 401 - /auth/token" report with no reauth flow firing.
+    private func handleAsTokenFailure(_ error: Error) {
+        if case .backendApi(let code, _, _)? = error as? SirosError, code == 401 {
+            onSessionRejected?()
+        }
     }
 
     /// Register a token rejection (e.g. from a 401 response).
