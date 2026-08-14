@@ -44,8 +44,8 @@ let package = Package(
         // module.modulemap.
         .binaryTarget(
             name: "zk_cred_longfellowFFI",
-            url: "https://github.com/sirosfoundation/zk-cred-longfellow/releases/download/v0.1.0/zk_cred_longfellow.xcframework.zip",
-            checksum: "b58de78069255bfab61c207fb8799b034042766afa5bb2f4573387415af6770d"
+            url: "https://github.com/sirosfoundation/zk-cred-longfellow/releases/download/v0.1.1/zk_cred_longfellow.xcframework.zip",
+            checksum: "dcbbaaeb5b1075d9794e1c2be830218742558a62aa19276b7b789dd05c6727f6"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
@@ -110,8 +110,8 @@ let package = Package(
         // XCFramework's module.modulemap).
         .binaryTarget(
             name: "siros_wscd_managerFFI",
-            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.7.2/siros_wscd_manager.xcframework.zip",
-            checksum: "a7ac1dcd6407cb47785e4f02fe3e4d085c82317ecde4e81378b65302b998984c"
+            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.7.3/siros_wscd_manager.xcframework.zip",
+            checksum: "4ec25fa9c0f8177a77302c5c66f392c8286d4dbf128e447b6389771657d12b08"
         ),
 
         // --- Keystore: JWE-encrypted key management ---
