@@ -161,9 +161,9 @@ extension SirosWallet {
         let expectedCredentials = msg.credentials?.count ?? 0
         lock.lock(); let listener = eventListener; lock.unlock()
         if expectedCredentials > 0 && storedCount == 0 {
-            listener?.onFlowError(flowId: msg.flowId, errorMessage: storeFailureReason ?? "Credential could not be processed")
+            listener?.onFlowError(flowId: msg.flowId, errorMessage: storeFailureReason ?? "Credential could not be processed", redirectUri: nil)
         } else {
-            listener?.onFlowComplete(flowId: msg.flowId)
+            listener?.onFlowComplete(flowId: msg.flowId, redirectUri: msg.redirectUri)
         }
 
         switch state {

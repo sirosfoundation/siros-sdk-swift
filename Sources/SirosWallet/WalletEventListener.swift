@@ -31,10 +31,23 @@ public protocol WalletEventListener: AnyObject, Sendable {
     func onCredentialReceived(credential: StoredCredential)
 
     /// Called when a flow completes.
-    func onFlowComplete(flowId: String)
+    ///
+    /// - Parameter redirectUri: For an OID4VP `direct_post.jwt` presentation,
+    ///   some verifiers (e.g. verifier.multipaz.org) return a `redirect_uri`
+    ///   in their response so the user's browser/session can be returned to
+    ///   the verifier's own page to see the result. When present, open it
+    ///   (e.g. via `UIApplication.shared.open`), matching
+    ///   `onAuthorizationRequired`'s pattern. Nil when the verifier didn't
+    ///   return one (also true for every OID4VCI issuance completion).
+    func onFlowComplete(flowId: String, redirectUri: String?)
 
     /// Called when a flow fails.
-    func onFlowError(flowId: String, errorMessage: String)
+    ///
+    /// - Parameter redirectUri: Some verifiers return a `redirect_uri` even
+    ///   from their error-response endpoint (e.g. when the user declines an
+    ///   OID4VP presentation) - see `onFlowComplete`'s equivalent parameter.
+    ///   Nil unless the verifier provided one.
+    func onFlowError(flowId: String, errorMessage: String, redirectUri: String?)
 
     /// An issuer requires user authorization (OAuth consent).
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String)
@@ -56,8 +69,8 @@ public protocol WalletEventListener: AnyObject, Sendable {
 /// Default implementations for optional callbacks.
 public extension WalletEventListener {
     func onCredentialReceived(credential: StoredCredential) {}
-    func onFlowComplete(flowId: String) {}
-    func onFlowError(flowId: String, errorMessage: String) {}
+    func onFlowComplete(flowId: String, redirectUri: String?) {}
+    func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {}
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}
     func onTxCodeRequired(flowId: String, description: String?) -> String? { nil }
     func onReauthenticationRequired() {

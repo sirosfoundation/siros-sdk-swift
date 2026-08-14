@@ -37,6 +37,19 @@ final class WalletViewModel: ObservableObject {
     @Published var tenantId: String {
         didSet { UserDefaults.standard.set(tenantId, forKey: "siros_tenant_id") }
     }
+
+    /// Ordered list of go-zk-circuits `/v1` catalog hosting URLs (mirrors of
+    /// the same catalog, tried in order - see `ZkCircuitClient`'s doc
+    /// comment), mirroring `backendUrl`'s settings pattern. JSON-encoded
+    /// into a single UserDefaults string, the same technique
+    /// `wscdDefaultMapping` below uses for its `[String: String]`.
+    @Published var zkCircuitUrls: [String] {
+        didSet {
+            guard let data = try? JSONEncoder().encode(zkCircuitUrls),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            UserDefaults.standard.set(json, forKey: "siros_zk_circuit_urls_json")
+        }
+    }
     @Published var useWmpProtocol: Bool {
         didSet { UserDefaults.standard.set(useWmpProtocol, forKey: "siros_use_wmp_protocol") }
     }
@@ -266,6 +279,10 @@ final class WalletViewModel: ObservableObject {
         self.wscdDefaultMapping = defaults.string(forKey: "siros_wscd_default_mapping_json")
             .flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        self.zkCircuitUrls = defaults.string(forKey: "siros_zk_circuit_urls_json")
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode([String].self, from: $0) }
+            .flatMap { $0.isEmpty ? nil : $0 } ?? [ZkCircuitClient.defaultZkCircuitUrl]
     }
 
     // MARK: - Public actions
@@ -1134,7 +1151,8 @@ final class WalletViewModel: ObservableObject {
             useWmpProtocol: useWmpProtocol,
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,
-            requestWscdChoice: resolvedRequestWscdChoice
+            requestWscdChoice: resolvedRequestWscdChoice,
+            zkCircuitUrls: zkCircuitUrls
         )
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider
@@ -1301,7 +1319,7 @@ extension WalletViewModel: WalletEventListener {
         }
     }
 
-    nonisolated func onFlowComplete(flowId: String) {
+    nonisolated func onFlowComplete(flowId: String, redirectUri: String?) {
         Task { @MainActor in
             if self.receivedCredentialCount > 0 {
                 self.infoMessage = L10n.string("flow.credentialsReceived", self.receivedCredentialCount)
@@ -1315,14 +1333,36 @@ extension WalletViewModel: WalletEventListener {
                 self.infoMessage = L10n.string("flow.presentationSent")
                 self.showInfo = true
             }
+
+            // Some verifiers (e.g. verifier.multipaz.org) return a
+            // redirect_uri with their direct_post.jwt response so the
+            // user's browser can be sent back to the verifier's own result
+            // page. Without this, the flow just silently ends on the
+            // wallet side with no way back to the verifier.
+            self.openVerifierRedirect(redirectUri)
         }
     }
 
-    nonisolated func onFlowError(flowId: String, errorMessage: String) {
+    nonisolated func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
         Task { @MainActor in
             self.receivedCredentialCount = 0
             self.setError(errorMessage)
+
+            // Mirrors onFlowComplete above - a verifier can return a
+            // redirect_uri from its error-response endpoint too (e.g. on
+            // user-decline), so the user isn't left stranded in the wallet
+            // just because the flow ended in an error rather than success.
+            self.openVerifierRedirect(redirectUri)
         }
+    }
+
+    /// Opens a verifier-provided redirect_uri (from flow completion or decline) in the browser.
+    @MainActor
+    private func openVerifierRedirect(_ redirectUri: String?) {
+        guard let redirectUri, let url = URL(string: redirectUri) else { return }
+        #if canImport(UIKit)
+        UIApplication.shared.open(url)
+        #endif
     }
 
     nonisolated func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {

@@ -208,6 +208,11 @@ struct LoginView: View {
 struct PreLoginSettingsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     @Environment(\.dismiss) private var dismiss
+    /// Editable, newline-joined form of `viewModel.zkCircuitUrls` - SwiftUI
+    /// has no stock list-of-strings editor, so a plain multi-line
+    /// `TextEditor` stands in for one, one URL per line. Split back into
+    /// the array (trimmed, blank lines dropped) on every edit.
+    @State private var zkCircuitUrlsText: String = ""
 
     var body: some View {
         NavigationStack {
@@ -219,6 +224,26 @@ struct PreLoginSettingsView: View {
                     TextField("Tenant ID", text: $viewModel.tenantId)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                }
+
+                Section("ZK Circuit Hosting") {
+                    Text("Mirror/fallback hosting services for ZK-proof circuit artifacts, one URL per line. Tried in order; the first that responds is used.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextEditor(text: $zkCircuitUrlsText)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .frame(minHeight: 80)
+                        .onAppear { zkCircuitUrlsText = viewModel.zkCircuitUrls.joined(separator: "\n") }
+                        // Single-param onChange(of:perform:) - the two-param
+                        // (oldValue, newValue) overload needs iOS 17+, but
+                        // this app's deployment target is iOS 16.
+                        .onChange(of: zkCircuitUrlsText) { newValue in
+                            viewModel.zkCircuitUrls = newValue
+                                .split(separator: "\n", omittingEmptySubsequences: false)
+                                .map { $0.trimmingCharacters(in: .whitespaces) }
+                                .filter { !$0.isEmpty }
+                        }
                 }
 
                 Section("Transport Protocol") {

@@ -248,6 +248,13 @@ public final class SirosWallet: @unchecked Sendable {
     let mddlSchemaFetcher: MddlSchemaFetcher
     private let accountRegistry: AccountRegistry
 
+    /// Client for go-zk-circuits' `/v1` REST API, built from
+    /// `config.zkCircuitUrls`. Not wired into any flow yet - no ZK
+    /// proof-generation system exists in this SDK yet - this only makes a
+    /// configured client available for future Longfellow-ZKP-pseudonym
+    /// phases.
+    public let zkCircuitClient: ZkCircuitClient
+
     /// go-wallet-backend's credential-type registry service base URL, for
     /// `vctmFetcher`/`mddlSchemaFetcher`'s registry-service fetch strategy.
     /// Uses `config.registryUrl` when the integrator set one explicitly,
@@ -457,6 +464,7 @@ public final class SirosWallet: @unchecked Sendable {
         )
         self.vctmFetcher = VctmFetcher(httpGet: typeMetadataGet)
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
+        self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
 
         tokens.onSessionRejected = { [weak self] in
             self?.handleReauthenticationRequired()
@@ -2067,7 +2075,7 @@ public final class SirosWallet: @unchecked Sendable {
         }
 
         guard pending.state == state else {
-            listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch")
+            listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch", redirectUri: nil)
             return
         }
 
@@ -2110,7 +2118,8 @@ public final class SirosWallet: @unchecked Sendable {
                 lock.lock(); let listener = eventListener; lock.unlock()
                 listener?.onFlowError(
                     flowId: flowId,
-                    errorMessage: "Failed to resume issuance: \(error.localizedDescription)"
+                    errorMessage: "Failed to resume issuance: \(error.localizedDescription)",
+                    redirectUri: nil
                 )
             }
         }
@@ -2220,7 +2229,7 @@ public final class SirosWallet: @unchecked Sendable {
             logger.error("Failed to sync private data: \(error.localizedDescription)")
             #endif
             lock.lock(); let listener = eventListener; lock.unlock()
-            listener?.onFlowError(flowId: "sync", errorMessage: "Private data sync failed: \(error.localizedDescription)")
+            listener?.onFlowError(flowId: "sync", errorMessage: "Private data sync failed: \(error.localizedDescription)", redirectUri: nil)
         }
     }
 
@@ -2301,11 +2310,11 @@ public final class SirosWallet: @unchecked Sendable {
                 // Terminal path for this issuance over the WMP transport too -
                 // see `resetIssuanceGuards()`.
                 self?.resetIssuanceGuards()
-                self?.eventListener?.onFlowComplete(flowId: flowId)
+                self?.eventListener?.onFlowComplete(flowId: flowId, redirectUri: nil)
             },
             onError: { [weak self] flowId, code, message in
                 self?.resetIssuanceGuards()
-                self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")")
+                self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")", redirectUri: nil)
             }
         ))
         peer.use(profile)
@@ -2895,11 +2904,19 @@ public final class SirosWallet: @unchecked Sendable {
         let trustResult = lastTrustResults[msg.flowId]
         lock.unlock()
 
+        // The backend/trust evaluator only ever gives a real display name via
+        // entityName when the verifier declared one (client_metadata.client_name
+        // or trust-framework metadata); otherwise fall back to the raw
+        // client_id (`identifier`) and strip its scheme prefix via
+        // ClientIdScheme.displayName rather than showing e.g.
+        // "x509_san_dns:verifier.multipaz.org" verbatim to the user.
+        let verifierName = trustResult?.entityName ?? trustResult?.parsedScheme?.displayName
+
         let selectedIds: [Int64]
         if let listener, !allCreds.isEmpty {
             selectedIds = await listener.onCredentialSelectionRequired(
                 request: PresentationRequest(
-                    verifierName: trustResult?.entityName,
+                    verifierName: verifierName,
                     trustResult: trustResult,
                     candidates: allCreds
                 )
@@ -3164,7 +3181,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// that would never arrive.
     private func reportSignFailure(flowId: String, message: String) {
         lock.lock(); let listener = eventListener; lock.unlock()
-        listener?.onFlowError(flowId: flowId, errorMessage: message)
+        listener?.onFlowError(flowId: flowId, errorMessage: message, redirectUri: nil)
 
         // A terminal path for whatever issuance may have been in flight - a
         // no-op for a presentation sign-request failure, which never sets
@@ -3186,7 +3203,8 @@ public final class SirosWallet: @unchecked Sendable {
     private func handleFlowError(msg: FlowErrorMessage) {
         let fid = msg.flowId ?? "unknown"
         lock.lock(); let listener = eventListener; lock.unlock()
-        listener?.onFlowError(flowId: fid, errorMessage: msg.error.message)
+        let redirectUri = msg.error.details?["redirect_uri"]?.stringValue
+        listener?.onFlowError(flowId: fid, errorMessage: msg.error.message, redirectUri: redirectUri)
 
         // Terminal path for whatever issuance may have been in flight -
         // a no-op for a presentation flow error, which never sets these

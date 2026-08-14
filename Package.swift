@@ -20,6 +20,12 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.3"),
         .package(url: "https://github.com/valpackett/SwiftCBOR", from: "0.5.0"),
+        // Cross-platform SHA-256 for ZkCircuitClient's artifact hash
+        // verification. On Apple platforms CryptoKit is used directly (see
+        // ZkCircuitClient.swift's `#if canImport(CryptoKit)`); swift-crypto's
+        // `Crypto` module is only actually compiled/linked in on Linux,
+        // where CryptoKit doesn't exist at all.
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
         // --- Credentials: data models, DCQL matcher, VCTM types ---
@@ -27,6 +33,12 @@ let package = Package(
             name: "SirosCredentials",
             dependencies: [
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+                // AnyCodable (for ZkCircuitDescriptor.params' generic
+                // map[string]any) already exists in SirosTransport - reused
+                // here rather than duplicated. SirosTransport has no
+                // dependencies of its own, so this doesn't introduce a cycle.
+                "SirosTransport",
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             ],
             path: "Sources/SirosCredentials"
         ),
@@ -34,6 +46,7 @@ let package = Package(
             name: "SirosCredentialsTests",
             dependencies: [
                 "SirosCredentials",
+                "SirosTransport",
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
             ],
             path: "Tests/SirosCredentialsTests"

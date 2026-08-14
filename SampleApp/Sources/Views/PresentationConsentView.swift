@@ -39,76 +39,85 @@ struct PresentationConsentView: View {
 
         let totalSteps = displayCandidates.count + 2 // preview + per-cred + summary
 
+        // NavigationStack + inline title matches every other sub-screen's
+        // chrome (CredentialDetailView, etc.) instead of a bare, unchromed
+        // VStack. No back toolbar button: the Decline/Back buttons below
+        // already cover "leave this screen", and a back button that did
+        // something different would be confusing.
         return AnyView(
-            VStack(spacing: 16) {
-                // Step progress bar
-                StepProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+            NavigationStack {
+                VStack(spacing: 16) {
+                    // Step progress bar
+                    StepProgressBar(currentStep: currentStep, totalSteps: totalSteps)
+                        .padding(.horizontal)
+
+                    // Content
+                    Group {
+                        if currentStep == 0 {
+                            previewStep(request, displayCandidates: displayCandidates, isExhausted: isExhausted)
+                        } else if currentStep <= displayCandidates.count {
+                            let cred = displayCandidates[currentStep - 1]
+                            claimSelectionStep(credential: cred, requestedClaims: request.requestedClaims)
+                        } else {
+                            summaryStep(request, displayCandidates: displayCandidates)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    // Navigation buttons
+                    HStack(spacing: 12) {
+                        if currentStep == 0 {
+                            Button(action: { viewModel.declinePresentation() }) {
+                                HStack {
+                                    Image(systemName: "xmark")
+                                    Text("Decline")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                        } else {
+                            Button(action: { currentStep -= 1 }) {
+                                Text("Back")
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if currentStep < totalSteps - 1 {
+                            Button(action: { currentStep += 1 }) {
+                                Text("Next")
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(SirosTheme.brand)
+                        } else {
+                            Button(action: {
+                                viewModel.acceptPresentation(Array(eligibleIds))
+                            }) {
+                                HStack {
+                                    Image(systemName: "checkmark")
+                                    Text("Share")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(SirosTheme.brand)
+                            .disabled(isExhausted)
+                        }
+                    }
                     .padding(.horizontal)
-
-                // Content
-                Group {
-                    if currentStep == 0 {
-                        previewStep(request, displayCandidates: displayCandidates, isExhausted: isExhausted)
-                    } else if currentStep <= displayCandidates.count {
-                        let cred = displayCandidates[currentStep - 1]
-                        claimSelectionStep(credential: cred, requestedClaims: request.requestedClaims)
-                    } else {
-                        summaryStep(request, displayCandidates: displayCandidates)
-                    }
+                    .padding(.bottom)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // Navigation buttons
-                HStack(spacing: 12) {
-                    if currentStep == 0 {
-                        Button(action: { viewModel.declinePresentation() }) {
-                            HStack {
-                                Image(systemName: "xmark")
-                                Text("Decline")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.red)
-                    } else {
-                        Button(action: { currentStep -= 1 }) {
-                            Text("Back")
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 48)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if currentStep < totalSteps - 1 {
-                        Button(action: { currentStep += 1 }) {
-                            Text("Next")
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 48)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(SirosTheme.brand)
-                    } else {
-                        Button(action: {
-                            viewModel.acceptPresentation(Array(eligibleIds))
-                        }) {
-                            HStack {
-                                Image(systemName: "checkmark")
-                                Text("Share")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(SirosTheme.brand)
-                        .disabled(isExhausted)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.bottom)
+                .padding(.top, 16)
+                .navigationTitle("Credential Request")
+                .navigationBarTitleDisplayMode(.inline)
+                .onAppear { initializeSelections(displayCandidates, requestedClaims: request.requestedClaims) }
             }
-            .padding(.top, 16)
-            .onAppear { initializeSelections(displayCandidates, requestedClaims: request.requestedClaims) }
         )
     }
 
@@ -118,18 +127,15 @@ struct PresentationConsentView: View {
     private func previewStep(_ request: PresentationRequest, displayCandidates: [StoredCredential], isExhausted: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    Image(systemName: "info.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(SirosTheme.brand)
-                    VStack(alignment: .leading) {
-                        Text("Credential Request")
-                            .font(.title2.bold())
-                        if let verifier = request.verifierName {
-                            Text(verifier)
-                                .font(.subheadline)
-                                .foregroundColor(SirosTheme.onSurfaceVariant)
-                        }
+                // The screen title itself now lives in the navigation bar, so
+                // this just surfaces who's asking.
+                if let verifier = request.verifierName {
+                    HStack(spacing: 12) {
+                        Image(systemName: "info.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(SirosTheme.brand)
+                        Text(verifier)
+                            .font(.title3.weight(.semibold))
                     }
                 }
 
@@ -137,22 +143,26 @@ struct PresentationConsentView: View {
                 Text("\(verifier) is requesting the following credentials:")
                     .font(.body)
 
-                VStack(alignment: .leading, spacing: 4) {
+                // Reuses the exact same CredentialCardView as the main
+                // credential list (including its batch "remaining copies"
+                // ribbon) rather than a separate, simpler-looking
+                // representation that risked reading as a different credential.
+                let claimCount = request.requestedClaims.flatMap { $0 }.count
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(displayCandidates, id: \.id) { cred in
-                        credentialCard(cred, claimCount: request.requestedClaims.flatMap { $0 }.count)
+                        VStack(alignment: .leading, spacing: 4) {
+                            CredentialCardView(credential: cred, instances: instances(for: cred))
+                            Text("\(claimCount) data fields requested")
+                                .font(.caption)
+                                .foregroundColor(SirosTheme.onSurfaceVariant)
+                        }
                     }
                     if isExhausted {
                         Text("No eligible copies remain - renew this credential in Settings")
                             .font(.caption.bold())
                             .foregroundColor(SirosTheme.error)
-                            .padding(.top, 4)
                     }
                 }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(isExhausted ? SirosTheme.error.opacity(0.12) : Color.clear)
-                )
             }
             .padding(.horizontal)
         }
@@ -169,7 +179,7 @@ struct PresentationConsentView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                credentialRow(credential)
+                CredentialCardView(credential: credential, instances: instances(for: credential))
 
                 Spacer().frame(height: 8)
 
@@ -251,20 +261,24 @@ struct PresentationConsentView: View {
                         .filter { claimSelections["\(cred.id):\($0)"] ?? true }
 
                     VStack(alignment: .leading, spacing: 4) {
-                        credentialRow(cred)
-                        Divider().padding(.vertical, 4)
-                        ForEach(disclosedClaims, id: \.self) { claim in
-                            let meta = claimMetaMap[claim]
-                            Text("✓ \(meta?.label ?? formatClaimName(claim))")
-                                .font(.caption)
-                                .foregroundColor(SirosTheme.onSurfaceVariant)
+                        CredentialCardView(credential: cred, instances: instances(for: cred))
+                        if !disclosedClaims.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(disclosedClaims, id: \.self) { claim in
+                                    let meta = claimMetaMap[claim]
+                                    Text("✓ \(meta?.label ?? formatClaimName(claim))")
+                                        .font(.caption)
+                                        .foregroundColor(SirosTheme.onSurfaceVariant)
+                                }
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(SirosTheme.surfaceVariant)
+                            )
                         }
                     }
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(SirosTheme.surfaceVariant)
-                    )
                 }
             }
             .padding(.horizontal)
@@ -303,44 +317,18 @@ struct PresentationConsentView: View {
         return result
     }
 
-    @ViewBuilder
-    private func credentialCard(_ cred: StoredCredential, claimCount: Int) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            credentialRow(cred)
-            Text("\(claimCount) data fields requested")
-                .font(.caption)
-                .foregroundColor(SirosTheme.onSurfaceVariant)
-                .padding(.top, 4)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(SirosTheme.surfaceVariant)
-        )
-    }
-
-    @ViewBuilder
-    private func credentialRow(_ credential: StoredCredential) -> some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(SirosTheme.brand)
-                .frame(width: 36, height: 36)
-                .overlay(
-                    Text((credential.metadata?.name ?? "?").prefix(1).uppercased())
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text(credential.metadata?.name ?? credential.format)
-                    .font(.body.weight(.medium))
-                if let issuer = credential.metadata?.issuer?.name {
-                    Text(issuer)
-                        .font(.caption)
-                        .foregroundColor(SirosTheme.onSurfaceVariant)
-                }
-            }
-        }
+    /// Every batch instance of `credential` (see `StoredCredential.batchId`),
+    /// so `CredentialCardView` can show the same "remaining copies" ribbon
+    /// and exhausted-greying it uses in the main credential list.
+    /// `groupForDisplay` needs every raw candidate in the batch to count
+    /// remaining copies correctly, not just the one representative.
+    private func instances(for credential: StoredCredential) -> [CredentialInstance] {
+        let batchCandidates = viewModel.pendingPresentation?.candidates
+            .filter { $0.batchId == credential.batchId } ?? [credential]
+        return CredentialUtils.groupForDisplay(
+            credentials: batchCandidates,
+            presentationHistory: viewModel.currentPresentationHistory
+        ).first(where: { $0.credential.batchId == credential.batchId })?.instances ?? []
     }
 
     private func formatClaimName(_ claim: String) -> String {
