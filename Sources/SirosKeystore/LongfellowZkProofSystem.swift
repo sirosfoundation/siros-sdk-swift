@@ -222,7 +222,11 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
             #if canImport(os)
             logger.warning("Circuit '\(descriptor.id)' has no known uncompressed size; guessing buffer size")
             #endif
-            outputSize = compressedBytes.count * 20
+            // These circuits compress at roughly 300-400x (a 319KB real V8
+            // 2-attribute circuit decompresses to ~104MB, confirmed via
+            // `zstd -l`) - only reached if BOTH the frame's own embedded
+            // content size AND the catalog's uncompressed.size are absent.
+            outputSize = compressedBytes.count * 400
         }
 
         var output = Data(count: outputSize)
