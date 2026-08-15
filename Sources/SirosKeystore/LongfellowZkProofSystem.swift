@@ -209,10 +209,15 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // asserted this claim's presence to produce the proof), a missing
         // seed here means the credential is malformed, not that the
         // pseudonym is legitimately absent.
-        let seedItem = document.issuerSigned.nameSpaces[namespace]?.first {
-            $0.item.elementIdentifier == Self.pseudonymClaim ||
-                $0.item.elementIdentifier == Self.pseudonymSeedClaim
-        }
+        // pseudonymSeedClaim is checked first, deliberately: it's the only
+        // one that should ever actually be present in a credential (the
+        // issuer's own stored claim - see its doc comment), so an explicit
+        // priority order removes any ambiguity about which wins if a
+        // namespace somehow contained both, rather than relying on whatever
+        // order nameSpaces happens to iterate in.
+        let namespaceItems = document.issuerSigned.nameSpaces[namespace]
+        let seedItem = namespaceItems?.first { $0.item.elementIdentifier == Self.pseudonymSeedClaim }
+            ?? namespaceItems?.first { $0.item.elementIdentifier == Self.pseudonymClaim }
         guard case .byteString(let seed)? = seedItem?.item.elementValue else {
             throw MdocError.malformed(
                 "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymSeedClaim)' " +
