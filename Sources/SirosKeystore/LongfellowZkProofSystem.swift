@@ -57,6 +57,21 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         "eu.europa.ec.eudi.pid.1",
     ]
 
+    /// The single namespace Longfellow proving takes claims from, per
+    /// supported docType. Deliberately NOT derived generically from
+    /// `document.issuerSigned.nameSpaces.keys.first` (that key set's
+    /// iteration order is unspecified, and a real mDL can carry a SECOND,
+    /// jurisdiction-specific namespace alongside this primary one - e.g. an
+    /// AAMVA-extension US mDL - so picking "the first key" is not just
+    /// non-deterministic, it can pick the wrong namespace entirely).
+    /// Hardcoded per-docType, matching `supportedDocTypes`/`pseudonymClaim`
+    /// above already being a closed, hardcoded set rather than a generic
+    /// derivation.
+    private static let namespaceByDocType: [String: String] = [
+        "org.iso.18013.5.1.mDL": "org.iso.18013.5.1",
+        "eu.europa.ec.eudi.pid.1": "eu.europa.ec.eudi.pid.1",
+    ]
+
     private let zkCircuitClient: ZkCircuitClient
     private let pseudonymDeriver: ZkPseudonymDeriver
 
@@ -99,15 +114,34 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         signer: @Sendable @escaping ([UInt8]) async throws -> [UInt8],
         priorState: [UInt8]?
     ) async throws -> ZkProofResult {
+        // A caller that explicitly lists `pairwise_pseudonym` in
+        // `requestedClaims` without also supplying `verifierIdentity` has an
+        // inconsistent request: below, a nil `verifierIdentity` always takes
+        // the non-PPID `prove` path, which would silently drop the
+        // pseudonym request rather than honor or reject it. Reject it here
+        // instead of producing a proof that doesn't match what was asked.
+        if verifierIdentity == nil && requestedClaims.contains(Self.pseudonymClaim) {
+            throw MdocError.malformed(
+                "requestedClaims includes '\(Self.pseudonymClaim)' but verifierIdentity is nil - " +
+                "a pseudonym was requested without specifying who it should be bound to"
+            )
+        }
+
         var effectiveClaims = requestedClaims
         if verifierIdentity != nil && !effectiveClaims.contains(Self.pseudonymClaim) {
             effectiveClaims.append(Self.pseudonymClaim)
         }
 
         let document = try MdocCbor.parseStoredCredential(credentialBytes)
-        guard let namespace = document.issuerSigned.nameSpaces.keys.first else {
-            throw MdocError.malformed("mdoc credential '\(document.docType)' has no disclosed namespaces")
+        guard let expectedNamespace = Self.namespaceByDocType[document.docType] else {
+            throw MdocError.malformed("mdoc credential has unsupported docType '\(document.docType)'")
         }
+        guard document.issuerSigned.nameSpaces[expectedNamespace] != nil else {
+            throw MdocError.malformed(
+                "mdoc credential '\(document.docType)' has no disclosed '\(expectedNamespace)' namespace"
+            )
+        }
+        let namespace = expectedNamespace
 
         let prover = try await getOrInitProver(spec: spec, numAttributes: effectiveClaims.count)
 
@@ -153,22 +187,47 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // circuit itself asserts) is computed locally so the caller can
         // display/track it, mirroring the feat/longfellow-zk reference's own
         // separate computePPID() step.
+        //
+        // A missing/undecodable seed here is NOT this system reporting "no
+        // pseudonym support" - this system supports pseudonyms (that's why
+        // we're in this branch at all); `.notSupportedBySystem` would
+        // misrepresent a malformed credential as a system limitation. Since
+        // `proveWithPpid` above already succeeded (the circuit itself
+        // asserted this claim's presence to produce the proof), a missing
+        // seed here means the credential is malformed, not that the
+        // pseudonym is legitimately absent.
         let seedItem = document.issuerSigned.nameSpaces[namespace]?.first {
             $0.item.elementIdentifier == Self.pseudonymClaim
         }
-        var pseudonym: [UInt8]?
-        if case .byteString(let seed)? = seedItem?.item.elementValue {
-            pseudonym = Array(SHA256.hash(data: seed + verifierContext))
+        guard case .byteString(let seed)? = seedItem?.item.elementValue else {
+            throw MdocError.malformed(
+                "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymClaim)' " +
+                "element in namespace '\(namespace)', but a pseudonym was requested and the proof succeeded"
+            )
         }
+        let pseudonym = Array(SHA256.hash(data: seed + verifierContext))
 
         return ZkProofResult(
             proofBytes: [UInt8](proofBytes),
             pseudonym: pseudonym,
-            pseudonymOutcome: pseudonym != nil ? .provided : .notSupportedBySystem
+            pseudonymOutcome: .provided
         )
     }
 
     private func getOrInitProver(spec: ZkSystemSpec, numAttributes: Int) async throws -> MdocZkProver {
+        // `initializeProver`'s native signature takes `numAttributes` as a
+        // `UInt8` (circuits are compiled for a small, fixed attribute
+        // count) - `UInt8(numAttributes)` below traps on any value outside
+        // 0...255, which a verifier could otherwise trigger simply by
+        // requesting a lot of claims. Validate first and fail with a
+        // catchable error instead of crashing the process.
+        guard numAttributes <= Int(UInt8.max) else {
+            throw MdocError.malformed(
+                "circuit '\(spec.id)' cannot prove \(numAttributes) attributes - the native prover " +
+                "supports at most \(UInt8.max)"
+            )
+        }
+
         let cacheKey = ProverCacheKey(circuitId: spec.id, numAttributes: numAttributes)
         if let cached = proverCache[cacheKey] {
             return cached
