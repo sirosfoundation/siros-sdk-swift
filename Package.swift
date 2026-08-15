@@ -26,8 +26,28 @@ let package = Package(
         // `Crypto` module is only actually compiled/linked in on Linux,
         // where CryptoKit doesn't exist at all.
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        // Circuits fetched from go-zk-circuits (see ZkCircuitClient,
+        // SirosCredentials) are zstd-compressed; zk-cred-longfellow's
+        // initializeProver expects already-decompressed bytes (confirmed
+        // against wallet-frontend's feat/longfellow-zk reference
+        // implementation) - decompression is the caller's responsibility,
+        // not the native crate's. facebook/zstd ships its own SPM manifest
+        // (a plain C target, no Swift wrapper) exposing this as `libzstd`.
+        .package(url: "https://github.com/facebook/zstd.git", from: "1.5.6"),
     ],
     targets: [
+        // --- zk-cred-longfellow UniFFI bindings (XCFramework) ---
+        // Built by `make xcframework` in the zk-cred-longfellow crate; the
+        // module name is the crate name + "FFI" (`zk_cred_longfellowFFI`),
+        // matching siros_wscd_managerFFI's own naming convention below -
+        // confirmed by inspecting the real published XCFramework's
+        // module.modulemap.
+        .binaryTarget(
+            name: "zk_cred_longfellowFFI",
+            url: "https://github.com/sirosfoundation/zk-cred-longfellow/releases/download/v0.1.1/zk_cred_longfellow.xcframework.zip",
+            checksum: "dcbbaaeb5b1075d9794e1c2be830218742558a62aa19276b7b789dd05c6727f6"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -39,6 +59,13 @@ let package = Package(
                 // dependencies of its own, so this doesn't introduce a cycle.
                 "SirosTransport",
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+                // zk_cred_longfellowFFI's XCFramework only ships iOS slices
+                // (device + simulator) - no macOS slice exists, and this
+                // package's CI builds/tests the whole thing on bare macOS
+                // too, so this dependency must be scoped to iOS only.
+                // FFI-dependent code in this target is correspondingly
+                // wrapped in `#if os(iOS)` (see Generated/zk_cred_longfellow.swift).
+                .target(name: "zk_cred_longfellowFFI", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosCredentials"
         ),
@@ -83,8 +110,8 @@ let package = Package(
         // XCFramework's module.modulemap).
         .binaryTarget(
             name: "siros_wscd_managerFFI",
-            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.7.2/siros_wscd_manager.xcframework.zip",
-            checksum: "a7ac1dcd6407cb47785e4f02fe3e4d085c82317ecde4e81378b65302b998984c"
+            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.7.3/siros_wscd_manager.xcframework.zip",
+            checksum: "4ec25fa9c0f8177a77302c5c66f392c8286d4dbf128e447b6389771657d12b08"
         ),
 
         // --- Keystore: JWE-encrypted key management ---
@@ -100,6 +127,10 @@ let package = Package(
                 // is correspondingly wrapped in `#if os(iOS)`.
                 .target(name: "siros_wscd_managerFFI", condition: .when(platforms: [.iOS])),
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+                // Only used by LongfellowZkProofSystem.swift, which is
+                // itself `#if os(iOS)`-gated (see that file) since the
+                // native zk_cred_longfellowFFI it wraps is iOS-only.
+                .product(name: "libzstd", package: "zstd", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosKeystore"
         ),
@@ -107,7 +138,13 @@ let package = Package(
             name: "SirosKeystoreTests",
             dependencies: [
                 "SirosKeystore",
+                // Needed by LongfellowZkVectorTests for the vendored
+                // zk_cred_longfellow UniFFI bindings (initializeProver,
+                // proveWithPpid, CircuitVersion), which live in
+                // SirosCredentials's own module, not SirosKeystore's.
+                "SirosCredentials",
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+                .product(name: "libzstd", package: "zstd", condition: .when(platforms: [.iOS])),
             ],
             path: "Tests/SirosKeystoreTests",
             resources: [.copy("Resources")]
