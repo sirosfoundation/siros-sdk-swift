@@ -138,7 +138,13 @@ let package = Package(
             name: "SirosKeystoreTests",
             dependencies: [
                 "SirosKeystore",
+                // Needed by LongfellowZkVectorTests for the vendored
+                // zk_cred_longfellow UniFFI bindings (initializeProver,
+                // proveWithPpid, CircuitVersion), which live in
+                // SirosCredentials's own module, not SirosKeystore's.
+                "SirosCredentials",
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+                .product(name: "libzstd", package: "zstd", condition: .when(platforms: [.iOS])),
             ],
             path: "Tests/SirosKeystoreTests",
             resources: [.copy("Resources")]
