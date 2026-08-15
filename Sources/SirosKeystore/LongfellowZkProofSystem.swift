@@ -50,6 +50,19 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
     /// the circuit is unaware of.
     public static let pseudonymClaim = "pairwise_pseudonym"
 
+    /// The mdoc element identifier an issuer actually stores the raw seed
+    /// under (confirmed against zk-cred-longfellow's own reference source,
+    /// `mdoc::find_attributes` - it matches a *requested* id of
+    /// `pseudonymClaim` against a credential attribute *stored* as this
+    /// name: `desired_attribute_id == "pairwise_pseudonym" && attribute_id
+    /// == "pseudonym_seed"`). `pseudonymClaim` is the session-specific value
+    /// the wallet DERIVES from this seed at presentation time
+    /// (`SHA256(seed || verifier_context)`) and discloses to the verifier -
+    /// it is never itself a stored issuer claim, so a direct CBOR namespace
+    /// lookup for it (see `generateProof`'s own re-derivation below) must
+    /// fall back to this name, mirroring the crate's own alias.
+    private static let pseudonymSeedClaim = "pseudonym_seed"
+
     nonisolated public let systemId = "longfellow-libzk-v1"
 
     nonisolated public let supportedDocTypes: Set<String> = [
@@ -197,11 +210,12 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // seed here means the credential is malformed, not that the
         // pseudonym is legitimately absent.
         let seedItem = document.issuerSigned.nameSpaces[namespace]?.first {
-            $0.item.elementIdentifier == Self.pseudonymClaim
+            $0.item.elementIdentifier == Self.pseudonymClaim ||
+                $0.item.elementIdentifier == Self.pseudonymSeedClaim
         }
         guard case .byteString(let seed)? = seedItem?.item.elementValue else {
             throw MdocError.malformed(
-                "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymClaim)' " +
+                "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymSeedClaim)' " +
                 "element in namespace '\(namespace)', but a pseudonym was requested and the proof succeeded"
             )
         }
