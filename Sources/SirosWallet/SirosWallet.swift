@@ -248,6 +248,18 @@ public final class SirosWallet: @unchecked Sendable {
         await persistAndSyncKeystore()
     }
 
+    /// Exposes `authProvider` as a `WscdAutoEnrollHint` when it implements
+    /// one - `nil` otherwise (e.g. a host-supplied `AuthProvider` that
+    /// doesn't). Intended use: right after a successful `login()`, the host
+    /// app checks `wscdAutoEnrollHint()?.suggestsWscdCapableDevice()` to
+    /// decide whether to offer enrolling the just-used login credential as a
+    /// WSCD signing device - see that protocol's doc comment for why this is
+    /// a hint requiring a real (offered, not automatic) enrollment attempt to
+    /// confirm, not a guarantee.
+    public func wscdAutoEnrollHint() -> WscdAutoEnrollHint? {
+        authProvider as? WscdAutoEnrollHint
+    }
+
     // exportCredentialRefreshTokens/setCredentialRefreshToken/
     // removeCredentialRefreshToken (credential re-issuance/renewal plan,
     // Phase 2) now live in SirosWallet+Renewal.swift, alongside the rest of
