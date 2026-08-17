@@ -17,27 +17,27 @@ struct IDVPreparationView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Steps
-                    Text("How it works")
+                    Text(L10n.string("idv.howItWorks"))
                         .font(.headline)
 
-                    StepRow(number: 1, icon: "faceid", title: "Face scan",
-                            description: "Scan your face to show you are a real, live human")
-                    StepRow(number: 2, icon: "doc.viewfinder", title: "Document scan",
-                            description: "Scan the photo page of your passport or ID card")
-                    StepRow(number: 3, icon: "wave.3.right", title: "NFC chip read",
-                            description: "Place your phone on your document to read the NFC chip")
+                    StepRow(number: 1, icon: "faceid", title: L10n.string("idv.stepFaceScanTitle"),
+                            description: L10n.string("idv.stepFaceScanDescription"))
+                    StepRow(number: 2, icon: "doc.viewfinder", title: L10n.string("idv.stepDocumentScanTitle"),
+                            description: L10n.string("idv.stepDocumentScanDescription"))
+                    StepRow(number: 3, icon: "wave.3.right", title: L10n.string("idv.stepNfcTitle"),
+                            description: L10n.string("idv.stepNfcDescription"))
 
                     Divider()
 
                     // Prerequisites
-                    Text("Before you start")
+                    Text(L10n.string("idv.beforeYouStart"))
                         .font(.subheadline)
                         .fontWeight(.semibold)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Have your passport or ID card ready", systemImage: "checkmark.circle")
-                        Label("Ensure good lighting conditions", systemImage: "checkmark.circle")
-                        Label("Ensure a stable internet connection", systemImage: "checkmark.circle")
+                        Label(L10n.string("idv.prereqDocument"), systemImage: "checkmark.circle")
+                        Label(L10n.string("idv.prereqLighting"), systemImage: "checkmark.circle")
+                        Label(L10n.string("idv.prereqConnection"), systemImage: "checkmark.circle")
                     }
                     .font(.callout)
                     .foregroundColor(.secondary)
@@ -45,24 +45,24 @@ struct IDVPreparationView: View {
                     Divider()
 
                     // Privacy explanation
-                    Text("Why a face scan?")
+                    Text(L10n.string("idv.whyFaceScanTitle"))
                         .font(.subheadline)
                         .fontWeight(.semibold)
 
-                    Text("A 3D face scan verifies you are a real, live person. Your biometric data is encrypted during capture and processed only for identity verification. It is not stored after the session.")
+                    Text(L10n.string("idv.whyFaceScanDescription"))
                         .font(.caption)
                         .foregroundColor(.secondary)
 
                     // Consent
                     Toggle(isOn: $consentGiven) {
-                        Text("I consent to biometric processing for identity verification.")
+                        Text(L10n.string("idv.consentText"))
                             .font(.callout)
                     }
                     .toggleStyle(.switch)
 
                     // Start Scan
                     Button(action: onStartScan) {
-                        Text("Start Scan")
+                        Text(L10n.string("idv.startScanButton"))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
@@ -72,11 +72,11 @@ struct IDVPreparationView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
             }
-            .navigationTitle("Scan Physical ID")
+            .navigationTitle(L10n.string("idv.navTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onDismiss)
+                    Button(L10n.string("common.cancel"), action: onDismiss)
                 }
             }
         }

@@ -44,9 +44,16 @@ enum L10n {
         return lookup(currentTable, path) ?? lookup(fallbackTable, path) ?? key
     }
 
-    /// Substitutes `%1$s`/`%1$d`-style placeholders via `String(format:)`,
-    /// matching the printf-style specifiers already used throughout the
-    /// bundled i18n JSON.
+    /// Substitutes `%1$@`/`%1$d`-style placeholders via `String(format:)`,
+    /// matching the printf-style specifiers used throughout the bundled
+    /// i18n JSON.
+    ///
+    /// String arguments MUST use `%@`, never `%s`: confirmed via a real
+    /// on-device crash (`CFStringAppendFormatCore`) that Darwin's Foundation
+    /// `String(format:arguments:)` cannot format a Swift `String` through a
+    /// C `%s` specifier the way it does through `%@` (which bridges to
+    /// `NSString` and calls its `description`). `%d`/`%ld` etc. for numeric
+    /// arguments are unaffected.
     static func string(_ key: String, _ args: CVarArg...) -> String {
         String(format: string(key), arguments: args)
     }

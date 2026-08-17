@@ -35,7 +35,7 @@ struct LoginView: View {
 
                 Spacer().frame(height: 8)
 
-                Text("SIROS Wallet")
+                Text(L10n.string("login.title"))
                     .font(.title)
                     .fontWeight(.bold)
 
@@ -44,7 +44,7 @@ struct LoginView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "info.circle")
                             .font(.caption2)
-                        Text(showBackendInfo ? viewModel.backendUrl : "Digital Identity For Humans")
+                        Text(showBackendInfo ? viewModel.backendUrl : L10n.string("app.tagline"))
                             .font(.caption)
                     }
                     .foregroundColor(SirosTheme.onSurfaceVariant)
@@ -55,13 +55,13 @@ struct LoginView: View {
 
                 VStack(spacing: 12) {
                     if showBackendInfo {
-                        TextField("Backend URL", text: $viewModel.backendUrl)
+                        TextField(L10n.string("settings.backendUrl"), text: $viewModel.backendUrl)
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                             .disabled(viewModel.isLoading)
 
-                        TextField("Tenant ID", text: $viewModel.tenantId)
+                        TextField(L10n.string("settings.tenantId"), text: $viewModel.tenantId)
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
@@ -91,16 +91,16 @@ struct LoginView: View {
     private var loginContent: some View {
         if showRegister {
             // Mode C: Registration
-            Text("Create Account")
+            Text(L10n.string("login.createAccount"))
                 .font(.headline)
                 .fontWeight(.semibold)
 
-            TextField("Display name", text: $registerName)
+            TextField(L10n.string("login.displayNameLabel"), text: $registerName)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .disabled(viewModel.isLoading)
 
-            Text("\(registerName.utf8.count)/64")
+            Text(L10n.string("login.displayNameCount", registerName.utf8.count))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -113,7 +113,7 @@ struct LoginView: View {
                         ProgressView()
                             .tint(.white)
                     }
-                    Text("Sign up with passkey")
+                    Text(L10n.string("login.signUpButton"))
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 48)
@@ -123,14 +123,14 @@ struct LoginView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(viewModel.isLoading || registerName.isEmpty || registerName.utf8.count > 64)
 
-            Button("Already have an account? Login") {
+            Button(L10n.string("login.alreadyHaveAccount")) {
                 showRegister = false
             }
             .font(.subheadline)
 
         } else if !viewModel.cachedAccounts.isEmpty && !showOtherLogin {
             // Mode A: Cached accounts picker
-            Text("Welcome back")
+            Text(L10n.string("login.welcomeBack"))
                 .font(.headline)
                 .fontWeight(.semibold)
 
@@ -165,7 +165,7 @@ struct LoginView: View {
                 }
             }
 
-            Button("Use other account") {
+            Button(L10n.string("login.useOtherAccount")) {
                 showOtherLogin = true
             }
             .font(.subheadline)
@@ -178,7 +178,7 @@ struct LoginView: View {
                         ProgressView()
                             .tint(.white)
                     }
-                    Text("Log in with Passkey")
+                    Text(L10n.string("login.signInButton"))
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 48)
@@ -188,13 +188,13 @@ struct LoginView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(viewModel.isLoading)
 
-            Button("New here? Sign up") {
+            Button(L10n.string("login.newHere")) {
                 showRegister = true
             }
             .font(.subheadline)
 
             if !viewModel.cachedAccounts.isEmpty {
-                Button("Back to saved accounts") {
+                Button(L10n.string("login.backToSavedAccounts")) {
                     showOtherLogin = false
                 }
                 .font(.subheadline)
@@ -217,17 +217,17 @@ struct PreLoginSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Connection") {
-                    TextField("Backend URL", text: $viewModel.backendUrl)
+                Section(L10n.string("settings.connectionSection")) {
+                    TextField(L10n.string("settings.backendUrl"), text: $viewModel.backendUrl)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                    TextField("Tenant ID", text: $viewModel.tenantId)
+                    TextField(L10n.string("settings.tenantId"), text: $viewModel.tenantId)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
 
-                Section("ZK Circuit Hosting") {
-                    Text("Mirror/fallback hosting services for ZK-proof circuit artifacts, one URL per line. Tried in order; the first that responds is used.")
+                Section(L10n.string("settings.zkCircuitHostingSection")) {
+                    Text(L10n.string("settings.zkCircuitHostingDescription"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                     TextEditor(text: $zkCircuitUrlsText)
@@ -246,29 +246,29 @@ struct PreLoginSettingsView: View {
                         }
                 }
 
-                Section("Transport Protocol") {
-                    Toggle("WMP Protocol", isOn: $viewModel.useWmpProtocol)
-                    Text(viewModel.useWmpProtocol ? "JSON-RPC 2.0 (WMP)" : "Legacy engine protocol")
+                Section(L10n.string("settings.transportProtocolSection")) {
+                    Toggle(L10n.string("settings.wmpProtocolToggle"), isOn: $viewModel.useWmpProtocol)
+                    Text(viewModel.useWmpProtocol ? L10n.string("settings.wmpProtocolOn") : L10n.string("settings.wmpProtocolOff"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
 
-                Section("Developer") {
-                    Toggle("Credential Details", isOn: $viewModel.showCredentialDetails)
-                    Text("Whether tapping a credential opens the detail screen (raw credential, claims, disclosures).")
+                Section(L10n.string("common.developer")) {
+                    Toggle(L10n.string("settings.credentialDetailsToggle"), isOn: $viewModel.showCredentialDetails)
+                    Text(L10n.string("settings.credentialDetailsDescription"))
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Toggle("Diagnostic Messages", isOn: $viewModel.showDiagnosticMessages)
-                    Text("Show the raw backend step token alongside the friendly progress label during a flow.")
+                    Toggle(L10n.string("settings.diagnosticMessagesToggle"), isOn: $viewModel.showDiagnosticMessages)
+                    Text(L10n.string("settings.diagnosticMessagesDescription"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("Connection Settings")
+            .navigationTitle(L10n.string("settings.connectionSettingsTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(L10n.string("common.done")) { dismiss() }
                 }
             }
         }
