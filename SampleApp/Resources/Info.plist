@@ -35,6 +35,7 @@
                 <string>siros-sample</string>
                 <string>openid-credential-offer</string>
                 <string>openid4vp</string>
+                <string>haip</string>
             </array>
         </dict>
     </array>
@@ -46,5 +47,7 @@
     <string>Face ID is used to authenticate and protect your credentials.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader.</string>
+    <key>NFCReaderUsageDescription</key>
+    <string>NFC is used to communicate with a security key for FIDO2 authentication.</string>
 </dict>
 </plist>

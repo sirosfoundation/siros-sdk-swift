@@ -65,5 +65,8 @@ targets:
               - openid-credential-offer
               - openid4vp
               - haip
-        NSCameraUsageDescription: "Camera is used to scan QR codes for credential offers and presentation requests."
+        NSCameraUsageDescription: "Camera is used to scan QR codes and for identity verification via 3D liveness detection."
         NSBluetoothAlwaysUsageDescription: "Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader."
+        NSFaceIDUsageDescription: "Face ID is used to authenticate and protect your credentials."
+        NFCReaderUsageDescription: "NFC is used to communicate with a security key for FIDO2 authentication."
+        ITSAppUsesNonExemptEncryption: false
