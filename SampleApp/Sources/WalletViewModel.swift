@@ -152,6 +152,11 @@ final class WalletViewModel: ObservableObject {
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingWscdChoice`'s
     /// pattern above.
     @Published var pendingFido2PinEntry: PendingFido2PinEntry?
+    /// Which plugin ID (if any) is currently offering to auto-enroll after a
+    /// successful login - see `maybeOfferWscdAutoEnroll()`. Drives a
+    /// two-button `.alert` in `ContentView` (a plain confirm/decline, not
+    /// `.sheet(item:)`, since there's no picker involved).
+    @Published var pendingAutoEnrollOffer: String?
 
     /// Set the instant a QR-scanned (or pasted/deep-linked) offer/request URI
     /// is classified and handed off to the SDK's issuance/presentation start
@@ -185,6 +190,12 @@ final class WalletViewModel: ObservableObject {
     @Published var lifecycleStatus: LifecycleStatus?
     @Published var enrollmentInProgress = false
     @Published var wscdKeys: [SignerKeyInfo] = []
+    /// Every registered WSCD plugin ID this session actually has a signer
+    /// for (mirrors Kotlin's `_availableWscdPluginIds`), set from
+    /// `rebuildWalletIfNeeded()`'s local `availableKeystores` dict. Used by
+    /// `maybeOfferWscdAutoEnroll()` to check the hinted plugin is actually
+    /// usable in this session before offering it.
+    @Published var availableWscdPluginIds: [String] = []
     @Published var wscdKeySecurityProps: [String: SignerSecurityProperties] = [:]
     /// Snapshot of `SirosWallet.wscdTofuMapping`, refreshed on demand
     /// (`refreshWscdTofuMapping()`) - the SDK doesn't publish TOFU changes
@@ -242,6 +253,10 @@ final class WalletViewModel: ObservableObject {
     /// The continuation box backing the CURRENTLY shown `pendingWscdChoice`,
     /// if any - see `requestWscdChoice`'s doc comment.
     private var wscdChoiceContinuationBox: WscdChoiceContinuationBox?
+    /// Offered at most once per process - a user who dismisses it isn't
+    /// re-nagged every time `.ready` re-emits (e.g. after a token refresh),
+    /// and one who accepts doesn't need it again once `enrollWscd()` runs.
+    private var autoEnrollOffered = false
 
     init() {
         let defaults = UserDefaults.standard
@@ -580,6 +595,38 @@ final class WalletViewModel: ObservableObject {
     func clearWscdGlobalOverride() {
         wallet?.clearWscdGlobalOverride()
         refreshWscdUserOverrides()
+    }
+
+    // MARK: - WSCD auto-enroll offer
+
+    /// Checked every time the wallet becomes `.ready` (right after a
+    /// successful login, and on later reconnects). If the login provider's
+    /// `WscdAutoEnrollHint` suggests this might be a WSCD-capable device,
+    /// that plugin is available in this session, and nothing is enrolled for
+    /// it yet, offers the user a one-tap prompt to enroll it.
+    private func maybeOfferWscdAutoEnroll() {
+        guard !autoEnrollOffered, let wallet else { return }
+        guard let hint = wallet.wscdAutoEnrollHint(), hint.suggestsWscdCapableDevice() else { return }
+        let pluginId = hint.hintedWscdPluginId
+        guard availableWscdPluginIds.contains(pluginId) else { return }
+        Task {
+            guard await wallet.wscdCredentials(pluginId: pluginId) == nil else { return }
+            autoEnrollOffered = true
+            pendingAutoEnrollOffer = pluginId
+        }
+    }
+
+    /// The user's answer to `pendingAutoEnrollOffer`. Accepting switches to
+    /// that plugin's tab and starts the normal enroll flow - same PIN-first +
+    /// present-key sequence as the manual Enroll button, since accepting
+    /// this offer is still only a HINT that the device supports signing.
+    func respondToAutoEnrollOffer(accept: Bool) {
+        guard let pluginId = pendingAutoEnrollOffer else { return }
+        pendingAutoEnrollOffer = nil
+        if accept {
+            selectPlugin(pluginId)
+            enrollWscd()
+        }
     }
 
     /// Adds/overwrites one `WalletConfig.defaultWscdMapping` entry - dev
@@ -1144,6 +1191,7 @@ final class WalletViewModel: ObservableObject {
             }
         }
         #endif
+        availableWscdPluginIds = availableKeystores.keys.sorted()
 
         // Broken out into separately-typed statements rather than inlined
         // directly in the `WalletConfig(...)` call below - the combination
@@ -1239,6 +1287,7 @@ final class WalletViewModel: ObservableObject {
             userId = uid
             cachedAccounts = accounts
             listPasskeysForUI()
+            maybeOfferWscdAutoEnroll()
         case .keystoreLocked(_, let name):
             walletState = .connecting
             displayName = name

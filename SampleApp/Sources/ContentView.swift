@@ -69,6 +69,24 @@ struct ContentView: View {
         }) { pending in
             Fido2PinEntryView(pending: pending)
         }
+        // Same top-level rationale as `pendingWscdChoice`/`pendingFido2PinEntry`
+        // above - offered once right after a successful login, regardless of
+        // which screen is showing underneath (mirrors the Kotlin sample
+        // app's AutoEnrollOfferDialog).
+        .alert(
+            "Use this security key for signing?",
+            isPresented: Binding(
+                get: { viewModel.pendingAutoEnrollOffer != nil },
+                set: { isPresented in
+                    if !isPresented { viewModel.respondToAutoEnrollOffer(accept: false) }
+                }
+            )
+        ) {
+            Button("Enable") { viewModel.respondToAutoEnrollOffer(accept: true) }
+            Button("Not now", role: .cancel) { viewModel.respondToAutoEnrollOffer(accept: false) }
+        } message: {
+            Text("The security key you just used to log in may also support signing credentials directly, instead of relying on a software key. Set it up now?")
+        }
     }
 }
 
