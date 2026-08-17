@@ -48,7 +48,7 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
     /// alongside real disclosed claims (e.g. `["age_over_18",
     /// "pairwise_pseudonym"]`), not as a separate side-channel-only concept
     /// the circuit is unaware of.
-    public static let pseudonymClaim = "pairwise_pseudonym"
+    public static let pseudonymClaim = zkPseudonymClaim
 
     /// The mdoc element identifier an issuer actually stores the raw seed
     /// under (confirmed against zk-cred-longfellow's own reference source,
@@ -106,16 +106,25 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         self.pseudonymDeriver = pseudonymDeriver
     }
 
-    /// Matches any requested spec declaring `system == "longfellow"` -
-    /// mirrors `WscdSelectionPolicy`'s "nominal capability" convention (a
-    /// static declaration, not a live probe): whether the specific circuit
+    /// Matches any requested spec declaring `system == systemId`
+    /// (`"longfellow-libzk-v1"` - confirmed live against
+    /// multipaz-verifier-server's actual DCQL `zk_system_type` output, which
+    /// sends this exact string, not the shorter `"longfellow"` this
+    /// comparison incorrectly used before) AND whose own `num_attributes`
+    /// param equals `numAttributes` - a circuit is compiled for a FIXED
+    /// attribute count, so a mismatched count fails opaquely at the native
+    /// prover/verifier boundary rather than here. Mirrors
+    /// `WscdSelectionPolicy`'s "nominal capability" convention (a static
+    /// declaration, not a live probe): whether the specific circuit
     /// `ZkSystemSpec.id` names is actually fetchable is only verified
     /// lazily, in `generateProof` - `matchingSpec` itself can't do network
     /// I/O (it's a plain, synchronous, non-isolated function, used during
     /// request-vs-capability matching before any proof generation is
     /// committed to).
-    nonisolated public func matchingSpec(_ requestedSpecs: [ZkSystemSpec]) -> ZkSystemSpec? {
-        requestedSpecs.first { $0.system == "longfellow" }
+    nonisolated public func matchingSpec(_ requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> ZkSystemSpec? {
+        requestedSpecs.first {
+            $0.system == systemId && $0.getParam("num_attributes").flatMap { Int($0) } == numAttributes
+        }
     }
 
     public func generateProof(
@@ -181,7 +190,7 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
                 sessionTranscript: Data(sessionTranscript),
                 time: time
             )
-            return ZkProofResult(proofBytes: [UInt8](proofBytes))
+            return ZkProofResult(proofBytes: [UInt8](proofBytes), timestamp: time)
         }
 
         let verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
@@ -229,7 +238,8 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         return ZkProofResult(
             proofBytes: [UInt8](proofBytes),
             pseudonym: pseudonym,
-            pseudonymOutcome: .provided
+            pseudonymOutcome: .provided,
+            timestamp: time
         )
     }
 

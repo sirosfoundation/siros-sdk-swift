@@ -10,12 +10,31 @@ public enum CredentialMatcher {
         public let format: String?
         public let candidates: [StoredCredential]
         public let requestedClaims: [[String]]
+        /// Parsed `meta.zk_system_type` (present only when `format` is
+        /// `"mso_mdoc_zk"`) - the verifier's own list of acceptable ZK proof
+        /// systems, in priority order, per multipaz's wire convention.
+        /// Feed to `ZkProofSystem.matchingSpec`/`ZkProofSystemRegistry.resolve`
+        /// to pick which one (if any) this wallet can actually satisfy.
+        public let zkSystemTypes: [ZkSystemSpec]?
+        /// Parsed `meta.ppid_context`, if the verifier supplied one - see
+        /// `VerifierIdentity.ppidContext`'s doc comment. `nil` is a normal,
+        /// common case (most requests won't set this).
+        public let ppidContext: String?
 
-        public init(queryId: String, format: String? = nil, candidates: [StoredCredential], requestedClaims: [[String]]) {
+        public init(
+            queryId: String,
+            format: String? = nil,
+            candidates: [StoredCredential],
+            requestedClaims: [[String]],
+            zkSystemTypes: [ZkSystemSpec]? = nil,
+            ppidContext: String? = nil
+        ) {
             self.queryId = queryId
             self.format = format
             self.candidates = candidates
             self.requestedClaims = requestedClaims
+            self.zkSystemTypes = zkSystemTypes
+            self.ppidContext = ppidContext
         }
     }
 
@@ -170,6 +189,14 @@ public enum CredentialMatcher {
         }
 
         let doctypeValue = meta?["doctype_value"] as? String
+        let zkSystemTypes: [ZkSystemSpec]?
+        if let zkArray = meta?["zk_system_type"] as? [[String: Any]] {
+            let specs = zkArray.compactMap { parseZkSystemSpec($0) }
+            zkSystemTypes = specs.isEmpty ? nil : specs
+        } else {
+            zkSystemTypes = nil
+        }
+        let ppidContext = meta?["ppid_context"] as? String
 
         let matched = credentials.filter { cred in
             matchesFormat(cred, format: format)
@@ -181,12 +208,37 @@ public enum CredentialMatcher {
             queryId: queryId,
             format: format,
             candidates: matched,
-            requestedClaims: claims
+            requestedClaims: claims,
+            zkSystemTypes: zkSystemTypes,
+            ppidContext: ppidContext
         )
+    }
+
+    /// Parses one entry of a DCQL query's `meta.zk_system_type` array into a
+    /// `ZkSystemSpec` - `{id, system, ...params}`. Confirmed via multipaz's
+    /// own parsing of this exact wire shape: every OTHER top-level key on the
+    /// entry (e.g. `num_attributes`, `version`, `circuit_hash`,
+    /// `block_enc_hash`, `block_enc_sig`) IS a param - there is no nested
+    /// `"params"` object on the wire.
+    private static func parseZkSystemSpec(_ obj: [String: Any]) -> ZkSystemSpec? {
+        guard let id = obj["id"] as? String, let system = obj["system"] as? String else { return nil }
+        var params: [String: String] = [:]
+        for (key, value) in obj where key != "id" && key != "system" {
+            params[key] = (value as? String) ?? (value as? CustomStringConvertible)?.description ?? ""
+        }
+        return ZkSystemSpec(id: id, system: system, params: params)
     }
 
     private static func matchesFormat(_ credential: StoredCredential, format: String?) -> Bool {
         guard let format else { return true }
+        if format.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+            // A verifier requesting a ZK-wrapped presentation ("mso_mdoc_zk")
+            // still matches a credential stored in the ordinary "mso_mdoc"
+            // shape - producing a ZK proof is a presentation-time transform
+            // (see ZkProofSystem.generateProof), not a distinct storage
+            // format. There is no separate on-device "ZK credential" to store.
+            return credential.format.caseInsensitiveCompare("mso_mdoc") == .orderedSame
+        }
         return credential.format.caseInsensitiveCompare(format) == .orderedSame
     }
 

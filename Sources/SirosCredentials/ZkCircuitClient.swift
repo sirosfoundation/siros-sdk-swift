@@ -391,7 +391,7 @@ public final class ZkCircuitClient: @unchecked Sendable {
         }
         let data = try await downloadArtifactBytes(artifact)
         let actualHash = Self.sha256Hex(data)
-        guard actualHash.caseInsensitiveCompare(artifact.hash) == .orderedSame else {
+        guard actualHash.caseInsensitiveCompare(Self.bareHex(artifact.hash)) == .orderedSame else {
             throw ZkCircuitClientError.hashMismatch(expected: artifact.hash, actual: actualHash)
         }
         return data
@@ -445,5 +445,17 @@ public final class ZkCircuitClient: @unchecked Sendable {
     private static func sha256Hex(_ data: Data) -> String {
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// `ZkArtifact.hash` is wire-formatted as `"sha256:<hex>"` (matching
+    /// go-zk-circuits' own hash field convention), but `sha256Hex` returns a
+    /// bare hex digest with no prefix - comparing the two directly without
+    /// stripping this prefix always failed, even for a byte-for-byte-correct
+    /// download (confirmed live: "expected sha256:44c4b98..., got
+    /// 44c4b98..." - the same digest, just one side prefixed). Strips it if
+    /// present; leaves the string as-is otherwise, so a legacy unprefixed
+    /// hash value would still compare correctly too.
+    private static func bareHex(_ hash: String) -> String {
+        hash.hasPrefix("sha256:") ? String(hash.dropFirst("sha256:".count)) : hash
     }
 }

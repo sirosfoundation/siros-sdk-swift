@@ -3,6 +3,11 @@
 import XCTest
 import SirosTransport
 @testable import SirosCredentials
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 final class ZkCircuitClientTests: XCTestCase {
 
@@ -147,6 +152,41 @@ final class ZkCircuitClientTests: XCTestCase {
         )
         let client = ZkCircuitClient(sources: ["https://primary.example.com"], httpGet: { url in
             XCTAssertEqual(url.absoluteString, "https://primary.example.com/v1/artifacts/sha256/\(expectedHash)")
+            return bytes
+        })
+
+        let downloaded = try await client.downloadArtifact(descriptor)
+
+        XCTAssertEqual(downloaded, bytes)
+    }
+
+    func testDownloadArtifactMatchesARealSha256PrefixedDescriptorHashNotJustABareHexFixture() async throws {
+        // Real go-zk-circuits descriptors wire the hash as "sha256:<hex>"
+        // (confirmed live against zk-circuits.fly.dev) - unlike this file's
+        // other fixtures, which use a bare hex hash and would not have
+        // caught the real bug this regression-tests: the comparison used to
+        // always fail for a correct download because one side of the
+        // comparison never had the prefix stripped.
+        let bytes = Data("circuit-bytes".utf8)
+        let digest = SHA256.hash(data: bytes)
+        let hash = digest.map { String(format: "%02x", $0) }.joined()
+        let descriptor = ZkCircuitDescriptor(
+            id: "longfellow-mdl-v1",
+            system: "longfellow",
+            systemVersion: "1.0.0",
+            published: true,
+            status: "active",
+            artifact: ZkArtifact(
+                url: "/v1/artifacts/sha256/\(hash)",
+                hash: "sha256:\(hash)",
+                size: Int64(bytes.count),
+                compression: "none",
+                mediaType: "application/octet-stream"
+            ),
+            publishedAt: "2026-08-01T00:00:00Z"
+        )
+        let client = ZkCircuitClient(sources: ["https://zk-circuits.fly.dev"], httpGet: { url in
+            XCTAssertEqual(url.absoluteString, "https://zk-circuits.fly.dev/v1/artifacts/sha256/\(hash)")
             return bytes
         })
 
