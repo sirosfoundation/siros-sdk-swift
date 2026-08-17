@@ -2,6 +2,7 @@
 
 import XCTest
 import Foundation
+@testable import SirosSampleApp
 
 /// Unit tests for the pure (non-SwiftUI) logic behind the sample app's
 /// localization and non-blocking message banner:
