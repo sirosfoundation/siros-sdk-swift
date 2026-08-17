@@ -609,9 +609,14 @@ final class WalletViewModel: ObservableObject {
         guard let hint = wallet.wscdAutoEnrollHint(), hint.suggestsWscdCapableDevice() else { return }
         let pluginId = hint.hintedWscdPluginId
         guard availableWscdPluginIds.contains(pluginId) else { return }
-        Task {
+        // Mark as handled *before* the async check below, not after -
+        // otherwise a second `.ready` re-emission (e.g. a fast reconnect)
+        // racing the first Task's `await` could still see `autoEnrollOffered
+        // == false`, pass the guard above again, and double-schedule the
+        // offer.
+        autoEnrollOffered = true
+        Task { @MainActor in
             guard await wallet.wscdCredentials(pluginId: pluginId) == nil else { return }
-            autoEnrollOffered = true
             pendingAutoEnrollOffer = pluginId
         }
     }
