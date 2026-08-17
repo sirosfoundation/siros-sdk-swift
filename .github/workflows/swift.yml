@@ -80,6 +80,25 @@ jobs:
           swift build --target SirosCredentials --target SirosTransport --target SirosAuth
           swift test --filter "SirosCredentialsTests|SirosTransportTests|SirosAuthTests" --parallel
 
+  build-sample-app:
+    name: Build Sample App
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: SampleApp
+        run: xcodegen generate
+      - name: Build for iOS Simulator
+        working-directory: SampleApp
+        run: |
+          xcodebuild build \
+            -project SirosSampleApp.xcodeproj \
+            -scheme SirosSampleApp \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+
   lint:
     name: Lint
     runs-on: macos-26
