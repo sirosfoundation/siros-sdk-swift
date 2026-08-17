@@ -36,20 +36,20 @@ struct Fido2PinEntryView: View {
                     Image(systemName: "wave.3.right.circle.fill")
                         .font(.system(size: 28))
                         .foregroundColor(SirosTheme.brand)
-                    Text("Enter Security Key PIN")
+                    Text(L10n.string("fido2.pinTitle"))
                         .font(.title2.bold())
                 }
 
-                Text("Enter the PIN for your FIDO2 security key.")
+                Text(L10n.string("fido2.pinDescription"))
                     .font(.body)
                     .foregroundColor(SirosTheme.onSurfaceVariant)
 
                 HStack {
                     Group {
                         if pinVisible {
-                            TextField("PIN", text: $pin)
+                            TextField(L10n.string("fido2.pinPlaceholder"), text: $pin)
                         } else {
-                            SecureField("PIN", text: $pin)
+                            SecureField(L10n.string("fido2.pinPlaceholder"), text: $pin)
                         }
                     }
                     .textFieldStyle(.roundedBorder)
@@ -65,7 +65,7 @@ struct Fido2PinEntryView: View {
 
                 HStack(spacing: 12) {
                     Button(action: { pending.respond(nil) }) {
-                        Text("Cancel")
+                        Text(L10n.string("common.cancel"))
                             .frame(maxWidth: .infinity)
                             .frame(height: 48)
                     }
@@ -73,7 +73,7 @@ struct Fido2PinEntryView: View {
                     .tint(.red)
 
                     Button(action: { pending.respond(pin) }) {
-                        Text("Submit")
+                        Text(L10n.string("qr.pasteButton"))
                             .frame(maxWidth: .infinity)
                             .frame(height: 48)
                     }
@@ -83,7 +83,7 @@ struct Fido2PinEntryView: View {
                 }
             }
             .padding()
-            .navigationTitle("PIN Required")
+            .navigationTitle(L10n.string("fido2.navTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { fieldFocused = true }
         }

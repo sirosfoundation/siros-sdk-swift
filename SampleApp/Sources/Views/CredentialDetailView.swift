@@ -16,9 +16,9 @@ struct CredentialDetailView: View {
             VStack(spacing: 0) {
                 // Tab picker
                 Picker("", selection: $selectedTab) {
-                    Text("Info").tag(0)
-                    Text("Claims").tag(1)
-                    Text("Raw").tag(2)
+                    Text(L10n.string("credentials.tabInfo")).tag(0)
+                    Text(L10n.string("credentials.tabClaims")).tag(1)
+                    Text(L10n.string("credentials.tabRaw")).tag(2)
                 }
                 .pickerStyle(.segmented)
                 .padding()
@@ -35,7 +35,7 @@ struct CredentialDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Back") { viewModel.closeCredentialDetail() }
+                    Button(L10n.string("nav.back")) { viewModel.closeCredentialDetail() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -53,16 +53,16 @@ struct CredentialDetailView: View {
                 }
             }
             .confirmationDialog(
-                "Delete Credential",
+                L10n.string("credentials.deleteConfirmTitle"),
                 isPresented: $showDeleteConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
+                Button(L10n.string("common.delete"), role: .destructive) {
                     viewModel.deleteCredential(credential.id)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(L10n.string("common.cancel"), role: .cancel) {}
             } message: {
-                Text("Are you sure you want to delete \"\(credential.metadata?.name ?? credential.format)\"? This cannot be undone.")
+                Text(L10n.string("credentials.deleteConfirmMessage", credential.metadata?.name ?? credential.format))
             }
         }
     }
@@ -74,22 +74,22 @@ struct CredentialDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 CredentialCardView(credential: credential)
 
-                infoRow("Format", credential.format)
+                infoRow(L10n.string("credentials.fieldFormat"), credential.format)
 
                 if let vct = credential.metadata?.vct {
-                    infoRow("Type", vct)
+                    infoRow(L10n.string("credentials.fieldType"), vct)
                 }
                 if let doctype = credential.metadata?.doctype {
-                    infoRow("Document Type", doctype)
+                    infoRow(L10n.string("credentials.fieldDocumentType"), doctype)
                 }
                 if let issuer = credential.metadata?.issuer?.name {
-                    infoRow("Issuer", issuer)
+                    infoRow(L10n.string("credentials.fieldIssuer"), issuer)
                 }
                 if let issuedAt = credential.issuedAt {
-                    infoRow("Issued", formatTimestamp(issuedAt))
+                    infoRow(L10n.string("credentials.fieldIssued"), formatTimestamp(issuedAt))
                 }
                 if let expiresAt = credential.expiresAt {
-                    infoRow("Expires", formatTimestamp(expiresAt))
+                    infoRow(L10n.string("credentials.fieldExpires"), formatTimestamp(expiresAt))
                 }
             }
             .padding()
@@ -103,7 +103,7 @@ struct CredentialDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 let claims = CredentialUtils.extractClaims(credential)
                 if claims.isEmpty {
-                    Text("No claims available")
+                    Text(L10n.string("credentials.noClaims"))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 32)
@@ -130,13 +130,13 @@ struct CredentialDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 let parts = CredentialUtils.parseSdJwtParts(credential.raw)
                 if let header = parts.header {
-                    CopyableTextBlock(text: header, label: "Header")
+                    CopyableTextBlock(text: header, label: L10n.string("credentials.headerLabel"))
                 }
                 if let payload = parts.payload {
-                    CopyableTextBlock(text: payload, label: "Payload")
+                    CopyableTextBlock(text: payload, label: L10n.string("credentials.payloadLabel"))
                 }
                 ForEach(Array(parts.disclosures.enumerated()), id: \.offset) { index, disclosure in
-                    CopyableTextBlock(text: disclosure, label: "Disclosure \(index + 1)")
+                    CopyableTextBlock(text: disclosure, label: L10n.string("credentials.disclosureLabel", index + 1))
                 }
                 if parts.header == nil && parts.payload == nil && parts.disclosures.isEmpty {
                     CopyableTextBlock(text: credential.raw)

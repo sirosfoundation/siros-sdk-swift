@@ -39,7 +39,7 @@ struct QRScannerView: View {
 
                 // Paste URI fallback (always visible, like Kotlin)
                 VStack(spacing: 8) {
-                    Text("Or paste a URI:")
+                    Text(L10n.string("qr.manualInput"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     HStack {
@@ -47,7 +47,7 @@ struct QRScannerView: View {
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
-                        Button("Redeem") {
+                        Button(L10n.string("qr.pasteButton")) {
                             let trimmed = pasteUri.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !trimmed.isEmpty else { return }
                             viewModel.handleQrResult(trimmed)
@@ -60,11 +60,11 @@ struct QRScannerView: View {
                 .background(.regularMaterial)
             }
             .ignoresSafeArea(edges: .top)
-            .navigationTitle("Scan QR Code")
+            .navigationTitle(L10n.string("qr.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { viewModel.closeQrScanner() }
+                    Button(L10n.string("common.cancel")) { viewModel.closeQrScanner() }
                 }
             }
         }
@@ -117,9 +117,9 @@ struct QRScannerView: View {
             Image(systemName: "camera.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("Camera not available in Simulator")
+            Text(L10n.string("qr.simulatorUnavailable"))
                 .font(.headline)
-            Text("Use the paste field below to enter a URI.")
+            Text(L10n.string("qr.simulatorFallbackHint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
