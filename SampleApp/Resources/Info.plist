@@ -35,6 +35,7 @@
                 <string>siros-sample</string>
                 <string>openid-credential-offer</string>
                 <string>openid4vp</string>
+                <string>haip</string>
             </array>
         </dict>
     </array>
