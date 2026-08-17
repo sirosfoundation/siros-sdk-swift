@@ -20,7 +20,7 @@ struct CredentialsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Welcome, \(viewModel.displayName ?? "User")")
+            Text(L10n.string("credentials.welcome", viewModel.displayName ?? L10n.string("credentials.unknownUser")))
                 .font(.title2)
                 .fontWeight(.semibold)
                 .padding(.horizontal, 16)
@@ -78,9 +78,9 @@ struct CredentialsView: View {
     private var credentialCountText: String {
         let count = grouped.count
         switch count {
-        case 0: return "No credentials yet"
-        case 1: return "1 credential"
-        default: return "\(count) credentials"
+        case 0: return L10n.string("credentials.countZero")
+        case 1: return L10n.string("credentials.countOne")
+        default: return L10n.string("credentials.countOther", count)
         }
     }
 
@@ -90,10 +90,10 @@ struct CredentialsView: View {
             Image(systemName: "plus.circle.fill")
                 .font(.system(size: 48))
                 .foregroundColor(SirosTheme.brand)
-            Text("No credentials yet")
+            Text(L10n.string("credentials.emptyTitle"))
                 .font(.headline)
                 .fontWeight(.medium)
-            Text("Tap to add your first credential")
+            Text(L10n.string("credentials.emptySubtitle"))
                 .font(.subheadline)
                 .foregroundColor(SirosTheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
@@ -123,25 +123,25 @@ private struct CredentialContextMenuModifier: ViewModifier {
                 Button {
                     viewModel.renewCredential(credential)
                 } label: {
-                    Label("Renew", systemImage: "arrow.clockwise")
+                    Label(L10n.string("credentials.renew"), systemImage: "arrow.clockwise")
                 }
                 Button(role: .destructive) {
                     showDeleteConfirmation = true
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label(L10n.string("common.delete"), systemImage: "trash")
                 }
             }
             .confirmationDialog(
-                "Delete Credential",
+                L10n.string("credentials.deleteConfirmTitle"),
                 isPresented: $showDeleteConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
+                Button(L10n.string("common.delete"), role: .destructive) {
                     viewModel.deleteCredential(credential.id)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(L10n.string("common.cancel"), role: .cancel) {}
             } message: {
-                Text("Are you sure you want to delete \"\(credential.metadata?.name ?? credential.format)\"? This cannot be undone.")
+                Text(L10n.string("credentials.deleteConfirmMessage", credential.metadata?.name ?? credential.format))
             }
     }
 }

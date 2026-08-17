@@ -58,11 +58,11 @@ struct WscdSettingsView: View {
                     TofuCard()
 
                     Divider()
-                    Text("WSCD Plugin")
+                    Text(L10n.string("wscd.pluginPickerSection"))
                         .font(.subheadline)
                         .fontWeight(.semibold)
 
-                    Picker("Plugin", selection: Binding(
+                    Picker(L10n.string("wscd.pluginLabel"), selection: Binding(
                         get: { viewModel.selectedPluginId },
                         set: { viewModel.selectPlugin($0) }
                     )) {
@@ -77,7 +77,7 @@ struct WscdSettingsView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .navigationTitle("WSCD Settings")
+            .navigationTitle(L10n.string("wscd.settingsTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -109,7 +109,7 @@ private struct PluginSpecificSection: View {
         VStack(alignment: .leading, spacing: 16) {
             PreferredWscdCard()
 
-            DisclosureGroup("Developer", isExpanded: $developerExpanded) {
+            DisclosureGroup(L10n.string("common.developer"), isExpanded: $developerExpanded) {
                 DeveloperSection()
                     .padding(.top, 8)
             }
@@ -139,11 +139,11 @@ private struct PreferredWscdCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Preferred WSCD")
+                    Text(L10n.string("wscd.preferredWscdTitle"))
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
-                    Text("Always use \(pluginId), even for credentials that don't require it. Applies to every issuer unless a per-issuer override below takes precedence.")
+                    Text(L10n.string("wscd.preferredWscdDescription", pluginId))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -194,16 +194,16 @@ private struct WscdMappingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Mapping")
+            Text(L10n.string("wscd.mappingTitle"))
                 .font(.subheadline)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
-            Text("Which (issuer, credential type) pairs always use a specific WSCD plugin. \"Saved\" rows are real per-issuer preferences (also set from the security-key prompt's \"This issuer\" option); \"Dev default\" rows are session-only entries added in a plugin tab's Developer section below.")
+            Text(L10n.string("wscd.mappingDescription"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if viewModel.wscdUserOverridesSnapshot.isEmpty && viewModel.wscdDefaultMapping.isEmpty {
-                Text("No mapping entries yet")
+                Text(L10n.string("wscd.mappingEmpty"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -212,7 +212,7 @@ private struct WscdMappingCard: View {
                     MappingRow(
                         title: parts.credentialType,
                         subtitle: parts.issuer,
-                        technical: "Saved · → \(pluginId)",
+                        technical: L10n.string("wscd.mappingSavedTechnical", pluginId),
                         technicalColor: .accentColor,
                         onRemove: { viewModel.clearWscdUserOverride(issuer: parts.issuer, credentialType: parts.credentialType) }
                     )
@@ -223,7 +223,7 @@ private struct WscdMappingCard: View {
                         MappingRow(
                             title: parts.credentialType,
                             subtitle: parts.issuer,
-                            technical: "Dev default · → \(pluginId)",
+                            technical: L10n.string("wscd.mappingDevDefaultTechnical", pluginId),
                             technicalColor: .secondary,
                             onRemove: { viewModel.removeWscdDefaultMapping(key: key) }
                         )
@@ -233,11 +233,11 @@ private struct WscdMappingCard: View {
 
             if showAddOverride {
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField("Issuer URL", text: $newIssuer)
+                    TextField(L10n.string("wscd.issuerUrlPlaceholder"), text: $newIssuer)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                    TextField("Credential type (vct/doctype)", text: $newCredentialType)
+                    TextField(L10n.string("wscd.credentialTypePlaceholder"), text: $newCredentialType)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
@@ -247,7 +247,7 @@ private struct WscdMappingCard: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button("Add") {
+                        Button(L10n.string("wscd.addButton")) {
                             viewModel.setWscdUserOverride(
                                 issuer: newIssuer.trimmingCharacters(in: .whitespacesAndNewlines),
                                 credentialType: newCredentialType.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -260,12 +260,12 @@ private struct WscdMappingCard: View {
                         .buttonStyle(.bordered)
                         .disabled(newIssuer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || newCredentialType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Button("Cancel") { showAddOverride = false }
+                        Button(L10n.string("common.cancel")) { showAddOverride = false }
                             .buttonStyle(.bordered)
                     }
                 }
             } else {
-                Button("Add override") { showAddOverride = true }
+                Button(L10n.string("wscd.addOverrideButton")) { showAddOverride = true }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
             }
@@ -290,22 +290,22 @@ private struct TofuCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("WSCD Choices")
+                Text(L10n.string("wscd.tofuTitle"))
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                 Spacer()
                 if !viewModel.wscdTofuMappingSnapshot.isEmpty {
-                    Button("Forget All") { viewModel.clearAllWscdTofuMappings() }
+                    Button(L10n.string("wscd.forgetAllButton")) { viewModel.clearAllWscdTofuMappings() }
                         .font(.caption)
                 }
             }
-            Text("Ambiguous-choice outcomes remembered per (issuer, credential type), so you're only asked once. Forget a choice to be asked again next time.")
+            Text(L10n.string("wscd.tofuDescription"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if viewModel.wscdTofuMappingSnapshot.isEmpty {
-                Text("No WSCD choices remembered yet")
+                Text(L10n.string("wscd.tofuEmpty"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -314,7 +314,7 @@ private struct TofuCard: View {
                     MappingRow(
                         title: parts.credentialType,
                         subtitle: parts.issuer,
-                        technical: "→ \(pluginId)",
+                        technical: L10n.string("wscd.tofuTechnical", pluginId),
                         technicalColor: .accentColor,
                         onRemove: { viewModel.clearWscdTofuMapping(forKey: key) }
                     )
@@ -402,17 +402,17 @@ private struct DeveloperSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // ── Build Info ──────────────────────────────────
-            sectionHeader("Build Info")
+            sectionHeader(L10n.string("wscd.buildInfo"))
             infoCard {
-                infoRow("App Version", "0.1.0")
-                infoRow("Platform", "iOS")
-                infoRow("WSCD Manager", "siros-wscd-manager (UniFFI)")
+                infoRow(L10n.string("wscd.appVersion"), "0.1.0")
+                infoRow(L10n.string("wscd.platform"), "iOS")
+                infoRow(L10n.string("wscd.wscdManagerLabel"), L10n.string("wscd.wscdManager"))
             }
 
             // ── Transport / plugin-specific config ───────────
             if viewModel.selectedPluginId == "r2ps" {
-                sectionHeader("R2PS Server")
-                TextField("R2PS Server URL", text: $viewModel.r2psServerUrl)
+                sectionHeader(L10n.string("wscd.r2psServerSection"))
+                TextField(L10n.string("wscd.r2psServerUrlPlaceholder"), text: $viewModel.r2psServerUrl)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -420,44 +420,44 @@ private struct DeveloperSection: View {
                 // yet (see `r2psServerPublicKeyPem`'s doc comment) - left
                 // blank by default rather than silently reusing the
                 // client's own key, which would be actively wrong.
-                TextField("R2PS Server Public Key (PEM)", text: $viewModel.r2psServerPublicKeyPem, axis: .vertical)
+                TextField(L10n.string("wscd.r2psServerPublicKeyPlaceholder"), text: $viewModel.r2psServerPublicKeyPem, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .font(.caption.monospaced())
                     .lineLimit(3...6)
                 if viewModel.r2psServerPublicKeyPem.isEmpty {
-                    Text("No server public key configured - R2PS registration will fail until one is provided.")
+                    Text(L10n.string("wscd.r2psNoPublicKeyWarning"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
 
             // ── WSCD Selection Policy (dev config) ───────────
-            sectionHeader("WSCD Selection Policy")
+            sectionHeader(L10n.string("wscd.selectionPolicySection"))
             infoCard {
-                Toggle("Enable multi-plugin selection", isOn: $viewModel.wscdMultiPluginEnabled)
+                Toggle(L10n.string("wscd.multiPluginToggle"), isOn: $viewModel.wscdMultiPluginEnabled)
                     .font(.subheadline)
-                Text("Requires reconnecting to take effect.")
+                Text(L10n.string("wscd.requiresReconnect"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
             if viewModel.wscdMultiPluginEnabled {
-                Text("Default Mapping (dev, session-only)")
+                Text(L10n.string("wscd.defaultMappingSection"))
                     .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
-                Text("Adds a WalletConfig.defaultWscdMapping entry - see the Mapping card above the tabs for the full, unfiltered table across ALL plugins. Host-app/dev config, not persisted across restarts.")
+                Text(L10n.string("wscd.defaultMappingDescription"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField("Issuer URL", text: $newMappingIssuer)
+                    TextField(L10n.string("wscd.issuerUrlPlaceholder"), text: $newMappingIssuer)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                    TextField("Credential type (vct/doctype)", text: $newMappingCredentialType)
+                    TextField(L10n.string("wscd.credentialTypePlaceholder"), text: $newMappingCredentialType)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
@@ -470,7 +470,7 @@ private struct DeveloperSection: View {
                             )
                         }
                     }
-                    Button("Add Mapping") {
+                    Button(L10n.string("wscd.addMappingButton")) {
                         viewModel.addWscdDefaultMapping(
                             issuer: newMappingIssuer,
                             credentialType: newMappingCredentialType,
@@ -485,14 +485,14 @@ private struct DeveloperSection: View {
             }
 
             // ── Lifecycle Status ──────────────────────────────
-            sectionHeader("Lifecycle Status")
+            sectionHeader(L10n.string("wscd.lifecycleStatus"))
             infoCard {
-                infoRow("State", viewModel.lifecycleState.map(String.init(describing:)) ?? "Not enrolled")
+                infoRow(L10n.string("wscd.stateLabel"), viewModel.lifecycleState.map(String.init(describing:)) ?? L10n.string("settings.wscdNotEnrolled"))
                 if let status = viewModel.lifecycleStatus {
-                    infoRow("Context ID", status.contextId)
-                    infoRow("Plugin", status.pluginId)
-                    infoRow("Factor Kind", String(describing: status.factorKind))
-                    infoRow("Updated", formatTimestamp(status.updatedAt))
+                    infoRow(L10n.string("wscd.contextId"), status.contextId)
+                    infoRow(L10n.string("wscd.pluginLabel"), status.pluginId)
+                    infoRow(L10n.string("wscd.factorKind"), String(describing: status.factorKind))
+                    infoRow(L10n.string("wscd.updatedLabel"), formatTimestamp(status.updatedAt))
                 }
             }
 
@@ -503,7 +503,7 @@ private struct DeveloperSection: View {
                         ProgressView()
                             .tint(.white)
                     }
-                    Text("Enroll (\(viewModel.selectedPluginId))")
+                    Text(L10n.string("wscd.enrollButton", viewModel.selectedPluginId))
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
@@ -515,7 +515,7 @@ private struct DeveloperSection: View {
             )
 
             HStack(spacing: 8) {
-                Button("Rotate Keys") {
+                Button(L10n.string("wscd.rotateButton")) {
                     viewModel.rotateLifecycle()
                 }
                 .buttonStyle(.borderedProminent)
@@ -523,7 +523,7 @@ private struct DeveloperSection: View {
                 .frame(height: 44)
                 .disabled(viewModel.lifecycleState != .active)
 
-                Button("Destroy") {
+                Button(L10n.string("wscd.destroyButton")) {
                     showDestroyConfirm = true
                 }
                 .buttonStyle(.bordered)
@@ -533,7 +533,7 @@ private struct DeveloperSection: View {
                 .disabled(viewModel.lifecycleState == nil || viewModel.lifecycleState == .destroyed)
             }
 
-            Button("Refresh") {
+            Button(L10n.string("wscd.refreshButton")) {
                 viewModel.refreshWscdInfo()
             }
             .buttonStyle(.bordered)
@@ -541,10 +541,10 @@ private struct DeveloperSection: View {
             .frame(height: 44)
 
             // ── Keys ───────────────────────────────────────────
-            sectionHeader("Stored Keys (\(viewModel.wscdKeys.count))")
+            sectionHeader(L10n.string("wscd.storedKeys", viewModel.wscdKeys.count))
             if viewModel.wscdKeys.isEmpty {
                 infoCard {
-                    Text("No keys stored")
+                    Text(L10n.string("wscd.noKeys"))
                         .foregroundStyle(.secondary)
                 }
             } else {
@@ -558,13 +558,13 @@ private struct DeveloperSection: View {
                 }
             }
         }
-        .alert("Destroy this key?", isPresented: $showDestroyConfirm) {
-            Button("Destroy", role: .destructive) {
+        .alert(L10n.string("wscd.destroyConfirmTitle"), isPresented: $showDestroyConfirm) {
+            Button(L10n.string("wscd.destroyButton"), role: .destructive) {
                 viewModel.destroyLifecycle(mode: .remoteRevokeIfSupported)
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L10n.string("common.cancel"), role: .cancel) {}
         } message: {
-            Text("This permanently destroys the enrolled key and any keys derived from it, locally and on the backend if the active plugin supports remote revocation. This cannot be undone.")
+            Text(L10n.string("wscd.destroyConfirmMessage"))
         }
     }
 
@@ -616,20 +616,20 @@ private struct DeveloperSection: View {
             }
             if let props = viewModel.wscdKeySecurityProps[key.keyId] {
                 HStack(spacing: 16) {
-                    Text("Storage: \(props.keyStorage.joined(separator: ", "))")
+                    Text(L10n.string("wscd.keyStorageLabel", props.keyStorage.joined(separator: ", ")))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text("Cert: \(certificationText(props.certification))")
+                    Text(L10n.string("wscd.keyCertLabel", certificationText(props.certification)))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 if !props.userAuthentication.isEmpty {
-                    Text("Auth: \(props.userAuthentication.joined(separator: ", "))")
+                    Text(L10n.string("wscd.keyAuthLabel", props.userAuthentication.joined(separator: ", ")))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 if !props.amr.isEmpty {
-                    Text("AMR: \(props.amr.joined(separator: ", "))")
+                    Text(L10n.string("wscd.keyAmrLabel", props.amr.joined(separator: ", ")))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

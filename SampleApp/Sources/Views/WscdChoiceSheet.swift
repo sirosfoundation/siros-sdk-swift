@@ -61,11 +61,11 @@ struct WscdChoiceSheet: View {
                     Image(systemName: "lock.shield.fill")
                         .font(.system(size: 28))
                         .foregroundColor(SirosTheme.brand)
-                    Text("Choose a Security Key")
+                    Text(L10n.string("wscdChoice.title"))
                         .font(.title2.bold())
                 }
 
-                Text("This credential (\(choice.credentialType) from \(choice.issuer)) requires a hardware-backed key. Choose which security key to use:")
+                Text(L10n.string("wscdChoice.description", choice.credentialType, choice.issuer))
                     .font(.body)
                     .foregroundColor(SirosTheme.onSurfaceVariant)
 
@@ -92,13 +92,13 @@ struct WscdChoiceSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Remember this choice")
+                    Text(L10n.string("wscdChoice.rememberLabel"))
                         .font(.caption)
                         .foregroundColor(SirosTheme.onSurfaceVariant)
-                    Picker("Remember this choice", selection: $rememberScope) {
-                        Text("Just this once").tag(WscdRememberScope.once)
-                        Text("This issuer").tag(WscdRememberScope.thisIssuer)
-                        Text("Always").tag(WscdRememberScope.allIssuers)
+                    Picker(L10n.string("wscdChoice.rememberLabel"), selection: $rememberScope) {
+                        Text(L10n.string("wscdChoice.rememberOnce")).tag(WscdRememberScope.once)
+                        Text(L10n.string("wscdChoice.rememberThisIssuer")).tag(WscdRememberScope.thisIssuer)
+                        Text(L10n.string("wscdChoice.rememberAlways")).tag(WscdRememberScope.allIssuers)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -107,7 +107,7 @@ struct WscdChoiceSheet: View {
                 Spacer()
 
                 Button(action: { choice.respond(nil, rememberScope) }) {
-                    Text("Cancel")
+                    Text(L10n.string("common.cancel"))
                         .frame(maxWidth: .infinity)
                         .frame(height: 48)
                 }
@@ -115,7 +115,7 @@ struct WscdChoiceSheet: View {
                 .tint(.red)
             }
             .padding()
-            .navigationTitle("Security Key Required")
+            .navigationTitle(L10n.string("wscdChoice.navTitle"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }

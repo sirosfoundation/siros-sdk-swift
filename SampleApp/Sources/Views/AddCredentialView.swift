@@ -14,13 +14,13 @@ struct AddCredentialView: View {
                 if viewModel.isLoadingOffers {
                     VStack(spacing: 12) {
                         ProgressView()
-                        Text("Loading available credentials...")
+                        Text(L10n.string("credentials.addLoading"))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if viewModel.availableCredentials.isEmpty {
-                    Text("No credentials available")
+                    Text(L10n.string("credentials.addEmpty"))
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -38,10 +38,10 @@ struct AddCredentialView: View {
                                             .foregroundColor(.accentColor)
                                     }
                                     VStack(alignment: .leading) {
-                                        Text("Digital ID (scanned passport)")
+                                        Text(L10n.string("credentials.scanPhysicalIdTitle"))
                                             .font(.body)
                                             .fontWeight(.medium)
-                                        Text("Scan your face and passport")
+                                        Text(L10n.string("credentials.scanPhysicalIdSubtitle"))
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -67,19 +67,19 @@ struct AddCredentialView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Add Credential")
+            .navigationTitle(L10n.string("credentials.addTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Back") { viewModel.closeAddCredential() }
+                    Button(L10n.string("nav.back")) { viewModel.closeAddCredential() }
                 }
             }
-            .alert("Add Credential?", isPresented: showIssuanceConsent) {
-                Button("Accept") { viewModel.confirmIssuance() }
-                Button("Cancel", role: .cancel) { viewModel.cancelIssuance() }
+            .alert(L10n.string("credentials.addConfirmTitle"), isPresented: showIssuanceConsent) {
+                Button(L10n.string("credentials.addConfirmAccept")) { viewModel.confirmIssuance() }
+                Button(L10n.string("common.cancel"), role: .cancel) { viewModel.cancelIssuance() }
             } message: {
                 if let offer = viewModel.pendingIssuanceOffer {
-                    Text("You are about to request \"\(offer.credentialName)\" from \(offer.issuerName).")
+                    Text(L10n.string("credentials.addConfirmMessage", offer.credentialName, offer.issuerName))
                 }
             }
         }

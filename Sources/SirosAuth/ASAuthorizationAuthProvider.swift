@@ -28,7 +28,7 @@ import CryptoKit
 /// let wallet = SirosWallet(config: config, authProvider: authProvider)
 /// ```
 @available(iOS 16.0, macOS 13.0, *)
-public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, @unchecked Sendable {
+public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAutoEnrollHint, @unchecked Sendable {
     private let anchor: ASPresentationAnchor
     private let lock = NSLock()
     private var continuation: CheckedContinuation<ASAuthorization, Error>?
@@ -40,6 +40,15 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, @uncheck
     /// one used. `SirosWallet` always calls `register`/`authenticate` before
     /// `getPrfOutput`, so this is populated by the time it's needed.
     private var lastRpId: String?
+
+    /// True when the most recent `authenticate` call resolved to a roaming
+    /// security-key assertion (`ASAuthorizationSecurityKeyPublicKeyCredentialAssertion`)
+    /// rather than the platform authenticator (Face ID/Touch ID) - exactly
+    /// the kind of physical authenticator the fido2 previewSign plugin
+    /// needs. See `WscdAutoEnrollHint`'s doc comment for why this is a
+    /// heuristic, not confirmation that this specific key supports
+    /// previewSign. Guarded by `lock`, same as `lastRpId`.
+    private var lastWasSecurityKeyAssertion = false
 
     /// Create an ASAuthorization-based auth provider.
     ///
@@ -159,6 +168,7 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, @uncheck
 
         switch authorization.credential {
         case let credential as ASAuthorizationPlatformPublicKeyCredentialAssertion:
+            setLastWasSecurityKeyAssertion(false)
             var prfOutput: PrfOutput?
             if #available(iOS 18.0, macOS 15.0, *) {
                 prfOutput = Self.prfOutput(from: credential.prf)
@@ -172,6 +182,7 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, @uncheck
                 prfOutput: prfOutput
             )
         case let credential as ASAuthorizationSecurityKeyPublicKeyCredentialAssertion:
+            setLastWasSecurityKeyAssertion(true)
             var prfOutput: PrfOutput?
             // The security-key assertion result's `.prf` getter only exists
             // on iOS/macOS 26.4+ (later than the platform authenticator's
@@ -190,6 +201,21 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, @uncheck
         default:
             throw SirosError.auth(message: "Unexpected credential type from ASAuthorization assertion")
         }
+    }
+
+    // MARK: - WscdAutoEnrollHint
+
+    public let hintedWscdPluginId: String = "fido2"
+
+    public func suggestsWscdCapableDevice() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return lastWasSecurityKeyAssertion
+    }
+
+    private func setLastWasSecurityKeyAssertion(_ value: Bool) {
+        lock.lock()
+        lastWasSecurityKeyAssertion = value
+        lock.unlock()
     }
 
     /// Obtain the PRF output for `credentialId`/`salt`.

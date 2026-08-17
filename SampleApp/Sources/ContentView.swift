@@ -6,6 +6,18 @@ import SirosWallet
 struct ContentView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
+    /// Current transient toast, derived from `viewModel`'s error/info flags
+    /// (see `syncBanner`). Held as its own piece of state, rather than
+    /// computed inline in `body`, so `BannerMessage.id` stays stable across
+    /// re-renders while the same message is showing - `MessageBannerView`'s
+    /// auto-dismiss countdown (keyed on that `id`) would otherwise restart
+    /// on every unrelated body re-evaluation.
+    @State private var banner: BannerMessage?
+    /// Measured height of `MainTabView`'s bottom tab bar (0 on every other
+    /// screen) - see `BottomBarHeightKey`. Lets the banner float above the
+    /// tab bar instead of covering it.
+    @State private var bottomBarHeight: CGFloat = 0
+
     var body: some View {
         Group {
             switch viewModel.walletState {
@@ -37,15 +49,27 @@ struct ContentView: View {
                 ErrorView(message: message)
             }
         }
-        .alert("Error", isPresented: $viewModel.showError) {
-            Button("OK") { viewModel.clearError() }
-        } message: {
-            Text(viewModel.errorMessage ?? "")
-        }
-        .alert("Info", isPresented: $viewModel.showInfo) {
-            Button("OK") { viewModel.clearInfo() }
-        } message: {
-            Text(viewModel.infoMessage ?? "")
+        // Non-blocking dismissable banner, replacing the blocking `.alert()`
+        // this used to show for errorMessage/infoMessage - see
+        // `MessageBanner.swift`'s doc comment (mirrors siros-sdk-kotlin
+        // PR #106's identical fix). Single-param onChange(of:perform:) -
+        // the two-param (oldValue, newValue) overload needs iOS 17+, but
+        // this app's deployment target is iOS 16.
+        //
+        // `.onAppear` covers the case where `viewModel` already has an
+        // error/info message set the first time `ContentView` renders (e.g.
+        // one raised during startup before this view existed) - `.onChange`
+        // alone only fires on a SUBSEQUENT change, so without this the old
+        // `.alert(isPresented:)`'s "presents immediately" behavior would be
+        // lost for that one case.
+        .onAppear { syncBanner() }
+        .onChange(of: viewModel.showError) { _ in syncBanner() }
+        .onChange(of: viewModel.showInfo) { _ in syncBanner() }
+        .onChange(of: viewModel.errorMessage) { _ in syncBanner() }
+        .onChange(of: viewModel.infoMessage) { _ in syncBanner() }
+        .onPreferenceChange(BottomBarHeightKey.self) { bottomBarHeight = $0 }
+        .messageBanner(banner, bottomInset: bottomBarHeight) {
+            dismissBanner()
         }
         // Attached at this top level (not inside a specific screen) since a
         // `RequestWscdChoice` prompt can fire during credential issuance
@@ -69,6 +93,54 @@ struct ContentView: View {
         }) { pending in
             Fido2PinEntryView(pending: pending)
         }
+        // Same top-level rationale as `pendingWscdChoice`/`pendingFido2PinEntry`
+        // above - offered once right after a successful login, regardless of
+        // which screen is showing underneath (mirrors the Kotlin sample
+        // app's AutoEnrollOfferDialog).
+        .alert(
+            "Use this security key for signing?",
+            isPresented: Binding(
+                get: { viewModel.pendingAutoEnrollOffer != nil },
+                set: { isPresented in
+                    if !isPresented { viewModel.respondToAutoEnrollOffer(accept: false) }
+                }
+            )
+        ) {
+            Button("Enable") { viewModel.respondToAutoEnrollOffer(accept: true) }
+            Button("Not now", role: .cancel) { viewModel.respondToAutoEnrollOffer(accept: false) }
+        } message: {
+            Text("The security key you just used to log in may also support signing credentials directly, instead of relying on a software key. Set it up now?")
+        }
+    }
+
+    // MARK: - Banner state
+
+    /// Recomputes `banner` from `viewModel`'s current error/info flags.
+    /// Error takes priority when (unusually) both are set at once - matches
+    /// the old `.alert()`'s behavior, since only one `Bool` binding could
+    /// ever be presenting at a time there too.
+    private func syncBanner() {
+        if viewModel.showError, let message = viewModel.errorMessage {
+            banner = BannerMessage(kind: .error, text: message)
+        } else if viewModel.showInfo, let message = viewModel.infoMessage {
+            banner = BannerMessage(kind: .info, text: message)
+        } else {
+            banner = nil
+        }
+    }
+
+    /// Clears both the banner itself and whichever of
+    /// `viewModel`'s error/info flags is currently driving it - called from
+    /// the banner's explicit dismiss (X) button as well as its auto-dismiss
+    /// timeout, so either path leaves `viewModel` in a consistent
+    /// "acknowledged" state, not just this view's local `banner`.
+    private func dismissBanner() {
+        guard let banner else { return }
+        switch banner.kind {
+        case .error: viewModel.clearError()
+        case .info: viewModel.clearInfo()
+        }
+        self.banner = nil
     }
 }
 
@@ -170,13 +242,13 @@ struct ErrorView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundColor(SirosTheme.error)
-            Text("Something went wrong")
+            Text(L10n.string("error.title"))
                 .font(.title2.bold())
             Text(message)
                 .font(.body)
                 .foregroundColor(SirosTheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
-            Button("Retry") {
+            Button(L10n.string("error.retryButton")) {
                 viewModel.disconnect()
             }
             .buttonStyle(.borderedProminent)
@@ -201,7 +273,7 @@ struct MainTabView: View {
                 SirosMarkView()
                     .frame(width: 28, height: 28)
                 Spacer().frame(width: 10)
-                Text("SIROS Wallet")
+                Text(L10n.string("app.name"))
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
@@ -241,13 +313,13 @@ struct MainTabView: View {
             HStack {
                 tabButton(
                     icon: "wallet.pass",
-                    label: "Credentials",
+                    label: L10n.string("nav.credentials"),
                     tag: 0
                 )
                 Spacer()
                 tabButton(
                     icon: "plus",
-                    label: "Add",
+                    label: L10n.string("nav.add"),
                     tag: 1,
                     action: {
                         selectedTab = 1
@@ -257,13 +329,22 @@ struct MainTabView: View {
                 Spacer()
                 tabButton(
                     icon: "gear",
-                    label: "Settings",
+                    label: L10n.string("nav.settings"),
                     tag: 2
                 )
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 8)
             .background(SirosTheme.surfaceVariant)
+            // Reports this bar's real height (see `BottomBarHeightKey`) so
+            // ContentView's message banner can float above it instead of
+            // covering it - only present while MainTabView (i.e. this bar)
+            // is actually on screen.
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: BottomBarHeightKey.self, value: proxy.size.height)
+                }
+            )
         }
         .background(SirosTheme.background)
     }

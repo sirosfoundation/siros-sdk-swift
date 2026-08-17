@@ -17,7 +17,7 @@ struct PresentationHistoryView: View {
         NavigationStack {
             Group {
                 if history.isEmpty {
-                    Text("No presentation history")
+                    Text(L10n.string("history.empty"))
                         .font(.body)
                         .foregroundColor(SirosTheme.onSurfaceVariant)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -28,11 +28,11 @@ struct PresentationHistoryView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Presentation History")
+            .navigationTitle(L10n.string("history.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Back") { viewModel.closeHistory() }
+                    Button(L10n.string("nav.back")) { viewModel.closeHistory() }
                 }
             }
         }
@@ -55,7 +55,7 @@ struct PresentationRecordRow: View {
                         .foregroundColor(record.success ? SirosTheme.brand : SirosTheme.error)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(record.verifierName ?? "Unknown Verifier")
+                        Text(record.verifierName ?? L10n.string("history.unknownVerifier"))
                             .font(.body.weight(.medium))
                             .foregroundColor(SirosTheme.onSurface)
                             .lineLimit(1)
@@ -88,7 +88,7 @@ struct PresentationRecordRow: View {
                     Divider()
 
                     if !record.credentialNames.isEmpty {
-                        Text("Credentials shared:")
+                        Text(L10n.string("history.credentialsSharedLabel"))
                             .font(.caption2)
                             .foregroundColor(SirosTheme.onSurfaceVariant)
                         ForEach(record.credentialNames, id: \.self) { name in
@@ -98,7 +98,7 @@ struct PresentationRecordRow: View {
                     }
 
                     if !record.requestedClaims.flatMap({ $0 }).isEmpty {
-                        Text("Data disclosed:")
+                        Text(L10n.string("history.dataDisclosedLabel"))
                             .font(.caption2)
                             .foregroundColor(SirosTheme.onSurfaceVariant)
                         ForEach(record.requestedClaims.flatMap({ $0 }), id: \.self) { claim in
@@ -107,10 +107,10 @@ struct PresentationRecordRow: View {
                         }
                     }
 
-                    Text("Flow ID: \(record.flowId)")
+                    Text(L10n.string("history.flowIdLabel", record.flowId))
                         .font(.caption2)
                         .foregroundColor(SirosTheme.border)
-                    Text("Status: \(record.success ? "Successful" : "Failed")")
+                    Text(L10n.string("history.statusLabel", record.success ? L10n.string("history.statusSuccessful") : L10n.string("history.statusFailed")))
                         .font(.caption2)
                         .foregroundColor(record.success ? SirosTheme.brand : SirosTheme.error)
                 }

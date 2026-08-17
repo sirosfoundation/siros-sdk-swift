@@ -70,7 +70,7 @@ struct PresentationConsentView: View {
                             Button(action: { viewModel.declinePresentation() }) {
                                 HStack {
                                     Image(systemName: "xmark")
-                                    Text("Decline")
+                                    Text(L10n.string("presentation.declineButton"))
                                 }
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 48)
@@ -79,7 +79,7 @@ struct PresentationConsentView: View {
                             .tint(.red)
                         } else {
                             Button(action: { currentStep -= 1 }) {
-                                Text("Back")
+                                Text(L10n.string("presentation.backButton"))
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 48)
                             }
@@ -88,7 +88,7 @@ struct PresentationConsentView: View {
 
                         if currentStep < totalSteps - 1 {
                             Button(action: { currentStep += 1 }) {
-                                Text("Next")
+                                Text(L10n.string("presentation.nextButton"))
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 48)
                             }
@@ -100,7 +100,7 @@ struct PresentationConsentView: View {
                             }) {
                                 HStack {
                                     Image(systemName: "checkmark")
-                                    Text("Share")
+                                    Text(L10n.string("presentation.shareButton"))
                                 }
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 48)
@@ -114,7 +114,7 @@ struct PresentationConsentView: View {
                     .padding(.bottom)
                 }
                 .padding(.top, 16)
-                .navigationTitle("Credential Request")
+                .navigationTitle(L10n.string("presentation.title"))
                 .navigationBarTitleDisplayMode(.inline)
                 .onAppear { initializeSelections(displayCandidates, requestedClaims: request.requestedClaims) }
             }
@@ -139,9 +139,13 @@ struct PresentationConsentView: View {
                     }
                 }
 
-                let verifier = request.verifierName ?? "A verifier"
-                Text("\(verifier) is requesting the following credentials:")
-                    .font(.body)
+                if let verifier = request.verifierName {
+                    Text(L10n.string("presentation.requestingCredentials", verifier))
+                        .font(.body)
+                } else {
+                    Text(L10n.string("presentation.requestingCredentialsUnknown"))
+                        .font(.body)
+                }
 
                 // Reuses the exact same CredentialCardView as the main
                 // credential list (including its batch "remaining copies"
@@ -152,13 +156,13 @@ struct PresentationConsentView: View {
                     ForEach(displayCandidates, id: \.id) { cred in
                         VStack(alignment: .leading, spacing: 4) {
                             CredentialCardView(credential: cred, instances: instances(for: cred))
-                            Text("\(claimCount) data fields requested")
+                            Text(L10n.string("presentation.dataFieldsRequested", claimCount))
                                 .font(.caption)
                                 .foregroundColor(SirosTheme.onSurfaceVariant)
                         }
                     }
                     if isExhausted {
-                        Text("No eligible copies remain - renew this credential in Settings")
+                        Text(L10n.string("presentation.noEligibleCopies"))
                             .font(.caption.bold())
                             .foregroundColor(SirosTheme.error)
                     }
@@ -183,7 +187,7 @@ struct PresentationConsentView: View {
 
                 Spacer().frame(height: 8)
 
-                Text("Select which data to share:")
+                Text(L10n.string("presentation.selectData"))
                     .font(.subheadline)
                     .fontWeight(.semibold)
 
@@ -211,7 +215,7 @@ struct PresentationConsentView: View {
                                 .font(.body)
                                 .fontWeight(.medium)
                             if isRequired {
-                                Text("Required")
+                                Text(L10n.string("presentation.required"))
                                     .font(.caption)
                                     .foregroundColor(SirosTheme.onSurfaceVariant)
                             } else if let desc = meta?.description {
@@ -245,11 +249,11 @@ struct PresentationConsentView: View {
                     .font(.system(size: 28))
                     .foregroundColor(SirosTheme.brand)
 
-                Text("Ready to share")
+                Text(L10n.string("presentation.readyToShare"))
                     .font(.title2.bold())
 
-                let verifier = request.verifierName ?? "the verifier"
-                Text("You will share the following with \(verifier):")
+                let verifier = request.verifierName ?? L10n.string("presentation.unknownVerifier")
+                Text(L10n.string("presentation.sharingSummary", verifier))
                     .font(.body)
                     .foregroundColor(SirosTheme.onSurfaceVariant)
 
