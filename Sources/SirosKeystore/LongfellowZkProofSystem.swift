@@ -48,7 +48,20 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
     /// alongside real disclosed claims (e.g. `["age_over_18",
     /// "pairwise_pseudonym"]`), not as a separate side-channel-only concept
     /// the circuit is unaware of.
-    public static let pseudonymClaim = "pairwise_pseudonym"
+    public static let pseudonymClaim = zkPseudonymClaim
+
+    /// The mdoc element identifier an issuer actually stores the raw seed
+    /// under (confirmed against zk-cred-longfellow's own reference source,
+    /// `mdoc::find_attributes` - it matches a *requested* id of
+    /// `pseudonymClaim` against a credential attribute *stored* as this
+    /// name: `desired_attribute_id == "pairwise_pseudonym" && attribute_id
+    /// == "pseudonym_seed"`). `pseudonymClaim` is the session-specific value
+    /// the wallet DERIVES from this seed at presentation time
+    /// (`SHA256(seed || verifier_context)`) and discloses to the verifier -
+    /// it is never itself a stored issuer claim, so a direct CBOR namespace
+    /// lookup for it (see `generateProof`'s own re-derivation below) must
+    /// fall back to this name, mirroring the crate's own alias.
+    private static let pseudonymSeedClaim = "pseudonym_seed"
 
     nonisolated public let systemId = "longfellow-libzk-v1"
 
@@ -93,16 +106,25 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         self.pseudonymDeriver = pseudonymDeriver
     }
 
-    /// Matches any requested spec declaring `system == "longfellow"` -
-    /// mirrors `WscdSelectionPolicy`'s "nominal capability" convention (a
-    /// static declaration, not a live probe): whether the specific circuit
+    /// Matches any requested spec declaring `system == systemId`
+    /// (`"longfellow-libzk-v1"` - confirmed live against
+    /// multipaz-verifier-server's actual DCQL `zk_system_type` output, which
+    /// sends this exact string, not the shorter `"longfellow"` this
+    /// comparison incorrectly used before) AND whose own `num_attributes`
+    /// param equals `numAttributes` - a circuit is compiled for a FIXED
+    /// attribute count, so a mismatched count fails opaquely at the native
+    /// prover/verifier boundary rather than here. Mirrors
+    /// `WscdSelectionPolicy`'s "nominal capability" convention (a static
+    /// declaration, not a live probe): whether the specific circuit
     /// `ZkSystemSpec.id` names is actually fetchable is only verified
     /// lazily, in `generateProof` - `matchingSpec` itself can't do network
     /// I/O (it's a plain, synchronous, non-isolated function, used during
     /// request-vs-capability matching before any proof generation is
     /// committed to).
-    nonisolated public func matchingSpec(_ requestedSpecs: [ZkSystemSpec]) -> ZkSystemSpec? {
-        requestedSpecs.first { $0.system == "longfellow" }
+    nonisolated public func matchingSpec(_ requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> ZkSystemSpec? {
+        requestedSpecs.first {
+            $0.system == systemId && $0.getParam("num_attributes").flatMap { Int($0) } == numAttributes
+        }
     }
 
     public func generateProof(
@@ -168,7 +190,7 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
                 sessionTranscript: Data(sessionTranscript),
                 time: time
             )
-            return ZkProofResult(proofBytes: [UInt8](proofBytes))
+            return ZkProofResult(proofBytes: [UInt8](proofBytes), timestamp: time)
         }
 
         let verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
@@ -196,12 +218,18 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // asserted this claim's presence to produce the proof), a missing
         // seed here means the credential is malformed, not that the
         // pseudonym is legitimately absent.
-        let seedItem = document.issuerSigned.nameSpaces[namespace]?.first {
-            $0.item.elementIdentifier == Self.pseudonymClaim
-        }
+        // pseudonymSeedClaim is checked first, deliberately: it's the only
+        // one that should ever actually be present in a credential (the
+        // issuer's own stored claim - see its doc comment), so an explicit
+        // priority order removes any ambiguity about which wins if a
+        // namespace somehow contained both, rather than relying on whatever
+        // order nameSpaces happens to iterate in.
+        let namespaceItems = document.issuerSigned.nameSpaces[namespace]
+        let seedItem = namespaceItems?.first { $0.item.elementIdentifier == Self.pseudonymSeedClaim }
+            ?? namespaceItems?.first { $0.item.elementIdentifier == Self.pseudonymClaim }
         guard case .byteString(let seed)? = seedItem?.item.elementValue else {
             throw MdocError.malformed(
-                "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymClaim)' " +
+                "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymSeedClaim)' " +
                 "element in namespace '\(namespace)', but a pseudonym was requested and the proof succeeded"
             )
         }
@@ -210,7 +238,8 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         return ZkProofResult(
             proofBytes: [UInt8](proofBytes),
             pseudonym: pseudonym,
-            pseudonymOutcome: .provided
+            pseudonymOutcome: .provided,
+            timestamp: time
         )
     }
 

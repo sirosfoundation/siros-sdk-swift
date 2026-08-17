@@ -91,7 +91,7 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         signer: @Sendable @escaping (Data) async throws -> Data
     ) async throws -> Data {
         let disclosedDocument = try parseAndFilter(disclosedClaims)
-        let sessionTranscript = buildDCAPISessionTranscript(
+        let sessionTranscript = Self.buildDCAPISessionTranscript(
             origin: origin,
             nonce: nonce,
             encryptionPublicJwkThumbprint: encryptionPublicJwkThumbprint
@@ -175,6 +175,31 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         responseUri: String,
         verifierJwkThumbprint: String?
     ) -> [UInt8] {
+        Self.buildOpenID4VPSessionTranscript(
+            clientId: clientId,
+            nonce: nonce,
+            responseUri: responseUri,
+            verifierJwkThumbprint: verifierJwkThumbprint
+        )
+    }
+
+    /// Builds the `OpenID4VPHandover` session transcript (the redirect
+    /// flow's handover, OID4VP mdoc profile) from just the request
+    /// parameters - a pure function of `clientId`/`nonce`/`responseUri`/
+    /// `verifierJwkThumbprint`, with no dependency on any particular
+    /// credential's bytes. Exposed as a static function (not only via the
+    /// instance `build` method) so callers that need this exact transcript
+    /// for something OTHER than building a normal signed DeviceResponse -
+    /// e.g. as the `sessionTranscript` fed to a
+    /// `ZkProofSystem.generateProof` call for a ZK-wrapped redirect-flow
+    /// presentation - can compute it without constructing an unrelated
+    /// `MdocDeviceResponseBuilder` instance.
+    public static func buildOpenID4VPSessionTranscript(
+        clientId: String,
+        nonce: String,
+        responseUri: String,
+        verifierJwkThumbprint: String?
+    ) -> [UInt8] {
         let handoverInfo: CBOR = .array([
             .utf8String(clientId),
             .utf8String(nonce),
@@ -212,7 +237,13 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
     /// there is no clientId or responseUri here - the handover binds to the
     /// browser-verified origin instead, since the response never travels over
     /// HTTP to a responseUri.
-    private func buildDCAPISessionTranscript(
+    ///
+    /// `public static` (like `buildOpenID4VPSessionTranscript`) so callers
+    /// that need this exact transcript for something other than a normal
+    /// signed DeviceResponse - e.g. a ZK proof's `sessionTranscript` for a
+    /// DC API presentation - can compute it without constructing an
+    /// unrelated `MdocDeviceResponseBuilder` instance.
+    public static func buildDCAPISessionTranscript(
         origin: String,
         nonce: String,
         encryptionPublicJwkThumbprint: String?
@@ -226,7 +257,7 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
             // This sibling call site had the original bug independently.
             encryptionPublicJwkThumbprint.map { .byteString([UInt8](EncryptedContainer.base64UrlDecode($0))) } ?? .null,
         ])
-        let handoverHash = sha256(handoverInfo.encode())
+        let handoverHash = Self.sha256(handoverInfo.encode())
 
         let handover: CBOR = .array([
             .utf8String("OpenID4VPDCAPIHandover"),
@@ -295,11 +326,99 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         return response.encode()
     }
 
-    private func sha256(_ data: [UInt8]) -> [UInt8] {
+    static func sha256(_ data: [UInt8]) -> [UInt8] {
         #if canImport(CryptoKit)
         return Array(SHA256.hash(data: data))
         #else
         fatalError("CryptoKit required for mDoc DeviceResponse. Not available on this platform.")
         #endif
+    }
+
+    /// Builds a ZK-wrapped `DeviceResponse` CBOR structure - multipaz's own
+    /// `zkDocuments` extension to the standard DeviceResponse. Confirmed live
+    /// against a real verifier: a plain base64-encoded proof-bytes string as
+    /// the whole `vp_token` value silently produces an EMPTY result (the
+    /// verifier's parser only recognizes `documents` (plain disclosure) or
+    /// `zkDocuments` (ZK) as top-level keys, never bare proof bytes).
+    ///
+    /// SessionTranscript/proof binding is the ZK circuit's job (already
+    /// handled by `ZkProofSystem.generateProof` itself) - this function only
+    /// assembles the wire envelope the verifier expects to receive the proof
+    /// and its disclosed claims in.
+    ///
+    /// - Parameters:
+    ///   - proofBytes: the raw ZK proof from `ZkProofSystem.generateProof`.
+    ///   - zkSystemId: the resolved `ZkSystemSpec.id` - the full circuit id
+    ///     string the verifier requested and this wallet satisfied.
+    ///   - docType: the credential's mdoc docType.
+    ///   - timestamp: the exact same RFC 3339 timestamp string passed to the
+    ///     native prover call - it's part of what the proof attests to, so
+    ///     it must match byte-for-byte here.
+    ///   - namespace: the mdoc namespace `disclosedClaims` belong to.
+    ///   - disclosedClaims: element identifier -> disclosed CBOR value, for
+    ///     every claim actually being revealed - including the derived
+    ///     pseudonym under its own DCQL-facing name (e.g.
+    ///     `"pairwise_pseudonym"`), never the raw seed value.
+    ///   - issuerAuth: the credential's own COSE_Sign1 `issuerAuth`
+    ///     structure, to extract its x5chain (COSE header label 33) from.
+    /// - Returns: CBOR-encoded `{version, status, zkDocuments}` bytes, ready
+    ///   to become the `vp_token` value for this credential's query id.
+    public static func buildZkDeviceResponse(
+        proofBytes: [UInt8],
+        zkSystemId: String,
+        docType: String,
+        timestamp: String,
+        namespace: String,
+        disclosedClaims: [(String, CBOR)],
+        issuerAuth: CBOR
+    ) -> Data {
+        var documentData: [CBOR: CBOR] = [
+            .utf8String("zkSystemId"): .utf8String(zkSystemId),
+            .utf8String("docType"): .utf8String(docType),
+            .utf8String("timestamp"): .tagged(.standardDateTimeString, .utf8String(timestamp)),
+        ]
+
+        let issuerSignedItems: [CBOR] = disclosedClaims.map { elementId, elementValue in
+            .map([
+                .utf8String("elementIdentifier"): .utf8String(elementId),
+                .utf8String("elementValue"): elementValue,
+            ])
+        }
+        documentData[.utf8String("issuerSigned")] = .map([.utf8String(namespace): .array(issuerSignedItems)])
+
+        // We never disclose deviceSigned claims (everything comes from
+        // issuerSigned) - matches assembleFinalResponse's identical
+        // convention for the non-ZK path.
+        documentData[.utf8String("deviceSigned")] = .map([:])
+
+        if let x5chain = extractX5Chain(issuerAuth) {
+            documentData[.utf8String("msoX5chain")] = x5chain
+        }
+
+        let documentDataTagged: CBOR = .tagged(.encodedCBORDataItem, .byteString(CBOR.map(documentData).encode()))
+
+        let zkDocument: CBOR = .map([
+            .utf8String("proof"): .byteString(proofBytes),
+            .utf8String("documentData"): documentDataTagged,
+        ])
+
+        let response: CBOR = .map([
+            .utf8String("version"): .utf8String("1.0"),
+            .utf8String("status"): .unsignedInt(0),
+            .utf8String("zkDocuments"): .array([zkDocument]),
+        ])
+        return Data(response.encode())
+    }
+
+    /// Extracts the x5chain (COSE header label 33) from a COSE_Sign1
+    /// `issuerAuth`'s unprotected header map (index 1 of the 4-element
+    /// array) - already encoded exactly as multipaz's own
+    /// `X509CertChain.toDataItem()` expects (a single cert as a bare bstr,
+    /// or multiple as an array of bstr - the same encoding COSE itself uses
+    /// for this header, so it can be passed through as-is).
+    private static func extractX5Chain(_ issuerAuth: CBOR) -> CBOR? {
+        guard case .array(let coseSign1) = issuerAuth, coseSign1.count >= 2 else { return nil }
+        guard case .map(let unprotected) = coseSign1[1] else { return nil }
+        return unprotected[.unsignedInt(33)]
     }
 }

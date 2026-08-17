@@ -16,6 +16,17 @@ import CryptoKit
 import Crypto
 #endif
 
+/// The requested-claim name a verifier uses to ask for a ZK pseudonym,
+/// regardless of which underlying `ZkProofSystem` produces it - confirmed
+/// via the `feat/longfellow-zk` reference implementation, which always
+/// lists it alongside real disclosed claims (e.g. `["age_over_18",
+/// "pairwise_pseudonym"]`), not as a separate side-channel-only concept the
+/// circuit is unaware of. Lives here (platform-agnostic `SirosCredentials`),
+/// not on a specific concrete system like `LongfellowZkProofSystem` (iOS-only,
+/// wraps a native XCFramework), so wallet-facing code that must run on every
+/// platform can reference it unconditionally.
+public let zkPseudonymClaim = "pairwise_pseudonym"
+
 /// A verifier's request for one ZK proof system, mirroring multipaz's own
 /// `ZkSystemSpec`/`ZkSystemRepository` design: a generic id/system/params bag
 /// rather than a fixed typed shape, so each proof system (Longfellow today,
@@ -50,18 +61,30 @@ public struct ZkSystemSpec: Sendable, Equatable {
 /// there means no pseudonym was requested).
 public struct VerifierIdentity: Sendable, Equatable {
     /// The verifier's OpenID4VP `client_id` (e.g.
-    /// `x509_san_dns:verifier.example.com`) - fed into `verifier_id`'s
-    /// derivation.
+    /// `x509_san_dns:verifier.example.com`) - the fallback `verifier_id`
+    /// derivation input when `sessionId` is unavailable.
     public let clientId: String
     /// The DCQL credential query's `meta.ppid_context` string, if the
     /// verifier supplied one - a second, independent binding value a
     /// verifier can use to further scope pseudonyms (e.g. per-session, not
     /// just per-verifier). `nil` when absent, which is a normal, common case.
     public let ppidContext: String?
+    /// The verifier-assigned session id for this specific presentation
+    /// (parsed from the `request_uri`'s `?sessionId=` query parameter by
+    /// go-wallet-backend, the only hop that ever sees the raw request_uri) -
+    /// the REAL `verifier_id` derivation input, confirmed 2026-08-17 via
+    /// direct report from zk-cred-longfellow's V8/PPID author: a real
+    /// reference implementation derives `verifier_context` from the
+    /// presentation SESSION's id, not the verifier's static identity,
+    /// precisely so a captured proof can't be replayed against a different
+    /// session. `clientId` is only a fallback for callers that don't have a
+    /// session id available.
+    public let sessionId: String?
 
-    public init(clientId: String, ppidContext: String? = nil) {
+    public init(clientId: String, ppidContext: String? = nil, sessionId: String? = nil) {
         self.clientId = clientId
         self.ppidContext = ppidContext
+        self.sessionId = sessionId
     }
 }
 
@@ -95,19 +118,26 @@ public struct ZkProofResult: Sendable {
     /// Vega, recompute and return public values rather than taking expected
     /// ones as input).
     public let publicValues: [String: String]
+    /// The exact timestamp string passed to the native prover call, if this
+    /// system used one - a caller wrapping `proofBytes` into a wire envelope
+    /// (see `MdocDeviceResponseBuilder.buildZkDeviceResponse`) must echo this
+    /// exact same value, since it's part of what the proof attests to.
+    public let timestamp: String
 
     public init(
         proofBytes: [UInt8],
         nextState: [UInt8]? = nil,
         pseudonym: [UInt8]? = nil,
         pseudonymOutcome: PseudonymOutcome = .notSupportedBySystem,
-        publicValues: [String: String] = [:]
+        publicValues: [String: String] = [:],
+        timestamp: String = ""
     ) {
         self.proofBytes = proofBytes
         self.nextState = nextState
         self.pseudonym = pseudonym
         self.pseudonymOutcome = pseudonymOutcome
         self.publicValues = publicValues
+        self.timestamp = timestamp
     }
 }
 
@@ -137,7 +167,15 @@ public protocol ZkProofSystem: Sendable {
     /// priority order) this system can satisfy, or `nil` if none match -
     /// the extension point `ZkProofSystemRegistry` uses to resolve "does any
     /// registered system satisfy this verifier's ZK request."
-    func matchingSpec(_ requestedSpecs: [ZkSystemSpec]) -> ZkSystemSpec?
+    ///
+    /// `numAttributes` is the number of claims actually being disclosed for
+    /// this request - a circuit is compiled for a FIXED attribute count
+    /// (e.g. `..._8_2_...` proves exactly 2), so a matching implementation
+    /// must also compare this against a candidate spec's own `num_attributes`
+    /// param, not just its `system`/`id` string. Picking a circuit variant
+    /// for the wrong attribute count fails opaquely at the native prover/
+    /// verifier boundary (`MDOC_VERIFIER_HASH_PARSING_FAILURE`), not here.
+    func matchingSpec(_ requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> ZkSystemSpec?
 
     /// Generate a ZK proof of possession (and, if `verifierIdentity` is
     /// non-nil, a pseudonym bound to it) over the credential in
@@ -230,8 +268,18 @@ public struct DefaultZkPseudonymDeriver: ZkPseudonymDeriver {
     public init() {}
 
     public func deriveVerifierContext(_ verifierIdentity: VerifierIdentity) -> [UInt8] {
-        let verifierIdHash = SHA256.hash(data: Array(verifierIdentity.clientId.utf8))
-        let ppidContextHash = SHA256.hash(data: Array((verifierIdentity.ppidContext ?? "").utf8))
+        let verifierIdSource = verifierIdentity.sessionId ?? verifierIdentity.clientId
+        let verifierIdHash = SHA256.hash(data: Array(verifierIdSource.utf8))
+        // The real fallback for an absent ppid_context is 32 raw zero
+        // bytes, not SHA256("") - confirmed against the verifier's own
+        // reconstruction (multipaz's `LongfellowZkSystem.kt`), which never
+        // hashes a missing context, it substitutes the zero bytes directly.
+        let ppidContextHash: [UInt8]
+        if let ppidContext = verifierIdentity.ppidContext {
+            ppidContextHash = Array(SHA256.hash(data: Array(ppidContext.utf8)))
+        } else {
+            ppidContextHash = [UInt8](repeating: 0, count: 32)
+        }
         var combined = [UInt8]()
         combined.append(contentsOf: verifierIdHash)
         combined.append(contentsOf: ppidContextHash)
@@ -254,11 +302,14 @@ public final class ZkProofSystemRegistry: Sendable {
 
     /// The first registered system (in registration order) that supports
     /// `docType` and can satisfy one of `requestedSpecs`, paired with the
-    /// matched spec - or `nil` if none qualify.
-    public func resolve(docType: String, requestedSpecs: [ZkSystemSpec]) -> (ZkProofSystem, ZkSystemSpec)? {
+    /// matched spec - or `nil` if none qualify. `numAttributes` is the
+    /// number of claims actually being disclosed - see
+    /// `ZkProofSystem.matchingSpec`'s doc comment for why it must be
+    /// threaded through rather than matched on `system`/`id` alone.
+    public func resolve(docType: String, requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> (ZkProofSystem, ZkSystemSpec)? {
         for system in systems {
             guard system.supportedDocTypes.contains(docType) else { continue }
-            guard let matched = system.matchingSpec(requestedSpecs) else { continue }
+            guard let matched = system.matchingSpec(requestedSpecs, numAttributes: numAttributes) else { continue }
             return (system, matched)
         }
         return nil

@@ -484,6 +484,13 @@ public struct SignRequestParams: Codable, Sendable {
     /// `generate_proof` response with this existing kid instead of a fresh
     /// key - see `FlowStartMessage.reissuanceKid`'s doc comment.
     public var reissuanceKid: String?
+    /// The verifier-assigned session id for this specific presentation -
+    /// go-wallet-backend parses this from the `request_uri`'s `?sessionId=`
+    /// query parameter (the only hop that ever sees the raw request_uri) and
+    /// forwards it here so a ZK/PPID proof's `verifier_context` can bind to
+    /// the actual presentation SESSION, not just the verifier's static
+    /// identity - see `VerifierIdentity.sessionId`'s doc comment.
+    public var verifierSessionId: String?
 
     enum CodingKeys: String, CodingKey {
         case audience, nonce, issuer, count
@@ -493,6 +500,7 @@ public struct SignRequestParams: Codable, Sendable {
         case responseUri = "response_uri"
         case verifierJwkThumbprint = "verifier_jwk_thumbprint"
         case reissuanceKid = "reissuance_kid"
+        case verifierSessionId = "verifier_session_id"
     }
 }
 

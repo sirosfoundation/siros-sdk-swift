@@ -4,6 +4,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+@preconcurrency import SwiftCBOR
 import SirosCredentials
 import SirosTransport
 import SirosAuth
@@ -259,11 +260,17 @@ public final class SirosWallet: @unchecked Sendable {
     private let accountRegistry: AccountRegistry
 
     /// Client for go-zk-circuits' `/v1` REST API, built from
-    /// `config.zkCircuitUrls`. Not wired into any flow yet - no ZK
-    /// proof-generation system exists in this SDK yet - this only makes a
-    /// configured client available for future Longfellow-ZKP-pseudonym
-    /// phases.
+    /// `config.zkCircuitUrls`. Feeds `zkProofSystemRegistry` below.
     public let zkCircuitClient: ZkCircuitClient
+
+    /// Registered ZK proof systems, resolved against a verifier's
+    /// `zk_system_type` request in `handleDCAPIRequest`/`handleSignRequest`'s
+    /// ZK branches. Empty on non-iOS platforms - `LongfellowZkProofSystem`
+    /// wraps the `zk-cred-longfellow` native XCFramework, which only ships
+    /// iOS slices (see that type's own `#if os(iOS)` gating) - so a ZK
+    /// request simply finds no matching system there, the same "unsupported"
+    /// outcome as any other unregistered proof system.
+    public let zkProofSystemRegistry: ZkProofSystemRegistry
 
     /// go-wallet-backend's credential-type registry service base URL, for
     /// `vctmFetcher`/`mddlSchemaFetcher`'s registry-service fetch strategy.
@@ -495,6 +502,11 @@ public final class SirosWallet: @unchecked Sendable {
         self.vctmFetcher = VctmFetcher(httpGet: typeMetadataGet)
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
+        #if os(iOS)
+        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [LongfellowZkProofSystem(zkCircuitClient: self.zkCircuitClient)])
+        #else
+        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [])
+        #endif
 
         tokens.onSessionRejected = { [weak self] in
             self?.handleReauthenticationRequired()
@@ -1840,7 +1852,62 @@ public final class SirosWallet: @unchecked Sendable {
             let disclosedClaims = matchResult?.requestedClaims.compactMap(\.last)
 
             let token: String
-            if cred.format == "mso_mdoc" {
+            if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+                // ZK-wrapped mDoc presentation - see the shared
+                // `buildZkPresentationToken` helper's doc comment.
+                guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                    throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+                }
+                // cred.kid is commonly nil for a softkey-issued credential
+                // with no explicit per-credential key binding (the plain,
+                // non-ZK signing paths tolerate this via a similar
+                // fallback) - keystore.sign() below needs an explicit key
+                // id, so resolve the same default here rather than
+                // treating a nil kid as "no key exists".
+                guard let kid = cred.kid ?? keystore.listKeys().first?.keyId else {
+                    throw SirosError.wallet(message: "No signing key available for credential \(cred.id) - cannot generate a ZK proof for it")
+                }
+                let mdocDocument = try MdocCbor.parseStoredCredential([UInt8](credBytes))
+                let docType = mdocDocument.docType
+                // A circuit is compiled for a fixed attribute count, so the
+                // verifier's zk_system_type list must be matched against how
+                // many claims are actually being disclosed here.
+                guard let (system, spec) = zkProofSystemRegistry.resolve(
+                    docType: docType,
+                    requestedSpecs: matchResult?.zkSystemTypes ?? [],
+                    numAttributes: disclosedClaims?.count ?? 0
+                ) else {
+                    throw SirosError.wallet(message: "No registered ZK proof system satisfies the verifier's zk_system_type for \(docType)")
+                }
+                // Only bind a pseudonym when actually disclosed for this
+                // query.
+                let wantsPseudonym = disclosedClaims?.contains(zkPseudonymClaim) == true
+                let verifierIdentity: VerifierIdentity? = wantsPseudonym
+                    ? VerifierIdentity(clientId: audience, ppidContext: matchResult?.ppidContext)
+                    : nil
+                let sessionTranscript = MdocDeviceResponseBuilder.buildDCAPISessionTranscript(
+                    origin: origin,
+                    nonce: request.nonce,
+                    encryptionPublicJwkThumbprint: encryptionThumbprint
+                )
+                let result = try await system.generateProof(
+                    spec: spec,
+                    credentialBytes: [UInt8](credBytes),
+                    sessionTranscript: sessionTranscript,
+                    requestedClaims: disclosedClaims ?? [],
+                    verifierIdentity: verifierIdentity,
+                    signer: { data in [UInt8](try await self.keystore.sign(keyId: kid, payload: Data(data), algorithm: "ES256")) },
+                    priorState: nil
+                )
+                let zkDeviceResponse = try buildZkPresentationToken(
+                    credBytes: [UInt8](credBytes),
+                    docType: docType,
+                    spec: spec,
+                    disclosedClaimNames: disclosedClaims ?? [],
+                    result: result
+                )
+                token = Self.b64UrlEncode(zkDeviceResponse)
+            } else if cred.format == "mso_mdoc" {
                 guard let credBytes = Self.b64UrlDecode(cred.raw) else {
                     throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
                 }
@@ -1930,6 +1997,50 @@ public final class SirosWallet: @unchecked Sendable {
         ))
 
         return DCAPIPresentationResult(responseJson: finalResponseJson, credentialIds: selectedIds)
+    }
+
+    /// Wraps a raw ZK proof result into the full `{version, status,
+    /// zkDocuments: [...]}` DeviceResponse-shaped CBOR structure multipaz's
+    /// own `DeviceResponseParser` requires (see
+    /// `MdocDeviceResponseBuilder.buildZkDeviceResponse`'s doc comment). Bare
+    /// proof bytes alone are not a valid `vp_token` entry - a verifier that
+    /// understands this format silently shows nothing for one, since its
+    /// parser never finds a `documents` or `zkDocuments` key at all. Shared
+    /// by both ZK call sites (`handleDCAPIRequest` and the `sign_presentation`
+    /// handler) since the wrapping logic is identical regardless of transport.
+    private func buildZkPresentationToken(
+        credBytes: [UInt8],
+        docType: String,
+        spec: ZkSystemSpec,
+        disclosedClaimNames: [String],
+        result: ZkProofResult
+    ) throws -> Data {
+        let document = try MdocCbor.parseStoredCredential(credBytes)
+        guard let namespace = document.issuerSigned.nameSpaces.keys.first else {
+            throw MdocError.malformed("mdoc credential '\(docType)' has no disclosed namespaces")
+        }
+        let storedItems = document.issuerSigned.nameSpaces[namespace] ?? []
+
+        var disclosedClaims: [(String, CBOR)] = []
+        for claimName in disclosedClaimNames {
+            if claimName == zkPseudonymClaim {
+                if let pseudonym = result.pseudonym {
+                    disclosedClaims.append((claimName, .byteString(pseudonym)))
+                }
+            } else if let match = storedItems.first(where: { $0.item.elementIdentifier == claimName }) {
+                disclosedClaims.append((claimName, match.item.elementValue))
+            }
+        }
+
+        return MdocDeviceResponseBuilder.buildZkDeviceResponse(
+            proofBytes: result.proofBytes,
+            zkSystemId: spec.id,
+            docType: docType,
+            timestamp: result.timestamp,
+            namespace: namespace,
+            disclosedClaims: disclosedClaims,
+            issuerAuth: document.issuerSigned.issuerAuth
+        )
     }
 
     /// Direct (non-engine-relayed) trust evaluation, for flows like
