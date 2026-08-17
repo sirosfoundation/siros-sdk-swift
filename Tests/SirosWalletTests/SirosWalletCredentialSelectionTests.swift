@@ -116,6 +116,34 @@ final class SirosWalletCredentialSelectionTests: XCTestCase {
         XCTAssertEqual(entries.count, 1)
     }
 
+    /// A selected id that IS in `allCreds` but isn't a candidate of any
+    /// `matchResults` entry (e.g. an inconsistent listener return, a race, or
+    /// a future matcher change - flagged in PR review) must still produce an
+    /// entry carrying a `credential_query_id` (falling back to `"_default"`,
+    /// mirroring `matchAndSelectCredentials`'s synthetic no-DCQL
+    /// MatchResult), never omit the field - go-wallet-backend's
+    /// ConsentSelection wire contract requires it on every entry.
+    func testBuildConsentPayload_selectedIdNotInAnyMatchResult_fallsBackToDefaultQueryId() {
+        let matchedCred = makeCredential(id: 1)
+        let orphanCred = makeCredential(id: 2)
+        let matchResults = [
+            CredentialMatcher.MatchResult(queryId: "q", format: nil, candidates: [matchedCred], requestedClaims: []),
+        ]
+
+        let payload = SirosWallet.buildConsentPayload(
+            matchResults: matchResults, selectedIds: [2], allCreds: [matchedCred, orphanCred]
+        )
+
+        guard case .array(let entries)? = payload["selected_credentials"] else {
+            return XCTFail("Expected selected_credentials array")
+        }
+        XCTAssertEqual(entries.count, 1)
+        guard case .object_(let entry) = entries[0] else {
+            return XCTFail("Expected object entry")
+        }
+        XCTAssertEqual(entry["credential_query_id"]?.stringValue, "_default")
+    }
+
     /// Duplicate claim paths across a query's requestedClaims (e.g. the
     /// same element requested under two DCQL alternatives) must be
     /// deduplicated in the final disclosed_claims list.

@@ -3074,105 +3074,14 @@ public final class SirosWallet: @unchecked Sendable {
                         let matchResult = storedMatchResults?.first(where: { result in
                             result.queryId == ref.credentialQueryId || result.candidates.contains(where: { $0.id == cred.id })
                         })
-
-                        if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
-                            // ZK-wrapped mDoc presentation - see
-                            // handleDCAPIRequest's identical branch, which this
-                            // mirrors for the WS-engine/redirect-flow transport
-                            // instead of DC API.
-                            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
-                                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
-                            }
-                            // cred.kid is commonly nil for a softkey-issued
-                            // credential with no explicit per-credential key
-                            // binding - see the identical fallback in
-                            // handleDCAPIRequest.
-                            guard let kid = cred.kid ?? keystore.listKeys().first?.keyId else {
-                                throw SirosError.wallet(message: "No signing key available for credential \(cred.id) - cannot generate a ZK proof for it")
-                            }
-                            let mdocDocument = try MdocCbor.parseStoredCredential([UInt8](credBytes))
-                            let docType = mdocDocument.docType
-                            // See handleDCAPIRequest's identical comment: a
-                            // circuit is compiled for a fixed attribute count,
-                            // so matching must account for how many claims are
-                            // actually being disclosed here.
-                            guard let (system, spec) = zkProofSystemRegistry.resolve(
-                                docType: docType,
-                                requestedSpecs: matchResult?.zkSystemTypes ?? [],
-                                numAttributes: ref.disclosedClaims?.count ?? 0
-                            ) else {
-                                throw SirosError.wallet(message: "No registered ZK proof system satisfies the verifier's zk_system_type for \(docType)")
-                            }
-                            // Only bind a pseudonym when actually disclosed for
-                            // this query - see handleDCAPIRequest's identical
-                            // comment.
-                            let wantsPseudonym = ref.disclosedClaims?.contains(zkPseudonymClaim) == true
-                            let verifierIdentity: VerifierIdentity? = wantsPseudonym
-                                ? VerifierIdentity(
-                                    clientId: audience,
-                                    ppidContext: matchResult?.ppidContext,
-                                    // The verifier-assigned presentation session
-                                    // id (see VerifierIdentity.sessionId's doc
-                                    // comment) - the real verifier_context
-                                    // binding input for the WS-engine transport,
-                                    // where (unlike DC API) go-wallet-backend
-                                    // forwards it from the original request_uri.
-                                    sessionId: msg.params.verifierSessionId
-                                )
-                                : nil
-                            let sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
-                                clientId: audience,
-                                nonce: nonce,
-                                responseUri: msg.params.responseUri ?? "",
-                                verifierJwkThumbprint: msg.params.verifierJwkThumbprint
-                            )
-                            let result = try await system.generateProof(
-                                spec: spec,
-                                credentialBytes: [UInt8](credBytes),
-                                sessionTranscript: sessionTranscript,
-                                requestedClaims: ref.disclosedClaims ?? [],
-                                verifierIdentity: verifierIdentity,
-                                signer: { data in [UInt8](try await self.keystore.sign(keyId: kid, payload: Data(data), algorithm: "ES256")) },
-                                priorState: nil
-                            )
-                            let zkDeviceResponse = try buildZkPresentationToken(
-                                credBytes: [UInt8](credBytes),
-                                docType: docType,
-                                spec: spec,
-                                disclosedClaimNames: ref.disclosedClaims ?? [],
-                                result: result
-                            )
-                            vpParts.append(Self.b64UrlEncode(zkDeviceResponse))
-                        } else if cred.format == "mso_mdoc" {
-                            // mDoc DeviceResponse (ISO 18013-5)
-                            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
-                                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
-                            }
-                            let deviceResponse = try await keystore.signMdocPresentation(
-                                credentialBytes: credBytes,
-                                disclosedClaims: ref.disclosedClaims,
-                                nonce: nonce,
-                                audience: audience,
-                                responseUri: msg.params.responseUri ?? "",
-                                verifierJwkThumbprint: msg.params.verifierJwkThumbprint,
-                                kid: cred.kid
-                            )
-                            vpParts.append(deviceResponse.base64EncodedString()
-                                .replacingOccurrences(of: "+", with: "-")
-                                .replacingOccurrences(of: "/", with: "_")
-                                .replacingOccurrences(of: "=", with: "")
-                            )
-                        } else {
-                            // SD-JWT VP token with KB-JWT
-                            let vp = try await keystore.signVpToken(
-                                credential: cred.raw,
-                                disclosedClaims: ref.disclosedClaims,
-                                nonce: nonce,
-                                audience: audience,
-                                kid: cred.kid
-                            )
-                            vpParts.append(vp)
-                        }
+                        vpParts.append(try await buildSignPresentationVpPart(
+                            cred: cred,
+                            ref: ref,
+                            matchResult: matchResult,
+                            nonce: nonce,
+                            audience: audience,
+                            msg: msg
+                        ))
                     }
                     let vpToken = vpParts.joined(separator: "\n")
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
@@ -3191,6 +3100,118 @@ public final class SirosWallet: @unchecked Sendable {
             logger.error("Error handling sign request: \(error.localizedDescription)")
             #endif
             reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
+        }
+    }
+
+    /// Builds a single credential's VP-token part - ZK-wrapped mdoc, plain
+    /// mdoc `DeviceResponse`, or SD-JWT VP+KB-JWT - for the
+    /// `"sign_presentation"` `sign_request` action handled by
+    /// `handleSignRequest`. Factored out of that function purely to keep its
+    /// body under SwiftLint's `function_body_length` limit; behavior is
+    /// unchanged from the inline version. `matchResult` is the originating
+    /// DCQL query's cached match info (`format`/`zkSystemTypes`/`ppidContext`)
+    /// looked up by `handleSignRequest` via `pendingMatchResultsByFlow`, or
+    /// `nil` if none was cached for this credential (falls back to
+    /// `cred.format` alone to decide the branch, same as before this was
+    /// extracted).
+    private func buildSignPresentationVpPart(
+        cred: StoredCredential,
+        ref: CredentialRef,
+        matchResult: CredentialMatcher.MatchResult?,
+        nonce: String,
+        audience: String,
+        msg: SignRequestMessage
+    ) async throws -> String {
+        if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+            // ZK-wrapped mDoc presentation - see handleDCAPIRequest's
+            // identical branch, which this mirrors for the WS-engine/
+            // redirect-flow transport instead of DC API.
+            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+            }
+            // cred.kid is commonly nil for a softkey-issued credential with
+            // no explicit per-credential key binding - see the identical
+            // fallback in handleDCAPIRequest.
+            guard let kid = cred.kid ?? keystore.listKeys().first?.keyId else {
+                throw SirosError.wallet(message: "No signing key available for credential \(cred.id) - cannot generate a ZK proof for it")
+            }
+            let mdocDocument = try MdocCbor.parseStoredCredential([UInt8](credBytes))
+            let docType = mdocDocument.docType
+            // See handleDCAPIRequest's identical comment: a circuit is
+            // compiled for a fixed attribute count, so matching must account
+            // for how many claims are actually being disclosed here.
+            guard let (system, spec) = zkProofSystemRegistry.resolve(
+                docType: docType,
+                requestedSpecs: matchResult?.zkSystemTypes ?? [],
+                numAttributes: ref.disclosedClaims?.count ?? 0
+            ) else {
+                throw SirosError.wallet(message: "No registered ZK proof system satisfies the verifier's zk_system_type for \(docType)")
+            }
+            // Only bind a pseudonym when actually disclosed for this query -
+            // see handleDCAPIRequest's identical comment.
+            let wantsPseudonym = ref.disclosedClaims?.contains(zkPseudonymClaim) == true
+            let verifierIdentity: VerifierIdentity? = wantsPseudonym
+                ? VerifierIdentity(
+                    clientId: audience,
+                    ppidContext: matchResult?.ppidContext,
+                    // The verifier-assigned presentation session id (see
+                    // VerifierIdentity.sessionId's doc comment) - the real
+                    // verifier_context binding input for the WS-engine
+                    // transport, where (unlike DC API) go-wallet-backend
+                    // forwards it from the original request_uri.
+                    sessionId: msg.params.verifierSessionId
+                )
+                : nil
+            let sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
+                clientId: audience,
+                nonce: nonce,
+                responseUri: msg.params.responseUri ?? "",
+                verifierJwkThumbprint: msg.params.verifierJwkThumbprint
+            )
+            let result = try await system.generateProof(
+                spec: spec,
+                credentialBytes: [UInt8](credBytes),
+                sessionTranscript: sessionTranscript,
+                requestedClaims: ref.disclosedClaims ?? [],
+                verifierIdentity: verifierIdentity,
+                signer: { data in [UInt8](try await self.keystore.sign(keyId: kid, payload: Data(data), algorithm: "ES256")) },
+                priorState: nil
+            )
+            let zkDeviceResponse = try buildZkPresentationToken(
+                credBytes: [UInt8](credBytes),
+                docType: docType,
+                spec: spec,
+                disclosedClaimNames: ref.disclosedClaims ?? [],
+                result: result
+            )
+            return Self.b64UrlEncode(zkDeviceResponse)
+        } else if cred.format == "mso_mdoc" {
+            // mDoc DeviceResponse (ISO 18013-5)
+            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+            }
+            let deviceResponse = try await keystore.signMdocPresentation(
+                credentialBytes: credBytes,
+                disclosedClaims: ref.disclosedClaims,
+                nonce: nonce,
+                audience: audience,
+                responseUri: msg.params.responseUri ?? "",
+                verifierJwkThumbprint: msg.params.verifierJwkThumbprint,
+                kid: cred.kid
+            )
+            return deviceResponse.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        } else {
+            // SD-JWT VP token with KB-JWT
+            return try await keystore.signVpToken(
+                credential: cred.raw,
+                disclosedClaims: ref.disclosedClaims,
+                nonce: nonce,
+                audience: audience,
+                kid: cred.kid
+            )
         }
     }
 
@@ -3261,9 +3282,15 @@ public final class SirosWallet: @unchecked Sendable {
             guard allCreds.contains(where: { $0.id == id }) else { continue }
             let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
             var obj: [String: AnyCodable] = [:]
-            if let queryId = matchResult?.queryId {
-                obj["credential_query_id"] = .string(queryId)
-            }
+            // Always set credential_query_id, even for an id that (should
+            // never happen, but see below) isn't in any matchResult - the
+            // "_default" fallback mirrors the no-DCQL synthetic MatchResult
+            // matchAndSelectCredentials builds, and keeps this payload
+            // honoring the backend's documented wire contract unconditionally
+            // rather than silently omitting the field if a caller ever
+            // passes a selectedId inconsistent with matchResults (e.g. a
+            // misbehaving eventListener implementation).
+            obj["credential_query_id"] = .string(matchResult?.queryId ?? "_default")
             // Legacy engine JSON-RPC protocol keeps credential_id as a string
             // wire contract - a separate contract from privatedata-spec's
             // numeric StoredCredential.id, so it deliberately stays String
