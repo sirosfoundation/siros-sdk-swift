@@ -135,7 +135,10 @@ final class MessageBannerTests: XCTestCase {
     /// and legitimately expected for integer arguments (e.g.
     /// `credentials.countOther`), so this only flags `%s`.
     func testNoTranslationKeyUsesRawStringFormatSpecifier() throws {
-        let pattern = #"%\d+\$s"#
+        // Matches both the positional form (`%1$s`) and the bare form
+        // (`%s`) - `String(format:)` accepts either, and both crash
+        // identically for a Swift `String` argument on Darwin.
+        let pattern = #"%(\d+\$)?s"#
         let regex = try XCTUnwrap(try? NSRegularExpression(pattern: pattern))
 
         for name in ["en", "sv"] {
