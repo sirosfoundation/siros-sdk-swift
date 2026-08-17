@@ -178,6 +178,7 @@
     "pinTitle": "Ange PIN för säkerhetsnyckel",
     "pinDescription": "Ange PIN-koden för din FIDO2-säkerhetsnyckel.",
     "pinPlaceholder": "PIN",
+    "submitButton": "Skicka",
     "navTitle": "PIN krävs"
   },
   "idv": {

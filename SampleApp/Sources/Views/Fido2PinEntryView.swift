@@ -73,7 +73,7 @@ struct Fido2PinEntryView: View {
                     .tint(.red)
 
                     Button(action: { pending.respond(pin) }) {
-                        Text(L10n.string("qr.pasteButton"))
+                        Text(L10n.string("fido2.submitButton"))
                             .frame(maxWidth: .infinity)
                             .frame(height: 48)
                     }

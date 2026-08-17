@@ -55,6 +55,14 @@ struct ContentView: View {
         // PR #106's identical fix). Single-param onChange(of:perform:) -
         // the two-param (oldValue, newValue) overload needs iOS 17+, but
         // this app's deployment target is iOS 16.
+        //
+        // `.onAppear` covers the case where `viewModel` already has an
+        // error/info message set the first time `ContentView` renders (e.g.
+        // one raised during startup before this view existed) - `.onChange`
+        // alone only fires on a SUBSEQUENT change, so without this the old
+        // `.alert(isPresented:)`'s "presents immediately" behavior would be
+        // lost for that one case.
+        .onAppear { syncBanner() }
         .onChange(of: viewModel.showError) { _ in syncBanner() }
         .onChange(of: viewModel.showInfo) { _ in syncBanner() }
         .onChange(of: viewModel.errorMessage) { _ in syncBanner() }

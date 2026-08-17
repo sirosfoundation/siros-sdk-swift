@@ -178,6 +178,7 @@
     "pinTitle": "Enter Security Key PIN",
     "pinDescription": "Enter the PIN for your FIDO2 security key.",
     "pinPlaceholder": "PIN",
+    "submitButton": "Submit",
     "navTitle": "PIN Required"
   },
   "idv": {
