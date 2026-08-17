@@ -31,7 +31,17 @@ extension SirosWallet {
     /// crash the app. The backend authenticates the notification using ephemeral
     /// issuance state and never stores credential data.
     func handleFlowComplete(msg: FlowCompleteMessage) async {
-        lock.lock(); let offer = activeOffer; let vctm = activeVctm; let attestedKeyIds = activeAttestedKeyIds; lock.unlock()
+        lock.lock()
+        let offer = activeOffer
+        let vctm = activeVctm
+        let attestedKeyIds = activeAttestedKeyIds
+        // A completed flow has no further sign_presentation coming - drop
+        // its cached DCQL match results (if any; a no-op for an issuance
+        // flow, which never populates this map) so it doesn't linger
+        // forever, mirroring Kotlin's identical
+        // `pendingMatchResultsByFlow.remove(msg.flowId)` here.
+        pendingMatchResultsByFlow.removeValue(forKey: msg.flowId)
+        lock.unlock()
 
         // Shared across every copy in this response so the UI can group them
         // into one card (see StoredCredential.batchId) - ALWAYS assigned,

@@ -331,6 +331,22 @@ public final class SirosWallet: @unchecked Sendable {
     private var _presentationHistory: [PresentationRecord] = []
     /// Stores trust evaluation results keyed by flow ID for use in credential selection UI.
     private var lastTrustResults: [String: TrustResult] = [:]
+    /// Cached per-flow-id DCQL match results from whichever credential-
+    /// matching step actually ran for that flow (`handleCredentialSelection`'s
+    /// `"credential_selection"` flow_progress step - the real, live path for
+    /// redirect-flow/haip-vp:// presentations - or the legacy engine's own
+    /// `handleMatchRequest`). The later `sign_presentation` sign_request step
+    /// (`handleSignRequest`) needs this to know the originating query's
+    /// `format`/`zkSystemTypes`/`ppidContext` per credential, since its own
+    /// `credentials_to_include` wire shape doesn't carry that back. Mirrors
+    /// Kotlin's `pendingMatchResultsByFlow` exactly. Entries are removed once
+    /// consumed by `handleSignRequest`, or when the flow terminates (see
+    /// `handleFlowComplete`/`handleFlowError`/`reportSignFailure`).
+    ///
+    /// Not `private` - `handleFlowComplete` (in `SirosWallet+Notifications.swift`)
+    /// needs to clear it too, the same cross-file-extension-access reason as
+    /// `activeOffer`/`activeAttestedKeyIds` etc. above; guarded by the same `lock`.
+    var pendingMatchResultsByFlow: [String: [CredentialMatcher.MatchResult]] = [:]
     /// Authorization context captured from a flow's `authorization_required`
     /// progress message, keyed by flow ID - needed to resume issuance via a
     /// fresh `flow_start` once the OAuth browser redirect returns, since the
@@ -2770,6 +2786,16 @@ public final class SirosWallet: @unchecked Sendable {
             // skipped it entirely, so a WMP-relayed sign_presentation was
             // never checked against the trust result computed for this flow.
             try validateAudience(flowId: flowId, audience: params.audience)
+            // NOTE (pre-existing, separate gap - not addressed by this
+            // change): unlike the legacy engine transport's
+            // SignRequestParams, WMP's SignSubFlowParams carries no
+            // credentials_to_include equivalent at all, so there is no way
+            // for this handler to know which credential(s)
+            // handleWmpMatchRequest matched/the user selected, or to build a
+            // real per-credential vp_token (mso_mdoc/SD-JWT/ZK) for this
+            // transport - it always falls back to the credential-less
+            // legacy signPresentation path below. Fixing this needs a wire
+            // protocol change to SignSubFlowParams, out of scope here.
             let vpToken = try await keystore.signPresentation(
                 nonce: params.nonce,
                 audience: params.audience,
@@ -2785,22 +2811,58 @@ public final class SirosWallet: @unchecked Sendable {
 
     private func handleWmpMatchRequest(flowId: String, payload: AnyCodable?) async -> MatchResult {
         let allCreds = await credentialStore.getAll()
+        // WMP's "matching_credentials"/"match_request" progress step carries
+        // the same payload shape as the legacy engine's "credential_selection"
+        // step (a "dcql_query" object, optionally alongside "verifier" info) -
+        // filter against it instead of unconditionally offering every
+        // eligible credential regardless of what the verifier actually asked
+        // for.
+        let dcqlQuery = payload?.objectValue?["dcql_query"]?.objectValue.map { anyCodableDictToAny($0) }
+        let dcqlOutput: CredentialMatcher.DcqlMatchOutput
+        if let dcqlQuery {
+            dcqlOutput = CredentialMatcher.matchDcql(dcqlQuery: dcqlQuery, credentials: allCreds)
+        } else {
+            dcqlOutput = CredentialMatcher.DcqlMatchOutput(
+                queryResults: [CredentialMatcher.MatchResult(
+                    queryId: "_default", format: nil, candidates: allCreds, requestedClaims: []
+                )],
+                credentialSets: nil,
+                satisfiableOptions: []
+            )
+        }
+        let matchResults = dcqlOutput.queryResults
+        var seenIds = Set<Int64>()
+        let candidates = matchResults.flatMap { $0.candidates }.filter { seenIds.insert($0.id).inserted }
+
         // Only offer instances the active consumption policy still considers
         // usable - mirrors the legacy engine path's handleMatchRequest (and
         // Kotlin's matchRequests() collector) so a credential exhausted under
         // CONSUME_ALL/CONSUME_NON_ZKP can't be matched into a new
         // presentation via this transport either.
         let eligibleCreds = CredentialUtils.eligibleInstances(
-            instances: allCreds,
+            instances: candidates,
             policy: credentialConsumptionPolicy,
             presentationHistory: presentationHistory
         )
-        let matches = eligibleCreds.map { cred in
+
+        // Cache for the later sign_presentation step, mirroring
+        // handleCredentialSelection/handleMatchRequest - see
+        // pendingMatchResultsByFlow's doc comment. NOTE: handleWmpSignRequest
+        // does not currently read this map or accept any
+        // credentials_to_include equivalent at all (see its own doc
+        // comment on the "sign_presentation" case) - this is currently
+        // write-only for the WMP transport, kept for parity/consistency
+        // with the other two call sites and so it's ready once that
+        // separate gap is closed.
+        lock.lock(); pendingMatchResultsByFlow[flowId] = matchResults; lock.unlock()
+
+        let matches = eligibleCreds.map { cred -> CredentialMatch in
+            let queryId = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == cred.id }) })?.queryId
             // credentialId is the WMP wire-protocol identifier - a separate,
             // unverified backend contract distinct from privatedata-spec's
             // numeric StoredCredential.id, so it deliberately stays String.
-            CredentialMatch(
-                credentialQueryId: nil,
+            return CredentialMatch(
+                credentialQueryId: queryId,
                 credentialId: String(cred.id),
                 format: cred.format,
                 vct: cred.metadata?.vct,
@@ -2994,43 +3056,32 @@ public final class SirosWallet: @unchecked Sendable {
 
                 if let credsToInclude, !credsToInclude.isEmpty {
                     let allCreds = await credentialStore.getAll()
+                    // Cached by handleCredentialSelection ("credential_selection"
+                    // step - the real, live path for redirect-flow/haip-vp://
+                    // presentations) or handleMatchRequest (legacy match_request
+                    // path) - consumed (removed) here, at the point this batch's
+                    // tokens are actually built, mirroring Kotlin's identical
+                    // `pendingMatchResultsByFlow.remove(msg.flowId)`.
+                    lock.lock()
+                    let storedMatchResults = pendingMatchResultsByFlow.removeValue(forKey: msg.flowId)
+                    lock.unlock()
                     var vpParts: [String] = []
                     for ref in credsToInclude {
                         // ref.credentialId is the WMP wire-protocol identifier
                         // (String) - parse it back to the numeric
                         // StoredCredential.id it refers to.
                         guard let cred = allCreds.first(where: { $0.id == Int64(ref.credentialId) }) else { continue }
-
-                        if cred.format == "mso_mdoc" {
-                            // mDoc DeviceResponse (ISO 18013-5)
-                            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
-                                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
-                            }
-                            let deviceResponse = try await keystore.signMdocPresentation(
-                                credentialBytes: credBytes,
-                                disclosedClaims: ref.disclosedClaims,
-                                nonce: nonce,
-                                audience: audience,
-                                responseUri: msg.params.responseUri ?? "",
-                                verifierJwkThumbprint: msg.params.verifierJwkThumbprint,
-                                kid: cred.kid
-                            )
-                            vpParts.append(deviceResponse.base64EncodedString()
-                                .replacingOccurrences(of: "+", with: "-")
-                                .replacingOccurrences(of: "/", with: "_")
-                                .replacingOccurrences(of: "=", with: "")
-                            )
-                        } else {
-                            // SD-JWT VP token with KB-JWT
-                            let vp = try await keystore.signVpToken(
-                                credential: cred.raw,
-                                disclosedClaims: ref.disclosedClaims,
-                                nonce: nonce,
-                                audience: audience,
-                                kid: cred.kid
-                            )
-                            vpParts.append(vp)
-                        }
+                        let matchResult = storedMatchResults?.first(where: { result in
+                            result.queryId == ref.credentialQueryId || result.candidates.contains(where: { $0.id == cred.id })
+                        })
+                        vpParts.append(try await buildSignPresentationVpPart(
+                            cred: cred,
+                            ref: ref,
+                            matchResult: matchResult,
+                            nonce: nonce,
+                            audience: audience,
+                            msg: msg
+                        ))
                     }
                     let vpToken = vpParts.joined(separator: "\n")
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
@@ -3052,10 +3103,311 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
+    /// Builds a single credential's VP-token part - ZK-wrapped mdoc, plain
+    /// mdoc `DeviceResponse`, or SD-JWT VP+KB-JWT - for the
+    /// `"sign_presentation"` `sign_request` action handled by
+    /// `handleSignRequest`. Factored out of that function purely to keep its
+    /// body under SwiftLint's `function_body_length` limit; behavior is
+    /// unchanged from the inline version. `matchResult` is the originating
+    /// DCQL query's cached match info (`format`/`zkSystemTypes`/`ppidContext`)
+    /// looked up by `handleSignRequest` via `pendingMatchResultsByFlow`, or
+    /// `nil` if none was cached for this credential (falls back to
+    /// `cred.format` alone to decide the branch, same as before this was
+    /// extracted).
+    private func buildSignPresentationVpPart(
+        cred: StoredCredential,
+        ref: CredentialRef,
+        matchResult: CredentialMatcher.MatchResult?,
+        nonce: String,
+        audience: String,
+        msg: SignRequestMessage
+    ) async throws -> String {
+        if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+            // ZK-wrapped mDoc presentation - see handleDCAPIRequest's
+            // identical branch, which this mirrors for the WS-engine/
+            // redirect-flow transport instead of DC API.
+            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+            }
+            // cred.kid is commonly nil for a softkey-issued credential with
+            // no explicit per-credential key binding - see the identical
+            // fallback in handleDCAPIRequest.
+            guard let kid = cred.kid ?? keystore.listKeys().first?.keyId else {
+                throw SirosError.wallet(message: "No signing key available for credential \(cred.id) - cannot generate a ZK proof for it")
+            }
+            let mdocDocument = try MdocCbor.parseStoredCredential([UInt8](credBytes))
+            let docType = mdocDocument.docType
+            // See handleDCAPIRequest's identical comment: a circuit is
+            // compiled for a fixed attribute count, so matching must account
+            // for how many claims are actually being disclosed here.
+            guard let (system, spec) = zkProofSystemRegistry.resolve(
+                docType: docType,
+                requestedSpecs: matchResult?.zkSystemTypes ?? [],
+                numAttributes: ref.disclosedClaims?.count ?? 0
+            ) else {
+                throw SirosError.wallet(message: "No registered ZK proof system satisfies the verifier's zk_system_type for \(docType)")
+            }
+            // Only bind a pseudonym when actually disclosed for this query -
+            // see handleDCAPIRequest's identical comment.
+            let wantsPseudonym = ref.disclosedClaims?.contains(zkPseudonymClaim) == true
+            let verifierIdentity: VerifierIdentity? = wantsPseudonym
+                ? VerifierIdentity(
+                    clientId: audience,
+                    ppidContext: matchResult?.ppidContext,
+                    // The verifier-assigned presentation session id (see
+                    // VerifierIdentity.sessionId's doc comment) - the real
+                    // verifier_context binding input for the WS-engine
+                    // transport, where (unlike DC API) go-wallet-backend
+                    // forwards it from the original request_uri.
+                    sessionId: msg.params.verifierSessionId
+                )
+                : nil
+            let sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
+                clientId: audience,
+                nonce: nonce,
+                responseUri: msg.params.responseUri ?? "",
+                verifierJwkThumbprint: msg.params.verifierJwkThumbprint
+            )
+            let result = try await system.generateProof(
+                spec: spec,
+                credentialBytes: [UInt8](credBytes),
+                sessionTranscript: sessionTranscript,
+                requestedClaims: ref.disclosedClaims ?? [],
+                verifierIdentity: verifierIdentity,
+                signer: { data in [UInt8](try await self.keystore.sign(keyId: kid, payload: Data(data), algorithm: "ES256")) },
+                priorState: nil
+            )
+            let zkDeviceResponse = try buildZkPresentationToken(
+                credBytes: [UInt8](credBytes),
+                docType: docType,
+                spec: spec,
+                disclosedClaimNames: ref.disclosedClaims ?? [],
+                result: result
+            )
+            return Self.b64UrlEncode(zkDeviceResponse)
+        } else if cred.format == "mso_mdoc" {
+            // mDoc DeviceResponse (ISO 18013-5)
+            guard let credBytes = Self.b64UrlDecode(cred.raw) else {
+                throw SirosError.wallet(message: "Credential \(cred.id) has malformed base64url raw data")
+            }
+            let deviceResponse = try await keystore.signMdocPresentation(
+                credentialBytes: credBytes,
+                disclosedClaims: ref.disclosedClaims,
+                nonce: nonce,
+                audience: audience,
+                responseUri: msg.params.responseUri ?? "",
+                verifierJwkThumbprint: msg.params.verifierJwkThumbprint,
+                kid: cred.kid
+            )
+            return deviceResponse.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        } else {
+            // SD-JWT VP token with KB-JWT
+            return try await keystore.signVpToken(
+                credential: cred.raw,
+                disclosedClaims: ref.disclosedClaims,
+                nonce: nonce,
+                audience: audience,
+                kid: cred.kid
+            )
+        }
+    }
+
+    /// Shared DCQL-match + user-consent-selection logic for the three
+    /// credential-matching call sites: the legacy engine's `match_request`
+    /// (`handleMatchRequest`), WMP's `matching_credentials`/`match_request`
+    /// step (`handleWmpMatchRequest`), and the `"credential_selection"`
+    /// flow_progress step (`handleCredentialSelection` - the actual live
+    /// path exercised by redirect-flow/haip-vp:// presentations). Filters
+    /// `allCreds` against `dcqlQuery` (`nil` matches everything, preserving
+    /// each caller's prior no-DCQL fallback behavior), offers the matched
+    /// candidates to `eventListener` for consent when one is registered, and
+    /// falls back to auto-selecting every currently-eligible candidate
+    /// otherwise - mirrors Kotlin's identical fallback in each of its three
+    /// equivalent collectors/handlers.
+    private func matchAndSelectCredentials(
+        dcqlQuery: [String: Any]?,
+        allCreds: [StoredCredential],
+        verifierName: String?,
+        trustResult: TrustResult?
+    ) async -> (matchResults: [CredentialMatcher.MatchResult], candidates: [StoredCredential], selectedIds: [Int64]) {
+        let matchResults: [CredentialMatcher.MatchResult]
+        if let dcqlQuery {
+            matchResults = CredentialMatcher.match(dcqlQuery: dcqlQuery, credentials: allCreds)
+        } else {
+            matchResults = [CredentialMatcher.MatchResult(queryId: "_default", format: nil, candidates: allCreds, requestedClaims: [])]
+        }
+        var seenIds = Set<Int64>()
+        let candidates = matchResults.flatMap { $0.candidates }.filter { seenIds.insert($0.id).inserted }
+
+        lock.lock(); let listener = eventListener; lock.unlock()
+        let selectedIds: [Int64]
+        if let listener, !candidates.isEmpty {
+            selectedIds = await listener.onCredentialSelectionRequired(
+                request: PresentationRequest(
+                    verifierName: verifierName,
+                    trustResult: trustResult,
+                    candidates: candidates,
+                    requestedClaims: matchResults.flatMap { $0.requestedClaims }
+                )
+            )
+        } else {
+            selectedIds = CredentialUtils.eligibleInstances(
+                instances: candidates,
+                policy: credentialConsumptionPolicy,
+                presentationHistory: presentationHistory
+            ).map(\.id)
+        }
+        return (matchResults, candidates, selectedIds)
+    }
+
+    /// Builds the `"selected_credentials"` flow-action payload the engine's
+    /// `"consent"` action expects for the `"credential_selection"` step -
+    /// matches go-wallet-backend's `ConsentSelection` wire shape
+    /// (`credential_query_id`, `credential_id`, `disclosed_claims`) exactly,
+    /// mirroring Kotlin's `handleCredentialSelection`'s identical payload
+    /// construction. Internal (not private) and static so it's directly
+    /// unit-testable without a live `WalletEngineSession` - see
+    /// `requestBackendKeyAttestation`'s doc comment for this file's existing
+    /// testability precedent.
+    static func buildConsentPayload(
+        matchResults: [CredentialMatcher.MatchResult],
+        selectedIds: [Int64],
+        allCreds: [StoredCredential]
+    ) -> [String: AnyCodable] {
+        var entries: [AnyCodable] = []
+        for id in selectedIds {
+            guard allCreds.contains(where: { $0.id == id }) else { continue }
+            let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
+            var obj: [String: AnyCodable] = [:]
+            // Always set credential_query_id, even for an id that (should
+            // never happen, but see below) isn't in any matchResult - the
+            // "_default" fallback mirrors the no-DCQL synthetic MatchResult
+            // matchAndSelectCredentials builds, and keeps this payload
+            // honoring the backend's documented wire contract unconditionally
+            // rather than silently omitting the field if a caller ever
+            // passes a selectedId inconsistent with matchResults (e.g. a
+            // misbehaving eventListener implementation).
+            obj["credential_query_id"] = .string(matchResult?.queryId ?? "_default")
+            // Legacy engine JSON-RPC protocol keeps credential_id as a string
+            // wire contract - a separate contract from privatedata-spec's
+            // numeric StoredCredential.id, so it deliberately stays String
+            // (mirrors every other call site's identical stringification).
+            obj["credential_id"] = .string(String(id))
+            // Each requestedClaims entry is a full DCQL claim PATH (e.g.
+            // ["eu.europa.ec.eudi.pid.1", "pairwise_pseudonym"]) - only the
+            // last segment is the actual disclosable element id (mirrors
+            // handleDCAPIRequest's identical `compactMap(\.last)`): the
+            // native Longfellow ZK prover validates every requested claim
+            // strictly and throws on a raw, un-trimmed path.
+            var seenClaims = Set<String>()
+            let disclosedClaims = (matchResult?.requestedClaims ?? [])
+                .compactMap(\.last)
+                .filter { seenClaims.insert($0).inserted }
+            obj["disclosed_claims"] = .array(disclosedClaims.map { .string($0) })
+            entries.append(.object_(obj))
+        }
+        return ["selected_credentials": .array(entries)]
+    }
+
+    /// Handle the `"credential_selection"` flow_progress step - the actual,
+    /// live code path exercised by the redirect-flow (haip-vp://) protocol
+    /// for credential matching + consent (confirmed empirically in the
+    /// Kotlin SDK: its `matchRequests()`/`handleMatchRequest` collector never
+    /// fires for this flow type - only this step does). The backend sends a
+    /// DCQL query and verifier info in the flow_progress payload; this
+    /// matches credentials locally, shows a consent UI via `eventListener`,
+    /// caches the match results for the later `sign_presentation` step's ZK
+    /// branch (see `pendingMatchResultsByFlow`'s doc comment), and responds
+    /// with a `"consent"` or `"decline"` flow action. Mirrors Kotlin's
+    /// `handleCredentialSelection` exactly.
+    private func handleCredentialSelection(
+        engine: WalletEngineSession,
+        flowId: String,
+        payload: [String: AnyCodable]?
+    ) async {
+        do {
+            let dcqlQuery = payload?["dcql_query"]?.objectValue.map { anyCodableDictToAny($0) }
+            let verifierInfo = payload?["verifier"]?.objectValue
+            // The backend defaults verifier.name to the raw client_id (e.g.
+            // "x509_san_dns:verifier.multipaz.org") whenever the verifier
+            // hasn't declared a real client_metadata.client_name - never
+            // show that prefixed form to the user. Running every raw
+            // name/client_id through ClientIdScheme.parse is safe for a
+            // genuine friendly name too: it only matches known scheme
+            // prefixes/URLs (falling into .preRegistered otherwise, which
+            // passes the string through unchanged).
+            let rawVerifierName = verifierInfo?["name"]?.stringValue ?? verifierInfo?["client_id"]?.stringValue
+            let verifierName = rawVerifierName.map { ClientIdScheme.parse($0).displayName }
+
+            let allCreds = await credentialStore.getAll()
+            // Read only - do NOT remove. The later `sign_presentation` step
+            // (`handleSignRequest` -> `validateAudience`) still needs this
+            // entry - see `handleMatchRequest`'s identical comment.
+            lock.lock(); let trustResult = lastTrustResults[flowId]; lock.unlock()
+
+            let (matchResults, candidates, selectedIds) = await matchAndSelectCredentials(
+                dcqlQuery: dcqlQuery,
+                allCreds: allCreds,
+                verifierName: verifierName,
+                trustResult: trustResult
+            )
+
+            // This (not handleMatchRequest's match_request collector) is the
+            // code path actually exercised by the redirect-flow/haip-vp://
+            // protocol this backend uses for the "credential_selection"
+            // progress step - confirmed live in the Kotlin SDK: matchRequests()
+            // never fires for this flow type. sign_presentation's ZK branch
+            // needs this cached so it knows the originating query's
+            // format/zkSystemTypes/ppidContext.
+            lock.lock(); pendingMatchResultsByFlow[flowId] = matchResults; lock.unlock()
+
+            if selectedIds.isEmpty {
+                // User declined.
+                engine.sendFlowAction(flowId: flowId, action: "decline", payload: ["reason": .string("user_declined")])
+                return
+            }
+
+            // The app is trusted to only return IDs it was offered, but
+            // shouldn't be the only thing enforcing consumption -
+            // re-validate here too (defense in depth).
+            let eligibleIds = Set(CredentialUtils.eligibleInstances(
+                instances: candidates,
+                policy: credentialConsumptionPolicy,
+                presentationHistory: presentationHistory
+            ).map(\.id))
+            guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+                throw SirosError.wallet(message: "Selected credential has no eligible copies remaining - renew it to get more")
+            }
+
+            var seenClaims = Set<String>()
+            let requestedClaims = matchResults.flatMap { $0.requestedClaims.flatMap { $0 } }.filter { seenClaims.insert($0).inserted }
+            await recordPresentation(PresentationRecord(
+                id: randomUint32Id(),
+                flowId: flowId,
+                verifierName: verifierName,
+                credentialIds: selectedIds,
+                credentialNames: selectedIds.compactMap { id in allCreds.first(where: { $0.id == id })?.metadata?.name },
+                requestedClaims: requestedClaims,
+                timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+            ))
+
+            let consentPayload = Self.buildConsentPayload(matchResults: matchResults, selectedIds: selectedIds, allCreds: allCreds)
+            engine.sendFlowAction(flowId: flowId, action: "consent", payload: consentPayload)
+        } catch {
+            engine.sendFlowAction(
+                flowId: flowId,
+                action: "decline",
+                payload: ["reason": .string("error: \(error.localizedDescription)")]
+            )
+        }
+    }
+
     private func handleMatchRequest(engine: WalletEngineSession, msg: MatchRequestMessage) async {
         let allCreds = await credentialStore.getAll()
         lock.lock()
-        let listener = eventListener
         // Read only - do NOT remove. The later `sign_presentation` step
         // (`handleSignRequest` -> `validateAudience`) still needs this
         // entry; credential selection (this handler) always runs before
@@ -3075,28 +3427,27 @@ public final class SirosWallet: @unchecked Sendable {
         // "x509_san_dns:verifier.multipaz.org" verbatim to the user.
         let verifierName = trustResult?.entityName ?? trustResult?.parsedScheme?.displayName
 
-        let selectedIds: [Int64]
-        if let listener, !allCreds.isEmpty {
-            selectedIds = await listener.onCredentialSelectionRequired(
-                request: PresentationRequest(
-                    verifierName: verifierName,
-                    trustResult: trustResult,
-                    candidates: allCreds
-                )
-            )
-        } else {
-            selectedIds = CredentialUtils.eligibleInstances(
-                instances: allCreds,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            ).map(\.id)
-        }
+        // msg.dcqlQuery IS the DCQL query object directly (not nested under
+        // its own "dcql_query" key) - a separate wire shape from
+        // "credential_selection"'s flow_progress payload, which wraps it.
+        let dcqlQuery = msg.dcqlQuery?.objectValue.map { anyCodableDictToAny($0) }
+        let (matchResults, candidates, selectedIds) = await matchAndSelectCredentials(
+            dcqlQuery: dcqlQuery,
+            allCreds: allCreds,
+            verifierName: verifierName,
+            trustResult: trustResult
+        )
+
+        // Cache for the later sign_presentation step's ZK branch - mirrors
+        // handleCredentialSelection and Kotlin's matchRequests() collector,
+        // which populates the same map for this transport's equivalent step.
+        lock.lock(); pendingMatchResultsByFlow[msg.flowId] = matchResults; lock.unlock()
 
         // The app is trusted to only return IDs it was offered, but shouldn't
         // be the only thing enforcing consumption - re-validate here too
         // (defense in depth).
         let eligibleIds = Set(CredentialUtils.eligibleInstances(
-            instances: allCreds,
+            instances: candidates,
             policy: credentialConsumptionPolicy,
             presentationHistory: presentationHistory
         ).map(\.id))
@@ -3107,23 +3458,28 @@ public final class SirosWallet: @unchecked Sendable {
             return
         }
 
+        var seenClaims = Set<String>()
+        let requestedClaims = matchResults.flatMap { $0.requestedClaims.flatMap { $0 } }.filter { seenClaims.insert($0).inserted }
         await recordPresentation(PresentationRecord(
             id: randomUint32Id(),
             flowId: msg.flowId,
             credentialIds: selectedIds,
             credentialNames: selectedIds.compactMap { id in
-                allCreds.first(where: { $0.id == id })?.metadata?.name
+                candidates.first(where: { $0.id == id })?.metadata?.name
             },
+            requestedClaims: requestedClaims,
             timestamp: Int64(Date().timeIntervalSince1970 * 1000)
         ))
 
         let matches: [CredentialMatch] = selectedIds.compactMap { id in
-            guard let cred = allCreds.first(where: { $0.id == id }) else { return nil }
+            guard let cred = candidates.first(where: { $0.id == id }) else { return nil }
+            let queryId = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })?.queryId
             // credentialId is the legacy engine wire-protocol identifier - a
             // separate, unverified backend contract distinct from
             // privatedata-spec's numeric StoredCredential.id, so it
             // deliberately stays String.
             return CredentialMatch(
+                credentialQueryId: queryId,
                 credentialId: String(cred.id),
                 format: cred.format,
                 vct: cred.metadata?.vct
@@ -3160,6 +3516,14 @@ public final class SirosWallet: @unchecked Sendable {
             // Only populate the trust cache — do NOT store in lastTrustResults
             // (that map is for verifier consent UI in handleMatchRequest)
             trustCache.put(identifier: trustResult.identifier ?? "", result: trustResult)
+        }
+
+        // Handle credential selection — verifier wants credentials, user
+        // must consent. This is the actual, live code path exercised by the
+        // redirect-flow (haip-vp://) protocol - see
+        // handleCredentialSelection's doc comment.
+        if msg.step == "credential_selection" {
+            await handleCredentialSelection(engine: engine, flowId: msg.flowId, payload: payloadDict)
         }
 
         // Handle authorization required
@@ -3343,7 +3707,10 @@ public final class SirosWallet: @unchecked Sendable {
     /// (logger.error), so the engine waited indefinitely for a sign_response
     /// that would never arrive.
     private func reportSignFailure(flowId: String, message: String) {
-        lock.lock(); let listener = eventListener; lock.unlock()
+        lock.lock()
+        let listener = eventListener
+        pendingMatchResultsByFlow.removeValue(forKey: flowId)
+        lock.unlock()
         listener?.onFlowError(flowId: flowId, errorMessage: message, redirectUri: nil)
 
         // A terminal path for whatever issuance may have been in flight - a
@@ -3365,7 +3732,10 @@ public final class SirosWallet: @unchecked Sendable {
 
     private func handleFlowError(msg: FlowErrorMessage) {
         let fid = msg.flowId ?? "unknown"
-        lock.lock(); let listener = eventListener; lock.unlock()
+        lock.lock()
+        let listener = eventListener
+        pendingMatchResultsByFlow.removeValue(forKey: fid)
+        lock.unlock()
         let redirectUri = msg.error.details?["redirect_uri"]?.stringValue
         listener?.onFlowError(flowId: fid, errorMessage: msg.error.message, redirectUri: redirectUri)
 
