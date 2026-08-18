@@ -213,6 +213,33 @@ final class WalletViewModel: ObservableObject {
     /// preference, or `nil` for "no preference."
     @Published var wscdGlobalOverrideSnapshot: String?
 
+    // MARK: - TS11 registry discovery (best-effort, see WscdSettingsView.WscdMappingCard)
+
+    /// Result of the last `discoverTs11Schemas()` call, for
+    /// `WscdSettingsView`'s common (not per-plugin) "Discover from TS11
+    /// Registry" action - mirrors Kotlin's `WalletViewModel.ts11DiscoveredCredentials`.
+    /// Each entry has already been enriched with a real display identity by
+    /// `Ts11CredentialDiscovery` - a raw registry entry only carries an
+    /// opaque `Ts11SchemaMeta.id`, which is not something worth surfacing
+    /// directly to the user.
+    @Published var ts11DiscoveredCredentials: [Ts11DiscoveredCredential] = []
+    @Published var ts11DiscoveryInProgress = false
+
+    /// Queries `registry.siros.org` (via `Ts11CredentialDiscovery`) for
+    /// every published credential type and stores the result in
+    /// `ts11DiscoveredCredentials` for `WscdMappingCard` to offer as
+    /// candidates. Best-effort: network/parse failures degrade to whatever
+    /// subset of entries resolved, never surfaced as an app-level error -
+    /// mirrors Kotlin's `discoverTs11Schemas()`.
+    func discoverTs11Schemas() {
+        guard !ts11DiscoveryInProgress else { return }
+        ts11DiscoveryInProgress = true
+        Task {
+            defer { ts11DiscoveryInProgress = false }
+            ts11DiscoveredCredentials = await Ts11CredentialDiscovery().discover()
+        }
+    }
+
     // MARK: - Loading / error
 
     @Published var isLoading = false

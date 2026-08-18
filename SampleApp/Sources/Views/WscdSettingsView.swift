@@ -2,6 +2,8 @@
 
 import SwiftUI
 import SirosKeystore
+import SirosCredentials
+import SirosWallet
 
 /// The three WSCD plugin IDs `FfiWscdConfig(defaultPlugin:)` knows about - one tab each.
 private let wscdPluginIds = ["softkey", "r2ps", "fido2"]
@@ -15,11 +17,13 @@ private let wscdPluginIds = ["softkey", "r2ps", "fido2"]
 ///
 /// - A **common section** (always visible, shown once, above the tabs):
 ///   [WscdMappingCard] (the per-(issuer, credentialType) -> plugin ID
-///   mapping table, combining `wscdUserOverridesSnapshot` real preferences
-///   with `wscdDefaultMapping` dev-only session entries) and [TofuCard] (the
-///   auto-remembered TOFU choices table). Neither is scoped to one plugin,
-///   so - unlike the Kotlin reference's own first consolidation pass, since
-///   fixed - these are shown once here, not once per tab.
+///   mapping table, combining `wscdUserOverridesSnapshot` real preferences,
+///   `wscdDefaultMapping` dev-only session entries, and now
+///   `Ts11CredentialDiscovery`-sourced candidates from `registry.siros.org`
+///   - see that struct's doc comment) and [TofuCard] (the auto-remembered
+///   TOFU choices table). Neither is scoped to one plugin, so - unlike the
+///   Kotlin reference's own first consolidation pass, since fixed - these
+///   are shown once here, not once per tab.
 /// - A **plugin-specific sub-group** below: one tab per plugin
 ///   ([wscdPluginIds]), each with a [PreferredWscdCard] toggle for that
 ///   plugin and a collapsible "Developer" section (collapsed by default:
@@ -35,17 +39,12 @@ private let wscdPluginIds = ["softkey", "r2ps", "fido2"]
 /// `.remoteRevokeIfSupported` - matching the Kotlin reference's own single
 /// `destroyLifecycle()`, which hardcodes the same mode.
 ///
-/// Two deliberate deviations from the Kotlin reference, both because the
-/// underlying capability doesn't exist in this SDK yet (out of scope for a
-/// sample-app-only port):
-/// - No "Discover from TS11 Registry" action - Swift's `SirosCredentials`
-///   has no `Ts11RegistryClient`/`Ts11CredentialDiscovery` equivalent yet
-///   (Kotlin's `sdk/credentials`), so [WscdMappingCard] only shows saved
-///   overrides and dev defaults, not a third "discovered" row origin.
-/// - No FIDO2 transport-mode chooser - Swift only has one real CTAP2
-///   transport (`NfcCtap2Transport`; no USB HID host mode is available to
-///   third-party iOS apps), so there's nothing to choose between, unlike
-///   Kotlin's USB/NFC race.
+/// One remaining deliberate deviation from the Kotlin reference, because the
+/// underlying capability doesn't exist in this SDK (out of scope for a
+/// sample-app-only port): no FIDO2 transport-mode chooser - Swift only has
+/// one real CTAP2 transport (`NfcCtap2Transport`; no USB HID host mode is
+/// available to third-party iOS apps), so there's nothing to choose between,
+/// unlike Kotlin's USB/NFC race.
 struct WscdSettingsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
@@ -170,18 +169,40 @@ private struct PreferredWscdCard: View {
     }
 }
 
-// MARK: - Common section: Mapping + TOFU
+// MARK: - Common section: Mapping + Discovery + TOFU
 
-/// The per-(issuer, credentialType) -> plugin ID mapping, combining two row
-/// origins in one list/card (see `WscdSettingsView`'s doc comment for why
-/// there's no third "discovered" origin here, unlike the Kotlin reference):
-/// - A row for every `wscdUserOverridesSnapshot` entry ("Saved") - a real,
-///   persisted preference; removing it calls `clearWscdUserOverride`.
-/// - A row for every `wscdDefaultMapping` entry ("Dev default") - a
-///   session-only `WalletConfig.defaultWscdMapping` entry (added via the
-///   Developer section's own form below, since it requires a
-///   `wscdMultiPluginEnabled` reconnect to take effect); removing it calls
-///   `removeWscdDefaultMapping`.
+/// The per-(issuer, credentialType) -> plugin ID mapping, combining three row
+/// origins in one list/card - now including TS11 registry discovery,
+/// matching the Kotlin reference's own combined "Mapping & Discovery" widget
+/// (an earlier version of both apps kept Discovery and Mapping as two
+/// separate cards, which meant tapping "Add" on a discovered candidate gave
+/// no visible feedback in the Mapping card without scrolling to it):
+/// - A row for every `viewModel.ts11DiscoveredCredentials` entry (see
+///   `Ts11CredentialDiscovery`) is STICKY - it stays in the list once
+///   discovered regardless of whether it's currently mapped, since discovery
+///   state is independent of mapping state. Its `Toggle` calls
+///   `setWscdUserOverride`/`clearWscdUserOverride` using the wildcard issuer
+///   `"*"` (see below) and the cheapest plugin whose nominal tier satisfies
+///   the credential's declared `attestationLoS` (`bestPluginFor`) - "Add"
+///   from an earlier Discovery-only card is now just switching a row on.
+///   Credentials with no plugin able to satisfy their tier are dropped
+///   entirely (nothing to offer a switch for).
+/// - A row for every `wscdUserOverridesSnapshot` entry not already shown as
+///   a discovered row ("Saved") - a real, persisted preference; removing it
+///   calls `clearWscdUserOverride`.
+/// - A row for every `wscdDefaultMapping` entry not already covered above
+///   ("Dev default") - a session-only `WalletConfig.defaultWscdMapping`
+///   entry (added via the Developer section's own form below, since it
+///   requires a `wscdMultiPluginEnabled` reconnect to take effect); removing
+///   it calls `removeWscdDefaultMapping`.
+///
+/// NOTE: a TS11 schema entry has no issuer of its own (it describes a
+/// credential *type*, not an (issuer, credentialType) pair), so discovered
+/// rows are mapped using the wildcard issuer `"*"` - "use this plugin for
+/// this credential type, regardless of issuer." `WscdSelectionPolicy.resolve`
+/// explicitly interprets that placeholder as a fallback when no
+/// issuer-specific entry matches, so switching a discovered row on resolves
+/// end-to-end immediately, not just as a hand-edit starting point.
 ///
 /// Shown once, in `WscdSettingsView`'s common section above the plugin tabs
 /// - this is a single global resolution table, not scoped to any one plugin.
@@ -192,7 +213,23 @@ private struct WscdMappingCard: View {
     @State private var newCredentialType = ""
     @State private var newPluginId = wscdPluginIds[0]
 
+    /// identifier -> cheapest-sufficient plugin, dropping any discovered
+    /// credential with no required tier or no plugin able to satisfy it.
+    private var discoveredByIdentifier: [String: (Ts11DiscoveredCredential, String)] {
+        var result: [String: (Ts11DiscoveredCredential, String)] = [:]
+        for dc in viewModel.ts11DiscoveredCredentials {
+            guard let requiredTier = dc.schema.attestationLoS, let pluginId = bestPluginFor(requiredTier) else { continue }
+            result[dc.identifier] = (dc, pluginId)
+        }
+        return result
+    }
+
     var body: some View {
+        let discovered = discoveredByIdentifier
+        let discoveredKeys = Set(discovered.keys.map { "\(WscdSelectionPolicy.wildcardIssuer)|\($0)" })
+        let savedOnly = viewModel.wscdUserOverridesSnapshot.keys.filter { !discoveredKeys.contains($0) }
+        let devDefaultOnly = viewModel.wscdDefaultMapping.keys.filter { !discoveredKeys.contains($0) }
+
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("wscd.mappingTitle"))
                 .font(.subheadline)
@@ -202,22 +239,59 @@ private struct WscdMappingCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if viewModel.wscdUserOverridesSnapshot.isEmpty && viewModel.wscdDefaultMapping.isEmpty {
+            Button(action: { viewModel.discoverTs11Schemas() }) {
+                HStack {
+                    if viewModel.ts11DiscoveryInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(L10n.string("wscd.discoverButton"))
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(viewModel.ts11DiscoveryInProgress)
+
+            if discovered.isEmpty && savedOnly.isEmpty && devDefaultOnly.isEmpty {
                 Text(L10n.string("wscd.mappingEmpty"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(viewModel.wscdUserOverridesSnapshot.sorted(by: { $0.key < $1.key }), id: \.key) { key, pluginId in
+                ForEach(discovered.keys.sorted(), id: \.self) { identifier in
+                    if let (dc, pluginId) = discovered[identifier] {
+                        let key = "\(WscdSelectionPolicy.wildcardIssuer)|\(identifier)"
+                        // If this row was already turned on with a custom
+                        // plugin (e.g. hand-edited via "Add override" for the
+                        // same wildcard identifier), reflect what's actually
+                        // saved rather than the raw discovery suggestion.
+                        let effectivePluginId = viewModel.wscdUserOverridesSnapshot[key] ?? pluginId
+                        DiscoveredMappingRow(
+                            title: dc.displayName,
+                            subtitle: dc.description ?? L10n.string("wscd.mappingDiscoveredAnyIssuer"),
+                            technical: "\(dc.schema.attestationLoS ?? "?") → \(effectivePluginId) · \(identifier)",
+                            technicalColor: .accentColor,
+                            isOn: viewModel.wscdUserOverridesSnapshot[key] != nil,
+                            onToggle: { isOn in
+                                if isOn {
+                                    viewModel.setWscdUserOverride(issuer: WscdSelectionPolicy.wildcardIssuer, credentialType: identifier, pluginId: pluginId)
+                                } else {
+                                    viewModel.clearWscdUserOverride(issuer: WscdSelectionPolicy.wildcardIssuer, credentialType: identifier)
+                                }
+                            }
+                        )
+                    }
+                }
+                ForEach(savedOnly.sorted(), id: \.self) { key in
                     let parts = splitMappingKey(key)
                     MappingRow(
                         title: parts.credentialType,
                         subtitle: parts.issuer,
-                        technical: L10n.string("wscd.mappingSavedTechnical", pluginId),
+                        technical: L10n.string("wscd.mappingSavedTechnical", viewModel.wscdUserOverridesSnapshot[key] ?? ""),
                         technicalColor: .accentColor,
                         onRemove: { viewModel.clearWscdUserOverride(issuer: parts.issuer, credentialType: parts.credentialType) }
                     )
                 }
-                ForEach(Array(viewModel.wscdDefaultMapping.keys.sorted()), id: \.self) { key in
+                ForEach(devDefaultOnly.sorted(), id: \.self) { key in
                     if let pluginId = viewModel.wscdDefaultMapping[key] {
                         let parts = splitMappingKey(key)
                         MappingRow(
@@ -330,6 +404,41 @@ private struct TofuCard: View {
     }
 }
 
+/// One TS11-discovered candidate row: same layout as [MappingRow] but with a
+/// trailing on/off `Toggle` instead of a remove button, since discovered
+/// rows are STICKY (see [WscdMappingCard]'s doc comment) - they stay in the
+/// list regardless of the toggle's state.
+private struct DiscoveredMappingRow: View {
+    let title: String
+    let subtitle: String
+    let technical: String
+    let technicalColor: Color
+    let isOn: Bool
+    let onToggle: (Bool) -> Void
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(technical)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(technicalColor)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(get: { isOn }, set: onToggle))
+                .labelsHidden()
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 /// One mapping/TOFU entry: a primary label, a secondary detail line, a small
 /// technical line, and a trailing remove button. Shared by [WscdMappingCard]
 /// and [TofuCard].
@@ -374,6 +483,43 @@ private func splitMappingKey(_ key: String) -> (issuer: String, credentialType: 
     let issuer = parts.first.map(String.init) ?? key
     let credentialType = parts.count > 1 ? String(parts[1]) : ""
     return (issuer, credentialType)
+}
+
+/// Tie-break order used by `bestPluginFor` when two plugins tie on nominal
+/// tier rank. Prefers a plugin that's genuinely real/local over one whose
+/// assurance is a config-dependent placeholder: `WscdPluginCapabilities`'s
+/// doc comment explicitly documents `r2ps`'s "high" tier as best-effort/
+/// config-dependent, not a guarantee, whereas `fido2` is a real
+/// hardware-backed authenticator. Ports Kotlin's `PLUGIN_TIE_BREAK_ORDER` -
+/// a real bug found there via live testing, where every high-tier discovered
+/// credential silently defaulted to `r2ps` because it happened to come
+/// first in `wscdPluginIds` and Kotlin's `minWithOrNull` breaks ties by
+/// iteration order. `softkey` never actually ties with either (it's the
+/// only "basic" plugin), so its position here is arbitrary but harmless.
+private let pluginTieBreakOrder = ["softkey", "fido2", "r2ps"]
+
+/// The cheapest known plugin ID whose `WscdPluginCapabilities` nominal tier
+/// meets `requiredTier`, or `nil` if none does (either an unrecognized tier
+/// string, or every known plugin's tier falls short). Ports Kotlin's
+/// `bestPluginFor`, used by [WscdMappingCard] to auto-assign a plugin to
+/// each TS11-discovered credential rather than defaulting to whichever
+/// plugin tab happens to be open.
+private func bestPluginFor(_ requiredTier: String) -> String? {
+    wscdPluginIds
+        .compactMap { pluginId -> (id: String, tier: String)? in
+            guard let tier = WscdPluginCapabilities.tier(forPluginId: pluginId) else { return nil }
+            return (pluginId, tier)
+        }
+        .filter { WscdPluginCapabilities.meets(actual: $0.tier, required: requiredTier) }
+        .min { lhs, rhs in
+            let lhsRank = WscdPluginCapabilities.tierOrder.firstIndex(of: lhs.tier) ?? Int.max
+            let rhsRank = WscdPluginCapabilities.tierOrder.firstIndex(of: rhs.tier) ?? Int.max
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            let lhsTieBreak = pluginTieBreakOrder.firstIndex(of: lhs.id) ?? Int.max
+            let rhsTieBreak = pluginTieBreakOrder.firstIndex(of: rhs.id) ?? Int.max
+            return lhsTieBreak < rhsTieBreak
+        }
+        .map(\.id)
 }
 
 // MARK: - Developer section
