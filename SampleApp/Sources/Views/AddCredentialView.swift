@@ -59,12 +59,21 @@ struct AddCredentialView: View {
                             ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
                                 CredentialOfferRow(offer: offer)
                                     .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        viewModel.selectCredentialOffer(offer)
-                                    }
-                                    .onLongPressGesture {
-                                        detailOffer = offer
-                                    }
+                                    // `.onTapGesture` + `.onLongPressGesture` on the
+                                    // same view both fire on a long-press release in
+                                    // SwiftUI (a real bug this replaced: tapping to add
+                                    // a credential could immediately follow opening its
+                                    // detail sheet) - `exclusively(before:)` recognizes
+                                    // whichever gesture succeeds first and suppresses
+                                    // the other.
+                                    .gesture(
+                                        LongPressGesture(minimumDuration: 0.5)
+                                            .onEnded { _ in detailOffer = offer }
+                                            .exclusively(
+                                                before: TapGesture()
+                                                    .onEnded { viewModel.selectCredentialOffer(offer) }
+                                            )
+                                    )
                             }
                         }
                     }
@@ -167,9 +176,9 @@ struct CredentialOfferRow: View {
 // MARK: - Credential Offer Detail (long-press modal)
 
 /// Detail modal shown on long-press of a [CredentialOfferRow] - lets the
-/// user inspect an offer's full description/format before committing to
-/// the issuance-consent dialog, without the row's own tap target already
-/// starting that flow.
+/// user inspect the issuer name and (if published) the credential's
+/// description before committing to the issuance-consent dialog, without
+/// the row's own tap target already starting that flow.
 struct CredentialOfferDetailView: View {
     let offer: CredentialOffer
     let onAdd: () -> Void
