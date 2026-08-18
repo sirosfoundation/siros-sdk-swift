@@ -29,6 +29,7 @@
     "countZero": "Inga intyg ännu",
     "countOne": "1 intyg",
     "countOther": "%1$d intyg",
+    "stackOverflowMore": "+%1$d till",
     "emptyTitle": "Inga intyg ännu",
     "emptySubtitle": "Tryck för att lägga till ditt första intyg",
     "addTitle": "Lägg till Intyg",

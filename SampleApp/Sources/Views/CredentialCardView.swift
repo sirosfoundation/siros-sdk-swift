@@ -194,6 +194,13 @@ struct CredentialCardView: View {
         svgState = .loading
         let preferredScheme = preferDark ? "dark" : "light"
         let template = templates.first(where: { $0.colorScheme == preferredScheme }) ?? templates[0]
+
+        let cacheKey = svgRenderCacheKey(credentialId: credential.id, templateUri: template.uri, colorScheme: preferredScheme)
+        if let cached = svgRenderCache.object(forKey: cacheKey) {
+            svgState = .loaded(cached as String)
+            return
+        }
+
         guard let url = URL(string: template.uri) else {
             svgState = .failed
             return
@@ -206,11 +213,31 @@ struct CredentialCardView: View {
                 return
             }
             let claims = CredentialUtils.extractClaims(credential)
-            svgState = .loaded(SvgTemplateRenderer.substitute(svgText, claims: claims))
+            let rendered = SvgTemplateRenderer.substitute(svgText, claims: claims)
+            svgRenderCache.setObject(rendered as NSString, forKey: cacheKey)
+            svgState = .loaded(rendered)
         } catch {
             svgState = .failed
         }
     }
+}
+
+/// Process-lifetime (not disk-persisted) cache of substituted SVG template
+/// text, keyed by everything that affects the rendered output - avoids
+/// re-fetching and re-substituting a card's template SVG every time its
+/// `.task(id:)` re-fires (e.g. scrolling it off/on screen recreates the
+/// view). `NSCache` behaves like Android's `LruCache`: bounded by
+/// `countLimit` and additionally evicted under memory pressure, so a leaked
+/// entry can't accumulate unboundedly - matches the Kotlin sample app's
+/// identical `svgRenderCache` (64-entry `LruCache`) in `CredentialCard.kt`.
+private let svgRenderCache: NSCache<NSString, NSString> = {
+    let cache = NSCache<NSString, NSString>()
+    cache.countLimit = 64
+    return cache
+}()
+
+private func svgRenderCacheKey(credentialId: Int64, templateUri: String, colorScheme: String) -> NSString {
+    "\(credentialId)|\(templateUri)|\(colorScheme)" as NSString
 }
 
 /// Loading state for a credential card's VCTM SVG template rendering.

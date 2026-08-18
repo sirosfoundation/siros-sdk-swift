@@ -3,6 +3,11 @@
 import SwiftUI
 import SirosCredentials
 
+/// Number of credential cards shown in full before the rest collapse into
+/// `CredentialStackOverflow` - mirrors the Kotlin sample app's
+/// `CREDENTIAL_STACK_THRESHOLD` exactly.
+private let credentialStackThreshold = 3
+
 struct CredentialsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
@@ -17,6 +22,14 @@ struct CredentialsView: View {
             presentationHistory: viewModel.currentPresentationHistory
         )
     }
+
+    /// Past `credentialStackThreshold` cards, the tail collapses into one
+    /// fanned overflow item instead of extending the scroll further - keeps
+    /// the common case (a handful of credentials) showing several full
+    /// cards at once, while an overview that would otherwise need a lot of
+    /// scrolling gets a single glanceable summary that expands to the full
+    /// list on tap. Mirrors the Kotlin sample app's `showAllCredentials`.
+    @State private var showAllCredentials = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -53,9 +66,10 @@ struct CredentialsView: View {
                 // at once (live-testing feedback from the user). Kept
                 // conceptually aligned with the equivalent fix in the
                 // Kotlin sample app's `CredentialsTab`.
+                let visibleCount = showAllCredentials ? entries.count : min(entries.count, credentialStackThreshold)
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(spacing: 16) {
-                        ForEach(entries, id: \.credential.id) { entry in
+                        ForEach(entries.prefix(visibleCount), id: \.credential.id) { entry in
                             CredentialCardView(
                                 credential: entry.credential,
                                 instances: entry.instances,
@@ -64,6 +78,13 @@ struct CredentialsView: View {
                             )
                             .padding(.horizontal, 16)
                             .credentialContextMenu(entry.credential, viewModel: viewModel)
+                        }
+                        if visibleCount < entries.count {
+                            CredentialStackOverflow(
+                                remaining: Array(entries.dropFirst(visibleCount)),
+                                onClick: { showAllCredentials = true }
+                            )
+                            .padding(.horizontal, 16)
                         }
                     }
                     .padding(.bottom, 16)
@@ -109,6 +130,47 @@ struct CredentialsView: View {
         .onTapGesture {
             viewModel.openAddCredential()
         }
+    }
+}
+
+/// Compact fanned-card summary for credentials past `credentialStackThreshold`
+/// - a glance at how many/which issuers are collapsed, without rendering
+/// each one's full SVG card (that's the expensive part the cache in
+/// `CredentialCardView` handles; this overview only needs flat background
+/// colors). Tapping it expands the full list. Mirrors the Kotlin sample
+/// app's `CredentialStackOverflow`.
+private struct CredentialStackOverflow: View {
+    let remaining: [CredentialWithInstances]
+    let onClick: () -> Void
+
+    private let maxFanned = 3
+
+    var body: some View {
+        Button(action: onClick) {
+            ZStack {
+                ForEach(Array(remaining.prefix(maxFanned).enumerated()), id: \.element.credential.id) { index, entry in
+                    let bgColor = entry.credential.metadata?.backgroundColor.flatMap { Color(hex: $0) } ?? SirosTheme.brandLighter
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(bgColor)
+                        .frame(width: 40, height: 26)
+                        .offset(x: CGFloat(index * 14))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(L10n.string("credentials.stackOverflowMore", remaining.count))
+                    .font(.headline)
+                    .foregroundColor(SirosTheme.onSurface)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .frame(height: 72)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(SirosTheme.surfaceVariant)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
