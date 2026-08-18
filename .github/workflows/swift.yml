@@ -102,8 +102,11 @@ jobs:
         working-directory: SampleApp
         run: |
           # A concrete (bootable) simulator is required for `test`, unlike the
-          # generic destination above which suffices for `build`.
-          DEVICE=$(xcrun simctl list devicetypes | grep -m1 -oE 'iPhone [0-9]+( Pro( Max)?| Air|e)?' )
+          # generic destination above which suffices for `build`. Select from
+          # actually available simulator devices (not `simctl list devicetypes`,
+          # which lists templates that may not correspond to a real device
+          # instance on every runner image).
+          DEVICE=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9]+( Pro( Max)?| Air|e)?' | sed -E 's/[[:space:]]+$//')
           xcodebuild test \
             -project SirosSampleApp.xcodeproj \
             -scheme SirosSampleApp \
