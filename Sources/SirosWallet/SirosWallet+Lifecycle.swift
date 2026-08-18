@@ -1,0 +1,344 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+import SirosCredentials
+import SirosTransport
+import SirosAuth
+import SirosKeystore
+import SirosFlow
+
+#if canImport(os)
+import os
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
+#endif
+
+extension SirosWallet {
+    /// Force a fresh engine WebSocket connection before starting a new flow,
+    /// rather than trusting a connection that may have gone idle since the
+    /// last one - mirrors `completeAuthorization`'s existing zombie-connection
+    /// handling. A connection left open across a backend restart or any other
+    /// silent network drop can look connected while actually discarding every
+    /// send, and that failure mode isn't unique to the post-OAuth-redirect gap.
+    // Not `private`: `SirosWallet+Renewal.swift`'s `renewCredential` needs
+    // it too - same cross-file-extension-access reason as `keystore` above.
+    func ensureEngineConnected(_ engine: WalletEngineSession) async throws {
+        guard let tokens = authTokens else {
+            throw SirosError.wallet(message: "Not connected")
+        }
+        let token = try await tokens.ensureBackendToken()
+        engine.forceReconnect(appToken: token.raw)
+        try await engine.awaitConnected()
+    }
+
+    /// Clear the ambient issuance-in-progress guard fields, unconditionally.
+    ///
+    /// Every terminal path for an issuance attempt must call this - a
+    /// `flow_complete`/`flow_error` from the engine, a client-side
+    /// termination (e.g. `reportSignFailure`), a synchronous start failure,
+    /// or the user cancelling before the engine ever assigned a flow ID at
+    /// all (see `cancelCurrentFlow`'s doc comment for why that last case is
+    /// real, not just defensive). Not `private`, for the same
+    /// cross-file-extension-access reason as `activeOffer` etc.
+    func resetIssuanceGuards() {
+        lock.lock()
+        activeOffer = nil
+        activeVctm = nil
+        activeMddlSchema = nil
+        activeAttestedKeyIds = nil
+        issuanceInFlight = false
+        // A failed/cancelled renewal must not leave this pointing at a
+        // batch that a later, unrelated flow_complete would then be
+        // misinterpreted as superseding (see `renewCredential`'s doc
+        // comment and `SirosWallet+Notifications.swift`'s
+        // `supersedeRenewalSourceBatchIfNeeded`) - every terminal path
+        // (success or error) routes through here, same as `activeOffer`
+        // etc. above.
+        pendingRenewalSourceBatchId = nil
+        lock.unlock()
+    }
+
+    /// Cancel the current flow.
+    ///
+    /// `resetIssuanceGuards()` is called unconditionally, not just inside the
+    /// `.flowActive` branch - a slow/unresponsive issuer leaves the wallet in
+    /// `.ready` the whole time `startIssuance`/`startIssuanceByOffer` is
+    /// awaiting the engine's first progress message, since the engine
+    /// doesn't assign (and report) a flow ID until then. Gating the local
+    /// guard reset on `.flowActive` too meant cancelling during exactly that
+    /// window did nothing at all - not even a local reset - permanently
+    /// stranding `issuanceInFlight` at `true` and blocking every subsequent
+    /// issuance attempt until the app process was killed (real bug hit
+    /// against a slow Geneva interop test issuer). The backend `cancelFlow`
+    /// send stays gated on `.flowActive`, since only then does a real
+    /// `flowId` exist to send to the server - the local guard reset does
+    /// not need one, and is a no-op if no issuance was ever in flight, so
+    /// it's always safe to call unconditionally.
+    public func cancelCurrentFlow() {
+        if case .flowActive(let userId, let displayName, let flowId, _, _, let creds) = state {
+            try? engineSession?.cancelFlow(flowId: flowId)
+            setState(.ready(userId: userId, displayName: displayName, credentials: creds))
+        }
+        resetIssuanceGuards()
+    }
+
+    // MARK: - Identity Verification
+
+    /// Perform identity verification via a plugin provider and automatically start
+    /// credential issuance with the resulting offer.
+    ///
+    /// This is the primary integration point for IDV flows (FaceTec, iProov, etc.).
+    /// The provider handles all capture UI and backend communication; this method
+    /// bridges the IDV result into the standard OID4VCI issuance flow.
+    ///
+    /// - Parameters:
+    ///   - provider: An ``IdentityVerificationProvider`` implementation.
+    ///   - presentingViewController: The UIViewController to present the IDV UI from.
+    /// - Throws: ``IDVError`` if verification fails, or ``SirosError`` if issuance fails.
+    public func verifyIdentityAndIssue(
+        provider: IdentityVerificationProvider,
+        presentingViewController: Any
+    ) async throws {
+        guard await provider.isAvailable() else {
+            throw IDVError.unavailable(reason: "\(provider.name) is not available on this device")
+        }
+        let result = try await provider.startVerification(
+            presentingViewController: presentingViewController
+        )
+        try await startIssuance(offerUri: result.credentialOfferURI)
+    }
+
+    /// Complete an OAuth authorization flow.
+    ///
+    /// If a pending authorization context was captured from this flow's
+    /// `authorization_required` progress message, resumes issuance via a
+    /// brand-new `flow_start` (not a `flow_action` on the original flow_id,
+    /// which isn't guaranteed to survive the OAuth browser round-trip) -
+    /// mirrors the wallet-backend's `resumeWithAuthCode` contract already
+    /// used by the web client. The engine WebSocket is force-reconnected
+    /// first in case it silently went stale ("zombie") during the redirect.
+    /// Falls back to the legacy `flow_action`-based completion if no pending
+    /// context was captured (e.g. an older backend that doesn't send it).
+    public func completeAuthorization(flowId: String, code: String, state: String) {
+        lock.lock()
+        let engine = engineSession
+        // Peek, don't remove yet - removing before the state check below
+        // meant a mismatched (e.g. attacker-forged) callback destroyed the
+        // real, still-pending context, so any later legitimate completion
+        // attempt for the same flowId fell through to the no-context branch,
+        // which sends the flow action straight through with no CSRF check
+        // at all. Only remove once the check actually passes.
+        let pending = pendingAuthorizations[flowId]
+        let tokens = authTokens
+        let listener = eventListener
+        lock.unlock()
+
+        guard let engine else { return }
+
+        guard let pending else {
+            engine.sendFlowAction(
+                flowId: flowId,
+                action: "authorization_complete",
+                payload: ["code": .string(code), "state": .string(state)]
+            )
+            return
+        }
+
+        guard pending.state == state else {
+            listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch", redirectUri: nil)
+            return
+        }
+
+        lock.lock(); pendingAuthorizations.removeValue(forKey: flowId); lock.unlock()
+
+        Task {
+            do {
+                guard let tokens else {
+                    throw SirosError.wallet(message: "Not connected")
+                }
+                let token = try await tokens.ensureBackendToken()
+                engine.forceReconnect(appToken: token.raw)
+                try await engine.awaitConnected()
+                // Client attestation for the resumed flow: Execute() sets up
+                // h.attestationProvider identically whether msg.AuthCode is
+                // set or not (it runs before that branch), so the ONLY thing
+                // missing here was the client never sending it - the backend
+                // already handled resume correctly. Confirmed missing via a
+                // real geneva2026.mdoc.online conformance run: the token
+                // request (which only ever happens via this resume path for
+                // redirect-based authorization_code issuers) showed "No OAuth
+                // Client Attestations were provided".
+                var clientAttestation: (String, String)?
+                if let offerJson = pending.offer,
+                   let data = offerJson.data(using: .utf8),
+                   let offerObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let issuerUrl = offerObj["credential_issuer"] as? String {
+                    clientAttestation = await resolveClientAttestation(issuerUrl: issuerUrl)
+                }
+                engine.resumeIssuance(
+                    offer: pending.offer,
+                    credentialOfferUri: pending.credentialOfferUri,
+                    redirectUri: pending.redirectUri,
+                    authCode: code,
+                    codeVerifier: pending.codeVerifier,
+                    clientAttestation: clientAttestation?.0,
+                    clientAttestationPoP: clientAttestation?.1
+                )
+            } catch {
+                lock.lock(); let listener = eventListener; lock.unlock()
+                listener?.onFlowError(
+                    flowId: flowId,
+                    errorMessage: "Failed to resume issuance: \(error.localizedDescription)",
+                    redirectUri: nil
+                )
+            }
+        }
+    }
+
+    /// Release all resources. Instance must not be reused after this.
+    public func destroy() {
+        lock.lock()
+        let engine = engineSession
+        engineSession = nil
+        credentialNotifier = nil
+        apiClient = nil
+        lock.unlock()
+        engine?.disconnect()
+        cancelEngineTasks()
+        keystore.lock()
+    }
+
+    /// Roll back a locally-stored credential after a failed registration.
+    /// Prevents orphaned passkeys from appearing in the login picker.
+    // Not `private`: called from `SirosWallet.swift`'s own
+    // `startIssuanceByOffer`/`startIssuance` (this function now lives in
+    // `SirosWallet+Lifecycle.swift`) - same cross-file-extension-access
+    // reason as `keystore` above.
+    func rollbackLocalCredential() {
+        if let local = authProvider as? LocalAuthProvider {
+            local.rollbackLastRegistration()
+        }
+    }
+
+    // MARK: - Private helpers
+
+    func setState(_ newState: WalletState) {
+        lock.lock()
+        _state = newState
+        let conts = Array(stateContinuations.values)
+        lock.unlock()
+        for c in conts { c.yield(newState) }
+    }
+
+    private func setupApiClient(session: AuthSession) {
+        let client = BackendApiClient(
+            baseUrl: config.backendUrl,
+            tenantId: config.tenantId,
+            httpFn: Self.defaultHttpFn
+        )
+        client.setAppToken(session.appToken)
+        lock.lock(); apiClient = client; lock.unlock()
+    }
+
+    // Not `private`: called from `SirosWallet.swift`'s `login`/`register`/
+    // `resumeSession` (this function now lives in
+    // `SirosWallet+Lifecycle.swift`) - same cross-file-extension-access
+    // reason as `keystore` above.
+    func setupApiClientWithTokens(_ tokens: AuthTokens) {
+        let client = BackendApiClient(
+            baseUrl: config.backendUrl,
+            tenantId: config.tenantId,
+            httpFn: Self.defaultHttpFn
+        )
+        client.setAuthTokens(tokens)
+        lock.lock(); apiClient = client; lock.unlock()
+    }
+
+    private func saveSession(session: AuthSession, credentialId: Data, prfSalt: Data, hkdfSalt: Data, hkdfInfo: Data) {
+        sessionStore.appToken = session.appToken
+        sessionStore.refreshToken = session.refreshToken
+        sessionStore.userId = session.uuid
+        sessionStore.displayName = session.displayName
+        sessionStore.tenantId = config.tenantId
+        sessionStore.credentialId = Self.b64UrlEncode(credentialId)
+        sessionStore.prfSalt = Self.b64Encode(prfSalt)
+        sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
+        sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
+    }
+
+    // Not `private`: called from `SirosWallet.swift`'s `unlockKeystore`
+    // (this function now lives in `SirosWallet+Lifecycle.swift`) - same
+    // cross-file-extension-access reason as `keystore` above.
+    func fetchPrivateData() async -> Data {
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else { return Data() }
+        do {
+            let response = try await client.getPrivateData()
+            if let pd = response["privateData"] {
+                if let pdDict = pd as? [String: Any], let b64u = pdDict["$b64u"] as? String {
+                    let containerBytes = Self.b64UrlDecode(b64u) ?? Data()
+                    if !containerBytes.isEmpty {
+                        sessionStore.privateDataJwe = String(data: containerBytes, encoding: .utf8)
+                    }
+                    return containerBytes
+                } else if let pdStr = pd as? String {
+                    let containerBytes = Data(pdStr.utf8)
+                    sessionStore.privateDataJwe = pdStr
+                    return containerBytes
+                }
+            }
+        } catch {
+            #if canImport(os)
+            logger.warning("Could not fetch privateData: \(error.localizedDescription)")
+            #endif
+        }
+        return Data()
+    }
+
+    // Not `private`: called from `SirosWallet.swift`'s `register`
+    // (this function now lives in `SirosWallet+Lifecycle.swift`) - same
+    // cross-file-extension-access reason as `keystore` above.
+    func syncPrivateDataToBackend() async throws {
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else { return }
+        guard let containerJson = sessionStore.privateDataJwe else { return }
+        do {
+            // Parse the JSON string back to a dict and send
+            if let data = containerJson.data(using: .utf8),
+               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                _ = try await client.updatePrivateData(dict)
+            }
+        } catch {
+            #if canImport(os)
+            logger.error("Failed to sync private data: \(error.localizedDescription)")
+            #endif
+            lock.lock(); let listener = eventListener; lock.unlock()
+            listener?.onFlowError(flowId: "sync", errorMessage: "Private data sync failed: \(error.localizedDescription)", redirectUri: nil)
+        }
+    }
+
+    func persistAndSyncKeystore() async {
+        guard keystore.isUnlocked else { return }
+        do {
+            let container = try await keystore.exportEncryptedContainer()
+            sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
+            try await syncPrivateDataToBackend()
+        } catch {
+            #if canImport(os)
+            logger.error("Failed to persist keystore: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    // Not `private`: called from `SirosWallet.swift`'s `logout` and
+    // `SirosWallet+Engine.swift`'s `connectEngine` (this function now lives
+    // in `SirosWallet+Lifecycle.swift`) - same cross-file-extension-access
+    // reason as `keystore` above.
+    func cancelEngineTasks() {
+        for t in engineTasks { t.cancel() }
+        engineTasks.removeAll()
+    }
+
+}
