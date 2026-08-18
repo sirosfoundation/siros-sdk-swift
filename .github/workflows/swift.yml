@@ -98,6 +98,17 @@ jobs:
             -scheme SirosSampleApp \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
+      - name: Run Sample App unit tests
+        working-directory: SampleApp
+        run: |
+          # A concrete (bootable) simulator is required for `test`, unlike the
+          # generic destination above which suffices for `build`.
+          DEVICE=$(xcrun simctl list devicetypes | grep -m1 -oE 'iPhone [0-9]+( Pro( Max)?| Air|e)?' )
+          xcodebuild test \
+            -project SirosSampleApp.xcodeproj \
+            -scheme SirosSampleApp \
+            -destination "platform=iOS Simulator,name=${DEVICE}" \
+            CODE_SIGNING_ALLOWED=NO
 
   lint:
     name: Lint
