@@ -413,27 +413,10 @@ public final class Ts11RegistryClient: @unchecked Sendable {
     }
 
     private func fetchWithUrlSession(_ urlString: String) async -> String? {
-        guard let url = URL(string: urlString) else { return nil }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 10
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                #if canImport(os)
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                logger.warning("TS11 registry fetch failed: \(statusCode) from \(urlString)")
-                #endif
-                return nil
-            }
-            return String(data: data, encoding: .utf8)
-        } catch {
-            #if canImport(os)
-            logger.warning("TS11 registry fetch error from \(urlString): \(error.localizedDescription)")
-            #endif
-            return nil
-        }
+        await ts11FetchWithUrlSession(
+            urlString,
+            logCategory: "Ts11RegistryClient",
+            logPrefix: "TS11 registry fetch"
+        )
     }
 }
