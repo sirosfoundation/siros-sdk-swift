@@ -10,30 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0]
 
 Highlights since v0.3.0 (41 commits):
+
+### Added
 - Longfellow ZKP Phase 3: `ZkProofSystem` + `LongfellowZkProofSystem` integration, wired into
-  the DC API ZK presentation path, plus cross-port ZK/pseudonym fixes (order-independent
-  pseudonym re-derivation lookup, `pseudonym_seed` acceptance) (#94)
+  the DC API ZK presentation path (#94)
 - OID4VCI Phase 2 credential renewal (refresh_token flow), extracted into
-  `SirosWallet+Renewal.swift`, with data-loss/crash fixes and immediate re-auth on a 401 from
-  the AS token endpoint (#91, #93)
-- WSCD Settings UI consolidation (task #214) and AutoEnroll hint mechanism ported from Kotlin,
-  including a race fix in the offered-once guard
-- FIDO2 CTAP2 transport wired into the sample app, with recovery from transient CTAP2
-  disconnects instead of wedging
-- TS11 registry discovery: `Ts11RegistryClient` wired into `WscdSettingsView`, including a
-  wildcard-issuer override resolution fix
+  `SirosWallet+Renewal.swift` (#91, #93)
+- FIDO2 CTAP2 transport wired into the sample app
+- TS11 registry discovery: `Ts11RegistryClient` wired into `WscdSettingsView`
 - Credential-type registry service integration (`go-wallet-backend`) with TTL-cached
   type-metadata fetches scoped to registry calls (#83, #84)
-- Security/architecture review pass: SDK/sample-app boundary refactor, WSCD key sync,
-  audience-validation enforcement, and immediate sign-failure reporting (#86)
-- Presentation flow parity fixes: `redirect_uri` on error, verifier display name/chrome,
-  `CredentialCardView` reuse, per-credential-type wizard steps (#89, #90)
-- WS-engine transport: DCQL matching + ZK presentation wiring, `sign_presentation` VP-part
-  builder extraction
-- Sample app: QR-detection/message-banner localization across remaining views, NFC usage
-  description/entitlement fixes, real test target wiring for `WalletViewModelTests`/
-  `MessageBannerTests` (#98, #100, #101)
+- WS-engine transport: DCQL matching + ZK presentation wiring
+- WSCD AutoEnroll hint mechanism ported from Kotlin
+
+### Changed
+- WSCD Settings UI consolidation (task #214)
+- Security/architecture review pass: SDK/sample-app boundary refactor, WSCD key sync
+- Sample app: QR-detection/message-banner localization across remaining views
 - Dependency bumps: `siros-wscd-manager` to v0.7.2 (#85)
+
+### Fixed
+- Cross-port ZK/pseudonym fixes: order-independent pseudonym re-derivation lookup,
+  `pseudonym_seed` acceptance
+- OID4VCI renewal data-loss/crash fixes; immediate re-auth on a 401 from the AS token endpoint
+- Race fix in WSCD AutoEnroll's offered-once guard
+- Recovery from transient CTAP2 disconnects instead of wedging
+- TS11 wildcard-issuer override resolution fix
+- Audience-validation enforcement; immediate sign-failure reporting (#86)
+- Presentation flow parity: `redirect_uri` on error, verifier display name/chrome,
+  `CredentialCardView` reuse, per-credential-type wizard steps (#89, #90)
+- `sign_presentation` VP-part builder extraction
+- NFC usage description/entitlement fixes
+- Real test target wiring for `WalletViewModelTests`/`MessageBannerTests` (#98, #100, #101)
 
 ## [0.1.0]
 
