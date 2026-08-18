@@ -195,7 +195,12 @@ struct CredentialCardView: View {
         let preferredScheme = preferDark ? "dark" : "light"
         let template = templates.first(where: { $0.colorScheme == preferredScheme }) ?? templates[0]
 
-        let cacheKey = svgRenderCacheKey(credentialId: credential.id, templateUri: template.uri, colorScheme: preferredScheme)
+        // Key on the CHOSEN template's own colorScheme, not preferredScheme -
+        // when no template matches the preferred scheme and this falls back
+        // to templates[0], preferredScheme wouldn't reflect what was
+        // actually resolved/rendered, splitting what should be one cache
+        // entry across two different keys.
+        let cacheKey = svgRenderCacheKey(credentialId: credential.id, templateUri: template.uri, colorScheme: template.colorScheme ?? "default")
         if let cached = svgRenderCache.object(forKey: cacheKey) {
             svgState = .loaded(cached as String)
             return
@@ -226,10 +231,12 @@ struct CredentialCardView: View {
 /// text, keyed by everything that affects the rendered output - avoids
 /// re-fetching and re-substituting a card's template SVG every time its
 /// `.task(id:)` re-fires (e.g. scrolling it off/on screen recreates the
-/// view). `NSCache` behaves like Android's `LruCache`: bounded by
-/// `countLimit` and additionally evicted under memory pressure, so a leaked
-/// entry can't accumulate unboundedly - matches the Kotlin sample app's
-/// identical `svgRenderCache` (64-entry `LruCache`) in `CredentialCard.kt`.
+/// view). `NSCache` is not a strict LRU (`countLimit` is a best-effort
+/// cap, and eviction order isn't guaranteed), but like Android's
+/// `LruCache` it's bounded and additionally evicted under memory
+/// pressure, so a leaked entry can't accumulate unboundedly - matches the
+/// Kotlin sample app's similarly-bounded (64-entry `LruCache`)
+/// `svgRenderCache` in `CredentialCard.kt`.
 private let svgRenderCache: NSCache<NSString, NSString> = {
     let cache = NSCache<NSString, NSString>()
     cache.countLimit = 64

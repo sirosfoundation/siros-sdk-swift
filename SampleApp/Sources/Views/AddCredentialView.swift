@@ -186,7 +186,7 @@ struct CredentialOfferRow: View {
 
 // MARK: - Credential Offer Detail (long-press modal)
 
-/// Detail modal shown on long-press of a [CredentialOfferRow] - lets the
+/// Detail modal shown on long-press of a `CredentialOfferRow` - lets the
 /// user inspect the issuer name and (if published) the credential's
 /// description before committing to the issuance-consent dialog, without
 /// the row's own tap target already starting that flow.
