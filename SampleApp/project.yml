@@ -70,3 +70,29 @@ targets:
         NSFaceIDUsageDescription: "Face ID is used to authenticate and protect your credentials."
         NFCReaderUsageDescription: "NFC is used to communicate with a security key for FIDO2 authentication."
         ITSAppUsesNonExemptEncryption: false
+
+  SirosSampleAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: SirosSampleApp
+    settings:
+      base:
+        SWIFT_VERSION: "5.10"
+        GENERATE_INFOPLIST_FILE: YES
+        ALWAYS_SEARCH_USER_PATHS: "NO"
+
+schemes:
+  SirosSampleApp:
+    build:
+      targets:
+        SirosSampleApp: all
+        SirosSampleAppTests: [test]
+    test:
+      config: Debug
+      targets:
+        - SirosSampleAppTests
+    run:
+      config: Debug

@@ -1,11 +1,17 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
-@testable import SirosWallet
-@testable import SirosCredentials
+import SirosWallet
+import SirosCredentials
+@testable import SirosSampleApp
 
 /// Unit tests for WalletViewModel.
 /// Mirrors the Kotlin sample-app's WalletViewModelTest coverage.
+///
+/// `WalletViewModel` is internal to the `SirosSampleApp` app target (not a
+/// member of the `SirosWallet`/`SirosCredentials` SPM packages it consumes),
+/// so it needs `@testable import SirosSampleApp` to be visible here - the
+/// same fix applied to this file's sibling `MessageBannerTests.swift`.
 @MainActor
 final class WalletViewModelTests: XCTestCase {
 
