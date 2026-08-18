@@ -20,14 +20,18 @@ struct AddCredentialView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.availableCredentials.isEmpty {
-                    Text(L10n.string("credentials.addEmpty"))
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    // The "Scan Physical ID card" row is always shown here,
+                    // regardless of whether `availableCredentials` (the
+                    // generic issuer-offer list, with the plain SIROS ID
+                    // offer filtered out - see `openAddCredential`) is
+                    // empty. A real bug this replaced: showing the plain
+                    // "No credentials available" empty state instead of
+                    // this List whenever SIROS ID was a tenant's only
+                    // offer completely hid the one path meant to actually
+                    // issue it, since this row previously lived only in
+                    // the "offers non-empty" branch.
                     List {
-                        // Scan Physical ID card
                         Section {
                             Button(action: { showIDVPreparation = true }) {
                                 HStack(spacing: 12) {
@@ -54,26 +58,33 @@ struct AddCredentialView: View {
                             .buttonStyle(.plain)
                         }
 
-                        // Credential offers
-                        Section {
-                            ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
-                                CredentialOfferRow(offer: offer)
-                                    .contentShape(Rectangle())
-                                    // `.onTapGesture` + `.onLongPressGesture` on the
-                                    // same view both fire on a long-press release in
-                                    // SwiftUI (a real bug this replaced: tapping to add
-                                    // a credential could immediately follow opening its
-                                    // detail sheet) - `exclusively(before:)` recognizes
-                                    // whichever gesture succeeds first and suppresses
-                                    // the other.
-                                    .gesture(
-                                        LongPressGesture(minimumDuration: 0.5)
-                                            .onEnded { _ in detailOffer = offer }
-                                            .exclusively(
-                                                before: TapGesture()
-                                                    .onEnded { viewModel.selectCredentialOffer(offer) }
-                                            )
-                                    )
+                        if viewModel.availableCredentials.isEmpty {
+                            Section {
+                                Text(L10n.string("credentials.addEmpty"))
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Section {
+                                ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
+                                    CredentialOfferRow(offer: offer)
+                                        .contentShape(Rectangle())
+                                        // `.onTapGesture` + `.onLongPressGesture` on the
+                                        // same view both fire on a long-press release in
+                                        // SwiftUI (a real bug this replaced: tapping to add
+                                        // a credential could immediately follow opening its
+                                        // detail sheet) - `exclusively(before:)` recognizes
+                                        // whichever gesture succeeds first and suppresses
+                                        // the other.
+                                        .gesture(
+                                            LongPressGesture(minimumDuration: 0.5)
+                                                .onEnded { _ in detailOffer = offer }
+                                                .exclusively(
+                                                    before: TapGesture()
+                                                        .onEnded { viewModel.selectCredentialOffer(offer) }
+                                                )
+                                        )
+                                }
                             }
                         }
                     }
