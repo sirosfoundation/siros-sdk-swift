@@ -488,17 +488,27 @@ extension SirosWallet {
         let actionName = subjectType == "credential_verifier" ? "credential-verifier" : "credential-issuer"
 
         do {
-            let kmType: String
-            if case .object_(let km) = request["key_material"],
-               case .string(let t) = km["type"] {
-                kmType = t
-            } else {
-                kmType = "x5c"
+            var keyMaterial: [String: AnyCodable]?
+            if case .object_(let km) = request["key_material"] {
+                keyMaterial = km
+            }
+            let kmType = keyMaterial?["type"]?.stringValue ?? "x5c"
+
+            // Include the actual key material (x5c/jwk), not just its type -
+            // matching the legacy engine path's `handleTrustEvaluation` and
+            // the direct-call `evaluateTrustDirect`. Omitting this let the
+            // backend evaluate trust based on the subject identifier alone,
+            // with no cryptographic binding to the key actually presented.
+            var resource: [String: Any] = ["type": kmType, "id": subjectId]
+            if let x5c = keyMaterial?["x5c"] {
+                resource["key"] = anyCodableToAny(x5c)
+            } else if let jwk = keyMaterial?["jwk"] {
+                resource["key"] = [anyCodableToAny(jwk)]
             }
 
             let evaluationRequest: [String: Any] = [
                 "subject": ["type": "key", "id": subjectId],
-                "resource": ["type": kmType, "id": subjectId],
+                "resource": resource,
                 "action": ["name": actionName],
             ]
             let response = try await client.evaluateTrust(evaluationRequest)

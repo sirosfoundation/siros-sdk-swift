@@ -316,6 +316,13 @@ extension SirosWallet {
             #endif
             lock.lock(); let listener = eventListener; lock.unlock()
             listener?.onFlowError(flowId: "sync", errorMessage: "Private data sync failed: \(error.localizedDescription)", redirectUri: nil)
+            // Rethrow: this function is declared `async throws` precisely so
+            // callers (`register`, `persistAndSyncKeystore`) can react to a
+            // sync failure - swallowing it here made every `try await
+            // syncPrivateDataToBackend()` call site's own catch block
+            // unreachable for this specific failure, silently treating it
+            // as success.
+            throw error
         }
     }
 

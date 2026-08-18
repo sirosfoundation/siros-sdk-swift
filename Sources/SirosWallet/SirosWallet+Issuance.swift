@@ -154,7 +154,8 @@ extension SirosWallet {
         if let wia = cached, expiresAt - now > 60 {
             return wia
         }
-        guard let client = apiClient else { return nil }
+        lock.lock(); let client = apiClient; lock.unlock()
+        guard let client else { return nil }
         do {
             let keyId = try await ensureInstanceKeyId()
             let challengeResponse = try await client.requestWIAChallenge()
