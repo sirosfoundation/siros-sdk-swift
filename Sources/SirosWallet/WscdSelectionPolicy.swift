@@ -150,6 +150,16 @@ extension WscdSelectionError: LocalizedError {
 // credentialType) pairs (e.g. two credential types being issued near-
 // simultaneously), so this must genuinely be safe to share across tasks.
 public final class WscdSelectionPolicy: @unchecked Sendable {
+    /// Sentinel issuer value for a per-(issuer, credentialType) user override
+    /// that applies to ANY issuer of that credential type - checked in
+    /// `resolve` as a fallback when no issuer-specific entry matches. Real-
+    /// world need: TS11 registry discovery knows a credential *type* but has
+    /// no issuer of its own to key an entry by - this constant is what makes
+    /// those discovered mappings actually resolve, rather than silently
+    /// never matching any real issuance. Mirrors the Kotlin SDK's
+    /// `WscdSelectionPolicy.WILDCARD_ISSUER`.
+    public static let wildcardIssuer = "*"
+
     private let sessionStore: SessionStoreProtocol
     private let defaultMapping: [String: String]
     private let requestChoice: RequestWscdChoice?
@@ -205,8 +215,13 @@ public final class WscdSelectionPolicy: @unchecked Sendable {
         // specific thing the user can have said. Validated exactly like
         // TOFU/default-mapping below: a stale (unregistered or since-
         // insufficient) override must fall through rather than being used
-        // or erroring outright.
-        if let override = readUserOverrides()[key], registered.contains(override), isSufficient(override, for: requiredTier) {
+        // or erroring outright. Falls back to a `wildcardIssuer` entry (any
+        // issuer, this credentialType) when no issuer-specific one matches -
+        // see that constant's doc comment for why (TS11 discovery has no
+        // real issuer to key an entry by).
+        let overrides = readUserOverrides()
+        if let override = overrides[key] ?? overrides[Self.tofuKey(issuer: Self.wildcardIssuer, credentialType: credentialType)],
+           registered.contains(override), isSufficient(override, for: requiredTier) {
             return override
         }
 

@@ -158,6 +158,7 @@
     "mappingDescription": "Vilka (utfärdare, intygstyp)-par som alltid använder en specifik WSCD-plugin. Sök kandidater från registry.siros.org och slå på de du vill använda - varje kandidat tilldelas den billigaste pluginen vars nivå räcker (t.ex. iso_18045_basic → softkey, inte fido2). \"Sparad\"-rader är riktiga per-utfärdarpreferenser (kan även anges från säkerhetsnyckelprompten via \"Denna utfärdare\"); \"Standard (utv)\"-rader är sessionsbundna poster som lagts till i en pluginflikens Utvecklare-avsnitt nedan.",
     "mappingEmpty": "Inga mappningar ännu",
     "discoverButton": "Sök i TS11-registret",
+    "mappingDiscoveredAnyIssuer": "Alla utfärdare (upptäckt)",
     "mappingSavedTechnical": "Sparad · → %1$@",
     "mappingDevDefaultTechnical": "Standard (utv) · → %1$@",
     "tofuTitle": "WSCD-val",

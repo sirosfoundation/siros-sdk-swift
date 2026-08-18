@@ -505,6 +505,45 @@ final class WscdSelectionPolicyTests: XCTestCase {
         XCTAssertEqual(result, "r2ps", "an explicit per-issuer user override must win over TOFU")
     }
 
+    /// TS11 registry discovery knows a credential *type* but has no real
+    /// issuer to key an override by - it saves under `wildcardIssuer`
+    /// instead. `resolve` must fall back to that wildcard entry when no
+    /// exact-issuer override exists, or a discovered mapping would silently
+    /// never apply to any real presentation (the bug this test guards
+    /// against - a discovered/toggled-on row previously had no effect at
+    /// all, since `resolve` only ever checked the exact-issuer key).
+    func testWildcardIssuerUserOverrideAppliesWhenNoExactIssuerOverrideExists() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let credentialType = "urn:eu.europa.ec.eudi:pid:1"
+
+        policy.setUserOverride(issuer: WscdSelectionPolicy.wildcardIssuer, credentialType: credentialType, pluginId: "fido2")
+
+        let result = try await policy.resolve(
+            issuer: "https://some-real-issuer.example.com", credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["softkey", "fido2"]
+        )
+        XCTAssertEqual(result, "fido2", "a wildcard-issuer override must apply to any real issuer of that credential type")
+    }
+
+    func testExactIssuerUserOverrideWinsOverWildcardIssuerOverride() async throws {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "test:account"
+        let policy = WscdSelectionPolicy(sessionStore: store)
+        let issuer = "https://issuer.example.com"
+        let credentialType = "urn:eu.europa.ec.eudi:pid:1"
+
+        policy.setUserOverride(issuer: WscdSelectionPolicy.wildcardIssuer, credentialType: credentialType, pluginId: "fido2")
+        policy.setUserOverride(issuer: issuer, credentialType: credentialType, pluginId: "r2ps")
+
+        let result = try await policy.resolve(
+            issuer: issuer, credentialType: credentialType,
+            requiredTier: "iso_18045_high", availablePluginIds: ["softkey", "fido2", "r2ps"]
+        )
+        XCTAssertEqual(result, "r2ps", "a more-specific exact-issuer override must win over the wildcard-issuer fallback")
+    }
+
     func testGlobalUserOverrideWinsOverTofuButLosesToPerIssuerOverride() async throws {
         let store = InMemorySessionStore()
         store.activeAccountId = "test:account"

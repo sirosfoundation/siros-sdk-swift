@@ -3,6 +3,7 @@
 import SwiftUI
 import SirosKeystore
 import SirosCredentials
+import SirosWallet
 
 /// The three WSCD plugin IDs `FfiWscdConfig(defaultPlugin:)` knows about - one tab each.
 private let wscdPluginIds = ["softkey", "r2ps", "fido2"]
@@ -225,7 +226,7 @@ private struct WscdMappingCard: View {
 
     var body: some View {
         let discovered = discoveredByIdentifier
-        let discoveredKeys = Set(discovered.keys.map { "*|\($0)" })
+        let discoveredKeys = Set(discovered.keys.map { "\(WscdSelectionPolicy.wildcardIssuer)|\($0)" })
         let savedOnly = viewModel.wscdUserOverridesSnapshot.keys.filter { !discoveredKeys.contains($0) }
         let devDefaultOnly = viewModel.wscdDefaultMapping.keys.filter { !discoveredKeys.contains($0) }
 
@@ -258,7 +259,7 @@ private struct WscdMappingCard: View {
             } else {
                 ForEach(discovered.keys.sorted(), id: \.self) { identifier in
                     if let (dc, pluginId) = discovered[identifier] {
-                        let key = "*|\(identifier)"
+                        let key = "\(WscdSelectionPolicy.wildcardIssuer)|\(identifier)"
                         // If this row was already turned on with a custom
                         // plugin (e.g. hand-edited via "Add override" for the
                         // same wildcard identifier), reflect what's actually
@@ -266,15 +267,15 @@ private struct WscdMappingCard: View {
                         let effectivePluginId = viewModel.wscdUserOverridesSnapshot[key] ?? pluginId
                         DiscoveredMappingRow(
                             title: dc.displayName,
-                            subtitle: dc.description ?? "*  (any issuer - discovered)",
+                            subtitle: dc.description ?? L10n.string("wscd.mappingDiscoveredAnyIssuer"),
                             technical: "\(dc.schema.attestationLoS ?? "?") → \(effectivePluginId) · \(identifier)",
                             technicalColor: .accentColor,
                             isOn: viewModel.wscdUserOverridesSnapshot[key] != nil,
                             onToggle: { isOn in
                                 if isOn {
-                                    viewModel.setWscdUserOverride(issuer: "*", credentialType: identifier, pluginId: pluginId)
+                                    viewModel.setWscdUserOverride(issuer: WscdSelectionPolicy.wildcardIssuer, credentialType: identifier, pluginId: pluginId)
                                 } else {
-                                    viewModel.clearWscdUserOverride(issuer: "*", credentialType: identifier)
+                                    viewModel.clearWscdUserOverride(issuer: WscdSelectionPolicy.wildcardIssuer, credentialType: identifier)
                                 }
                             }
                         )
