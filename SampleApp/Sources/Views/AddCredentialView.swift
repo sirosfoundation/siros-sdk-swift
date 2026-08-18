@@ -7,6 +7,7 @@ import SirosCredentials
 struct AddCredentialView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     @State private var showIDVPreparation = false
+    @State private var detailOffer: CredentialOffer?
 
     var body: some View {
         NavigationStack {
@@ -61,6 +62,9 @@ struct AddCredentialView: View {
                                     .onTapGesture {
                                         viewModel.selectCredentialOffer(offer)
                                     }
+                                    .onLongPressGesture {
+                                        detailOffer = offer
+                                    }
                             }
                         }
                     }
@@ -92,6 +96,25 @@ struct AddCredentialView: View {
                 onDismiss: { showIDVPreparation = false }
             )
         }
+        .sheet(isPresented: showDetailOffer) {
+            if let offer = detailOffer {
+                CredentialOfferDetailView(
+                    offer: offer,
+                    onAdd: {
+                        detailOffer = nil
+                        viewModel.selectCredentialOffer(offer)
+                    },
+                    onClose: { detailOffer = nil }
+                )
+            }
+        }
+    }
+
+    private var showDetailOffer: Binding<Bool> {
+        Binding(
+            get: { detailOffer != nil },
+            set: { if !$0 { detailOffer = nil } }
+        )
     }
 
     private var showIssuanceConsent: Binding<Bool> {
@@ -138,5 +161,43 @@ struct CredentialOfferRow: View {
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Credential Offer Detail (long-press modal)
+
+/// Detail modal shown on long-press of a [CredentialOfferRow] - lets the
+/// user inspect an offer's full description/format before committing to
+/// the issuance-consent dialog, without the row's own tap target already
+/// starting that flow.
+struct CredentialOfferDetailView: View {
+    let offer: CredentialOffer
+    let onAdd: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(offer.issuerName)
+                    .font(.headline)
+                if let description = offer.credentialDescription {
+                    Text(description)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding()
+            .navigationTitle(offer.credentialName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(L10n.string("credentials.rowActionClose")) { onClose() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.string("credentials.rowActionAdd")) { onAdd() }
+                }
+            }
+        }
     }
 }

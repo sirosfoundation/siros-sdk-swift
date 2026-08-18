@@ -21,6 +21,13 @@ private let defaultTenantId = "default"
 private let defaultR2psUrl = "http://192.168.240.1:9000"
 private let redirectScheme = "siros-sample"
 
+/// OID4VCI `credential_configuration_id` for the SIROS ID credential (see
+/// vc-issuer's config: `credential_configurations.siros_id`) - used to hide
+/// the plain issuer offer from `openAddCredential()`'s list in favor of the
+/// "Scan Physical ID card" / IDV row, which is the one path meant to
+/// actually issue this credential.
+private let sirosIdCredentialConfigurationId = "siros_id"
+
 /// Sample app ViewModel.
 ///
 /// The entire wallet lifecycle — auth, key management, engine protocol,
@@ -766,7 +773,8 @@ final class WalletViewModel: ObservableObject {
         isLoadingOffers = true
         Task {
             do {
-                availableCredentials = try await wallet?.getAvailableCredentials() ?? []
+                let offers = try await wallet?.getAvailableCredentials() ?? []
+                availableCredentials = offers.filter { $0.credentialConfigurationId != sirosIdCredentialConfigurationId }
             } catch {
                 print("Failed to load available credentials: \(error)")
                 availableCredentials = []

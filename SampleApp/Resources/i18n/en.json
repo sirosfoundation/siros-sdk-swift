@@ -54,7 +54,9 @@
     "noClaims": "No claims available",
     "headerLabel": "Header",
     "payloadLabel": "Payload",
-    "disclosureLabel": "Disclosure %1$d"
+    "disclosureLabel": "Disclosure %1$d",
+    "rowActionAdd": "Add",
+    "rowActionClose": "Close"
   },
   "presentation": {
     "title": "Credential Request",
