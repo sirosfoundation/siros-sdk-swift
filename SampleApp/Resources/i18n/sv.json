@@ -54,7 +54,9 @@
     "noClaims": "Inga anspråk tillgängliga",
     "headerLabel": "Header",
     "payloadLabel": "Payload",
-    "disclosureLabel": "Friläggning %1$d"
+    "disclosureLabel": "Friläggning %1$d",
+    "rowActionAdd": "Lägg till",
+    "rowActionClose": "Stäng"
   },
   "presentation": {
     "title": "Intygsbegäran",
