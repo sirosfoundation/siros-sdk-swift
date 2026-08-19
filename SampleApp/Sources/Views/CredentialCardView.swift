@@ -191,7 +191,6 @@ struct CredentialCardView: View {
             svgState = .notApplicable
             return
         }
-        svgState = .loading
         let preferredScheme = preferDark ? "dark" : "light"
         let template = templates.first(where: { $0.colorScheme == preferredScheme }) ?? templates[0]
 
@@ -205,6 +204,11 @@ struct CredentialCardView: View {
             svgState = .loaded(cached as String)
             return
         }
+
+        // Only transition to .loading once a cache miss confirms real
+        // network work is actually needed - setting it unconditionally
+        // above caused an unnecessary state flicker on cache hits.
+        svgState = .loading
 
         guard let url = URL(string: template.uri) else {
             svgState = .failed

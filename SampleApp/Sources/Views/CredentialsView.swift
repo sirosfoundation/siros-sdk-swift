@@ -81,7 +81,7 @@ struct CredentialsView: View {
                         }
                         if visibleCount < entries.count {
                             CredentialStackOverflow(
-                                remaining: Array(entries.dropFirst(visibleCount)),
+                                remaining: entries.dropFirst(visibleCount),
                                 onClick: { showAllCredentials = true }
                             )
                             .padding(.horizontal, 16)
@@ -140,7 +140,10 @@ struct CredentialsView: View {
 /// colors). Tapping it expands the full list. Mirrors the Kotlin sample
 /// app's `CredentialStackOverflow`.
 private struct CredentialStackOverflow: View {
-    let remaining: [CredentialWithInstances]
+    // ArraySlice, not [CredentialWithInstances] - avoids copying the whole
+    // (potentially large) overflow tail on every body recompute, since the
+    // caller only ever passes `entries.dropFirst(visibleCount)`.
+    let remaining: ArraySlice<CredentialWithInstances>
     let onClick: () -> Void
 
     private let maxFanned = 3
