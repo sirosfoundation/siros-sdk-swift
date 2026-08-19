@@ -7,6 +7,7 @@ import SirosCredentials
 struct AddCredentialView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     @State private var showIDVPreparation = false
+    @State private var detailOffer: CredentialOffer?
 
     var body: some View {
         NavigationStack {
@@ -19,14 +20,18 @@ struct AddCredentialView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.availableCredentials.isEmpty {
-                    Text(L10n.string("credentials.addEmpty"))
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    // The "Scan Physical ID card" row is always shown here,
+                    // regardless of whether `availableCredentials` (the
+                    // generic issuer-offer list, with the plain SIROS ID
+                    // offer filtered out - see `openAddCredential`) is
+                    // empty. A real bug this replaced: showing the plain
+                    // "No credentials available" empty state instead of
+                    // this List whenever SIROS ID was a tenant's only
+                    // offer completely hid the one path meant to actually
+                    // issue it, since this row previously lived only in
+                    // the "offers non-empty" branch.
                     List {
-                        // Scan Physical ID card
                         Section {
                             Button(action: { showIDVPreparation = true }) {
                                 HStack(spacing: 12) {
@@ -53,14 +58,33 @@ struct AddCredentialView: View {
                             .buttonStyle(.plain)
                         }
 
-                        // Credential offers
-                        Section {
-                            ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
-                                CredentialOfferRow(offer: offer)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        viewModel.selectCredentialOffer(offer)
-                                    }
+                        if viewModel.availableCredentials.isEmpty {
+                            Section {
+                                Text(L10n.string("credentials.addEmpty"))
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Section {
+                                ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
+                                    CredentialOfferRow(offer: offer)
+                                        .contentShape(Rectangle())
+                                        // `.onTapGesture` + `.onLongPressGesture` on the
+                                        // same view both fire on a long-press release in
+                                        // SwiftUI (a real bug this replaced: tapping to add
+                                        // a credential could immediately follow opening its
+                                        // detail sheet) - `exclusively(before:)` recognizes
+                                        // whichever gesture succeeds first and suppresses
+                                        // the other.
+                                        .gesture(
+                                            LongPressGesture(minimumDuration: 0.5)
+                                                .onEnded { _ in detailOffer = offer }
+                                                .exclusively(
+                                                    before: TapGesture()
+                                                        .onEnded { viewModel.selectCredentialOffer(offer) }
+                                                )
+                                        )
+                                }
                             }
                         }
                     }
@@ -92,6 +116,25 @@ struct AddCredentialView: View {
                 onDismiss: { showIDVPreparation = false }
             )
         }
+        .sheet(isPresented: showDetailOffer) {
+            if let offer = detailOffer {
+                CredentialOfferDetailView(
+                    offer: offer,
+                    onAdd: {
+                        detailOffer = nil
+                        viewModel.selectCredentialOffer(offer)
+                    },
+                    onClose: { detailOffer = nil }
+                )
+            }
+        }
+    }
+
+    private var showDetailOffer: Binding<Bool> {
+        Binding(
+            get: { detailOffer != nil },
+            set: { if !$0 { detailOffer = nil } }
+        )
     }
 
     private var showIssuanceConsent: Binding<Bool> {
@@ -138,5 +181,43 @@ struct CredentialOfferRow: View {
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Credential Offer Detail (long-press modal)
+
+/// Detail modal shown on long-press of a `CredentialOfferRow` - lets the
+/// user inspect the issuer name and (if published) the credential's
+/// description before committing to the issuance-consent dialog, without
+/// the row's own tap target already starting that flow.
+struct CredentialOfferDetailView: View {
+    let offer: CredentialOffer
+    let onAdd: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(offer.issuerName)
+                    .font(.headline)
+                if let description = offer.credentialDescription {
+                    Text(description)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding()
+            .navigationTitle(offer.credentialName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(L10n.string("credentials.rowActionClose")) { onClose() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.string("credentials.rowActionAdd")) { onAdd() }
+                }
+            }
+        }
     }
 }

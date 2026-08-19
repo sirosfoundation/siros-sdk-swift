@@ -29,6 +29,7 @@
     "countZero": "No credentials yet",
     "countOne": "1 credential",
     "countOther": "%1$d credentials",
+    "stackOverflowMore": "+%1$d more",
     "emptyTitle": "No credentials yet",
     "emptySubtitle": "Tap to add your first credential",
     "addTitle": "Add Credential",
@@ -54,7 +55,9 @@
     "noClaims": "No claims available",
     "headerLabel": "Header",
     "payloadLabel": "Payload",
-    "disclosureLabel": "Disclosure %1$d"
+    "disclosureLabel": "Disclosure %1$d",
+    "rowActionAdd": "Add",
+    "rowActionClose": "Close"
   },
   "presentation": {
     "title": "Credential Request",

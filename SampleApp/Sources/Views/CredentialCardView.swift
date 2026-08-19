@@ -191,9 +191,25 @@ struct CredentialCardView: View {
             svgState = .notApplicable
             return
         }
-        svgState = .loading
         let preferredScheme = preferDark ? "dark" : "light"
         let template = templates.first(where: { $0.colorScheme == preferredScheme }) ?? templates[0]
+
+        // Key on the CHOSEN template's own colorScheme, not preferredScheme -
+        // when no template matches the preferred scheme and this falls back
+        // to templates[0], preferredScheme wouldn't reflect what was
+        // actually resolved/rendered, splitting what should be one cache
+        // entry across two different keys.
+        let cacheKey = svgRenderCacheKey(credentialId: credential.id, templateUri: template.uri, colorScheme: template.colorScheme ?? "default")
+        if let cached = svgRenderCache.object(forKey: cacheKey) {
+            svgState = .loaded(cached as String)
+            return
+        }
+
+        // Only transition to .loading once a cache miss confirms real
+        // network work is actually needed - setting it unconditionally
+        // above caused an unnecessary state flicker on cache hits.
+        svgState = .loading
+
         guard let url = URL(string: template.uri) else {
             svgState = .failed
             return
@@ -206,11 +222,33 @@ struct CredentialCardView: View {
                 return
             }
             let claims = CredentialUtils.extractClaims(credential)
-            svgState = .loaded(SvgTemplateRenderer.substitute(svgText, claims: claims))
+            let rendered = SvgTemplateRenderer.substitute(svgText, claims: claims)
+            svgRenderCache.setObject(rendered as NSString, forKey: cacheKey)
+            svgState = .loaded(rendered)
         } catch {
             svgState = .failed
         }
     }
+}
+
+/// Process-lifetime (not disk-persisted) cache of substituted SVG template
+/// text, keyed by everything that affects the rendered output - avoids
+/// re-fetching and re-substituting a card's template SVG every time its
+/// `.task(id:)` re-fires (e.g. scrolling it off/on screen recreates the
+/// view). `NSCache` is not a strict LRU (`countLimit` is a best-effort
+/// cap, and eviction order isn't guaranteed), but like Android's
+/// `LruCache` it's bounded and additionally evicted under memory
+/// pressure, so a leaked entry can't accumulate unboundedly - matches the
+/// Kotlin sample app's similarly-bounded (64-entry `LruCache`)
+/// `svgRenderCache` in `CredentialCard.kt`.
+private let svgRenderCache: NSCache<NSString, NSString> = {
+    let cache = NSCache<NSString, NSString>()
+    cache.countLimit = 64
+    return cache
+}()
+
+private func svgRenderCacheKey(credentialId: Int64, templateUri: String, colorScheme: String) -> NSString {
+    "\(credentialId)|\(templateUri)|\(colorScheme)" as NSString
 }
 
 /// Loading state for a credential card's VCTM SVG template rendering.
