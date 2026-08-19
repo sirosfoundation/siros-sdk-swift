@@ -215,4 +215,18 @@ public struct CredentialOffer: Sendable, Equatable {
         self.vct = vct
         self.doctype = doctype
     }
+
+    /// Unique identity across issuers - unlike `credentialConfigurationId`
+    /// alone (issuers commonly reuse configuration IDs like "identity" or
+    /// "default"), pairing it with `credentialIssuerIdentifier` can't
+    /// collide. Use this, not `credentialConfigurationId`, as a SwiftUI
+    /// `ForEach` identity for a list of offers from multiple issuers.
+    ///
+    /// Length-prefixes `credentialIssuerIdentifier` rather than joining with
+    /// a plain separator - a bare `"\(issuer)#\(configId)"` could still
+    /// collide if either component itself contains `#` (e.g. issuer `"x#y"`
+    /// + config `"z"` vs. issuer `"x"` + config `"y#z"`).
+    public var offerIdentity: String {
+        "\(credentialIssuerIdentifier.count):\(credentialIssuerIdentifier)#\(credentialConfigurationId)"
+    }
 }

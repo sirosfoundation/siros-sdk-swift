@@ -66,7 +66,7 @@ struct AddCredentialView: View {
                             }
                         } else {
                             Section {
-                                ForEach(viewModel.availableCredentials, id: \.credentialConfigurationId) { offer in
+                                ForEach(viewModel.availableCredentials, id: \.offerIdentity) { offer in
                                     CredentialOfferRow(offer: offer)
                                         .contentShape(Rectangle())
                                         // `.onTapGesture` + `.onLongPressGesture` on the
