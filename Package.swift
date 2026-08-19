@@ -25,7 +25,7 @@ let package = Package(
         // ZkCircuitClient.swift's `#if canImport(CryptoKit)`); swift-crypto's
         // `Crypto` module is only actually compiled/linked in on Linux,
         // where CryptoKit doesn't exist at all.
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.5.1"),
         // Circuits fetched from go-zk-circuits (see ZkCircuitClient,
         // SirosCredentials) are zstd-compressed; zk-cred-longfellow's
         // initializeProver expects already-decompressed bytes (confirmed
