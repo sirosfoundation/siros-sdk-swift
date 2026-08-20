@@ -188,6 +188,9 @@ struct ProximityEngagementScreen: View {
         let filterEligible: ([StoredCredential]) -> [StoredCredential] = { [viewModel] instances in
             viewModel.filterEligibleForProximity(instances)
         }
+        let evaluateReaderTrust: (_ x5chain: [[UInt8]]) async -> ReaderTrustResult = { [viewModel] x5chain in
+            await viewModel.evaluateReaderTrustForProximity(x5chain)
+        }
 
         // `onStep`/`onComplete` are invoked from `BlePeripheralServer`/
         // `BleCentralClient`'s own async Task contexts (kicked off from
@@ -203,6 +206,7 @@ struct ProximityEngagementScreen: View {
             getCredentials: getCredentials,
             signPresentation: signPresentation,
             requestConsent: requestConsent,
+            evaluateReaderTrust: evaluateReaderTrust,
             filterEligible: filterEligible,
             onStep: { step in Task { @MainActor in currentStep = step } },
             onLog: { message in print("[BlePeripheralServer] \(message)") },
@@ -230,6 +234,7 @@ struct ProximityEngagementScreen: View {
             getCredentials: getCredentials,
             signPresentation: signPresentation,
             requestConsent: requestConsent,
+            evaluateReaderTrust: evaluateReaderTrust,
             filterEligible: filterEligible,
             onStep: { step in Task { @MainActor in currentStep = step } },
             onLog: { message in print("[BleCentralClient] \(message)") },
@@ -290,7 +295,8 @@ struct ProximityEngagementScreen: View {
     private func requestConsent(
         _ docType: String,
         _ requestedClaims: [String],
-        _ matchingFamilies: [CredentialFamily]
+        _ matchingFamilies: [CredentialFamily],
+        _ readerTrust: ReaderTrustResult?
     ) async -> ProximityConsentResult {
         await withCheckedContinuation { (continuation: CheckedContinuation<ProximityConsentResult, Never>) in
             let box = ConsentContinuationBox()
@@ -301,6 +307,7 @@ struct ProximityEngagementScreen: View {
                     docType: docType,
                     requestedClaims: requestedClaims,
                     matchingFamilies: matchingFamilies,
+                    readerTrust: readerTrust,
                     respond: { chosen in
                         // Triggers `.sheet(item:onDismiss:)`'s onDismiss too
                         // (setting the bound item to nil dismisses the sheet) -
@@ -412,6 +419,8 @@ private struct PendingConsent: Identifiable {
     let docType: String
     let requestedClaims: [String]
     let matchingFamilies: [CredentialFamily]
+    /// See `RequestProximityConsent`'s `readerTrust` parameter doc comment.
+    let readerTrust: ReaderTrustResult?
     /// Call with the chosen family to approve, or nil to deny.
     let respond: (CredentialFamily?) -> Void
 }
@@ -452,6 +461,8 @@ private struct ProximityConsentSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     CredentialCardView(credential: selected.representative)
+
+                    ReaderTrustBadge(readerTrust: consent.readerTrust)
 
                     Text(L10n.string("proximity.requestingClaims"))
                         .font(.subheadline)
@@ -509,5 +520,42 @@ private struct ProximityConsentSheet: View {
                 }
             }
         }
+    }
+}
+
+/// RICAL reader-trust indicator for the consent sheet (Geneva 2026 interop
+/// requirement: reader trust must be a visible, distinguishable signal, not
+/// enforced/blocking). Three states: trusted (verified signature + trusted
+/// chain), untrusted (verified signature but an untrusted/unresolved chain),
+/// and no badge at all when `readerTrust` is nil - see `ReaderTrustResult`'s
+/// doc comment for why "no `readerAuth`/invalid signature" is deliberately
+/// silent rather than shown as "untrusted". Mirrors the Kotlin app's
+/// `ReaderTrustBadge`.
+private struct ReaderTrustBadge: View {
+    let readerTrust: ReaderTrustResult?
+
+    var body: some View {
+        if let readerTrust {
+            HStack(spacing: 6) {
+                Image(systemName: readerTrust.trusted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundColor(readerTrust.trusted ? SirosTheme.brand : SirosTheme.error)
+                Text(label(for: readerTrust))
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(readerTrust.trusted ? SirosTheme.brand : SirosTheme.error)
+            }
+        }
+    }
+
+    private func label(for readerTrust: ReaderTrustResult) -> String {
+        if readerTrust.trusted {
+            if let entityName = readerTrust.entityName {
+                return "Trusted reader: \(entityName)"
+            }
+            return "Trusted reader"
+        }
+        if let reason = readerTrust.reason {
+            return "Reader identity not trusted (\(reason))"
+        }
+        return "Reader identity not trusted"
     }
 }

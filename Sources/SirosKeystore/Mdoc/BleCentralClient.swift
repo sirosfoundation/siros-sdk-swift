@@ -85,6 +85,7 @@ public final class BleCentralClient: NSObject {
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
         requestConsent: @escaping RequestProximityConsent,
+        evaluateReaderTrust: @escaping (_ x5chain: [[UInt8]]) async -> ReaderTrustResult,
         filterEligible: @escaping ([StoredCredential]) -> [StoredCredential],
         onStep: @escaping (String) -> Void,
         onLog: @escaping (String) -> Void,
@@ -99,6 +100,7 @@ public final class BleCentralClient: NSObject {
             getCredentials: getCredentials,
             signPresentation: signPresentation,
             requestConsent: requestConsent,
+            evaluateReaderTrust: evaluateReaderTrust,
             filterEligible: filterEligible,
             onStep: onStep,
             logTag: "BleCentralClient"

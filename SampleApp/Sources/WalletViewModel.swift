@@ -69,6 +69,17 @@ final class WalletViewModel: ObservableObject {
     @Published var showDiagnosticMessages: Bool {
         didSet { UserDefaults.standard.set(showDiagnosticMessages, forKey: "siros_show_diagnostic_messages") }
     }
+    /// See `WalletConfig.preferLocalReaderTrustEvaluation`'s doc comment.
+    @Published var preferLocalReaderTrustEvaluation: Bool {
+        didSet { UserDefaults.standard.set(preferLocalReaderTrustEvaluation, forKey: "siros_prefer_local_reader_trust_evaluation") }
+    }
+    /// A single PEM-encoded RICAL root certificate for local reader-trust
+    /// fallback (see `WalletConfig.readerTrustRootCertificatesPem`) - blank
+    /// means none configured, matching that config field defaulting to an
+    /// empty list.
+    @Published var readerTrustRootCertificatePem: String {
+        didSet { UserDefaults.standard.set(readerTrustRootCertificatePem, forKey: "siros_reader_trust_root_certificate_pem") }
+    }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
     /// PEM-encoded P-256 R2PS SERVER public key, for the R2PS message
@@ -332,6 +343,8 @@ final class WalletViewModel: ObservableObject {
             .flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONDecoder().decode([String].self, from: $0) }
             .flatMap { $0.isEmpty ? nil : $0 } ?? [ZkCircuitClient.defaultZkCircuitUrl]
+        self.preferLocalReaderTrustEvaluation = defaults.bool(forKey: "siros_prefer_local_reader_trust_evaluation")
+        self.readerTrustRootCertificatePem = defaults.string(forKey: "siros_reader_trust_root_certificate_pem") ?? ""
     }
 
     // MARK: - Public actions
@@ -943,6 +956,19 @@ final class WalletViewModel: ObservableObject {
         )
     }
 
+    /// Mirrors `SirosWallet.evaluateReaderTrust` - passed to
+    /// `BlePeripheralServer`/`BleCentralClient`'s `evaluateReaderTrust`
+    /// dependency. Adapts `TrustResult` (shared with the verifier/issuer
+    /// trust paths) down to `MdocProximitySession`'s narrower
+    /// `ReaderTrustResult`.
+    func evaluateReaderTrustForProximity(_ x5chain: [[UInt8]]) async -> ReaderTrustResult {
+        guard let wallet else {
+            return ReaderTrustResult(trusted: false, reason: "Wallet is not connected")
+        }
+        let result = await wallet.evaluateReaderTrust(x5chain)
+        return ReaderTrustResult(trusted: result.trusted, reason: result.reason, entityName: result.entityName)
+    }
+
     /// Same as `filterEligibleForProximity`, generalized for the redirect/DC
     /// API presentation consent screen (`PresentationConsentView`) - a query
     /// is unsatisfiable if every candidate that matched it has already been
@@ -1263,7 +1289,9 @@ final class WalletViewModel: ObservableObject {
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,
             requestWscdChoice: resolvedRequestWscdChoice,
-            zkCircuitUrls: zkCircuitUrls
+            zkCircuitUrls: zkCircuitUrls,
+            readerTrustRootCertificatesPem: readerTrustRootCertificatePem.isEmpty ? [] : [readerTrustRootCertificatePem],
+            preferLocalReaderTrustEvaluation: preferLocalReaderTrustEvaluation
         )
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider

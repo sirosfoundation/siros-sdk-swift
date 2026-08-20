@@ -1,8 +1,14 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
+import Foundation
 import XCTest
 @preconcurrency import SwiftCBOR
 @testable import SirosKeystore
+
+#if canImport(CryptoKit) && canImport(Security)
+import CryptoKit
+import Security
+#endif
 
 /// Verifies `DeviceRequestParser` against a real ISO/IEC 18013-5 mdoc
 /// request: the plaintext recovered by the Kotlin SDK's
@@ -14,7 +20,10 @@ import XCTest
 /// which isn't needed to test parsing). Ported from
 /// `org.siros.sdk.keystore.mdoc.DeviceRequestParserTest` (Kotlin).
 ///
-/// Pure CBOR parsing - no platform-crypto dependency, runs on every platform.
+/// Pure CBOR parsing - no platform-crypto dependency, runs on every platform
+/// - except `testParseRealMdlRequest_extractsReaderAuthAndVerifiesAgainstItsOwnX5Chain`,
+/// which needs CryptoKit/Security (cert parsing + ECDSA verification) and is
+/// gated accordingly.
 final class DeviceRequestParserTests: XCTestCase {
 
     private let realDeviceRequestHex =
@@ -65,6 +74,60 @@ final class DeviceRequestParserTests: XCTestCase {
         let docRequests = try DeviceRequestParser.parse(hex(realDeviceRequestHex))
         XCTAssertEqual(docRequests[0].disclosedClaims().count, 6)
     }
+
+    /// Bare (untagged) `SessionTranscript` array bytes from Annex D.5.1 - the
+    /// same fixture the Kotlin SDK's `ProximitySessionCryptoTest` uses,
+    /// needed here to reconstruct `ReaderAuthenticationBytes` for the real
+    /// `readerAuth` embedded in `realDeviceRequestHex`.
+    private let bareSessionTranscriptHex =
+        "83d8185858a20063312e30018201d818584ba4010220012158205a88d182bce5f42efa59943f33359d2e8a968ff289d9" +
+        "3e5fa444b624343167fe225820b16e8cf858ddc7690407ba61d4c338237a8cfcf3de6aa672fc60a557aa32fc67d81858" +
+        "4ba40102200121582060e3392385041f51403051f2415531cb56dd3f999c71687013aac6768bc8187e225820e58deb8f" +
+        "dbe907f7dd5368245551a34796f7d2215c440c339bb0f7b67beccdfa8258c391020f487315d10209616301013001046d" +
+        "646f631a200c016170706c69636174696f6e2f766e642e626c7565746f6f74682e6c652e6f6f6230081b28128b372828" +
+        "01021c015c1e580469736f2e6f72673a31383031333a646576696365656e676167656d656e746d646f63a20063312e30" +
+        "018201d818584ba4010220012158205a88d182bce5f42efa59943f33359d2e8a968ff289d93e5fa444b624343167fe22" +
+        "5820b16e8cf858ddc7690407ba61d4c338237a8cfcf3de6aa672fc60a557aa32fc6758cd910225487215910202637201" +
+        "02110204616301013000110206616301036e6663005102046163010157001a201e016170706c69636174696f6e2f766e" +
+        "642e626c7565746f6f74682e6c652e6f6f6230081b28078080bf2801021c021107c832fff6d26fa0beb34dfcd555d482" +
+        "3a1c11010369736f2e6f72673a31383031333a6e66636e6663015a172b016170706c69636174696f6e2f766e642e7766" +
+        "612e6e616e57030101032302001324fec9a70b97ac9684a4e326176ef5b981c5e8533e5f00298cfccbc35e700a6b0204" +
+        "14"
+
+    #if canImport(CryptoKit) && canImport(Security)
+    func testParseRealMdlRequest_extractsReaderAuthAndVerifiesAgainstItsOwnX5Chain() throws {
+        let docRequests = try DeviceRequestParser.parse(hex(realDeviceRequestHex))
+        let doc = docRequests[0]
+
+        guard let readerAuth = doc.readerAuth else {
+            return XCTFail("expected a readerAuth to be present")
+        }
+
+        let chain = MdocCose.extractX5Chain(readerAuth)
+        XCTAssertFalse(chain.isEmpty, "expected at least one certificate in readerAuth's x5chain")
+
+        guard let cert = SecCertificateCreateWithData(nil, Data(chain[0]) as CFData) else {
+            return XCTFail("failed to parse readerAuth's leaf certificate")
+        }
+        guard let secKey = SecCertificateCopyKey(cert) else {
+            return XCTFail("failed to extract public key from readerAuth's leaf certificate")
+        }
+        var error: Unmanaged<CFError>?
+        guard let publicKeyX963 = SecKeyCopyExternalRepresentation(secKey, &error) as Data? else {
+            return XCTFail("failed to export readerAuth's public key")
+        }
+
+        let readerAuthenticationBytes = try MdocCose.buildReaderAuthenticationBytes(
+            sessionTranscript: hex(bareSessionTranscriptHex),
+            itemsRequestTaggedBytes: doc.itemsRequestTaggedBytes
+        )
+
+        XCTAssertTrue(
+            MdocCose.verify1(readerAuth, payload: readerAuthenticationBytes, publicKeyX963: Array(publicKeyX963)),
+            "expected the real ISO 18013-5 Annex D.4.1.1 readerAuth signature to verify against its own embedded certificate"
+        )
+    }
+    #endif
 
     func testParse_missingDocRequests_throws() {
         let bytes = CBOR.map([.utf8String("version"): .utf8String("1.0")]).encode()

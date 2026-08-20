@@ -102,6 +102,25 @@ public struct WalletConfig: Sendable {
     /// value in wallet-frontend.
     public var registryUrl: String?
 
+    /// PEM-encoded RICAL (Reader Identity CA List, ISO/IEC 18013-5 second
+    /// edition Annex F) root certificate(s) for `SirosWallet.evaluateReaderTrust`'s
+    /// local fallback path - plain X.509 path validation against these
+    /// anchors, with none of the RICAL CBOR/COSE document parsing or
+    /// `trustConstraints` enforcement the remote go-trust `mdocrical`
+    /// registry does. Empty by default: until an operator configures at
+    /// least one root here, local reader-trust evaluation always reports
+    /// untrusted rather than silently no-oping.
+    public var readerTrustRootCertificatesPem: [String]
+
+    /// Forces `SirosWallet.evaluateReaderTrust` to always use the local
+    /// X.509 fallback (see `readerTrustRootCertificatesPem`) instead of
+    /// attempting the remote AuthZEN call first - e.g. for offline event
+    /// scenarios, or a host app setting the user explicitly opted into.
+    /// Default `false`: the remote path is preferred since it's the only
+    /// one that honors RICAL's temporary/dynamic trust roots - local
+    /// fallback only happens automatically when the remote call itself fails.
+    public var preferLocalReaderTrustEvaluation: Bool
+
     public init(
         backendUrl: String,
         tenantId: String = "default",
@@ -115,7 +134,9 @@ public struct WalletConfig: Sendable {
         defaultWscdMapping: [String: String]? = nil,
         requestWscdChoice: RequestWscdChoice? = nil,
         registryUrl: String? = nil,
-        zkCircuitUrls: [String] = [ZkCircuitClient.defaultZkCircuitUrl]
+        zkCircuitUrls: [String] = [ZkCircuitClient.defaultZkCircuitUrl],
+        readerTrustRootCertificatesPem: [String] = [],
+        preferLocalReaderTrustEvaluation: Bool = false
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -130,6 +151,8 @@ public struct WalletConfig: Sendable {
         self.requestWscdChoice = requestWscdChoice
         self.registryUrl = registryUrl
         self.zkCircuitUrls = zkCircuitUrls
+        self.readerTrustRootCertificatesPem = readerTrustRootCertificatesPem
+        self.preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation
     }
 
     /// Discover the engine base URL from the backend's
