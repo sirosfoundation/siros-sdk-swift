@@ -144,7 +144,7 @@ public enum MdocCose {
         guard case .byteString(let signature) = arr[3] else { return false }
 
         guard let protectedHeaders = try? CBOR.decode(protectedBytes),
-              let algCbor = protectedHeaders?[.unsignedInt(headerAlgorithm)],
+              let algCbor = protectedHeaders[.unsignedInt(headerAlgorithm)],
               let coseAlg = int64Value(algCbor) else {
             return false
         }
