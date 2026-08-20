@@ -12,10 +12,16 @@ import Foundation
 /// ItemsRequestBytes = #6.24(bstr .cbor ItemsRequest)
 /// ItemsRequest = { "docType": tstr, "nameSpaces": { tstr => { tstr => bool } } }
 /// ```
-/// `readerAuth` (mdoc reader authentication, §9.1.4) is intentionally not
-/// parsed or verified here - matching the Kotlin SDK's
+/// `readerAuth` (mdoc reader authentication, §9.1.4) is parsed here (the
+/// bare COSE_Sign1 array - `ReaderAuth = COSE_Sign1`, confirmed untagged
+/// from the base spec's own worked example's diagnostic notation) but not
+/// verified in this class - see `MdocCose.verify1`/`MdocCose.extractX5Chain`
+/// for the signature/x5chain half and RICAL trust evaluation (go-trust's
+/// `mdocrical` registry, or a local fallback) for the trust-decision half,
+/// both driven from the wallet layer that has the session transcript this
+/// parser doesn't. Matches the Kotlin SDK's
 /// `org.siros.sdk.keystore.mdoc.DeviceRequestParser`, which this is ported
-/// from, deferred until after the Tier 0 BLE transport itself is validated.
+/// from.
 public enum DeviceRequestParser {
 
     /// One requested document: its type, and the namespace/element-identifier pairs asked for.
@@ -25,10 +31,26 @@ public enum DeviceRequestParser {
         /// per-element `IntentToRetain` bit is ignored - every listed
         /// identifier is being requested regardless of its value).
         public let requestedItems: [String: [String]]
+        /// The reader's `readerAuth` COSE_Sign1 (bare 4-element array), if
+        /// the reader sent one - nil for readers that don't participate in
+        /// reader authentication (it's optional per §9.1.4).
+        public let readerAuth: CBOR?
+        /// The exact tag-24-wrapped `itemsRequest` CBOR bytes as they
+        /// appeared on the wire - needed verbatim (not re-encoded) to
+        /// reconstruct `ReaderAuthenticationBytes` via
+        /// `MdocCose.buildReaderAuthenticationBytes`.
+        public let itemsRequestTaggedBytes: [UInt8]
 
-        public init(docType: String, requestedItems: [String: [String]]) {
+        public init(
+            docType: String,
+            requestedItems: [String: [String]],
+            readerAuth: CBOR? = nil,
+            itemsRequestTaggedBytes: [UInt8] = []
+        ) {
             self.docType = docType
             self.requestedItems = requestedItems
+            self.readerAuth = readerAuth
+            self.itemsRequestTaggedBytes = itemsRequestTaggedBytes
         }
 
         /// Flattened element identifiers across all namespaces - the shape
@@ -75,7 +97,19 @@ public enum DeviceRequestParser {
                 }
                 requestedItems[ns] = elementIds
             }
-            return DocRequest(docType: docType, requestedItems: requestedItems)
+
+            // readerAuth = COSE_Sign1 (bare array, confirmed untagged from
+            // ISO 18013-5:2021's own worked example's diagnostic notation) -
+            // optional per §9.1.4, so a reader that doesn't participate in
+            // reader authentication is not an error.
+            let readerAuth = docRequest["readerAuth"]
+
+            return DocRequest(
+                docType: docType,
+                requestedItems: requestedItems,
+                readerAuth: readerAuth,
+                itemsRequestTaggedBytes: itemsRequestTagged.encode()
+            )
         }
     }
 }
