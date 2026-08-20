@@ -6,11 +6,36 @@ import SirosCredentials
 import os
 private let logger = Logger(subsystem: "org.siros.sdk", category: "MdocProximitySession")
 #endif
+#if canImport(Security)
+import Security
+#endif
 
 /// The user's answer to a `RequestProximityConsent` prompt.
 public enum ProximityConsentResult {
     case approved(CredentialFamily)
     case denied
+}
+
+/// Outcome of evaluating a proximity reader's authenticated identity - only
+/// produced when the reader sent a `readerAuth` AND its COSE_Sign1 signature
+/// verified successfully against its own embedded x5chain (see
+/// `MdocCose.verify1`); a present-but-invalid signature is treated as
+/// `MdocProximitySession` logging a warning and passing `nil` here rather
+/// than a `trusted = false` result, since an invalid signature means the
+/// reader's claimed identity itself is unproven, not merely untrusted.
+/// Ported from the Kotlin SDK's `ReaderTrustResult`.
+public struct ReaderTrustResult: Sendable {
+    public let trusted: Bool
+    /// Human-readable reason for the decision, e.g. why a chain wasn't trusted.
+    public let reason: String?
+    /// Display name of the reader/relying party, if the trust evaluator could resolve one.
+    public let entityName: String?
+
+    public init(trusted: Bool, reason: String? = nil, entityName: String? = nil) {
+        self.trusted = trusted
+        self.reason = reason
+        self.entityName = entityName
+    }
 }
 
 /// Asks the user to approve a proximity presentation before it's signed and
@@ -26,10 +51,15 @@ public enum ProximityConsentResult {
 ///     one match exists; see `CredentialFamily` for why this is families, not
 ///     raw instances), for the user to choose among if there's more than one
 ///     (e.g. the same docType from two different issuers).
+///   - readerTrust: the reader's RICAL trust evaluation result - `nil` if the
+///     reader sent no `readerAuth` (optional per §9.1.4) or its signature
+///     failed to verify, in which case the host UI should treat the reader as
+///     unauthenticated (no badge), not as actively distrusted.
 public typealias RequestProximityConsent = (
     _ docType: String,
     _ requestedClaims: [String],
-    _ matchingFamilies: [CredentialFamily]
+    _ matchingFamilies: [CredentialFamily],
+    _ readerTrust: ReaderTrustResult?
 ) async -> ProximityConsentResult
 
 /// ISO 18013-5 §8.3.3.1.1/§11.1.3 mdoc-side proximity session logic, shared
@@ -91,6 +121,15 @@ public final class MdocProximitySession {
     private let signPresentation: (_ credentialId: Int64, _ disclosedClaims: [String]?, _ sessionTranscriptBytes: Data) async throws -> Data
     /// See `RequestProximityConsent`'s doc comment.
     private let requestConsent: RequestProximityConsent
+    /// Evaluates a reader's already-signature-verified x5chain (leaf first)
+    /// for trust - the host app wires this to a remote AuthZEN call against
+    /// go-trust's `mdocrical` registry, with a local X.509-path-validation
+    /// fallback against a configured RICAL root, per this session's RICAL
+    /// plan. Only invoked when a `readerAuth` was present and its signature
+    /// verified - see `ReaderTrustResult`'s doc comment for why an invalid
+    /// signature skips this entirely rather than calling it with an
+    /// already-doomed chain.
+    private let evaluateReaderTrust: (_ x5chain: [[UInt8]]) async -> ReaderTrustResult
     /// Mirrors `CredentialUtils.eligibleInstances` bound to the caller's
     /// current `SirosWallet.credentialConsumptionPolicy`/`presentationHistory` -
     /// excludes instances the active consumption policy considers already
@@ -109,6 +148,7 @@ public final class MdocProximitySession {
         getCredentials: @escaping () async -> [StoredCredential],
         signPresentation: @escaping (Int64, [String]?, Data) async throws -> Data,
         requestConsent: @escaping RequestProximityConsent,
+        evaluateReaderTrust: @escaping (_ x5chain: [[UInt8]]) async -> ReaderTrustResult,
         filterEligible: @escaping ([StoredCredential]) -> [StoredCredential],
         onStep: @escaping (String) -> Void,
         logTag: String
@@ -117,6 +157,7 @@ public final class MdocProximitySession {
         self.getCredentials = getCredentials
         self.signPresentation = signPresentation
         self.requestConsent = requestConsent
+        self.evaluateReaderTrust = evaluateReaderTrust
         self.filterEligible = filterEligible
         self.onStep = onStep
         self.logTag = logTag
@@ -205,8 +246,10 @@ public final class MdocProximitySession {
             return .failed(reason: "no representable credential family")
         }
 
+        let readerTrust = await evaluateReaderAuth(docRequest, sessionTranscript: sessionTranscript)
+
         onStep("awaiting_consent")
-        let consent = await requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
+        let consent = await requestConsent(docRequest.docType, docRequest.disclosedClaims(), families, readerTrust)
         let family: CredentialFamily
         switch consent {
         case .approved(let approvedFamily):
@@ -233,6 +276,50 @@ public final class MdocProximitySession {
         let encrypted = try cipher.encrypt([UInt8](response))
         let sessionData = ProximitySessionMessages.buildSessionData(encryptedData: encrypted)
         return .response(Data(sessionData))
+    }
+
+    /// §9.1.4 reader authentication: verifies `docRequest`'s `readerAuth`
+    /// COSE_Sign1 (if present) against its own embedded x5chain, then hands
+    /// that chain to `evaluateReaderTrust` for the actual trust decision.
+    /// Returns `nil` (no badge, not "untrusted") when there's no
+    /// `readerAuth` to check or its signature doesn't verify - see
+    /// `ReaderTrustResult`'s doc comment.
+    private func evaluateReaderAuth(_ docRequest: DeviceRequestParser.DocRequest, sessionTranscript: [UInt8]) async -> ReaderTrustResult? {
+        guard let readerAuth = docRequest.readerAuth else { return nil }
+        let chain = MdocCose.extractX5Chain(readerAuth)
+        guard !chain.isEmpty else {
+            #if canImport(os)
+            logger.warning("\(self.logTag, privacy: .public): readerAuth present but has no x5chain")
+            #endif
+            return nil
+        }
+        guard let readerCert = SecCertificateCreateWithData(nil, Data(chain[0]) as CFData),
+              let secKey = SecCertificateCopyKey(readerCert) else {
+            #if canImport(os)
+            logger.warning("\(self.logTag, privacy: .public): failed to parse readerAuth's leaf certificate")
+            #endif
+            return nil
+        }
+        var error: Unmanaged<CFError>?
+        guard let publicKeyX963 = SecKeyCopyExternalRepresentation(secKey, &error) as Data? else {
+            #if canImport(os)
+            logger.warning("\(self.logTag, privacy: .public): failed to export readerAuth's public key")
+            #endif
+            return nil
+        }
+        guard let readerAuthenticationBytes = try? MdocCose.buildReaderAuthenticationBytes(
+            sessionTranscript: sessionTranscript,
+            itemsRequestTaggedBytes: docRequest.itemsRequestTaggedBytes
+        ) else {
+            return nil
+        }
+        guard MdocCose.verify1(readerAuth, payload: readerAuthenticationBytes, publicKeyX963: Array(publicKeyX963)) else {
+            #if canImport(os)
+            logger.warning("\(self.logTag, privacy: .public): readerAuth signature verification failed")
+            #endif
+            return nil
+        }
+        return await evaluateReaderTrust(chain)
     }
 
     #else

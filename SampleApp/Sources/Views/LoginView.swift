@@ -253,6 +253,22 @@ struct PreLoginSettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
+                // RICAL reader-trust local fallback (Geneva 2026 interop
+                // event) - off by default: the remote go-trust `mdocrical`
+                // AuthZEN call is preferred since only it honors RICAL's
+                // temporary/dynamic trust roots. See
+                // WalletConfig.preferLocalReaderTrustEvaluation.
+                Section("Reader Trust (RICAL)") {
+                    Toggle("Evaluate reader trust locally", isOn: $viewModel.preferLocalReaderTrustEvaluation)
+                    Text("Skip the remote RICAL trust check and validate proximity readers only against the root certificate below.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("RICAL root certificate (PEM)", text: $viewModel.readerTrustRootCertificatePem, axis: .vertical)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .lineLimit(3...6)
+                }
+
                 Section(L10n.string("common.developer")) {
                     Toggle(L10n.string("settings.credentialDetailsToggle"), isOn: $viewModel.showCredentialDetails)
                     Text(L10n.string("settings.credentialDetailsDescription"))
