@@ -161,8 +161,17 @@ extension SirosWallet {
 
     /// Strips PEM armor (`-----BEGIN/END CERTIFICATE-----`) and base64-decodes
     /// the body - `SecCertificateCreateWithData` requires raw DER bytes.
+    /// Trims whitespace/CR from each line before joining: PEM pasted from
+    /// many sources (e.g. Windows-authored files, copy-paste) carries `\r`
+    /// or trailing spaces, which `Data(base64Encoded:)` rejects outright -
+    /// a real Copilot-review finding that would otherwise make local
+    /// reader-trust evaluation silently report "no root certificate
+    /// configured" for a perfectly valid, just imperfectly-pasted PEM.
     private static func decodePem(_ pem: String) -> Data? {
-        let lines = pem.split(separator: "\n").filter { !$0.hasPrefix("-----") }
+        let lines = pem
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("-----") }
         return Data(base64Encoded: lines.joined())
     }
     #endif

@@ -35,10 +35,15 @@ public enum DeviceRequestParser {
         /// the reader sent one - nil for readers that don't participate in
         /// reader authentication (it's optional per §9.1.4).
         public let readerAuth: CBOR?
-        /// The exact tag-24-wrapped `itemsRequest` CBOR bytes as they
-        /// appeared on the wire - needed verbatim (not re-encoded) to
-        /// reconstruct `ReaderAuthenticationBytes` via
-        /// `MdocCose.buildReaderAuthenticationBytes`.
+        /// The tag-24-wrapped `itemsRequest` CBOR, re-encoded from the
+        /// parsed value (SwiftCBOR's decode discards the original byte
+        /// offsets, so this is a re-encoding, not a verbatim byte slice -
+        /// a real Copilot-review finding against this doc comment's
+        /// earlier, overclaiming wording). Matches the original bytes
+        /// whenever the reader used canonical CBOR encoding, which is the
+        /// only case the real ISO 18013-5 Annex D.4.1.1 worked example (and
+        /// every conformant encoder) exercises - needed to reconstruct
+        /// `ReaderAuthenticationBytes` via `MdocCose.buildReaderAuthenticationBytes`.
         public let itemsRequestTaggedBytes: [UInt8]
 
         public init(

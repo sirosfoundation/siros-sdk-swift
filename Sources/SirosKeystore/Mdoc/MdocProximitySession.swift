@@ -285,6 +285,7 @@ public final class MdocProximitySession {
     /// `readerAuth` to check or its signature doesn't verify - see
     /// `ReaderTrustResult`'s doc comment.
     private func evaluateReaderAuth(_ docRequest: DeviceRequestParser.DocRequest, sessionTranscript: [UInt8]) async -> ReaderTrustResult? {
+        #if canImport(Security)
         guard let readerAuth = docRequest.readerAuth else { return nil }
         let chain = MdocCose.extractX5Chain(readerAuth)
         guard !chain.isEmpty else {
@@ -320,6 +321,14 @@ public final class MdocProximitySession {
             return nil
         }
         return await evaluateReaderTrust(chain)
+        #else
+        // No Security framework on this platform (real Apple platforms
+        // always have it alongside CryptoKit, but this class's own
+        // top-level gate is CryptoKit-only, so this can't silently rely on
+        // that - a real Copilot-review finding) - readerAuth verification
+        // needs SecCertificate/SecKey, so it's unavailable here.
+        return nil
+        #endif
     }
 
     #else

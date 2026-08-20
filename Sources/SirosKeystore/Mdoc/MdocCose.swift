@@ -143,6 +143,18 @@ public enum MdocCose {
         guard case .byteString(let protectedBytes) = arr[0] else { return false }
         guard case .byteString(let signature) = arr[3] else { return false }
 
+        // If sign1 carries its own (non-null) payload, it must match the
+        // caller-supplied one - otherwise a structurally valid signature
+        // could be checked against bytes the COSE_Sign1 doesn't actually
+        // claim to carry (a real Copilot-review finding: this callers-only
+        // path is meant for the detached case, where arr[2] is CBOR null).
+        switch arr[2] {
+        case .null: break
+        case .byteString(let embeddedPayload):
+            guard embeddedPayload == payload else { return false }
+        default: return false
+        }
+
         guard let protectedHeaders = try? CBOR.decode(protectedBytes),
               let algCbor = protectedHeaders[.unsignedInt(headerAlgorithm)],
               let coseAlg = int64Value(algCbor) else {
@@ -217,10 +229,10 @@ public enum MdocCose {
     ///
     /// - Parameter sessionTranscript: the bare (untagged) `SessionTranscript`
     ///   array bytes, the same shape `ProximitySessionCrypto` takes.
-    /// - Parameter itemsRequestTaggedBytes: the exact tag-24-wrapped
-    ///   `itemsRequest` CBOR bytes as they appeared in the `DocRequest` - the
-    ///   identical bytes, not a re-encoding, per the spec's "Same as in mdoc
-    ///   request".
+    /// - Parameter itemsRequestTaggedBytes: the tag-24-wrapped `itemsRequest`
+    ///   CBOR from the `DocRequest` - see `DeviceRequestParser.DocRequest.itemsRequestTaggedBytes`'s
+    ///   doc comment for why this is a re-encoding rather than a guaranteed
+    ///   verbatim byte slice, and when the two coincide.
     public static func buildReaderAuthenticationBytes(
         sessionTranscript: [UInt8],
         itemsRequestTaggedBytes: [UInt8]
