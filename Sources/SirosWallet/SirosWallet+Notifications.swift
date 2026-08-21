@@ -4,6 +4,10 @@ import Foundation
 import SirosCredentials
 import SirosTransport
 import SirosKeystore
+#if canImport(os)
+import os
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
+#endif
 
 /// A randomly-generated uint32-range identifier, matching wallet-frontend's
 /// `credentialId: number` (privatedata-spec §6) - not a UUID. Cross-client
@@ -166,8 +170,19 @@ extension SirosWallet {
             // JWT-shaped - the parseJwtPayload-based validation/expiry/
             // metadata path below doesn't apply and would always fail,
             // silently dropping every issued mdoc credential.
-            guard CredentialUtils.parseMdocDocument(cred.credential) != nil else {
+            guard let mdocDocument = CredentialUtils.parseMdocDocument(cred.credential) else {
                 return (false, "Received credential could not be read")
+            }
+
+            // VICAL issuer-trust (ISO 18013-5 Annex C): defensive check on
+            // the newly-issued credential's issuerAuth, surfaced via logging
+            // only - not a blocking gate, same convention as
+            // evaluateReaderTrust's remote/local-fallback reader-trust check
+            // at presentation time (see evaluateIssuerTrust's doc comment).
+            if let issuerTrust = await verifyAndEvaluateIssuerTrust(mdocDocument.issuerSigned.issuerAuth, docType: mdocDocument.docType) {
+                #if canImport(os)
+                logger.info("mdoc issuer trust for docType=\(mdocDocument.docType, privacy: .public): trusted=\(issuerTrust.trusted, privacy: .public) reason=\(issuerTrust.reason ?? "", privacy: .public)")
+                #endif
             }
 
             var metadata: CredentialMetadata?

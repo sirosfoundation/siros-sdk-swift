@@ -1,18 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
-import SirosAuth
-import SirosCredentials
-import SirosKeystore
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
-#if canImport(Security)
-import Security
-#endif
 
 extension SirosWallet {
     /// Evaluates a proximity reader's authenticated identity for trust - the
@@ -21,7 +9,7 @@ extension SirosWallet {
     /// with an x5chain whose `readerAuth` COSE_Sign1 signature has ALREADY
     /// verified locally (see `MdocCose.verify1`) - this method is purely the
     /// trust decision, mirroring `evaluateTrustDirect`'s request shape with a
-    /// new `"mdoc-reader-auth"` action name against go-trust's `mdocrical`
+    /// `"mdoc-reader-auth"` action name against go-trust's `mdocrical`
     /// registry. Ported from the Kotlin SDK's `SirosWallet.evaluateReaderTrust`.
     ///
     /// Defaults to the remote AuthZEN call - this is the only path that
@@ -48,29 +36,7 @@ extension SirosWallet {
     }
 
     private func evaluateReaderTrustRemote(_ x5chain: [[UInt8]]) async throws -> TrustResult {
-        lock.lock(); let client = apiClient; lock.unlock()
-        guard let client else { throw SirosError.wallet(message: "Not connected") }
-
-        let subjectId = sha256Hex(x5chain[0])
-        let x5c = x5chain.map { Data($0).base64EncodedString() }
-
-        let evaluationRequest: [String: Any] = [
-            "subject": ["type": "key", "id": subjectId],
-            "resource": ["type": "x5c", "id": subjectId, "key": x5c],
-            "action": ["name": "mdoc-reader-auth"],
-        ]
-
-        let response = try await client.evaluateTrust(evaluationRequest)
-        let decision = response["decision"] as? Bool ?? false
-        let respContext = response["context"] as? [String: Any]
-
-        return TrustResult(
-            trusted: decision,
-            framework: (respContext?["framework"] as? String) ?? "mdocrical",
-            reason: (respContext?["reason"] as? String) ?? (respContext?["message"] as? String),
-            entityName: respContext?["entity_name"] as? String,
-            identifier: subjectId
-        )
+        try await evaluateMdocTrustRemote(x5chain: x5chain, actionName: "mdoc-reader-auth", defaultFramework: "mdocrical")
     }
 
     /// Plain X.509 path validation against
@@ -80,108 +46,12 @@ extension SirosWallet {
     /// known-in-advance official root(s), not a full reimplementation of
     /// go-trust's `mdocrical` registry.
     private func evaluateReaderTrustLocally(_ x5chain: [[UInt8]]) -> TrustResult {
-        let subjectId = sha256Hex(x5chain[0])
-        #if canImport(Security)
-        let roots = readerTrustRootCertificates()
-        guard !roots.isEmpty else {
-            return TrustResult(
-                trusted: false,
-                framework: "local-rical-root",
-                reason: "Local reader trust evaluation is unavailable: no RICAL root certificate configured",
-                identifier: subjectId
-            )
-        }
-        guard let certificates = certificateChain(from: x5chain) else {
-            return TrustResult(
-                trusted: false,
-                framework: "local-rical-root",
-                reason: "Failed to parse readerAuth's certificate chain",
-                identifier: subjectId
-            )
-        }
-
-        var trust: SecTrust?
-        let policy = SecPolicyCreateBasicX509()
-        guard SecTrustCreateWithCertificates(certificates as CFTypeRef, policy, &trust) == errSecSuccess,
-              let trust else {
-            return TrustResult(
-                trusted: false,
-                framework: "local-rical-root",
-                reason: "Failed to build a certificate trust object",
-                identifier: subjectId
-            )
-        }
-        SecTrustSetAnchorCertificates(trust, roots as CFArray)
-        SecTrustSetAnchorCertificatesOnly(trust, true)
-
-        var trustError: CFError?
-        if SecTrustEvaluateWithError(trust, &trustError) {
-            let leafName = (SecCertificateCopySubjectSummary(certificates[0]) as String?)
-            return TrustResult(
-                trusted: true,
-                framework: "local-rical-root",
-                reason: "Validated locally against a configured RICAL root certificate",
-                entityName: leafName,
-                identifier: subjectId
-            )
-        } else {
-            return TrustResult(
-                trusted: false,
-                framework: "local-rical-root",
-                reason: "Local RICAL root validation failed: \(trustError.map { String(describing: $0) } ?? "unknown error")",
-                identifier: subjectId
-            )
-        }
-        #else
-        return TrustResult(
-            trusted: false,
-            framework: "local-rical-root",
-            reason: "Local reader trust evaluation requires the Security framework (unsupported on this platform)",
-            identifier: subjectId
+        evaluateMdocTrustLocally(
+            x5chain: x5chain,
+            rootCertificatesPem: config.readerTrustRootCertificatesPem,
+            frameworkLabel: "local-rical-root",
+            entityLabel: "reader",
+            registryName: "RICAL"
         )
-        #endif
-    }
-
-    #if canImport(Security)
-    private func certificateChain(from x5chain: [[UInt8]]) -> [SecCertificate]? {
-        var certificates: [SecCertificate] = []
-        for der in x5chain {
-            guard let cert = SecCertificateCreateWithData(nil, Data(der) as CFData) else { return nil }
-            certificates.append(cert)
-        }
-        return certificates
-    }
-
-    private func readerTrustRootCertificates() -> [SecCertificate] {
-        config.readerTrustRootCertificatesPem.compactMap { pem in
-            guard let der = Self.decodePem(pem) else { return nil }
-            return SecCertificateCreateWithData(nil, der as CFData)
-        }
-    }
-
-    /// Strips PEM armor (`-----BEGIN/END CERTIFICATE-----`) and base64-decodes
-    /// the body - `SecCertificateCreateWithData` requires raw DER bytes.
-    /// Trims whitespace/CR from each line before joining: PEM pasted from
-    /// many sources (e.g. Windows-authored files, copy-paste) carries `\r`
-    /// or trailing spaces, which `Data(base64Encoded:)` rejects outright -
-    /// a real Copilot-review finding that would otherwise make local
-    /// reader-trust evaluation silently report "no root certificate
-    /// configured" for a perfectly valid, just imperfectly-pasted PEM.
-    private static func decodePem(_ pem: String) -> Data? {
-        let lines = pem
-            .split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("-----") }
-        return Data(base64Encoded: lines.joined())
-    }
-    #endif
-
-    private func sha256Hex(_ bytes: [UInt8]) -> String {
-        #if canImport(CryptoKit)
-        let digest = SHA256.hash(data: Data(bytes))
-        return digest.map { String(format: "%02x", $0) }.joined()
-        #else
-        return bytes.map { String(format: "%02x", $0) }.joined()
-        #endif
     }
 }

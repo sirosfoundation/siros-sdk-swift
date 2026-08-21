@@ -222,7 +222,8 @@ struct CredentialCardView: View {
                 return
             }
             let claims = CredentialUtils.extractClaims(credential)
-            let rendered = SvgTemplateRenderer.substitute(svgText, claims: claims)
+            let substituted = SvgTemplateRenderer.substitute(svgText, claims: claims)
+            let rendered = ensureSvgImageHeight(ensureSvgViewBox(substituted))
             svgRenderCache.setObject(rendered as NSString, forKey: cacheKey)
             svgState = .loaded(rendered)
         } catch {
@@ -265,6 +266,89 @@ private enum SvgLoadState: Equatable {
 private struct SvgLoadKey: Equatable {
     let credentialId: Int64
     let isDark: Bool
+}
+
+// MARK: - Defensive SVG normalization
+
+/// Matches an opening `<svg ...` tag, deliberately stopping short of its
+/// closing `>` (mirrors the Kotlin sample app's `SVG_ROOT_TAG_OPEN`) so
+/// `ensureSvgViewBox` can splice new attributes in front of that `>` without
+/// needing to special-case a self-closing root tag (an `<svg>` root is
+/// never self-closing in practice, but this avoids the question).
+private let svgRootTagOpenRegex = try! NSRegularExpression(pattern: "<svg\\b[^>]*")
+private let svgHasViewBoxAttrRegex = try! NSRegularExpression(pattern: "\\bviewBox=[\"']")
+private let svgHasPreserveAspectRatioAttrRegex = try! NSRegularExpression(pattern: "\\bpreserveAspectRatio=[\"']")
+private let svgDimensionAttrRegex = try! NSRegularExpression(pattern: "\\b(width|height)=([\"'])(\\d+(?:\\.\\d+)?)\\2")
+
+/// Injects a `viewBox` on the SVG root when it's missing entirely, derived
+/// from the root's own plain-number `width`/`height` attributes - a no-op
+/// when a `viewBox` already exists, or when `width`/`height` aren't both
+/// plain numbers. Port of the Kotlin sample app's `ensureSvgViewBox`
+/// (`CredentialCard.kt`) - see its doc comment for why this and
+/// `ensureSvgImageHeight` are both needed: a real issuer's SVG credential
+/// template (wwwallet.org's demo PID) declares numeric `width`/`height` with
+/// no `viewBox`, which otherwise leaves percentage-sized children ambiguous
+/// across renderers.
+func ensureSvgViewBox(_ svg: String) -> String {
+    let full = NSRange(svg.startIndex..., in: svg)
+    guard let rootMatch = svgRootTagOpenRegex.firstMatch(in: svg, range: full),
+          let rootRange = Range(rootMatch.range, in: svg) else { return svg }
+    let rootTag = String(svg[rootRange])
+    let rootNSRange = NSRange(rootRange, in: svg)
+    if svgHasViewBoxAttrRegex.firstMatch(in: svg, range: rootNSRange) != nil { return svg }
+
+    var dimensions: [String: String] = [:]
+    for match in svgDimensionAttrRegex.matches(in: svg, range: rootNSRange) {
+        guard let nameRange = Range(match.range(at: 1), in: svg),
+              let valueRange = Range(match.range(at: 3), in: svg) else { continue }
+        dimensions[String(svg[nameRange])] = String(svg[valueRange])
+    }
+    guard let width = dimensions["width"], let height = dimensions["height"] else { return svg }
+
+    let preserveAspectRatio = svgHasPreserveAspectRatioAttrRegex.firstMatch(in: svg, range: rootNSRange) != nil
+        ? "" : " preserveAspectRatio=\"none\""
+
+    var result = svg
+    result.replaceSubrange(rootRange, with: "\(rootTag) viewBox=\"0 0 \(width) \(height)\"\(preserveAspectRatio)")
+    return result
+}
+
+/// Matches an `<image ...>` opening tag (self-closing or not).
+private let svgImageTagRegex = try! NSRegularExpression(pattern: "<image\\b[^>]*>")
+/// Matches a percentage `width="NN%"`/`width='NN%'` attribute within an already-isolated tag string.
+private let svgImageWidthPercentAttrRegex = try! NSRegularExpression(pattern: "width=([\"'])(\\d+%)\\1")
+/// True if the tag string already declares a `height` attribute (any value).
+private let svgHasHeightAttrRegex = try! NSRegularExpression(pattern: "\\bheight=[\"']")
+
+/// Injects a missing `height` on an `<image>` element that declares a
+/// percentage `width` but no `height` at all, mirroring the exact width
+/// value. Port of the Kotlin sample app's `ensureSvgImageHeight`
+/// (`CredentialCard.kt`) - confirmed necessary via live testing there: a
+/// real issuer's SVG credential template
+/// (demo-issuer.wwwallet.org's EHIC card) has its full-bleed background
+/// `<image>` declare `width="100%"` with no `height` attribute whatsoever.
+/// Per SVG 1.1, an `<image>` with no height defaults to height 0 - the
+/// element renders invisibly rather than erroring, so the card silently
+/// shows nothing but its own flat background color. An `<image>` that
+/// already declares a `height` (any value) is never touched.
+func ensureSvgImageHeight(_ svg: String) -> String {
+    let mutable = NSMutableString(string: svg)
+    let matches = svgImageTagRegex.matches(in: svg, range: NSRange(location: 0, length: mutable.length))
+    for match in matches.reversed() {
+        let tag = mutable.substring(with: match.range)
+        let tagRange = NSRange(location: 0, length: (tag as NSString).length)
+        guard let widthMatch = svgImageWidthPercentAttrRegex.firstMatch(in: tag, range: tagRange),
+              svgHasHeightAttrRegex.firstMatch(in: tag, range: tagRange) == nil else {
+            continue
+        }
+        let percentage = (tag as NSString).substring(with: widthMatch.range(at: 2))
+        let selfClosing = tag.hasSuffix("/>")
+        let bodyRaw = selfClosing ? String(tag.dropLast(2)) : String(tag.dropLast(1))
+        let body = bodyRaw.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        let closer = selfClosing ? " />" : ">"
+        mutable.replaceCharacters(in: match.range, with: "\(body) height=\"\(percentage)\"\(closer)")
+    }
+    return mutable as String
 }
 
 // MARK: - Color hex extension

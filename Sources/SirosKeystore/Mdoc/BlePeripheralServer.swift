@@ -77,6 +77,23 @@ public final class BlePeripheralServer: NSObject {
     /// see `peripheralManager(_:central:didSubscribeTo:)`'s doc comment for
     /// why that callback is used as the "reader connected" signal.
     private var reportedReaderConnected = false
+    /// Set synchronously, before spawning the session-establishment `Task`,
+    /// the first time a complete SessionData message arrives - NOT the same
+    /// guard as `session.established` (which only flips true partway through
+    /// that Task's async body, once key derivation completes). Checking
+    /// `session.established` from inside the spawned `Task` was the actual
+    /// guard originally, but that's a check-then-act race: unlike Kotlin's
+    /// coroutines (serialized onto a single-threaded dispatcher for this
+    /// exact reason), an unstructured Swift `Task` has no such guarantee -
+    /// two `Task`s spawned from consecutive (CoreBluetooth-serialized)
+    /// delegate callbacks can run their bodies concurrently on different
+    /// threads, so both could observe `established == false` and both start
+    /// processing the same reassembled message. This flag is only ever
+    /// touched from `handleDataWrite`, which CoreBluetooth already delivers
+    /// serially (the manager was created with `queue: nil`), so a plain
+    /// `Bool` - checked and set before the `Task` exists at all - closes the
+    /// race without needing a lock.
+    private var sessionEstablishmentStarted = false
 
     /// Default BLE ATT MTU before negotiation (23 bytes, per the Bluetooth
     /// Core Spec) - yields a 20-byte max chunk payload (MTU-3). Mirrors the
@@ -153,12 +170,13 @@ public final class BlePeripheralServer: NSObject {
 
     private func handleDataWrite(_ chunk: [UInt8], central: CBCentral) {
         guard let message = reassembler.feed(chunk) else { return }
+        guard !sessionEstablishmentStarted else {
+            onLog("Additional SessionData messages after the first request are not yet handled")
+            return
+        }
+        sessionEstablishmentStarted = true
         Task {
             do {
-                if session.established {
-                    onLog("Additional SessionData messages after the first request are not yet handled")
-                    return
-                }
                 switch try await session.handleSessionEstablishment(message) {
                 case .response(let sessionData):
                     onLog("Sending DeviceResponse")

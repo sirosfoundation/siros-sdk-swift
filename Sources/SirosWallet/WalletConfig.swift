@@ -121,6 +121,25 @@ public struct WalletConfig: Sendable {
     /// fallback only happens automatically when the remote call itself fails.
     public var preferLocalReaderTrustEvaluation: Bool
 
+    /// PEM-encoded VICAL (Verified Issuer CA List, ISO/IEC 18013-5 Annex C)
+    /// root certificate(s) for `SirosWallet.evaluateIssuerTrust`'s local
+    /// fallback path - plain X.509 path validation against these anchors,
+    /// with none of the VICAL CBOR/COSE document parsing or per-certificate
+    /// `docType` enforcement the remote go-trust `vical` registry does.
+    /// Empty by default: until an operator configures at least one root
+    /// here, local issuer-trust evaluation always reports untrusted rather
+    /// than silently no-oping - same convention as `readerTrustRootCertificatesPem`.
+    public var issuerTrustRootCertificatesPem: [String]
+
+    /// Forces `SirosWallet.evaluateIssuerTrust` to always use the local
+    /// X.509 fallback (see `issuerTrustRootCertificatesPem`) instead of
+    /// attempting the remote AuthZEN call first. Default `false`: the
+    /// remote path is preferred since it's the only one that honors
+    /// VICAL's dynamic updates - local fallback only happens automatically
+    /// when the remote call itself fails. Same convention as
+    /// `preferLocalReaderTrustEvaluation`.
+    public var preferLocalIssuerTrustEvaluation: Bool
+
     public init(
         backendUrl: String,
         tenantId: String = "default",
@@ -136,7 +155,9 @@ public struct WalletConfig: Sendable {
         registryUrl: String? = nil,
         zkCircuitUrls: [String] = [ZkCircuitClient.defaultZkCircuitUrl],
         readerTrustRootCertificatesPem: [String] = [],
-        preferLocalReaderTrustEvaluation: Bool = false
+        preferLocalReaderTrustEvaluation: Bool = false,
+        issuerTrustRootCertificatesPem: [String] = [],
+        preferLocalIssuerTrustEvaluation: Bool = false
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -153,6 +174,8 @@ public struct WalletConfig: Sendable {
         self.zkCircuitUrls = zkCircuitUrls
         self.readerTrustRootCertificatesPem = readerTrustRootCertificatesPem
         self.preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation
+        self.issuerTrustRootCertificatesPem = issuerTrustRootCertificatesPem
+        self.preferLocalIssuerTrustEvaluation = preferLocalIssuerTrustEvaluation
     }
 
     /// Discover the engine base URL from the backend's
