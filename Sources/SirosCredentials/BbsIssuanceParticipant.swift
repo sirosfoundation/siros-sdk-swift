@@ -151,7 +151,18 @@ public struct BbsIssuancePreparation: ZkIssuancePreparation {
     /// The key binding public keys the credential is being bound to.
     public let keybindPublicKeys: [[UInt8]]
 
-    init(
+    /// Rebuild a preparation from persisted state.
+    ///
+    /// Public because it has to be. Issuance is a round trip: the wallet
+    /// commits, sends a credential request, and may not be running when the
+    /// response arrives - an app can be backgrounded or killed in between.
+    /// Everything here is exactly what must survive that gap, and without a
+    /// public initializer a consumer could persist those fields and still
+    /// have no way to get back to a preparation that can `accept` the
+    /// credential.
+    ///
+    /// Raised in review on #114.
+    public init(
         suiteId: BbsSuiteId,
         commitmentWithProof: [UInt8],
         holderPointers: [String],
