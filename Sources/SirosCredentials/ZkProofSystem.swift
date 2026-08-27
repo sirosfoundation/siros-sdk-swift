@@ -248,6 +248,66 @@ public let coseAlgBls12381G1Schnorr: Int64 = -65609
 /// with the wrong key produces a credential that cannot be presented.
 public typealias ZkWitnessSigner = @Sendable (Int64, [UInt8]) async throws -> [UInt8]
 
+/// A ZK system that must take part in ISSUANCE, not only presentation.
+///
+/// Longfellow and Vega are post-issuance transforms: they prove things
+/// about a credential someone else already signed, so a wallet holding one
+/// can start proving without ever having said anything to the issuer.
+/// Blind BBS is not like that. The wallet commits to messages the issuer
+/// never sees, and to the public key of a device-held key binding key, and
+/// the issuer signs that commitment - so a credential that was not issued
+/// this way can never be presented this way, and an issuer cannot bolt it
+/// on afterwards.
+///
+/// That makes this a real seam rather than a speculative one, but it is
+/// deliberately narrow. Only the parts every system would share are here:
+/// what goes into the credential request, and the fact that something must
+/// happen at all. Everything a specific system needs afterwards - BBS has
+/// to validate the issued credential against the exact messages it
+/// committed to - belongs on that system's own preparation type, where it
+/// can be typed properly instead of passed around as an opaque blob.
+///
+/// See `ZkProofSystem.issuanceParticipant` for how a wallet finds one
+/// without naming a system.
+public protocol ZkIssuanceParticipant: Sendable {
+    /// The owning `ZkProofSystem.systemId`, for diagnostics.
+    var systemId: String { get }
+
+    /// Do whatever this system requires before a credential can be
+    /// requested, and return what the request must carry.
+    ///
+    /// - Parameters:
+    ///   - holderClaimsJson: a JSON object of claims the holder contributes
+    ///     and the issuer never sees. Systems with no such concept ignore
+    ///     it.
+    ///   - keybindPublicKeys: device-held key binding public keys to bind
+    ///     the credential to, in whatever encoding the system defines.
+    ///     Empty for an unbound credential.
+    ///   - signer: signs whatever challenge the system produces - for BBS
+    ///     the authenticator signs a commit challenge, which is why this is
+    ///     async and why it carries an algorithm (see `ZkWitnessSigner`).
+    func prepare(
+        holderClaimsJson: String,
+        keybindPublicKeys: [[UInt8]],
+        signer: @escaping ZkWitnessSigner
+    ) async throws -> ZkIssuancePreparation
+}
+
+/// The wallet-facing half of what `ZkIssuanceParticipant.prepare` produced.
+///
+/// Implementations carry their own follow-up alongside this - see
+/// `BbsIssuancePreparation.accept`, which validates the issued credential
+/// and yields the state to store next to it.
+public protocol ZkIssuancePreparation: Sendable {
+    /// Members to merge into the OID4VCI credential request object, as
+    /// already-encoded JSON values keyed by member name.
+    ///
+    /// Pre-encoded rather than typed because this crosses into whatever
+    /// JSON encoder the request builder uses, and re-encoding a value that
+    /// a signature covers is how the two ends stop agreeing.
+    var credentialRequestFields: [String: String] { get }
+}
+
 /// One pluggable zero-knowledge proof system, backing a specific credential
 /// presentation mode (selective disclosure + optional pseudonym, today;
 /// whatever a future BBS/Vega implementation supports). Mirrors this org's
@@ -290,6 +350,15 @@ public protocol ZkProofSystem: Sendable {
     /// for the wrong attribute count fails opaquely at the native prover/
     /// verifier boundary (`MDOC_VERIFIER_HASH_PARSING_FAILURE`), not here.
     func matchingSpec(_ requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> ZkSystemSpec?
+
+    /// How this system takes part in issuance, or `nil` if it does not.
+    ///
+    /// Defaulted to `nil` in an extension below, because that is the honest
+    /// answer for every post-issuance system - Longfellow and Vega prove
+    /// things about a credential someone else already signed - and because
+    /// defaulting it means adding this seam changed neither of their
+    /// implementations.
+    var issuanceParticipant: ZkIssuanceParticipant? { get }
 
     /// Generate a ZK proof of possession (and, if `verifierIdentity` is
     /// non-nil, a pseudonym bound to it) over the credential in
@@ -348,6 +417,11 @@ public protocol ZkProofSystem: Sendable {
         signer: @escaping ZkWitnessSigner,
         priorState: [UInt8]?
     ) async throws -> ZkProofResult
+}
+
+public extension ZkProofSystem {
+    /// Most systems take no part in issuance. See the protocol requirement.
+    var issuanceParticipant: ZkIssuanceParticipant? { nil }
 }
 
 /// Derives the wire-format `verifier_context` a `ZkProofSystem` pseudonym
@@ -425,6 +499,24 @@ public final class ZkProofSystemRegistry: Sendable {
             guard system.supportedCredentialTypes.contains(credentialType) else { continue }
             guard let matched = system.matchingSpec(requestedSpecs, numAttributes: numAttributes) else { continue }
             return (system, matched)
+        }
+        return nil
+    }
+
+    /// The first registered system that both supports `credentialType` and
+    /// needs the wallet to contribute something at issuance, or `nil` if
+    /// none do.
+    ///
+    /// The point of routing this through the registry rather than letting
+    /// an issuance flow construct a BBS participant directly is that the
+    /// flow then never names a proof system. Today exactly one system
+    /// answers; a flow written against this keeps working when that stops
+    /// being true, and more immediately, keeps working for the credential
+    /// types where the answer is `nil` - which is most of them.
+    public func issuanceParticipant(credentialType: CredentialTypeRef) -> ZkIssuanceParticipant? {
+        for system in systems {
+            guard system.supportedCredentialTypes.contains(credentialType) else { continue }
+            if let participant = system.issuanceParticipant { return participant }
         }
         return nil
     }

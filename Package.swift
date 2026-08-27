@@ -56,8 +56,8 @@ let package = Package(
         // include/module.modulemap - see that crate's Makefile.
         .binaryTarget(
             name: "zk_cred_bbsFFI",
-            url: "https://github.com/sirosfoundation/zk-cred-bbs/releases/download/v0.0.4/zk_cred_bbs.xcframework.zip",
-            checksum: "dda1fd82b38129a0d0cfe997c68d26f8a291d57241fc679d552e17a8c640a5fe"
+            url: "https://github.com/sirosfoundation/zk-cred-bbs/releases/download/v0.0.6/zk_cred_bbs.xcframework.zip",
+            checksum: "cfa8afea27c2e2d9b671193ce2a923cef462dc185a953dda5ba5c518f749bac9"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
