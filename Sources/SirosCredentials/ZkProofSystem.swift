@@ -188,6 +188,19 @@ public enum CredentialDocument: Sendable {
         case let .sdJwtVc(b): return b
         }
     }
+
+    /// The case name alone, for diagnostics.
+    ///
+    /// Interpolating the enum itself would print the associated `[UInt8]`
+    /// too - and those bytes are the credential, so an error message about
+    /// the wrong format would spill the whole thing into logs and crash
+    /// reports. Always use this in anything user- or log-facing.
+    public var formatName: String {
+        switch self {
+        case .mdoc: return "mdoc"
+        case .sdJwtVc: return "sdJwtVc"
+        }
+    }
 }
 
 /// COSE algorithm identifier for ES256 (RFC 8152 §8.1).
@@ -376,7 +389,7 @@ public final class ZkProofSystemRegistry: Sendable {
     }
 
     /// The first registered system (in registration order) that supports
-    /// `docType` and can satisfy one of `requestedSpecs`, paired with the
+    /// `credentialType` and can satisfy one of `requestedSpecs`, paired with the
     /// matched spec - or `nil` if none qualify. `numAttributes` is the
     /// number of claims actually being disclosed - see
     /// `ZkProofSystem.matchingSpec`'s doc comment for why it must be

@@ -161,7 +161,7 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // hand us a format whose bytes are not a DeviceResponse at all, and
         // the native prover's failure would say nothing useful.
         guard case let .mdoc(credentialBytes) = document else {
-            throw MdocError.malformed("\(systemId) proves over mdoc only, got \(document)")
+            throw MdocError.malformed("\(systemId) proves over mdoc only, got \(document.formatName)")
         }
         let mdoc = try MdocCbor.parseStoredCredential(credentialBytes)
         guard let expectedNamespace = Self.namespaceByDocType[mdoc.docType] else {
