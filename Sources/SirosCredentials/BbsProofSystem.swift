@@ -184,6 +184,15 @@ public struct BbsProofSystem: ZkProofSystem {
         requestedSpecs.first { $0.system == BbsProofSystem.systemIdentifier }
     }
 
+    /// BBS is the one system here that needs the wallet at issuance.
+    ///
+    /// Longfellow and Vega prove things about a credential someone else
+    /// already signed; a blind BBS credential does not exist unless the
+    /// wallet committed first. See `BbsIssuanceParticipant`.
+    public var issuanceParticipant: ZkIssuanceParticipant? {
+        BbsIssuanceParticipant(systemId: BbsProofSystem.systemIdentifier, suiteId: suiteId)
+    }
+
     public func generateProof(
         spec: ZkSystemSpec,
         document: CredentialDocument,
