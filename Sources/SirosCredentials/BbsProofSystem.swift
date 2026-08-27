@@ -1,17 +1,21 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
-// CryptoKit unconditionally, not swift-crypto's `Crypto`: this whole file
-// is inside `#if os(iOS)`, where CryptoKit always exists and Package.swift
-// does not link the `Crypto` product at all. ZkProofSystem.swift needs the
-// `#if canImport(CryptoKit)` dance because it also builds on Linux; this
-// does not.
-import CryptoKit
 
 // The whole implementation is iOS-only because the native library is: the
 // zk-cred-bbs XCFramework ships iOS slices only, and the generated bindings
 // carry the same gate. Same arrangement as LongfellowZkProofSystem.
 #if os(iOS)
+
+// INSIDE the gate, not above it. CryptoKit does not exist on Linux, and
+// this package's CI builds SirosCredentials there - an import above the
+// `#if` compiles on every platform regardless of what it guards, so it
+// fails the Linux build even though nothing that uses it is reachable.
+// swift-crypto's `Crypto` is not the answer either: Package.swift scopes
+// that product to Linux only, so it is unavailable here. ZkProofSystem.swift
+// needs the `#if canImport(CryptoKit)` dance because its code really does
+// run on both; this file's does not.
+import CryptoKit
 
 /// The holder-side state a BBS credential needs that its container does not
 /// carry.
