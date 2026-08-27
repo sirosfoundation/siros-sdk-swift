@@ -739,7 +739,7 @@ extension SirosWallet {
             // compiled for a fixed attribute count, so matching must account
             // for how many claims are actually being disclosed here.
             guard let (system, spec) = zkProofSystemRegistry.resolve(
-                docType: docType,
+                credentialType: CredentialTypeRef(format: .msoMdoc, typeId: docType),
                 requestedSpecs: matchResult?.zkSystemTypes ?? [],
                 numAttributes: ref.disclosedClaims?.count ?? 0
             ) else {
@@ -768,11 +768,19 @@ extension SirosWallet {
             )
             let result = try await system.generateProof(
                 spec: spec,
-                credentialBytes: [UInt8](credBytes),
+                document: .mdoc([UInt8](credBytes)),
                 sessionTranscript: sessionTranscript,
                 requestedClaims: ref.disclosedClaims ?? [],
                 verifierIdentity: verifierIdentity,
-                signer: { data in [UInt8](try await self.keystore.sign(keyId: kid, payload: Data(data), algorithm: "ES256")) },
+                signer: { algorithm, data in
+                    // The signer carries an algorithm so a system needing a
+                    // key this keystore cannot produce fails here rather
+                    // than getting a signature over the wrong curve.
+                    guard algorithm == coseAlgES256 else {
+                        throw SirosError.wallet(message: "This keystore signs ES256 only, proof system asked for COSE alg \(algorithm)")
+                    }
+                    return [UInt8](try await self.keystore.sign(keyId: kid, payload: Data(data), algorithm: "ES256"))
+                },
                 priorState: nil
             )
             let zkDeviceResponse = try buildZkPresentationToken(

@@ -65,14 +65,17 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
 
     nonisolated public let systemId = "longfellow-libzk-v1"
 
-    nonisolated public let supportedDocTypes: Set<String> = [
-        "org.iso.18013.5.1.mDL",
-        "eu.europa.ec.eudi.pid.1",
+    // mdoc only: this system proves over a DeviceResponse, and its native
+    // prover parses CBOR. Declaring the format explicitly is what keeps an
+    // SD-JWT VC or JWP credential of the same type from being routed here.
+    nonisolated public let supportedCredentialTypes: Set<CredentialTypeRef> = [
+        CredentialTypeRef(format: .msoMdoc, typeId: "org.iso.18013.5.1.mDL"),
+        CredentialTypeRef(format: .msoMdoc, typeId: "eu.europa.ec.eudi.pid.1"),
     ]
 
     /// The single namespace Longfellow proving takes claims from, per
     /// supported docType. Deliberately NOT derived generically from
-    /// `document.issuerSigned.nameSpaces.keys.first` (that key set's
+    /// `mdoc.issuerSigned.nameSpaces.keys.first` (that key set's
     /// iteration order is unspecified, and a real mDL can carry a SECOND,
     /// jurisdiction-specific namespace alongside this primary one - e.g. an
     /// AAMVA-extension US mDL - so picking "the first key" is not just
@@ -129,11 +132,11 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
 
     public func generateProof(
         spec: ZkSystemSpec,
-        credentialBytes: [UInt8],
+        document: CredentialDocument,
         sessionTranscript: [UInt8],
         requestedClaims: [String],
         verifierIdentity: VerifierIdentity?,
-        signer: @Sendable @escaping ([UInt8]) async throws -> [UInt8],
+        signer: @escaping ZkWitnessSigner,
         priorState: [UInt8]?
     ) async throws -> ZkProofResult {
         // A caller that explicitly lists `pairwise_pseudonym` in
@@ -154,13 +157,19 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
             effectiveClaims.append(Self.pseudonymClaim)
         }
 
-        let document = try MdocCbor.parseStoredCredential(credentialBytes)
-        guard let expectedNamespace = Self.namespaceByDocType[document.docType] else {
-            throw MdocError.malformed("mdoc credential has unsupported docType '\(document.docType)'")
+        // Reject rather than assume: a caller bypassing the registry could
+        // hand us a format whose bytes are not a DeviceResponse at all, and
+        // the native prover's failure would say nothing useful.
+        guard case let .mdoc(credentialBytes) = document else {
+            throw MdocError.malformed("\(systemId) proves over mdoc only, got \(document.formatName)")
         }
-        guard document.issuerSigned.nameSpaces[expectedNamespace] != nil else {
+        let mdoc = try MdocCbor.parseStoredCredential(credentialBytes)
+        guard let expectedNamespace = Self.namespaceByDocType[mdoc.docType] else {
+            throw MdocError.malformed("mdoc credential has unsupported docType '\(mdoc.docType)'")
+        }
+        guard mdoc.issuerSigned.nameSpaces[expectedNamespace] != nil else {
             throw MdocError.malformed(
-                "mdoc credential '\(document.docType)' has no disclosed '\(expectedNamespace)' namespace"
+                "mdoc credential '\(mdoc.docType)' has no disclosed '\(expectedNamespace)' namespace"
             )
         }
         let namespace = expectedNamespace
@@ -176,7 +185,7 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // is presenting over.
         let witnessDeviceResponse = try await MdocDeviceResponseBuilder(credentialBytes: credentialBytes)
             .buildForProximity(sessionTranscriptBytes: Data(sessionTranscript), disclosedClaims: nil, signer: { data in
-                Data(try await signer([UInt8](data)))
+                Data(try await signer(coseAlgES256, [UInt8](data)))
             })
 
         let time = ISO8601DateFormatter().string(from: Date())
@@ -224,12 +233,12 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         // priority order removes any ambiguity about which wins if a
         // namespace somehow contained both, rather than relying on whatever
         // order nameSpaces happens to iterate in.
-        let namespaceItems = document.issuerSigned.nameSpaces[namespace]
+        let namespaceItems = mdoc.issuerSigned.nameSpaces[namespace]
         let seedItem = namespaceItems?.first { $0.item.elementIdentifier == Self.pseudonymSeedClaim }
             ?? namespaceItems?.first { $0.item.elementIdentifier == Self.pseudonymClaim }
         guard case .byteString(let seed)? = seedItem?.item.elementValue else {
             throw MdocError.malformed(
-                "mdoc credential '\(document.docType)' has no decodable '\(Self.pseudonymSeedClaim)' " +
+                "mdoc credential '\(mdoc.docType)' has no decodable '\(Self.pseudonymSeedClaim)' " +
                 "element in namespace '\(namespace)', but a pseudonym was requested and the proof succeeded"
             )
         }

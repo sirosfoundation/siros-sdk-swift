@@ -141,6 +141,87 @@ public struct ZkProofResult: Sendable {
     }
 }
 
+/// What a credential *is*: a format plus the type identifier that format
+/// uses - an mdoc's doctype, an SD-JWT VC's `vct`.
+///
+/// Replaces the bare doctype string this protocol used to match on. That
+/// only worked while every proof system was mdoc-only: a doctype alone
+/// cannot distinguish an mdoc mDL from an SD-JWT VC one, so a request for
+/// the latter would have been silently routed to an mdoc-only
+/// implementation and failed somewhere deep inside a native prover.
+///
+/// Reuses `CredentialFormat`, the enum the credential store already keys
+/// on, rather than introducing a second notion of "format" alongside it.
+public struct CredentialTypeRef: Hashable, Sendable {
+    public let format: CredentialFormat
+    public let typeId: String
+
+    public init(format: CredentialFormat, typeId: String) {
+        self.format = format
+        self.typeId = typeId
+    }
+}
+
+/// A credential's stored bytes, tagged with how to read them.
+///
+/// Deliberately still bytes rather than a parsed model. The bytes are a
+/// private witness fed to a local prover and never sent to the verifier
+/// (see `ZkProofSystem.generateProof`), and each proof system's native
+/// crate parses them itself - so a shared parsed representation here would
+/// be a translation layer that every implementation immediately undoes.
+///
+/// Only the formats something actually stores today. A JWP case for blind
+/// BBS is deliberately absent until a proof system consumes one; the enum
+/// is the extension point, so adding it later is additive and every
+/// `switch` over it stays exhaustiveness-checked.
+public enum CredentialDocument: Sendable {
+    /// A DeviceResponse-shaped CBOR envelope, matching
+    /// `MdocDeviceResponseBuilder`'s own constructor input.
+    case mdoc([UInt8])
+
+    /// A `~`-delimited SD-JWT VC, as issued.
+    case sdJwtVc([UInt8])
+
+    public var bytes: [UInt8] {
+        switch self {
+        case let .mdoc(b): return b
+        case let .sdJwtVc(b): return b
+        }
+    }
+
+    /// The case name alone, for diagnostics.
+    ///
+    /// Interpolating the enum itself would print the associated `[UInt8]`
+    /// too - and those bytes are the credential, so an error message about
+    /// the wrong format would spill the whole thing into logs and crash
+    /// reports. Always use this in anything user- or log-facing.
+    public var formatName: String {
+        switch self {
+        case .mdoc: return "mdoc"
+        case .sdJwtVc: return "sdJwtVc"
+        }
+    }
+}
+
+/// COSE algorithm identifier for ES256 (RFC 8152 §8.1).
+public let coseAlgES256: Int64 = -7
+
+/// Signs raw bytes with a credential's device key, mid-proof-generation.
+///
+/// Replaces the bare `([UInt8]) async throws -> [UInt8]` this protocol used
+/// to take. The reason is the algorithm parameter: Longfellow needs an
+/// ES256 signature over a witness DeviceResponse, while a BBS key binding
+/// key signs with Schnorr over BLS12-381 G1 - a different key, on a
+/// different curve, that only some authenticators can produce at all. A
+/// bare closure cannot say which it wants, so the wallet had to guess, and
+/// guessing wrong yields a signature that fails verification with nothing
+/// to point at.
+///
+/// Implementations must return a raw (not DER) signature, and must throw
+/// rather than substitute another algorithm - a wallet that quietly signs
+/// with the wrong key produces a credential that cannot be presented.
+public typealias ZkWitnessSigner = @Sendable (Int64, [UInt8]) async throws -> [UInt8]
+
 /// One pluggable zero-knowledge proof system, backing a specific credential
 /// presentation mode (selective disclosure + optional pseudonym, today;
 /// whatever a future BBS/Vega implementation supports). Mirrors this org's
@@ -161,7 +242,14 @@ public protocol ZkProofSystem: Sendable {
     var systemId: String { get }
 
     /// mdoc doctypes this system can generate a ZK proof over, e.g. `{"org.iso.18013.5.1.mDL"}`.
-    var supportedDocTypes: Set<String> { get }
+    /// The credential types this system can prove over, e.g.
+    /// `[CredentialTypeRef(format: .msoMdoc, typeId: "org.iso.18013.5.1.mDL")]`.
+    ///
+    /// Was `supportedDocTypes: Set<String>`. Carrying the format means a
+    /// request for an SD-JWT VC or JWP credential finds no match today
+    /// rather than being routed to an mdoc-only implementation on a
+    /// doctype-string collision.
+    var supportedCredentialTypes: Set<CredentialTypeRef> { get }
 
     /// Returns whichever of `requestedSpecs` (a verifier's own list, in
     /// priority order) this system can satisfy, or `nil` if none match -
@@ -227,11 +315,11 @@ public protocol ZkProofSystem: Sendable {
     ///     without a reuse path (Longfellow) ignore it.
     func generateProof(
         spec: ZkSystemSpec,
-        credentialBytes: [UInt8],
+        document: CredentialDocument,
         sessionTranscript: [UInt8],
         requestedClaims: [String],
         verifierIdentity: VerifierIdentity?,
-        signer: @Sendable @escaping ([UInt8]) async throws -> [UInt8],
+        signer: @escaping ZkWitnessSigner,
         priorState: [UInt8]?
     ) async throws -> ZkProofResult
 }
@@ -301,14 +389,14 @@ public final class ZkProofSystemRegistry: Sendable {
     }
 
     /// The first registered system (in registration order) that supports
-    /// `docType` and can satisfy one of `requestedSpecs`, paired with the
+    /// `credentialType` and can satisfy one of `requestedSpecs`, paired with the
     /// matched spec - or `nil` if none qualify. `numAttributes` is the
     /// number of claims actually being disclosed - see
     /// `ZkProofSystem.matchingSpec`'s doc comment for why it must be
     /// threaded through rather than matched on `system`/`id` alone.
-    public func resolve(docType: String, requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> (ZkProofSystem, ZkSystemSpec)? {
+    public func resolve(credentialType: CredentialTypeRef, requestedSpecs: [ZkSystemSpec], numAttributes: Int) -> (ZkProofSystem, ZkSystemSpec)? {
         for system in systems {
-            guard system.supportedDocTypes.contains(docType) else { continue }
+            guard system.supportedCredentialTypes.contains(credentialType) else { continue }
             guard let matched = system.matchingSpec(requestedSpecs, numAttributes: numAttributes) else { continue }
             return (system, matched)
         }
