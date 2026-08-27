@@ -169,11 +169,6 @@ public struct CredentialTypeRef: Hashable, Sendable {
 /// (see `ZkProofSystem.generateProof`), and each proof system's native
 /// crate parses them itself - so a shared parsed representation here would
 /// be a translation layer that every implementation immediately undoes.
-///
-/// Only the formats something actually stores today. A JWP case for blind
-/// BBS is deliberately absent until a proof system consumes one; the enum
-/// is the extension point, so adding it later is additive and every
-/// `switch` over it stays exhaustiveness-checked.
 public enum CredentialDocument: Sendable {
     /// A DeviceResponse-shaped CBOR envelope, matching
     /// `MdocDeviceResponseBuilder`'s own constructor input.
@@ -182,11 +177,31 @@ public enum CredentialDocument: Sendable {
     /// A `~`-delimited SD-JWT VC, as issued.
     case sdJwtVc([UInt8])
 
+    /// A JWP in Compact Serialization, issued form - the UTF-8 bytes of
+    /// the three dot-separated parts.
+    ///
+    /// Bytes for consistency with the other cases even though this one is
+    /// always ASCII; `compact` is the form the native crate takes.
+    case jwp([UInt8])
+
     public var bytes: [UInt8] {
         switch self {
         case let .mdoc(b): return b
         case let .sdJwtVc(b): return b
+        case let .jwp(b): return b
         }
+    }
+
+    /// Builds a JWP case from its compact serialization.
+    public static func jwp(_ compact: String) -> CredentialDocument {
+        .jwp(Array(compact.utf8))
+    }
+
+    /// This document's bytes as a compact JWP string, or `nil` if it is not
+    /// a JWP or is not valid UTF-8.
+    public var jwpCompact: String? {
+        guard case let .jwp(b) = self else { return nil }
+        return String(bytes: b, encoding: .utf8)
     }
 
     /// The case name alone, for diagnostics.
@@ -199,12 +214,23 @@ public enum CredentialDocument: Sendable {
         switch self {
         case .mdoc: return "mdoc"
         case .sdJwtVc: return "sdJwtVc"
+        case .jwp: return "jwp"
         }
     }
 }
 
 /// COSE algorithm identifier for ES256 (RFC 8152 §8.1).
 public let coseAlgES256: Int64 = -7
+
+/// COSE algorithm identifier for Schnorr over BLS12-381 G1, the signature a
+/// BBS key binding key produces.
+///
+/// **A placeholder.** `-65609` is what the YubiKey 5.8 prototype firmware
+/// reports for `EcsdsaBls12_381_BP1_Sha256_SEC1`; the construction is
+/// pre-standardisation and this identifier is expected to change when it
+/// reaches a registry. Named here rather than inlined so that when it does,
+/// there is one place to change.
+public let coseAlgBls12381G1Schnorr: Int64 = -65609
 
 /// Signs raw bytes with a credential's device key, mid-proof-generation.
 ///
