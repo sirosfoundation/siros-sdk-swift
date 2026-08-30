@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1]
+
+Re-release of 0.6.0. No SDK or sample-app source changes.
+
+v0.6.0's release build hung and was cancelled, so that release carries only an
+SBOM — the same failure that left v0.3.0, v0.4.0 and v0.5.0 without artifacts.
+The cause was the Release workflow's `Configure vendor package access` step,
+whose global git `insteadOf` rewrite broke SwiftPM's binary-artifact downloader:
+the three xcframework downloads stalled at zero bytes indefinitely. Nothing in
+this repository needs that token — every dependency and binary target is public
+— so the step was removed (#116), and both macOS jobs gained a 45-minute
+timeout so a future stall fails fast instead of burning the 6-hour job limit.
+
+### Changed
+- Sample app: MARKETING_VERSION 0.6.1, build 4
+
 ## [0.6.0]
 
 Highlights since v0.5.0 (4 commits). Sample app: MARKETING_VERSION 0.6.0, build 3.
