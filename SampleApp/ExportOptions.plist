@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Export for upload to App Store Connect / TestFlight. Xcode 15+ names
+         this method "app-store-connect"; it was called "app-store" before. -->
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>teamID</key>
+    <string>X3YM693CZ3</string>
+    <!-- Let Xcode fetch/create the distribution provisioning profile via the
+         App Store Connect API key passed to xcodebuild. The distribution
+         certificate itself comes from the keychain the workflow sets up. -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>destination</key>
+    <string>export</string>
+    <!-- Upload dSYMs so TestFlight crash reports are symbolicated. -->
+    <key>uploadSymbols</key>
+    <true/>
+    <!-- Bitcode has been removed from the toolchain; keep it off explicitly. -->
+    <key>compileBitcode</key>
+    <false/>
+</dict>
+</plist>
