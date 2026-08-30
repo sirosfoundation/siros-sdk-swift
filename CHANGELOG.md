@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0]
+
+Highlights since v0.5.0 (4 commits). Sample app: MARKETING_VERSION 0.6.0, build 3.
+
+### Added
+- `BbsProofSystem`: the blind BBS presentation path (#113), plus the wallet's half
+  of blind BBS issuance (#114)
+- VICAL-based issuer-trust evaluation for mdoc presentation (#111)
+
+### Changed
+- `ZkProofSystem` generalized beyond mdoc-only, so non-mdoc credential formats can
+  plug into the same proving interface (#112)
+
+### Fixed
+- BLE session-establishment race during proximity presentation (#111)
+- SVG `<image>` height normalization in credential logo rendering (#111)
+- `SampleApp/project.yml` hardcoded `CFBundleShortVersionString`/`CFBundleVersion`
+  in its `info:` block, so `xcodegen generate` overwrote `Resources/Info.plist` and
+  reset the built app to 0.1.0/1 — undoing the v0.4.0 fix. Both now substitute
+  `$(MARKETING_VERSION)`/`$(CURRENT_PROJECT_VERSION)`.
+
+## [0.5.0]
+
+Highlights since v0.4.0 (10 commits).
+
+### Added
+- RICAL reader authentication: `MdocCose.verify1` plus `readerAuth` parsing and
+  trust evaluation (ISO 18013-5 Annex F), with an AuthZEN reader-trust call, a
+  local fallback, and a settings toggle (#110)
+
+### Changed
+- `SirosWallet.swift` split into focused files to clear SwiftLint
+  `type_body_length`/`file_length` errors (#106)
+- Sample app UX: unified SIROS ID identity-verification path and long-press offer
+  detail (#105)
+- `siros-wscd-manager` bumped to v0.7.4 (#109)
+
+### Fixed
+- `AddCredentialView` offer identity collision across issuers (#108)
+- Three wallet bugs surfaced by the PR #106 review and deferred there (#107)
+
 ## [0.4.0]
 
 Highlights since v0.3.0 (41 commits):
