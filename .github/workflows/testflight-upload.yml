@@ -129,8 +129,9 @@ jobs:
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          # altool/notarytool look here by convention; xcodebuild is given the
-          # path explicitly below.
+          # altool searches ./private_keys, ~/private_keys, ~/.private_keys and
+          # ~/.appstoreconnect/private_keys for AuthKey_<id>.p8 (verified
+          # against altool 26.40.1); xcodebuild is given the path explicitly.
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           printf '%s\n' "$APPSTORE_PRIVATE_KEY" > "$KEY_PATH"
@@ -202,15 +203,19 @@ jobs:
           # Validate first: catches entitlement/bundle problems here, with a
           # readable message, instead of as a silent processing failure in App
           # Store Connect 20 minutes later.
-          xcrun altool --validate-app \
-            -f "$IPA" -t ios \
-            --apiKey "$APPSTORE_KEY_ID" \
-            --apiIssuer "$APPSTORE_ISSUER_ID"
+          #
+          # Note the asymmetry, which is altool's and not a typo: per
+          # `altool --help` on Xcode 26.6, --upload-app takes its file via -f,
+          # while --validate-app takes it positionally.
+          xcrun altool --validate-app "$IPA" \
+            -t ios \
+            --api-key "$APPSTORE_KEY_ID" \
+            --api-issuer "$APPSTORE_ISSUER_ID"
 
           xcrun altool --upload-app \
             -f "$IPA" -t ios \
-            --apiKey "$APPSTORE_KEY_ID" \
-            --apiIssuer "$APPSTORE_ISSUER_ID"
+            --api-key "$APPSTORE_KEY_ID" \
+            --api-issuer "$APPSTORE_ISSUER_ID"
 
           echo "Uploaded ${{ steps.version.outputs.marketing }} " \
                "(build ${{ steps.version.outputs.build }}) to TestFlight."
