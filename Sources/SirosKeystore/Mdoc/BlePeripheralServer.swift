@@ -353,6 +353,19 @@ extension BlePeripheralServer: CBPeripheralManagerDelegate {
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         onLog("Reader unsubscribed from \(characteristic.uuid)")
+        // A reader that subscribes and unsubscribes before ever writing
+        // STATE_END (a probe, a flaky link, a churning scanner) never
+        // reaches completeOnce() - without this, the UI would stay parked
+        // on "reader connected" forever even though this peripheral is
+        // still advertising and genuinely waiting for the next connection.
+        // Mirrors the Kotlin SDK's `BlePeripheralServer.kt` fix (PR #136),
+        // found the same way: live fuzz-testing against a real Pixel with
+        // siros-verifier-cli's `fuzz disconnect-after-connect`/
+        // `rapid-reconnect` scenarios.
+        if !completed {
+            reportedReaderConnected = false
+            onStep("waiting_for_reader")
+        }
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
