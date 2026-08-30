@@ -15,6 +15,11 @@ on:
         type: boolean
         default: false
 
+# This workflow never writes to the repository; it only reads the checkout and
+# talks to Apple. Least privilege, per CodeQL.
+permissions:
+  contents: read
+
 jobs:
   testflight:
     name: Build signed IPA & upload to TestFlight
@@ -69,8 +74,14 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             MARKETING_VERSION="${GITHUB_REF_NAME#v}"
           else
-            MARKETING_VERSION=$(grep -E '^\s*MARKETING_VERSION:' SampleApp/project.yml \
+            # [[:space:]], not \s: BSD grep -E has no \s escape, so \s
+            # matched nothing here and left MARKETING_VERSION empty.
+            MARKETING_VERSION=$(grep -E '^[[:space:]]*MARKETING_VERSION:' SampleApp/project.yml \
               | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            [ -n "$MARKETING_VERSION" ] || {
+              echo "::error::Could not read MARKETING_VERSION from SampleApp/project.yml"
+              exit 1
+            }
           fi
           echo "marketing=${MARKETING_VERSION}" >> "$GITHUB_OUTPUT"
           echo "build=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -91,7 +102,7 @@ jobs:
           security set-keychain-settings -lut 3600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
-          echo "$IOS_DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          echo -n "$IOS_DIST_CERT_P12_BASE64" | base64 --decode -o "$RUNNER_TEMP/dist.p12"
           security import "$RUNNER_TEMP/dist.p12" \
             -k "$KEYCHAIN" \
             -P "$IOS_DIST_CERT_PASSWORD" \
@@ -154,6 +165,10 @@ jobs:
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
         run: |
           set -euo pipefail
+          # Keep ExportOptions.plist's teamID in step with the workflow's
+          # TEAM_ID, so the two cannot drift into a confusing signing failure.
+          /usr/libexec/PlistBuddy -c "Set :teamID $TEAM_ID" ExportOptions.plist
+
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
             -exportOptionsPlist ExportOptions.plist \
