@@ -12,12 +12,9 @@ jobs:
   build-sdk:
     name: Build SDK
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-
-      - name: Configure vendor package access
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.VENDOR_PACKAGES_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Build SDK (macOS + iOS)
         run: |
@@ -55,12 +52,9 @@ jobs:
   build-sample-app:
     name: Build Sample App
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-
-      - name: Configure vendor package access
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.VENDOR_PACKAGES_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install XcodeGen
         run: brew install xcodegen
