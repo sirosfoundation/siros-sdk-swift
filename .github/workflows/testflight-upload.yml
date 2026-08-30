@@ -204,9 +204,11 @@ jobs:
           # readable message, instead of as a silent processing failure in App
           # Store Connect 20 minutes later.
           #
-          # Note the asymmetry, which is altool's and not a typo: per
-          # `altool --help` on Xcode 26.6, --upload-app takes its file via -f,
-          # while --validate-app takes it positionally.
+          # altool's own help documents the file positionally for
+          # --validate-app and via -f for --upload-app. Probing Xcode 26.6
+          # showed --validate-app actually accepts both, so the asymmetry
+          # below is cosmetic (it matches the documented synopsis), not load
+          # bearing — either form works.
           xcrun altool --validate-app "$IPA" \
             -t ios \
             --api-key "$APPSTORE_KEY_ID" \
