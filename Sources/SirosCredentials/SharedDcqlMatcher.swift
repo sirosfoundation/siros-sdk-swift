@@ -1,6 +1,24 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+#if canImport(os)
+import os
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SharedDcqlMatcher")
+#endif
+
+/// Route a diagnostic line through the platform logger, or drop it where there
+/// is none.
+///
+/// The identifiers below are interpolated as dynamic values on purpose. `os`
+/// redacts those in released builds and shows them when a developer is attached
+/// — which is exactly the audience for a line explaining why a credential was
+/// declined. Marking them `public` would put credential identifiers into
+/// device logs a host app does not control.
+private func log(_ message: String) {
+    #if canImport(os)
+    logger.info("\(message, privacy: .private)")
+    #endif
+}
 
 /// DCQL matching by the shared Rust engine — the same one the Android
 /// credential picker runs, and the same one `siros-sdk-kotlin` calls.
@@ -82,11 +100,10 @@ public enum SharedDcqlMatcher {
         let onlyShared = shared.filter { !builtInSet.contains($0) }
         guard !onlyBuiltIn.isEmpty || !onlyShared.isEmpty else { return }
 
-        print("""
-        [SharedDcqlMatcher] DCQL query '\(queryId)': the shared engine declined \
-        \(onlyBuiltIn) that the built-in matcher would have offered (most likely a \
-        requested claim the credential lacks, OID4VP 1.0 §6.4.1), and offered \
-        \(onlyShared) it would not
+        log("""
+        DCQL query '\(queryId)': the shared engine declined \(onlyBuiltIn) that the \
+        built-in matcher would have offered (most likely a requested claim the \
+        credential lacks, OID4VP 1.0 §6.4.1), and offered \(onlyShared) it would not
         """)
     }
 
@@ -96,11 +113,11 @@ public enum SharedDcqlMatcher {
     /// explains a decline as a missing claim, which is the usual cause and the
     /// wrong one here.
     static func reportUnsatisfiable(builtIn: [Int64]) {
-        print("""
-        [SharedDcqlMatcher] The shared engine declined the request as a whole \
-        (OID4VP 1.0 §6.4): some part of it cannot be answered, so none of it may be \
-        offered. The built-in matcher would have offered \(builtIn). This is not a \
-        per-credential decline - no credential here is missing a requested claim
+        log("""
+        The shared engine declined the request as a whole (OID4VP 1.0 §6.4): some \
+        part of it cannot be answered, so none of it may be offered. The built-in \
+        matcher would have offered \(builtIn). This is not a per-credential decline \
+        - no credential here is missing a requested claim
         """)
     }
 }
@@ -117,7 +134,7 @@ extension SharedDcqlMatcher {
     static func evaluate(dcqlQuery: [String: Any], credentials: [StoredCredential]) -> Outcome? {
         guard let queryData = try? JSONSerialization.data(withJSONObject: dcqlQuery),
               let queryJson = String(data: queryData, encoding: .utf8) else {
-            print("[SharedDcqlMatcher] DCQL query is not serialisable JSON; keeping the built-in matcher's answer")
+            log("DCQL query is not serialisable JSON; keeping the built-in matcher's answer")
             return nil
         }
 
@@ -155,7 +172,7 @@ extension SharedDcqlMatcher {
         } catch {
             // The engine declining a request is not a wallet fault: it means
             // "no answer", and the built-in matcher's answer stands.
-            print("[SharedDcqlMatcher] Shared DCQL engine unavailable; keeping the built-in matcher's answer: \(error)")
+            log("Shared DCQL engine unavailable; keeping the built-in matcher's answer: \(error)")
             return nil
         }
     }
