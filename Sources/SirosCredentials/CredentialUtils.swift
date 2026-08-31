@@ -416,7 +416,10 @@ public enum CredentialUtils {
         return text
     }
 
-    private static func formatClaimValue(_ value: Any?) -> String {
+    /// Module-internal rather than private: SharedDcqlMatcher formats claim
+    /// values for DCQL `values` comparison, and a second formatter would mean
+    /// the same claim rendering differently to the matcher than to the user.
+    static func formatClaimValue(_ value: Any?) -> String {
         switch value {
         case let s as String: return s
         case let n as NSNumber: return n.stringValue

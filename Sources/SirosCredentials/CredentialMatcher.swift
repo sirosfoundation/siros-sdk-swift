@@ -142,7 +142,21 @@ public enum CredentialMatcher {
             // double the noise on every call.
             return parsed
         }
+        return narrow(parsed: parsed, with: shared)
+        #else
+        return parsed
+        #endif
+    }
 
+    /// Apply an engine outcome to the parsed results.
+    ///
+    /// Separate from ``applySharedEngine(dcqlQuery:credentials:parsed:)``, and
+    /// deliberately not `#if os(iOS)`: calling the engine needs the native
+    /// library, but deciding what its answer *means* does not, and that
+    /// decision is where the §6.4 rule lives. Keeping it platform-neutral is
+    /// what lets the rule be tested on every platform this package builds for,
+    /// rather than only on the one where it runs.
+    static func narrow(parsed: [MatchResult], with shared: SharedDcqlMatcher.Outcome) -> [MatchResult] {
         guard shared.satisfiable else {
             // §6.4: "MUST NOT return any Credential(s)" - not even the queries
             // that were answerable on their own. A request can ask for two
@@ -170,7 +184,7 @@ public enum CredentialMatcher {
             }
         }
 
-        return parsed.map { result in
+        return parsed.map { result -> MatchResult in
             let ids = shared.candidatesByQuery[result.queryId] ?? []
             SharedDcqlMatcher.reportDifference(
                 queryId: result.queryId,
@@ -188,9 +202,6 @@ public enum CredentialMatcher {
                 ppidContext: result.ppidContext
             )
         }
-        #else
-        return parsed
-        #endif
     }
 
     /// Match stored credentials against an ISO 18013-5 mdoc `docType`

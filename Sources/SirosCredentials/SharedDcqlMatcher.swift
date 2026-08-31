@@ -1,6 +1,14 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+// swift-crypto's `Crypto` mirrors CryptoKit 1:1, including the `SHA256` used
+// to match a disclosure to its digest - the same arrangement ZkCircuitClient
+// uses so this file compiles and behaves identically off Apple platforms.
+import Crypto
+#endif
 #if canImport(os)
 import os
 private let logger = Logger(subsystem: "org.siros.sdk", category: "SharedDcqlMatcher")
@@ -122,6 +130,165 @@ public enum SharedDcqlMatcher {
     }
 }
 
+// MARK: - Claims for matching
+
+/// One claim as the engine sees it: a DCQL path and the value at it.
+///
+/// Deliberately not ``DisplayClaim``. That type is built for a credential
+/// detail screen and carries a label, a description and an SVG id; this one
+/// carries a *path*, because DCQL matches on claims path pointers (OpenID4VP
+/// 1.0 §7) and a dotted display key is not one.
+struct MatchClaim: Sendable, Equatable {
+    let path: [String]
+    let value: String
+    let label: String
+}
+
+extension SharedDcqlMatcher {
+
+    /// Every claim a verifier could ask for, at the path they would ask for it.
+    ///
+    /// Not ``CredentialUtils/extractClaims(_:)``, which exists to render a
+    /// credential and is wrong here in two ways that both hide credentials from
+    /// the user:
+    ///
+    /// - It reads only the JWT body. `parseJwtPayload` splits on `~` and keeps
+    ///   the first segment, so for an SD-JWT VC stored as issued, every
+    ///   *selectively disclosable* claim is missing — and `_sd` itself is in
+    ///   its skip list. The engine would conclude the credential lacks the
+    ///   claim, apply §6.4.1, and decline a credential that can in fact
+    ///   disclose it.
+    /// - It returns dotted display keys. `credentialSubject.given_name` is one
+    ///   string; the DCQL path is `["credentialSubject", "given_name"]`, and
+    ///   the two do not compare equal.
+    ///
+    /// Both fail in the same direction — a credential that qualifies is not
+    /// offered — which is the failure this whole component exists to remove.
+    static func matchingClaims(_ credential: StoredCredential) -> [MatchClaim] {
+        // mdoc claims are already the real disclosed elements, read from the
+        // credential's own namespaces rather than from issuer metadata, and
+        // their path is `[namespace, element]`.
+        if credential.format.lowercased() == "mso_mdoc" {
+            return CredentialUtils.extractClaims(credential).map {
+                MatchClaim(path: splitClaimKey(format: credential.format, key: $0.key),
+                           value: $0.value,
+                           label: $0.label)
+            }
+        }
+
+        guard var payload = CredentialUtils.parseJwtPayload(credential.raw) else { return [] }
+        payload = resolvingDisclosures(payload, in: credential.raw)
+
+        var claims: [MatchClaim] = []
+        flatten(payload, prefix: [], into: &claims)
+        return claims
+    }
+
+    /// Reinstate selectively disclosed claims into the payload they were
+    /// removed from.
+    ///
+    /// SD-JWT replaces a claim with the digest of its disclosure, collected in
+    /// an `_sd` array on the object the claim belonged to. Resolving is
+    /// therefore not a merge but a walk: hash each disclosure, find the `_sd`
+    /// entry naming it, and put the claim back where that array lives.
+    ///
+    /// Repeated to a fixed point, because a disclosed value may itself carry an
+    /// `_sd` array whose digests only become reachable once its parent is
+    /// restored.
+    private static func resolvingDisclosures(_ payload: [String: Any], in raw: String) -> [String: Any] {
+        let segments = raw.split(separator: "~", omittingEmptySubsequences: true).map(String.init)
+        guard segments.count > 1 else { return payload }
+
+        // [digest: (name, value)]. Two-element disclosures are array elements
+        // (§4.2.2), which carry no name and no path a DCQL pointer can address,
+        // so they are not reinstated here.
+        var byDigest: [String: (name: String, value: Any)] = [:]
+        for segment in segments.dropFirst() {
+            guard let json = CredentialUtils.base64UrlDecode(segment),
+                  let parts = try? JSONSerialization.jsonObject(with: json) as? [Any],
+                  parts.count == 3,
+                  let name = parts[1] as? String else { continue }
+            byDigest[sha256Base64Url(segment)] = (name, parts[2])
+        }
+        guard !byDigest.isEmpty else { return payload }
+
+        var resolved = payload
+        // Bounded by the number of disclosures: each pass must reinstate at
+        // least one to continue, so this cannot spin on a malformed credential.
+        for _ in 0..<byDigest.count {
+            var planted = false
+            resolved = reinstate(resolved, byDigest, &planted)
+            if !planted { break }
+        }
+        return resolved
+    }
+
+    private static func reinstate(
+        _ node: [String: Any],
+        _ byDigest: [String: (name: String, value: Any)],
+        _ planted: inout Bool
+    ) -> [String: Any] {
+        var out = node
+
+        if let digests = node["_sd"] as? [Any] {
+            var unresolved: [Any] = []
+            for entry in digests {
+                guard let digest = entry as? String, let claim = byDigest[digest] else {
+                    unresolved.append(entry)
+                    continue
+                }
+                out[claim.name] = claim.value
+                planted = true
+            }
+            // Keep digests we have no disclosure for: the holder was not given
+            // those claims, and dropping the array would erase the evidence
+            // that they exist at all.
+            if unresolved.isEmpty { out.removeValue(forKey: "_sd") } else { out["_sd"] = unresolved }
+        }
+
+        for (key, value) in out {
+            if let child = value as? [String: Any] {
+                out[key] = reinstate(child, byDigest, &planted)
+            }
+        }
+        return out
+    }
+
+    /// Every node in the payload, at its DCQL path.
+    ///
+    /// Intermediate objects are emitted as well as leaves, because a claims
+    /// path pointer may address either — `["address"]` is as valid a request as
+    /// `["address", "locality"]`.
+    private static func flatten(_ node: [String: Any], prefix: [String], into claims: inout [MatchClaim]) {
+        for key in node.keys.sorted() {
+            guard !jwtStructuralKeys.contains(key) else { continue }
+            let path = prefix + [key]
+            let value = node[key]
+            if let child = value as? [String: Any] {
+                claims.append(MatchClaim(path: path,
+                                         value: CredentialUtils.formatClaimValue(value),
+                                         label: CredentialUtils.formatClaimKey(key)))
+                flatten(child, prefix: path, into: &claims)
+            } else {
+                claims.append(MatchClaim(path: path,
+                                         value: CredentialUtils.formatClaimValue(value),
+                                         label: CredentialUtils.formatClaimKey(key)))
+            }
+        }
+    }
+
+    /// SD-JWT bookkeeping, not claims. A verifier does not request `_sd_alg`.
+    private static let jwtStructuralKeys: Set<String> = ["_sd", "_sd_alg", "...", "cnf"]
+
+    private static func sha256Base64Url(_ text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        return Data(digest).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
 #if os(iOS)
 
 extension SharedDcqlMatcher {
@@ -189,9 +356,13 @@ extension SharedDcqlMatcher {
             title: credential.metadata?.name ?? credential.format,
             subtitle: credential.metadata?.issuer?.name ?? "",
             iconId: nil,
-            claims: CredentialUtils.extractClaims(credential).map { claim in
+            // matchingClaims, not extractClaims: the display extractor drops
+            // every selectively disclosed claim and returns dotted keys rather
+            // than DCQL paths. Both make a credential look like it lacks what a
+            // verifier asked for.
+            claims: matchingClaims(credential).map { claim in
                 FfiClaim(
-                    path: splitClaimKey(format: credential.format, key: claim.key),
+                    path: claim.path,
                     value: claim.value,
                     display: claim.label,
                     displayValue: nil

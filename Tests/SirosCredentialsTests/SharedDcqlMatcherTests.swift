@@ -2,6 +2,11 @@
 
 import XCTest
 @testable import SirosCredentials
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 /// The shared DCQL engine.
 ///
@@ -67,5 +72,173 @@ final class SharedDcqlMatcherTests: XCTestCase {
         )
         XCTAssertFalse(outcome.satisfiable)
         XCTAssertEqual(outcome.candidatesByQuery["answerable"], [1])
+    }
+
+    // MARK: - Claims the engine is given
+
+    private func b64url(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func digest(of disclosure: String) -> String {
+        b64url(Data(SHA256.hash(data: Data(disclosure.utf8))))
+    }
+
+    /// Build a real SD-JWT VC: a JWT whose payload hides `hidden` behind an
+    /// `_sd` digest, followed by the disclosure that opens it.
+    private func sdJwt(plain: [String: Any], hidden: (String, Any)) -> String {
+        let disclosureJson = try! JSONSerialization.data(
+            withJSONObject: ["c2FsdA", hidden.0, hidden.1]
+        )
+        let disclosure = b64url(disclosureJson)
+
+        var payload = plain
+        payload["_sd"] = [digest(of: disclosure)]
+        payload["_sd_alg"] = "sha-256"
+        let body = b64url(try! JSONSerialization.data(withJSONObject: payload))
+        return "eyJhbGciOiJFUzI1NiJ9.\(body).sig~\(disclosure)~"
+    }
+
+    private func sdJwtCredential(raw: String) -> StoredCredential {
+        StoredCredential(id: 1, format: "dc+sd-jwt", raw: raw, metadata: nil, batchId: 1, instanceId: 0)
+    }
+
+    /// The regression this extractor exists for.
+    ///
+    /// `CredentialUtils.extractClaims` reads only the JWT body, so a
+    /// selectively disclosed claim is simply absent. The engine would then
+    /// apply §6.4.1 and decline a credential that can disclose exactly what the
+    /// verifier asked for - a credential silently missing from the picker.
+    func testASelectivelyDisclosedClaimIsFound() {
+        let credential = sdJwtCredential(raw: sdJwt(plain: ["vct": "urn:eu.europa.ec.eudi:pid:1"],
+                                                    hidden: ("given_name", "Erika")))
+
+        let display = CredentialUtils.extractClaims(credential).map(\.key)
+        XCTAssertFalse(display.contains("given_name"), "precondition: the display extractor cannot see it")
+
+        let matching = SharedDcqlMatcher.matchingClaims(credential)
+        XCTAssertTrue(matching.contains { $0.path == ["given_name"] && $0.value == "Erika" })
+    }
+
+    /// A claim that was never hidden is still there - resolving disclosures
+    /// must not replace the payload, only add to it.
+    func testPlainClaimsSurviveDisclosureResolution() {
+        let credential = sdJwtCredential(raw: sdJwt(plain: ["vct": "x", "iss": "https://issuer.example"],
+                                                    hidden: ("given_name", "Erika")))
+        let paths = SharedDcqlMatcher.matchingClaims(credential).map(\.path)
+        XCTAssertTrue(paths.contains(["iss"]))
+        XCTAssertTrue(paths.contains(["given_name"]))
+    }
+
+    /// Nested claims get real DCQL paths, not one dotted string.
+    ///
+    /// `["address", "locality"]` is what a claims path pointer looks like
+    /// (OpenID4VP 1.0 §7); `["address.locality"]` matches nothing.
+    func testNestedClaimsBecomePathsNotDottedKeys() {
+        let credential = sdJwtCredential(
+            raw: sdJwt(plain: ["address": ["locality": "Stockholm"]], hidden: ("given_name", "Erika"))
+        )
+        let paths = SharedDcqlMatcher.matchingClaims(credential).map(\.path)
+        XCTAssertTrue(paths.contains(["address", "locality"]))
+        XCTAssertTrue(paths.contains(["address"]), "an object is addressable too")
+        XCTAssertFalse(paths.contains(["address.locality"]))
+    }
+
+    /// A digest with no matching disclosure invents nothing.
+    ///
+    /// The holder was not given that claim. Offering the credential for it
+    /// would be the opposite error to the one above, and just as wrong.
+    func testAnUndisclosedDigestDoesNotBecomeAClaim() {
+        var payload: [String: Any] = ["vct": "x"]
+        payload["_sd"] = ["ZG9lcy1ub3QtcmVzb2x2ZQ"]
+        let body = b64url(try! JSONSerialization.data(withJSONObject: payload))
+        let credential = sdJwtCredential(raw: "eyJhbGciOiJFUzI1NiJ9.\(body).sig~")
+
+        let claims = SharedDcqlMatcher.matchingClaims(credential)
+        XCTAssertEqual(claims.map(\.path), [["vct"]])
+    }
+
+    /// SD-JWT bookkeeping is not a claim - no verifier requests `_sd_alg`.
+    func testStructuralKeysAreNotOfferedAsClaims() {
+        let credential = sdJwtCredential(raw: sdJwt(plain: ["vct": "x"], hidden: ("given_name", "Erika")))
+        let paths = SharedDcqlMatcher.matchingClaims(credential).map(\.path)
+        XCTAssertFalse(paths.contains(["_sd"]))
+        XCTAssertFalse(paths.contains(["_sd_alg"]))
+    }
+}
+
+/// The §6.4 rule, tested where the engine cannot run.
+///
+/// `CredentialMatcher.narrow(parsed:with:)` is deliberately platform-neutral:
+/// calling the engine needs the native library, deciding what its answer means
+/// does not. These run on every platform this package builds for.
+final class CredentialMatcherNarrowingTests: XCTestCase {
+
+    private func credential(_ id: Int64) -> StoredCredential {
+        StoredCredential(id: id, format: "mso_mdoc", raw: "", metadata: nil, batchId: id, instanceId: 0)
+    }
+
+    private func result(_ queryId: String, _ ids: [Int64]) -> CredentialMatcher.MatchResult {
+        CredentialMatcher.MatchResult(
+            queryId: queryId,
+            format: "mso_mdoc",
+            candidates: ids.map(credential),
+            requestedClaims: [["org.iso.18013.5.1", "age_over_18"]],
+            ppidContext: "https://rp.example/ctx"
+        )
+    }
+
+    /// §6.4: when part of a request cannot be answered, none of it may be
+    /// offered - not even the part that could.
+    ///
+    /// The engine reports per-query candidates regardless, so `answerable` has
+    /// one here. Offering it would let a user consent to a presentation that
+    /// cannot satisfy the verifier.
+    func testAnUnsatisfiableRequestWithholdsTheAnswerableQueryToo() {
+        let narrowed = CredentialMatcher.narrow(
+            parsed: [result("answerable", [1]), result("unanswerable", [])],
+            with: SharedDcqlMatcher.Outcome(
+                satisfiable: false,
+                candidatesByQuery: ["answerable": [1], "unanswerable": []]
+            )
+        )
+        XCTAssertTrue(narrowed.allSatisfy { $0.candidates.isEmpty })
+    }
+
+    /// Narrowing filters candidates; it does not touch what the wallet reads at
+    /// presentation time. Those are parsed from the query, not decided by the
+    /// engine.
+    func testPresentationMetadataSurvivesNarrowing() {
+        let narrowed = CredentialMatcher.narrow(
+            parsed: [result("q", [1, 2])],
+            with: SharedDcqlMatcher.Outcome(satisfiable: true, candidatesByQuery: ["q": [2]])
+        )
+        XCTAssertEqual(narrowed.single().candidates.map(\.id), [2])
+        XCTAssertEqual(narrowed.single().requestedClaims, [["org.iso.18013.5.1", "age_over_18"]])
+        XCTAssertEqual(narrowed.single().ppidContext, "https://rp.example/ctx")
+        XCTAssertEqual(narrowed.single().format, "mso_mdoc")
+    }
+
+    /// A query the engine says nothing about offers nothing.
+    ///
+    /// The engine names every query it was given, so an absent one means it
+    /// found no candidates - not that it had no opinion. Reading it the other
+    /// way would offer credentials the engine had already declined.
+    func testAQueryAbsentFromTheOutcomeOffersNothing() {
+        let narrowed = CredentialMatcher.narrow(
+            parsed: [result("q", [1])],
+            with: SharedDcqlMatcher.Outcome(satisfiable: true, candidatesByQuery: [:])
+        )
+        XCTAssertTrue(narrowed.single().candidates.isEmpty)
+    }
+}
+
+private extension Array {
+    func single() -> Element {
+        precondition(count == 1, "expected exactly one element, got \(count)")
+        return self[0]
     }
 }
