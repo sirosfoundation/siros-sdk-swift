@@ -183,6 +183,30 @@ final class SharedDcqlMatcherTests: XCTestCase {
         XCTAssertEqual(claims.first { $0.path == ["age"] }?.value, "42", "a real number is still a number")
     }
 
+    /// A disclosure whose value hides further claims is resolved too.
+    ///
+    /// `address` is disclosed, and the object it reveals carries its own `_sd`
+    /// pointing at `locality`. One pass cannot reach the inner digest, because
+    /// the array holding it does not exist in the payload until the outer
+    /// disclosure has been planted - which is why resolution runs to a fixed
+    /// point, and why it walks the payload as it is being rebuilt rather than
+    /// as it arrived.
+    func testDisclosuresNestedInsideDisclosuresAreResolved() {
+        let inner = b64url(try! JSONSerialization.data(withJSONObject: ["s1", "locality", "Stockholm"]))
+        let outer = b64url(try! JSONSerialization.data(
+            withJSONObject: ["s2", "address", ["_sd": [digest(of: inner)]]]
+        ))
+        let payload: [String: Any] = ["vct": "x", "_sd": [digest(of: outer)], "_sd_alg": "sha-256"]
+        let body = b64url(try! JSONSerialization.data(withJSONObject: payload))
+        let credential = sdJwtCredential(raw: "eyJhbGciOiJFUzI1NiJ9.\(body).sig~\(outer)~\(inner)~")
+
+        let claims = SharedDcqlMatcher.matchingClaims(credential)
+        XCTAssertTrue(
+            claims.contains { $0.path == ["address", "locality"] && $0.value == "Stockholm" },
+            "got \(claims.map(\.path))"
+        )
+    }
+
     /// SD-JWT bookkeeping is not a claim - no verifier requests `_sd_alg`.
     func testStructuralKeysAreNotOfferedAsClaims() {
         let credential = sdJwtCredential(raw: sdJwt(plain: ["vct": "x"], hidden: ("given_name", "Erika")))

@@ -246,6 +246,15 @@ extension SharedDcqlMatcher {
             if unresolved.isEmpty { out.removeValue(forKey: "_sd") } else { out["_sd"] = unresolved }
         }
 
+        // Iterating `out`, not `node`, and the difference matters: the block
+        // above has just planted disclosed claims into `out`, and a planted
+        // value can carry an `_sd` array of its own. Walking `node` would never
+        // descend into one, leaving a nested selectively-disclosed claim hidden.
+        //
+        // Mutating `out` while iterating it is safe here - `Dictionary` is a
+        // value type, so the loop walks the value the sequence expression
+        // produced and the assignment copies on write. There is no shared
+        // buffer to invalidate.
         for (key, value) in out {
             if let child = value as? [String: Any] {
                 out[key] = reinstate(child, byDigest, &planted)
