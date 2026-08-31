@@ -92,9 +92,10 @@ public enum CredentialMatcher {
             )
         }
 
-        let queryResults = credentialQueries.compactMap { query in
+        let parsed = credentialQueries.compactMap { query in
             matchSingleQuery(query, credentials: credentials)
         }
+        let queryResults = applySharedEngine(dcqlQuery: dcqlQuery, credentials: credentials, parsed: parsed)
 
         let credentialSets = parseCredentialSets(dcqlQuery)
         let satisfiableOptions: [SatisfiableOption]
@@ -109,6 +110,87 @@ public enum CredentialMatcher {
             credentialSets: credentialSets,
             satisfiableOptions: satisfiableOptions
         )
+    }
+
+    /// Narrow the parsed results to what the shared engine says qualifies.
+    ///
+    /// Which credentials qualify is decided by the shared engine - the same one
+    /// the Android credential picker runs, and the only implementation here
+    /// tested against the specification's own examples. This matcher still
+    /// parses everything else the wallet needs at presentation time (requested
+    /// claims, `zk_system_type`, `ppid_context`), because those are read from
+    /// the query rather than decided by it.
+    ///
+    /// The visible change is that a credential missing a claim the verifier
+    /// asked for is no longer offered. OID4VP 1.0 §6.4.1 requires that; the
+    /// parsing path never checked it, so such a credential would be offered,
+    /// consented to, and then fail to satisfy the verifier.
+    ///
+    /// On platforms without the engine this returns `parsed` unchanged, which
+    /// is what every platform did until now.
+    private static func applySharedEngine(
+        dcqlQuery: [String: Any],
+        credentials: [StoredCredential],
+        parsed: [MatchResult]
+    ) -> [MatchResult] {
+        #if os(iOS)
+        guard let shared = SharedDcqlMatcher.evaluate(dcqlQuery: dcqlQuery, credentials: credentials) else {
+            // No answer, not an empty answer. Falling back keeps presentations
+            // working where the engine cannot decide, which is worth more than
+            // consistency. SharedDcqlMatcher has already logged why - with the
+            // error, when there was one - so repeating it here would only
+            // double the noise on every call.
+            return parsed
+        }
+
+        guard shared.satisfiable else {
+            // §6.4: "MUST NOT return any Credential(s)" - not even the queries
+            // that were answerable on their own. A request can ask for two
+            // credentials and get one; offering that one lets a user consent to
+            // a presentation that cannot satisfy the verifier.
+            //
+            // Reported once for the request rather than per query. The
+            // per-query line explains a decline as a missing claim, which is
+            // the usual cause and the wrong one here.
+            //
+            // One credential can be a candidate for several queries; the log
+            // names credentials, not candidacies.
+            var seen = Set<Int64>()
+            let offered = parsed.flatMap { $0.candidates.map(\.id) }.filter { seen.insert($0).inserted }
+            SharedDcqlMatcher.reportUnsatisfiable(builtIn: offered)
+            return parsed.map {
+                MatchResult(
+                    queryId: $0.queryId,
+                    format: $0.format,
+                    candidates: [],
+                    requestedClaims: $0.requestedClaims,
+                    zkSystemTypes: $0.zkSystemTypes,
+                    ppidContext: $0.ppidContext
+                )
+            }
+        }
+
+        return parsed.map { result in
+            let ids = shared.candidatesByQuery[result.queryId] ?? []
+            SharedDcqlMatcher.reportDifference(
+                queryId: result.queryId,
+                builtIn: result.candidates.map(\.id),
+                shared: ids
+            )
+            // Built once per query, not once per candidate.
+            let qualifying = Set(ids)
+            return MatchResult(
+                queryId: result.queryId,
+                format: result.format,
+                candidates: result.candidates.filter { qualifying.contains($0.id) },
+                requestedClaims: result.requestedClaims,
+                zkSystemTypes: result.zkSystemTypes,
+                ppidContext: result.ppidContext
+            )
+        }
+        #else
+        return parsed
+        #endif
     }
 
     /// Match stored credentials against an ISO 18013-5 mdoc `docType`

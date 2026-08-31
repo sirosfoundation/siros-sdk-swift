@@ -60,6 +60,20 @@ let package = Package(
             checksum: "cfa8afea27c2e2d9b671193ce2a923cef462dc185a953dda5ba5c518f749bac9"
         ),
 
+        // --- siros-dc-matcher UniFFI bindings (XCFramework) ---
+        // The shared DCQL engine: the same Rust code the Android credential
+        // picker runs as matcher.wasm, so the wallet's own answer and the
+        // picker's cannot drift apart. Built by `make xcframework` in that
+        // crate; module name is the crate name + "FFI", as with the three
+        // below. Headers nest under siros_dc_matcher_ffiFFI/ so that linking
+        // it alongside the others does not collide on a shared
+        // Headers/module.modulemap.
+        .binaryTarget(
+            name: "siros_dc_matcher_ffiFFI",
+            url: "https://github.com/sirosfoundation/siros-dc-matcher/releases/download/v0.4.0/siros_dc_matcher_ffi.xcframework.zip",
+            checksum: "d03783b8db84315d28de9928394f687d86efca317f59bfe4fc4ab63bf33fe7ee"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -83,6 +97,12 @@ let package = Package(
                 // Generated/zk_cred_bbs.swift are wrapped in `#if os(iOS)`
                 // to match.
                 .target(name: "zk_cred_bbsFFI", condition: .when(platforms: [.iOS])),
+                // Same story, same gate: iOS slices only, and both
+                // SharedDcqlMatcher.swift and
+                // Generated/siros_dc_matcher_ffi.swift are `#if os(iOS)` to
+                // match. On macOS CredentialMatcher keeps its own parsing
+                // path, which is what it used everywhere until now.
+                .target(name: "siros_dc_matcher_ffiFFI", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosCredentials"
         ),
