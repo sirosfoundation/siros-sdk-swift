@@ -8,15 +8,21 @@ import CryptoKit
 import Crypto
 #endif
 
-/// The shared DCQL engine.
+/// The SDK's half of the shared DCQL engine.
 ///
-/// Only ``SharedDcqlMatcher/splitClaimKey(format:key:)`` is testable off-iOS:
-/// the engine is a native library shipped as an iOS-only XCFramework, so
-/// everything that calls it is `#if os(iOS)` and would not even compile in this
-/// package's macOS and Linux test runs. The engine's own matching behaviour is
-/// covered in `siros-dc-matcher` against the specification's examples, which is
-/// the point of sharing it; what is left to test here is the SDK's translation
-/// layer.
+/// The engine itself is a native library in an iOS-only XCFramework, so the one
+/// function that *calls* it is `#if os(iOS)` and cannot run here. Its matching
+/// behaviour is covered in `siros-dc-matcher` against the specification's own
+/// examples, which is the point of sharing it.
+///
+/// What is left is the translation layer, and it is deliberately
+/// platform-neutral so that it can be tested where the engine cannot run:
+/// ``SharedDcqlMatcher/matchingClaims(_:)`` (which claims the engine is told
+/// about), ``SharedDcqlMatcher/splitClaimKey(format:key:)`` (mdoc path
+/// splitting), and — in `CredentialMatcherNarrowingTests` below —
+/// `CredentialMatcher.narrow(parsed:with:)`, which is where the §6.4 rule
+/// lives. Those three are where a mistake silently removes a credential from
+/// what a user is offered.
 final class SharedDcqlMatcherTests: XCTestCase {
 
     /// ISO namespaces keep their dots; only the element identifier splits off.
@@ -159,6 +165,22 @@ final class SharedDcqlMatcherTests: XCTestCase {
 
         let claims = SharedDcqlMatcher.matchingClaims(credential)
         XCTAssertEqual(claims.map(\.path), [["vct"]])
+    }
+
+    /// A JSON boolean reaches the engine as "true", not "1".
+    ///
+    /// `JSONSerialization` bridges it to `__NSCFBoolean`, which is an
+    /// `NSNumber`, so a formatter that tests `NSNumber` first renders it "1".
+    /// DCQL compares a requested `values` entry against this string, so
+    /// `age_over_18: true` would then fail to match and the credential would
+    /// not be offered.
+    func testBooleanClaimsAreNotRenderedAsNumbers() {
+        let credential = sdJwtCredential(
+            raw: sdJwt(plain: ["age_over_18": true, "age": 42], hidden: ("given_name", "Erika"))
+        )
+        let claims = SharedDcqlMatcher.matchingClaims(credential)
+        XCTAssertEqual(claims.first { $0.path == ["age_over_18"] }?.value, "true")
+        XCTAssertEqual(claims.first { $0.path == ["age"] }?.value, "42", "a real number is still a number")
     }
 
     /// SD-JWT bookkeeping is not a claim - no verifier requests `_sd_alg`.

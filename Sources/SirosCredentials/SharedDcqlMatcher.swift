@@ -306,6 +306,14 @@ extension SharedDcqlMatcher {
         }
 
         do {
+            // `SirosBlobBuilder()` and `addCredential` are declared infallible in
+            // Rust, so UniFFI generates `try!` for them and a Rust panic there
+            // would trap rather than reach the `catch` below. They cannot panic:
+            // the builder's lock is taken with
+            // `unwrap_or_else(PoisonError::into_inner)`, so poisoning is handled
+            // rather than unwrapped, and the body is a `Vec::push`. The two calls
+            // that *can* fail - `build()` and `matchDcql` - are declared fallible
+            // and are the ones this `catch` exists for.
             let builder = SirosBlobBuilder()
             for credential in credentials {
                 builder.addCredential(credential: toFfi(credential))
