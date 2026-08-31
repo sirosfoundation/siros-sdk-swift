@@ -1,6 +1,12 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+#if canImport(CoreFoundation)
+// For CFGetTypeID/CFBooleanGetTypeID in formatClaimValue. Available through
+// Foundation on Apple platforms, but on Linux swift-corelibs-foundation needs
+// the module imported explicitly.
+import CoreFoundation
+#endif
 @preconcurrency import SwiftCBOR
 #if canImport(os)
 import os
@@ -416,9 +422,24 @@ public enum CredentialUtils {
         return text
     }
 
-    private static func formatClaimValue(_ value: Any?) -> String {
+    /// Module-internal rather than private: SharedDcqlMatcher formats claim
+    /// values for DCQL `values` comparison, and a second formatter would mean
+    /// the same claim rendering differently to the matcher than to the user.
+    static func formatClaimValue(_ value: Any?) -> String {
         switch value {
         case let s as String: return s
+        // Booleans first, and by CFTypeID rather than by cast. `JSONSerialization`
+        // bridges a JSON boolean to `__NSCFBoolean`, which *is* an `NSNumber`, so
+        // an `as NSNumber` case reached first renders `true` as "1". A plain
+        // `as? Bool` test is no better in the other direction: it succeeds for the
+        // number 1, rendering it "true" - verified, not assumed. Only the type
+        // identity separates them.
+        //
+        // This is not cosmetic. DCQL compares a requested `values` entry against
+        // this string, so `age_over_18: true` matching "1" fails and the
+        // credential is not offered.
+        case let n as NSNumber where CFGetTypeID(n) == CFBooleanGetTypeID():
+            return n.boolValue ? "true" : "false"
         case let n as NSNumber: return n.stringValue
         case let b as Bool: return b ? "true" : "false"
         default: return String(describing: value ?? "")
