@@ -455,11 +455,25 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     }
 
     /// Send a signing response back to the server.
+    ///
+    /// Always answer a `sign_request`, even with every payload field nil: the
+    /// engine's `RequestSign` blocks on a matching `message_id` for 30 s
+    /// before giving up (`ErrSignTimeout`), so an unanswered request stalls
+    /// the whole flow for that long. An empty response is how the client
+    /// declines (e.g. no Wallet Instance Attestation available for a
+    /// `request_attestation`).
+    ///
+    /// - Parameters:
+    ///   - clientAttestation/clientAttestationPoP: the WIA and per-flow PoP
+    ///     answering a `request_attestation` action - see
+    ///     `SignResponseMessage.clientAttestation`.
     public func sendSignResponse(
         flowId: String,
         proofJwt: String? = nil,
         vpToken: String? = nil,
         proofs: [ProofObject]? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil,
         messageId: String? = nil
     ) {
         send(SignResponseMessage(
@@ -467,7 +481,9 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             messageId: messageId,
             proofJwt: proofJwt,
             vpToken: vpToken,
-            proofs: proofs
+            proofs: proofs,
+            clientAttestation: clientAttestation,
+            clientAttestationPoP: clientAttestationPoP
         ))
     }
 

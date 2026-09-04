@@ -16,6 +16,47 @@ import os
 private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 #endif
 
+/// The one engine capability `SirosWallet.handleSignRequest` needs: sending a
+/// `sign_response`. `WalletEngineSession` is a `final class` bound to a real
+/// `URLSessionWebSocketTask`, so this seam is what lets the sign-request
+/// dispatcher be unit-tested with a recording fake (see
+/// `SirosWalletSignRequestTests`) without a reachable backend.
+protocol SignResponseSender {
+    func sendSignResponse(
+        flowId: String,
+        proofJwt: String?,
+        vpToken: String?,
+        proofs: [ProofObject]?,
+        clientAttestation: String?,
+        clientAttestationPoP: String?,
+        messageId: String?
+    )
+}
+
+extension SignResponseSender {
+    func sendSignResponse(
+        flowId: String,
+        proofJwt: String? = nil,
+        vpToken: String? = nil,
+        proofs: [ProofObject]? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil,
+        messageId: String? = nil
+    ) {
+        sendSignResponse(
+            flowId: flowId,
+            proofJwt: proofJwt,
+            vpToken: vpToken,
+            proofs: proofs,
+            clientAttestation: clientAttestation,
+            clientAttestationPoP: clientAttestationPoP,
+            messageId: messageId
+        )
+    }
+}
+
+extension WalletEngineSession: SignResponseSender {}
+
 extension SirosWallet {
     // MARK: - Engine connection
 
@@ -620,7 +661,10 @@ extension SirosWallet {
         engineTasks = [signTask, matchTask, progressTask, completeTask, errorTask, reauthTask]
     }
 
-    private func handleSignRequest(engine: WalletEngineSession, msg: SignRequestMessage) async {
+    // Not `private`: the test target drives it with a recording
+    // `SignResponseSender` (there is no transport seam in
+    // `WalletEngineSession` itself to fake a live engine at).
+    func handleSignRequest(engine: any SignResponseSender, msg: SignRequestMessage) async {
         do {
             switch msg.action {
             case "generate_proof":
@@ -690,8 +734,32 @@ extension SirosWallet {
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
                 }
 
+            case "request_attestation":
+                // Engine-requested Wallet Instance Attestation (go-wallet-backend
+                // `SignActionRequestAttestation`). A nil pair is a deliberate
+                // decline: the empty response below lets the engine continue
+                // without wallet attestation right away instead of sitting on
+                // its 30 s sign timeout. Never throws (see the helper's doc).
+                let pair = await clientAttestation(forEngineRequest: msg.params)
+                engine.sendSignResponse(
+                    flowId: msg.flowId,
+                    clientAttestation: pair?.0,
+                    clientAttestationPoP: pair?.1,
+                    messageId: msg.messageId
+                )
+
             default:
-                break
+                // An action this SDK build doesn't know. The engine has no
+                // separate "sign error" message - `RequestSign` only unblocks
+                // on a `sign_response` with a matching `message_id` - so
+                // answer with an empty one: the engine then fails fast on the
+                // missing payload (and reports a flow_error we handle as
+                // usual) instead of stalling for the full sign timeout, which
+                // is what silently ignoring the request used to cause.
+                #if canImport(os)
+                logger.warning("Unknown sign action \(msg.action, privacy: .public); sending empty sign_response")
+                #endif
+                engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
             }
         } catch {
             #if canImport(os)

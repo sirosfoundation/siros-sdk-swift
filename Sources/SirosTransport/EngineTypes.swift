@@ -197,6 +197,16 @@ public struct SignResponseMessage: Codable, Sendable {
     public var proofJwt: String?
     public var vpToken: String?
     public var proofs: [ProofObject]?
+    /// Response to a `request_attestation` sign request (go-wallet-backend's
+    /// `SignActionRequestAttestation`): the Wallet Instance Attestation JWT
+    /// (`typ: oauth-client-attestation+jwt`) and the per-flow PoP JWT
+    /// (`typ: oauth-client-attestation-pop+jwt`) the client signed with its
+    /// instance key, with `aud`/`iss` taken from the request's
+    /// `SignRequestParams.audience`/`.issuer`. Both nil means the client has
+    /// no attestation to offer - the engine then proceeds without wallet
+    /// attestation rather than waiting for one.
+    public var clientAttestation: String?
+    public var clientAttestationPoP: String?
     public var timestamp: String?
 
     public init(
@@ -206,6 +216,8 @@ public struct SignResponseMessage: Codable, Sendable {
         proofJwt: String? = nil,
         vpToken: String? = nil,
         proofs: [ProofObject]? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil,
         timestamp: String? = nil
     ) {
         self.type = type
@@ -214,6 +226,8 @@ public struct SignResponseMessage: Codable, Sendable {
         self.proofJwt = proofJwt
         self.vpToken = vpToken
         self.proofs = proofs
+        self.clientAttestation = clientAttestation
+        self.clientAttestationPoP = clientAttestationPoP
         self.timestamp = timestamp
     }
 
@@ -223,6 +237,8 @@ public struct SignResponseMessage: Codable, Sendable {
         case messageId = "message_id"
         case proofJwt = "proof_jwt"
         case vpToken = "vp_token"
+        case clientAttestation = "client_attestation"
+        case clientAttestationPoP = "client_attestation_pop"
     }
 }
 
