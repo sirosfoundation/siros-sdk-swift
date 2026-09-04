@@ -147,6 +147,75 @@ extension SirosWallet {
     // batch that supersedes it is confirmed stored - see
     // `snapshotRenewalSourceBatch`'s doc comment for why this must not run
     // any earlier.
+    /// The credential type this flow was authorised to receive, or nil if the
+    /// wallet never resolved one.
+    ///
+    /// This is the type whose metadata was fetched, whose WSCD requirement was
+    /// applied, and which the issuer's registration was checked against. The
+    /// credential configuration ID is deliberately NOT a fallback: it is an
+    /// OID4VCI-internal identifier, not a credential type, so comparing a `vct`
+    /// against it would fail every time and refuse legitimate issuance.
+    func authorisedCredentialType(format: String) -> String? {
+        if format == "mso_mdoc" {
+            return activeMddlSchema?.doctype
+        }
+        return activeVctm?.vct
+    }
+
+    /// Refuse a credential whose declared type is not the one this flow was
+    /// authorised to receive.
+    ///
+    /// Every earlier decision in the issuance path — the issuer's entitlement
+    /// under ARF section 6.6.2.3, which type metadata to apply, which WSCD to
+    /// use — was made about the type the issuer *advertised*. None of them
+    /// looked at what actually arrived. Without this, an issuer entitled to one
+    /// attestation type could deliver another and have every one of those
+    /// decisions stand, made about the wrong credential.
+    ///
+    /// Returns a failure reason, or nil when the credential is acceptable. A
+    /// type that could not be determined on either side is not a mismatch: as
+    /// everywhere else in this path, a check that could not run must not become
+    /// a refusal.
+    func verifyIssuedType(format: String, raw: String) -> String? {
+        guard let authorised = authorisedCredentialType(format: format),
+              let declared = CredentialUtils.declaredType(format: format, raw: raw),
+              declared != authorised else {
+            return nil
+        }
+        return "Issuer delivered a '\(declared)' credential, but this offer was for '\(authorised)'"
+    }
+
+    /// Refuse a credential whose issuer pinned its type metadata to something
+    /// other than what the wallet resolved.
+    ///
+    /// SD-JWT VC Type Metadata lets the credential carry `vct#integrity`, a
+    /// digest over the type metadata document. It exists so the *issuer*
+    /// decides what a credential type means. Without checking it, whoever
+    /// serves the registry decides how the credential is displayed and which
+    /// claims it is understood to carry — independently of the issuer who
+    /// vouched for it, and even for a type the issuer is legitimately
+    /// registered to issue.
+    ///
+    /// Only checked when the credential asks for it: a credential with no
+    /// `vct#integrity` is making no claim about its metadata, so there is
+    /// nothing to disagree with.
+    func verifyVctIntegrity(format: String, payload: [String: Any]) -> String? {
+        guard format != "mso_mdoc",
+              let expected = payload["vct#integrity"] as? String else {
+            return nil
+        }
+        guard let document = activeVctmDocument else {
+            // The issuer pinned metadata the wallet never resolved. Nothing was
+            // applied, so nothing was tampered with.
+            return nil
+        }
+        guard let raw = document.raw.data(using: String.Encoding.utf8),
+              Integrity.matches(raw, expected) else {
+            return "The issuer's type metadata does not match what it published"
+        }
+        return nil
+    }
+
     private func deleteRenewalSourceBatch(_ oldBatchId: Int64) async {
         let existing = await credentialStore.getAll()
         for cred in existing where cred.batchId == oldBatchId {
@@ -172,6 +241,9 @@ extension SirosWallet {
             // silently dropping every issued mdoc credential.
             guard let mdocDocument = CredentialUtils.parseMdocDocument(cred.credential) else {
                 return (false, "Received credential could not be read")
+            }
+            if let reason = verifyIssuedType(format: cred.format, raw: cred.credential) {
+                return (false, reason)
             }
 
             // VICAL issuer-trust (ISO 18013-5 Annex C): defensive check on
@@ -219,6 +291,13 @@ extension SirosWallet {
         let now = Int64(Date().timeIntervalSince1970)
         if let exp, exp < now {
             return (false, "Issued credential was already expired")
+        }
+
+        if let reason = verifyIssuedType(format: cred.format, raw: cred.credential) {
+            return (false, reason)
+        }
+        if let reason = verifyVctIntegrity(format: cred.format, payload: payload) {
+            return (false, reason)
         }
 
         let metadata = offer.flatMap { CredentialUtils.buildMetadata(offer: $0, vctm: vctm, rawCredential: cred.credential) }

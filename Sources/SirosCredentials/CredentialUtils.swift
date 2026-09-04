@@ -254,6 +254,23 @@ public enum CredentialUtils {
     /// `DocumentMdoc` shape (unwrapping the `DeviceResponse`-style envelope
     /// per wallet-frontend#191). Returns nil if the raw string isn't
     /// valid base64url or doesn't parse as an mdoc document.
+    /// The credential type the credential itself declares: `vct` for an SD-JWT
+    /// VC, `docType` for an mdoc. Nil when it declares none, or cannot be read.
+    ///
+    /// This is what the holder actually received, as opposed to the credential
+    /// configuration ID, which is what the issuer advertised. The two are
+    /// checked against each other at issuance, because everything else in the
+    /// issuance path — entitlement, type metadata, WSCD selection — keys off
+    /// the advertised type, so an issuer that advertises one type and issues
+    /// another would have every one of those decisions made about the wrong
+    /// credential.
+    public static func declaredType(format: String, raw: String) -> String? {
+        if format == "mso_mdoc" {
+            return parseMdocDocument(raw)?.docType
+        }
+        return parseJwtPayload(raw)?["vct"] as? String
+    }
+
     public static func parseMdocDocument(_ rawCredential: String) -> DocumentMdoc? {
         guard let bytes = base64UrlDecode(rawCredential) else { return nil }
         do {

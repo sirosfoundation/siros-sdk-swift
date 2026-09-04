@@ -578,12 +578,13 @@ extension SirosWallet {
             // Try to fetch VCTM (SD-JWT) and MDDL schema (mdoc) - format-blind,
             // like `activeVctm`'s existing fetch: whichever one doesn't match
             // this offer's actual format simply fails to decode and stays nil.
-            let vctm = try? await vctmFetcher.fetch(
+            let vctmDocument = await vctmFetcher.fetchDocument(
                 issuerUrl: offer.credentialIssuerIdentifier,
                 scope: offer.credentialConfigurationId,
                 vct: offer.vct,
                 registryUrl: resolvedRegistryUrl
             )
+            let vctm = vctmDocument?.vctm
             let mddlSchema = await mddlSchemaFetcher.fetch(
                 issuerUrl: offer.credentialIssuerIdentifier,
                 scope: offer.credentialConfigurationId,
@@ -592,6 +593,7 @@ extension SirosWallet {
             )
             lock.lock()
             activeVctm = vctm
+            activeVctmDocument = vctmDocument
             activeMddlSchema = mddlSchema
             lock.unlock()
 
@@ -653,19 +655,24 @@ extension SirosWallet {
         do {
             if let offer = await resolveOfferForDisplay(offerUri) {
                 lock.lock(); activeOffer = offer; lock.unlock()
-                let vctm = try? await vctmFetcher.fetch(
+                let vctmDocument = await vctmFetcher.fetchDocument(
                     issuerUrl: offer.credentialIssuerIdentifier,
                     scope: offer.credentialConfigurationId,
                     vct: offer.vct,
                     registryUrl: resolvedRegistryUrl
                 )
+                let vctm = vctmDocument?.vctm
                 let mddlSchema = await mddlSchemaFetcher.fetch(
                     issuerUrl: offer.credentialIssuerIdentifier,
                     scope: offer.credentialConfigurationId,
                     doctype: offer.doctype,
                     registryUrl: resolvedRegistryUrl
                 )
-                lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
+                lock.lock()
+                activeVctm = vctm
+                activeVctmDocument = vctmDocument
+                activeMddlSchema = mddlSchema
+                lock.unlock()
             }
             // Resolve OAuth Client Attestation once, independent of whether the
             // display-metadata resolution above succeeded - a client that can't

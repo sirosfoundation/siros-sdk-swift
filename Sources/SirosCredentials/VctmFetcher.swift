@@ -33,7 +33,7 @@ public final class VctmFetcher: @unchecked Sendable {
     }
 
     private struct CacheEntry {
-        let result: Vctm
+        let result: VctmDocument
         let cachedAt: Date
     }
 
@@ -58,6 +58,21 @@ public final class VctmFetcher: @unchecked Sendable {
         vct: String? = nil,
         registryUrl: String? = nil
     ) async -> Vctm? {
+        await fetchDocument(issuerUrl: issuerUrl, scope: scope, vct: vct, registryUrl: registryUrl)?.vctm
+    }
+
+    /// The parsed VCTM together with the exact bytes it was parsed from.
+    ///
+    /// The raw document is what an integrity digest is computed over, so a
+    /// caller checking `vct#integrity` needs it rather than a re-serialisation
+    /// of the parsed form — which would differ in key order and whitespace and
+    /// hash to something else entirely.
+    public func fetchDocument(
+        issuerUrl: String,
+        scope: String,
+        vct: String? = nil,
+        registryUrl: String? = nil
+    ) async -> VctmDocument? {
         let cacheKey = CacheKey(issuerUrl: issuerUrl, scope: scope, vct: vct, registryUrl: registryUrl)
         if let cached = cachedResult(for: cacheKey) {
             return cached
@@ -107,7 +122,7 @@ public final class VctmFetcher: @unchecked Sendable {
 
     // MARK: - Cache
 
-    private func cachedResult(for key: CacheKey) -> Vctm? {
+    private func cachedResult(for key: CacheKey) -> VctmDocument? {
         lock.lock()
         defer { lock.unlock() }
         guard let entry = cache[key] else { return nil }
@@ -118,7 +133,7 @@ public final class VctmFetcher: @unchecked Sendable {
         return entry.result
     }
 
-    private func store(_ result: Vctm, for key: CacheKey) {
+    private func store(_ result: VctmDocument, for key: CacheKey) {
         lock.lock()
         defer { lock.unlock() }
         cache[key] = CacheEntry(result: result, cachedAt: Date())
@@ -138,7 +153,7 @@ public final class VctmFetcher: @unchecked Sendable {
 
     // MARK: - Private
 
-    private func fetchFromUrl(_ url: String) async -> Vctm? {
+    private func fetchFromUrl(_ url: String) async -> VctmDocument? {
         do {
             #if canImport(os)
             logger.debug("Fetching VCTM from \(url)")
@@ -150,7 +165,7 @@ public final class VctmFetcher: @unchecked Sendable {
                 body = try await fetchWithUrlSession(url)
             }
             guard let body else { return nil }
-            return parseVctm(body)
+            return parseVctm(body).map { VctmDocument(raw: body, vctm: $0) }
         } catch {
             #if canImport(os)
             logger.debug("VCTM fetch error from \(url): \(error.localizedDescription)")
