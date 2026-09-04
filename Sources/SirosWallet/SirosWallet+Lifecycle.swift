@@ -46,6 +46,7 @@ extension SirosWallet {
         lock.lock()
         activeOffer = nil
         activeVctm = nil
+        activeVctmDocument = nil
         activeMddlSchema = nil
         activeAttestedKeyIds = nil
         issuanceInFlight = false

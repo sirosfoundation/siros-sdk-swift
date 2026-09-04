@@ -322,6 +322,10 @@ public final class SirosWallet: @unchecked Sendable {
     weak var eventListener: WalletEventListener?
     var activeOffer: CredentialOffer?
     var activeVctm: Vctm?
+
+    /// The bytes ``activeVctm`` was parsed from, kept so `vct#integrity` can be
+    /// checked against the document as served rather than a re-serialisation.
+    var activeVctmDocument: VctmDocument?
     /// The mdoc analogue of `activeVctm` - the currently-in-flight
     /// issuance's `MddlSchema`, when the credential being issued is
     /// `mso_mdoc` rather than SD-JWT. Populated the same way `activeVctm`

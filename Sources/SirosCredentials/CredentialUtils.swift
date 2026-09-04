@@ -242,6 +242,23 @@ public enum CredentialUtils {
         return current
     }
 
+    /// The credential type the credential itself declares: `vct` for an SD-JWT
+    /// VC, `docType` for an mdoc. Nil when it declares none, or cannot be read.
+    ///
+    /// This is what the holder actually received, as opposed to the credential
+    /// configuration ID, which is what the issuer advertised. The two are
+    /// checked against each other at issuance, because everything else in the
+    /// issuance path — entitlement, type metadata, WSCD selection — keys off
+    /// the advertised type, so an issuer that advertises one type and issues
+    /// another would have every one of those decisions made about the wrong
+    /// credential.
+    public static func declaredType(format: String, raw: String) -> String? {
+        if format == "mso_mdoc" {
+            return parseMdocDocument(raw)?.docType
+        }
+        return parseJwtPayload(raw)?["vct"] as? String
+    }
+
     /// mdoc analogue of ``extractClaims(_:)``: parse a stored mdoc credential's
     /// REAL disclosed namespace/element values (via `MdocCbor`, not
     /// `parseJwtPayload` which assumes a JWT-shaped `raw`) into `DisplayClaim`s,

@@ -339,3 +339,19 @@ public struct IssuerEntitlementFinding: Codable, Sendable, Equatable {
         case credentialType = "credential_type"
     }
 }
+
+
+/// A VCTM together with the exact bytes it arrived as.
+///
+/// SD-JWT VC Type Metadata's `vct#integrity` is a digest over the document as
+/// served, so verifying it needs the original bytes: re-serialising the parsed
+/// form would change key order and whitespace and hash to something else.
+public struct VctmDocument: Sendable {
+    public let raw: String
+    public let vctm: Vctm
+
+    public init(raw: String, vctm: Vctm) {
+        self.raw = raw
+        self.vctm = vctm
+    }
+}
