@@ -293,26 +293,79 @@ extension SirosWallet {
     // cross-file-extension-access reason as `keystore` above.
     func resolveClientAttestation(issuerUrl: String) async -> (String, String)? {
         guard let wia = await ensureWalletInstanceAttestation() else { return nil }
+        let asUrl: String
+        if let metadata = try? await fetchIssuerMetadata(issuerUrl: issuerUrl),
+           let server = metadata.authorizationServers?.first(where: { !$0.isEmpty }) {
+            asUrl = server
+        } else {
+            asUrl = issuerUrl
+        }
+        guard let pop = await buildClientAttestationPoP(asUrl: asUrl, clientId: clientAttestationClientId()) else {
+            return nil
+        }
+        return (wia, pop)
+    }
+
+    /// Answer the engine's `request_attestation` sign request
+    /// (go-wallet-backend `SignActionRequestAttestation`, sent from
+    /// `OID4VCIHandler.Execute` once issuer metadata has been resolved and
+    /// FlowStart carried no attestation of its own).
+    ///
+    /// The engine supplies exactly what the per-flow PoP must be bound to,
+    /// so no client-side offer/metadata discovery is needed here:
+    /// `params.audience` is the issuer's authorization server (the PoP
+    /// `aud`, and the value the AS checks against its own issuer URL) and
+    /// `params.issuer` is the flow's effective `client_id` (the PoP `iss`,
+    /// which includes any registered per-issuer override that is invisible
+    /// to the client). Falls back to `clientAttestationClientId()` only if
+    /// the engine sent no issuer.
+    ///
+    /// Returns nil - meaning "send an empty sign_response so the flow
+    /// proceeds without wallet attestation" - when no WIA is available, no
+    /// audience was supplied, or PoP signing fails. Never throws: a missing
+    /// attestation must never block issuance, and an unanswered request
+    /// would stall the engine for its 30 s sign timeout.
+    // Not `private`: called from `SirosWallet+Engine.swift`'s sign-request
+    // dispatcher and exercised directly by the test target.
+    func clientAttestation(forEngineRequest params: SignRequestParams) async -> (String, String)? {
+        guard let audience = params.audience, !audience.isEmpty else { return nil }
+        guard let wia = await ensureWalletInstanceAttestation() else { return nil }
+        let clientId: String
+        if let issuer = params.issuer, !issuer.isEmpty {
+            clientId = issuer
+        } else {
+            clientId = clientAttestationClientId()
+        }
+        // The audience IS the AS URL - the engine already resolved it
+        // (`h.authServerIssuer`), so it goes straight through as the PoP `aud`.
+        guard let pop = await buildClientAttestationPoP(asUrl: audience, clientId: clientId) else { return nil }
+        return (wia, pop)
+    }
+
+    /// Sign a fresh per-flow OAuth Client Attestation PoP
+    /// (`typ: oauth-client-attestation-pop+jwt`) with this instance's key:
+    /// `aud` = `asUrl` (the authorization server the PAR/token request goes
+    /// to), `iss` = `clientId` (must equal the WIA's `sub` per
+    /// draft-ietf-oauth-attestation-based-client-auth-10), plus a `challenge`
+    /// claim when `asUrl` publishes a `challenge_endpoint` (see
+    /// `fetchAttestationChallenge`). Shared by the FlowStart-time
+    /// `resolveClientAttestation` and the engine-requested
+    /// `clientAttestation(forEngineRequest:)`.
+    ///
+    /// Best-effort: returns nil on any failure rather than throwing.
+    func buildClientAttestationPoP(asUrl: String, clientId: String) async -> String? {
         do {
-            let asUrl: String
-            if let metadata = try? await fetchIssuerMetadata(issuerUrl: issuerUrl),
-               let server = metadata.authorizationServers?.first(where: { !$0.isEmpty }) {
-                asUrl = server
-            } else {
-                asUrl = issuerUrl
-            }
             let challenge = await fetchAttestationChallenge(asUrl: asUrl)
             let keyId = try await ensureInstanceKeyId()
             var extraClaims: [String: String] = [:]
             if let challenge { extraClaims["challenge"] = challenge }
-            let pop = try await keystore.generateKeyProof(
+            return try await keystore.generateKeyProof(
                 keyId: keyId,
                 typ: "oauth-client-attestation-pop+jwt",
-                issuer: clientAttestationClientId(),
+                issuer: clientId,
                 audience: asUrl,
                 extraClaims: extraClaims
             )
-            return (wia, pop)
         } catch {
             return nil
         }

@@ -66,6 +66,41 @@ final class EngineTypesTests: XCTestCase {
         XCTAssertTrue(text.contains("\"proof_type\":\"jwt\""))
     }
 
+    /// `request_attestation` answers carry the WIA + PoP under exactly the
+    /// wire names go-wallet-backend's `SignResponseMessage` decodes
+    /// (`client_attestation` / `client_attestation_pop`).
+    func testSignResponseEncodesClientAttestation() throws {
+        let msg = SignResponseMessage(
+            flowId: "flow-78",
+            messageId: "msg-1",
+            clientAttestation: "wia-jwt",
+            clientAttestationPoP: "pop-jwt"
+        )
+        let data = try encoder.encode(msg)
+        let text = String(data: data, encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"type\":\"sign_response\""))
+        XCTAssertTrue(text.contains("\"message_id\":\"msg-1\""))
+        XCTAssertTrue(text.contains("\"client_attestation\":\"wia-jwt\""))
+        XCTAssertTrue(text.contains("\"client_attestation_pop\":\"pop-jwt\""))
+        XCTAssertFalse(text.contains("proof_jwt"))
+        XCTAssertFalse(text.contains("vp_token"))
+    }
+
+    /// An empty response (the client declining an attestation request) must
+    /// omit the attestation keys entirely - the backend treats absent and
+    /// empty the same, but `null` would not round-trip through its
+    /// `omitempty` string fields as cleanly.
+    func testSignResponseOmitsAbsentClientAttestation() throws {
+        let msg = SignResponseMessage(flowId: "flow-79", messageId: "msg-2")
+        let data = try encoder.encode(msg)
+        let text = String(data: data, encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"flow_id\":\"flow-79\""))
+        XCTAssertFalse(text.contains("client_attestation"))
+        XCTAssertFalse(text.contains("client_attestation_pop"))
+    }
+
     func testMatchResponseEncoding() throws {
         let msg = MatchResponseMessage(
             flowId: "flow-88",
