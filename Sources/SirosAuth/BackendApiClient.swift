@@ -113,6 +113,29 @@ public final class BackendApiClient: @unchecked Sendable {
         try await get("/issuer/\(id)/metadata")
     }
 
+    /// POST /v1/resolve — resolve an issuer through the backend's AuthZEN
+    /// endpoint, which returns its metadata already authenticated together
+    /// with a decision about the issuer's registration.
+    ///
+    /// Unlike `getIssuerMetadata(id:)` this works for any issuer URL, not only
+    /// the ones registered with this wallet's own backend, and unlike a direct
+    /// well-known fetch the document arrives verified rather than merely
+    /// downloaded.
+    public func resolveIssuer(
+        issuerUrl: String,
+        credentialTypes: [String] = []
+    ) async throws -> [String: Any] {
+        var body: [String: Any] = [
+            "subject_id": issuerUrl,
+            "subject_type": "url",
+            "resource_type": "credential_issuer",
+        ]
+        if !credentialTypes.isEmpty {
+            body["credential_types"] = credentialTypes
+        }
+        return try await post("/v1/resolve", body: body)
+    }
+
     /// GET /verifier/all — list registered verifiers
     public func getVerifiers() async throws -> [String: Any] {
         try await get("/verifier/all")
