@@ -21,8 +21,55 @@ permissions:
   contents: read
 
 jobs:
+  # Decides whether the macOS job runs at all. Three outcomes:
+  #   - all five secrets present: go.
+  #   - none present: the pipeline simply is not set up in this repository
+  #     yet. Skip with a warning rather than fail - otherwise every release
+  #     tag carries a red check for something nobody has decided to enable.
+  #   - some present: that is a misconfiguration, and failing here with the
+  #     names is far better than 20 minutes later inside codesign with
+  #     something inscrutable.
+  # A separate job because a job-level `if:` cannot read secrets directly,
+  # and gating each of the ten macOS steps individually is worse.
+  preflight:
+    name: Check signing secrets
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check required secrets are configured
+        id: check
+        env:
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          missing=""
+          present=0
+          for name in APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY \
+                      IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; else present=$((present + 1)); fi
+          done
+          if [ "$present" -eq 0 ]; then
+            echo "::warning::TestFlight upload skipped: no signing secrets are configured in this repository."
+            echo "See SampleApp/README.md ('TestFlight distribution') for how to create them."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "See SampleApp/README.md ('TestFlight distribution') for how to create them."
+            exit 1
+          fi
+          echo "All five signing secrets are present."
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
   testflight:
     name: Build signed IPA & upload to TestFlight
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: macos-26
     # A stalled macOS job otherwise burns the full 6-hour limit at 10x billing.
     timeout-minutes: 60
@@ -34,28 +81,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-
-      # Fail immediately with an actionable message rather than 20 minutes
-      # later inside codesign with something inscrutable.
-      - name: Check required secrets are configured
-        env:
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
-          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
-          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
-        run: |
-          missing=""
-          for name in APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY \
-                      IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD; do
-            [ -z "${!name}" ] && missing="$missing $name"
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing"
-            echo "See SampleApp/README.md ('TestFlight distribution') for how to create them."
-            exit 1
-          fi
-          echo "All five signing secrets are present."
 
       - name: Install XcodeGen
         run: brew install xcodegen

@@ -131,8 +131,11 @@ base64 -i Distribution.p12 | pbcopy
 | `IOS_DIST_CERT_P12_BASE64` | Base64 of the Apple Distribution `.p12` |
 | `IOS_DIST_CERT_PASSWORD` | Password set when exporting the `.p12` |
 
-The workflow checks all five up front and fails immediately with a list of any
-that are missing, rather than dying inside `codesign` twenty minutes later.
+The workflow checks all five up front. With none of them set it skips with a
+warning - the pipeline is simply not enabled yet, and a release tag should not
+carry a red check for that. With some set and some missing it fails immediately
+with a list of the missing ones, rather than dying inside `codesign` twenty
+minutes later.
 
 ### App Attest environment
 
