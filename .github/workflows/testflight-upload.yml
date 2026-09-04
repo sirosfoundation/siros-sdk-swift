@@ -1,0 +1,255 @@
+name: Upload to TestFlight
+
+# Triggered by the tag push itself, NOT by `release: published`. A release
+# created by a workflow using GITHUB_TOKEN does not trigger further workflow
+# runs, so a `release` trigger would silently never fire — the same trap that
+# left siros-sdk-kotlin's Play Store upload dormant for two releases.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and export the IPA but do not upload to TestFlight'
+        type: boolean
+        default: false
+
+# This workflow never writes to the repository; it only reads the checkout and
+# talks to Apple. Least privilege, per CodeQL.
+permissions:
+  contents: read
+
+jobs:
+  # Decides whether the macOS job runs at all. Three outcomes:
+  #   - all five secrets present: go.
+  #   - none present: the pipeline simply is not set up in this repository
+  #     yet. Skip with a warning rather than fail - otherwise every release
+  #     tag carries a red check for something nobody has decided to enable.
+  #   - some present: that is a misconfiguration, and failing here with the
+  #     names is far better than 20 minutes later inside codesign with
+  #     something inscrutable.
+  # A separate job because a job-level `if:` cannot read secrets directly,
+  # and gating each of the ten macOS steps individually is worse.
+  preflight:
+    name: Check signing secrets
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check required secrets are configured
+        id: check
+        env:
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          missing=""
+          present=0
+          for name in APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY \
+                      IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; else present=$((present + 1)); fi
+          done
+          if [ "$present" -eq 0 ]; then
+            echo "::warning::TestFlight upload skipped: no signing secrets are configured in this repository."
+            echo "See SampleApp/README.md ('TestFlight distribution') for how to create them."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "See SampleApp/README.md ('TestFlight distribution') for how to create them."
+            exit 1
+          fi
+          echo "All five signing secrets are present."
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+  testflight:
+    name: Build signed IPA & upload to TestFlight
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: macos-26
+    # A stalled macOS job otherwise burns the full 6-hour limit at 10x billing.
+    timeout-minutes: 60
+    env:
+      SCHEME: SirosSampleApp
+      PROJECT: SirosSampleApp.xcodeproj
+      BUNDLE_ID: org.siros.sdk.sample
+      TEAM_ID: X3YM693CZ3
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: SampleApp
+        run: xcodegen generate
+
+      # Version comes from the tag so a stale MARKETING_VERSION in project.yml
+      # can never ship under the wrong number. Build number is the run number,
+      # which is monotonic and unique — App Store Connect rejects a re-used
+      # (version, build) pair, including for a re-run of the same tag.
+      - name: Resolve version and build number
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            MARKETING_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # [[:space:]], not \s: BSD grep -E has no \s escape, so \s
+            # matched nothing here and left MARKETING_VERSION empty.
+            MARKETING_VERSION=$(grep -E '^[[:space:]]*MARKETING_VERSION:' SampleApp/project.yml \
+              | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            [ -n "$MARKETING_VERSION" ] || {
+              echo "::error::Could not read MARKETING_VERSION from SampleApp/project.yml"
+              exit 1
+            }
+          fi
+          echo "marketing=${MARKETING_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Uploading ${MARKETING_VERSION} (build ${GITHUB_RUN_NUMBER})"
+
+      - name: Set up signing keychain
+        env:
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Long enough for a slow archive; the keychain is deleted afterwards.
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo -n "$IOS_DIST_CERT_P12_BASE64" | base64 --decode -o "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" \
+            -k "$KEYCHAIN" \
+            -P "$IOS_DIST_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/dist.p12"
+
+          # Without this, codesign prompts for keychain access and the job hangs.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+
+          # Put our keychain first but keep the login/system keychains on the
+          # list, otherwise TLS to Apple's services loses its root anchors.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | tr -d '"')
+
+          echo "Identities available to codesign:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Install App Store Connect API key
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # altool searches ./private_keys, ~/private_keys, ~/.private_keys and
+          # ~/.appstoreconnect/private_keys for AuthKey_<id>.p8 (verified
+          # against altool 26.40.1); xcodebuild is given the path explicitly.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
+          printf '%s\n' "$APPSTORE_PRIVATE_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Archive
+        working-directory: SampleApp
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            MARKETING_VERSION="${{ steps.version.outputs.marketing }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}"
+
+      - name: Export IPA
+        working-directory: SampleApp
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # Keep ExportOptions.plist's teamID in step with the workflow's
+          # TEAM_ID, so the two cannot drift into a confusing signing failure.
+          /usr/libexec/PlistBuddy -c "Set :teamID $TEAM_ID" ExportOptions.plist
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
+          ls -la "$RUNNER_TEMP/export"
+
+      # Keep the exact artifact that was uploaded, so a TestFlight processing
+      # rejection can be diagnosed without re-running the build.
+      - name: Upload IPA as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: SirosSampleApp-${{ steps.version.outputs.marketing }}-build${{ steps.version.outputs.build }}
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+
+      - name: Upload to TestFlight
+        # On a tag push `inputs.dry_run` is null, so this is true.
+        if: ${{ !inputs.dry_run }}
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA=$(find "$RUNNER_TEMP/export" -name '*.ipa' | head -1)
+          [ -n "$IPA" ] || { echo "::error::No .ipa produced by export"; exit 1; }
+
+          # Validate first: catches entitlement/bundle problems here, with a
+          # readable message, instead of as a silent processing failure in App
+          # Store Connect 20 minutes later.
+          #
+          # altool's own help documents the file positionally for
+          # --validate-app and via -f for --upload-app. Probing Xcode 26.6
+          # showed --validate-app actually accepts both, so the asymmetry
+          # below is cosmetic (it matches the documented synopsis), not load
+          # bearing — either form works.
+          xcrun altool --validate-app "$IPA" \
+            -t ios \
+            --api-key "$APPSTORE_KEY_ID" \
+            --api-issuer "$APPSTORE_ISSUER_ID"
+
+          xcrun altool --upload-app \
+            -f "$IPA" -t ios \
+            --api-key "$APPSTORE_KEY_ID" \
+            --api-issuer "$APPSTORE_ISSUER_ID"
+
+          echo "Uploaded ${{ steps.version.outputs.marketing }} " \
+               "(build ${{ steps.version.outputs.build }}) to TestFlight."
+          echo "It appears for testers once App Store Connect finishes processing."
+
+      - name: Clean up keychain and API key
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+          rm -f "$HOME/.appstoreconnect/private_keys/"*.p8 2>/dev/null || true
