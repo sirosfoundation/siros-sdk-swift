@@ -126,6 +126,115 @@ extension SirosWallet {
         return try JSONDecoder().decode(IssuerMetadata.self, from: data)
     }
 
+    /// Issuer metadata together with what the backend concluded about it.
+    ///
+    /// `entitlement` is nil when the backend was not consulted - see
+    /// `resolveIssuerMetadata(issuerUrl:credentialTypes:)` - and a nil
+    /// entitlement means "not checked", never "checked and fine".
+    struct ResolvedIssuerMetadata {
+        let metadata: IssuerMetadata
+        let entitlement: IssuerEntitlement?
+        let trusted: Bool?
+
+        init(metadata: IssuerMetadata, entitlement: IssuerEntitlement? = nil, trusted: Bool? = nil) {
+            self.metadata = metadata
+            self.entitlement = entitlement
+            self.trusted = trusted
+        }
+    }
+
+    /// Resolve issuer metadata, preferring the backend so the document arrives
+    /// authenticated rather than merely fetched.
+    ///
+    /// The backend verifies the `signed_metadata` JWS, evaluates the signer
+    /// against the trust registry, and reports whether the provider is
+    /// registered to issue `credentialTypes` (ARF section 6.6.2.3). Doing this
+    /// wallet-side would mean a second certificate-handling implementation in
+    /// every SDK language, kept in sync by hand.
+    ///
+    /// Falls back to `fetchIssuerMetadata(issuerUrl:)` when there is no
+    /// authenticated session. That path returns metadata that is parsed but not
+    /// authenticated, so `entitlement` is left nil and callers must not read
+    /// the absence of findings as a pass.
+    func resolveIssuerMetadata(
+        issuerUrl: String,
+        credentialTypes: [String] = []
+    ) async throws -> ResolvedIssuerMetadata {
+        lock.lock()
+        let client = apiClient
+        lock.unlock()
+
+        if let client {
+            do {
+                let resolved = try await client.resolveIssuer(
+                    issuerUrl: issuerUrl,
+                    credentialTypes: credentialTypes
+                )
+                let context = resolved["context"] as? [String: Any]
+                if let metadataJson = context?["trust_metadata"] as? [String: Any] {
+                    let decoder = JSONDecoder()
+                    let metadata = try decoder.decode(
+                        IssuerMetadata.self,
+                        from: JSONSerialization.data(withJSONObject: metadataJson)
+                    )
+                    var entitlement: IssuerEntitlement?
+                    if let entJson = resolved["issuer_entitlement"] as? [String: Any] {
+                        entitlement = try? decoder.decode(
+                            IssuerEntitlement.self,
+                            from: JSONSerialization.data(withJSONObject: entJson)
+                        )
+                    }
+                    return ResolvedIssuerMetadata(
+                        metadata: metadata,
+                        entitlement: entitlement,
+                        trusted: resolved["decision"] as? Bool
+                    )
+                }
+            } catch {
+                // A backend that is unreachable must not make issuance
+                // impossible, but the caller has to be able to tell that the
+                // checks did not run - hence a nil entitlement below.
+            }
+        }
+
+        return ResolvedIssuerMetadata(metadata: try await fetchIssuerMetadata(issuerUrl: issuerUrl))
+    }
+
+    /// The backend's entitlement decision for one credential configuration, or
+    /// nil if it could not be obtained.
+    ///
+    /// Nil means "not checked", and a check that could not run must not block
+    /// issuance - the same distinction the backend draws between "revoked" and
+    /// "could not determine". Making issuance depend on this round-trip
+    /// succeeding would turn a backend outage into an outage for every issuer.
+    func issuerEntitlementFor(issuerUrl: String, configurationId: String) async -> IssuerEntitlement? {
+        do {
+            return try await resolveIssuerMetadata(
+                issuerUrl: issuerUrl,
+                credentialTypes: [configurationId]
+            ).entitlement
+        } catch {
+            return nil
+        }
+    }
+
+    /// Refuse issuance when the backend says the provider is not registered to
+    /// issue what it is offering.
+    ///
+    /// Warn mode reports findings while leaving `allowed` true, so this only
+    /// throws when the deployment has asked it to.
+    func enforceIssuerEntitlement(issuerUrl: String, entitlement: IssuerEntitlement?) throws {
+        guard let entitlement, !entitlement.allowed else {
+            return
+        }
+        let reasons = entitlement.findings
+            .map { "\($0.code): \($0.message)" }
+            .joined(separator: ", ")
+        throw SirosError.wallet(
+            message: "Issuer '\(issuerUrl)' is not registered to issue this credential: \(reasons)"
+        )
+    }
+
     /// Get (creating once, on first use) this wallet installation's persistent
     /// OAuth Client Attestation instance key ID - see
     /// `SessionStoreProtocol.instanceKeyId`.
@@ -370,6 +479,17 @@ extension SirosWallet {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
+        // ARF section 6.6.2.3: check the provider is registered to issue what
+        // it offers before requesting it. Done before the in-flight flag is
+        // taken, so a refusal cannot leave issuance wedged.
+        try enforceIssuerEntitlement(
+            issuerUrl: offer.credentialIssuerIdentifier,
+            entitlement: await issuerEntitlementFor(
+                issuerUrl: offer.credentialIssuerIdentifier,
+                configurationId: offer.credentialConfigurationId
+            )
+        )
+
         lock.lock()
         if issuanceInFlight {
             lock.unlock()
