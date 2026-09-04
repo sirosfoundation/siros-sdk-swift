@@ -10,6 +10,11 @@ import SirosAuth
 import SirosKeystore
 import SirosFlow
 
+#if canImport(os)
+import os
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
+#endif
+
 extension SirosWallet {
     // MARK: - Issuance
 
@@ -179,10 +184,27 @@ extension SirosWallet {
                     )
                     var entitlement: IssuerEntitlement?
                     if let entJson = resolved["issuer_entitlement"] as? [String: Any] {
-                        entitlement = try? decoder.decode(
-                            IssuerEntitlement.self,
-                            from: JSONSerialization.data(withJSONObject: entJson)
-                        )
+                        do {
+                            entitlement = try decoder.decode(
+                                IssuerEntitlement.self,
+                                from: JSONSerialization.data(withJSONObject: entJson)
+                            )
+                        } catch {
+                            #if canImport(os)
+                            // A decision we cannot read is not a decision, so
+                            // this stays nil - "not checked" - rather than
+                            // becoming a refusal: rejecting a shape we do not
+                            // understand would block legitimate issuance the
+                            // moment the backend adds a field. But it must not
+                            // be silent, because "not checked" and "checked and
+                            // fine" are indistinguishable to everything
+                            // downstream, and this is the one place that knows
+                            // the difference was caused by a malformed response.
+                            logger.warning(
+                                "Issuer entitlement decision for \(issuerUrl) could not be decoded: \(error.localizedDescription)"
+                            )
+                            #endif
+                        }
                     }
                     return ResolvedIssuerMetadata(
                         metadata: metadata,

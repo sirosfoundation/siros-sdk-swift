@@ -77,6 +77,19 @@ final class IssuerEntitlementDecodingTests: XCTestCase {
         XCTAssertNil(ent.subject)
     }
 
+    func testAMissingAllowedIsNotAPass() {
+        // Defaulting `allowed` to true would mean a truncated body, a renamed
+        // key or a tampered response decodes as a decision to allow. Decoding
+        // must fail instead, so the caller is left with nil - "not checked" -
+        // which is the one state that never reads as a pass.
+        XCTAssertThrowsError(try decode(#"{"mode": "fail", "evaluated": true}"#))
+    }
+
+    func testAllowedMustBeABoolean() {
+        // Same reasoning for a wrong-typed value: "false" is not false.
+        XCTAssertThrowsError(try decode(#"{"allowed": "false", "mode": "fail"}"#))
+    }
+
     func testIssuerMetadataCarriesSignedMetadataAndIssuerInfo() throws {
         // ETSI TS 119 472-3: the provider's WRPAC signs `signed_metadata`, and
         // its registration certificate travels in `issuer_info`.

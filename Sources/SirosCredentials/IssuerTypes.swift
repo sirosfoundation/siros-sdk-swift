@@ -300,7 +300,17 @@ public struct IssuerEntitlement: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        allowed = try c.decodeIfPresent(Bool.self, forKey: .allowed) ?? true
+        // `allowed` is required, deliberately. Defaulting it to true would mean
+        // a response that omits or misnames the field - a truncated body, a
+        // renamed key, a tampered one - decodes as a decision to allow. A
+        // decision that is not present is not a decision: failing to decode
+        // leaves the caller with nil, which is "not checked", and the one thing
+        // nil never does is read as a pass.
+        //
+        // Matches siros-sdk-kotlin, where `allowed` has no default, and
+        // wallet-frontend, which discards a decision carrying no `allowed`
+        // boolean.
+        allowed = try c.decode(Bool.self, forKey: .allowed)
         mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "warn"
         evaluated = try c.decodeIfPresent(Bool.self, forKey: .evaluated) ?? false
         findings = try c.decodeIfPresent([IssuerEntitlementFinding].self, forKey: .findings) ?? []
