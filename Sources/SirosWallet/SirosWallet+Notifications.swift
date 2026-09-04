@@ -157,9 +157,14 @@ extension SirosWallet {
     /// against it would fail every time and refuse legitimate issuance.
     func authorisedCredentialType(format: String) -> String? {
         if format == "mso_mdoc" {
-            return activeMddlSchema?.doctype
+            // The offer first: it is what the entitlement check in
+            // resolveIssuerMetadata was run against, and unlike the resolved
+            // schema it is present even when metadata resolution failed. Taking
+            // only the schema would make this check a no-op in exactly the
+            // situation where the wallet knows least about the credential.
+            return activeOffer?.doctype ?? activeMddlSchema?.doctype
         }
-        return activeVctm?.vct
+        return activeOffer?.vct ?? activeVctm?.vct
     }
 
     /// Refuse a credential whose declared type is not the one this flow was
@@ -176,9 +181,14 @@ extension SirosWallet {
     /// type that could not be determined on either side is not a mismatch: as
     /// everywhere else in this path, a check that could not run must not become
     /// a refusal.
-    func verifyIssuedType(format: String, raw: String) -> String? {
+    /// - Parameter declaredType: the type the caller has already read off the
+    ///   credential, when it has one. Both storage paths parse the credential
+    ///   before reaching here, so passing it avoids a second parse - and, more
+    ///   to the point, compares the same parse that was validated rather than a
+    ///   fresh one that might not agree with it.
+    func verifyIssuedType(format: String, raw: String, declaredType: String? = nil) -> String? {
         guard let authorised = authorisedCredentialType(format: format),
-              let declared = CredentialUtils.declaredType(format: format, raw: raw),
+              let declared = declaredType ?? CredentialUtils.declaredType(format: format, raw: raw),
               declared != authorised else {
             return nil
         }
@@ -242,7 +252,11 @@ extension SirosWallet {
             guard let mdocDocument = CredentialUtils.parseMdocDocument(cred.credential) else {
                 return (false, "Received credential could not be read")
             }
-            if let reason = verifyIssuedType(format: cred.format, raw: cred.credential) {
+            if let reason = verifyIssuedType(
+                format: cred.format,
+                raw: cred.credential,
+                declaredType: mdocDocument.docType
+            ) {
                 return (false, reason)
             }
 
@@ -293,7 +307,11 @@ extension SirosWallet {
             return (false, "Issued credential was already expired")
         }
 
-        if let reason = verifyIssuedType(format: cred.format, raw: cred.credential) {
+        if let reason = verifyIssuedType(
+            format: cred.format,
+            raw: cred.credential,
+            declaredType: payload["vct"] as? String
+        ) {
             return (false, reason)
         }
         if let reason = verifyVctIntegrity(format: cred.format, payload: payload) {

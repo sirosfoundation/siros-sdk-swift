@@ -97,6 +97,35 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         XCTAssertNil(w.verifyIssuedType(format: "mso_mdoc", raw: "not-a-jwt"))
     }
 
+    func testUsesTheOffersTypeWhenMetadataResolutionFailed() {
+        // The situation the check exists for and would otherwise miss: metadata
+        // never resolved, so there is no Vctm - but the offer still declared a
+        // vct, and that is what the entitlement check was run against.
+        let w = makeWallet()
+        w.activeVctm = nil
+        w.activeOffer = CredentialOffer(
+            credentialConfigurationId: "pid",
+            credentialIssuerIdentifier: "https://issuer.example.com",
+            credentialName: "PID",
+            issuerName: "Issuer",
+            vct: "urn:eudi:pid:1"
+        )
+        XCTAssertNotNil(w.verifyIssuedType(format: "dc+sd-jwt", raw: sdJwt(vct: "urn:example:other")))
+        XCTAssertNil(w.verifyIssuedType(format: "dc+sd-jwt", raw: sdJwt(vct: "urn:eudi:pid:1")))
+    }
+
+    func testAPreParsedTypeIsUsedAsGiven() {
+        // Both storage paths have already parsed the credential; the comparison
+        // must use that parse rather than a second one.
+        let w = makeWallet()
+        w.activeVctm = Vctm(vct: "urn:eudi:pid:1")
+        XCTAssertNotNil(w.verifyIssuedType(
+            format: "dc+sd-jwt",
+            raw: sdJwt(vct: "urn:eudi:pid:1"),
+            declaredType: "urn:example:other"
+        ))
+    }
+
     // MARK: - vct#integrity
 
     private func document(_ vct: String) -> VctmDocument {

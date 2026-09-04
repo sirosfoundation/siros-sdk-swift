@@ -242,18 +242,6 @@ public enum CredentialUtils {
         return current
     }
 
-    /// mdoc analogue of ``extractClaims(_:)``: parse a stored mdoc credential's
-    /// REAL disclosed namespace/element values (via `MdocCbor`, not
-    /// `parseJwtPayload` which assumes a JWT-shaped `raw`) into `DisplayClaim`s,
-    /// using MDDL claim metadata (`credential.metadata.claims`, populated by
-    /// ``buildMdocMetadata(offer:mddlSchema:)``) for labels/descriptions when available.
-    ///
-    /// Claim keys/paths use the `["namespace", "elementIdentifier"]` shape,
-    /// consistent with how ``buildMdocMetadata(offer:mddlSchema:)`` populates `ClaimMeta.path`.
-    /// Decode and parse a stored mdoc credential's raw base64url CBOR into its
-    /// `DocumentMdoc` shape (unwrapping the `DeviceResponse`-style envelope
-    /// per wallet-frontend#191). Returns nil if the raw string isn't
-    /// valid base64url or doesn't parse as an mdoc document.
     /// The credential type the credential itself declares: `vct` for an SD-JWT
     /// VC, `docType` for an mdoc. Nil when it declares none, or cannot be read.
     ///
@@ -271,6 +259,18 @@ public enum CredentialUtils {
         return parseJwtPayload(raw)?["vct"] as? String
     }
 
+    /// mdoc analogue of ``extractClaims(_:)``: parse a stored mdoc credential's
+    /// REAL disclosed namespace/element values (via `MdocCbor`, not
+    /// `parseJwtPayload` which assumes a JWT-shaped `raw`) into `DisplayClaim`s,
+    /// using MDDL claim metadata (`credential.metadata.claims`, populated by
+    /// ``buildMdocMetadata(offer:mddlSchema:)``) for labels/descriptions when available.
+    ///
+    /// Claim keys/paths use the `["namespace", "elementIdentifier"]` shape,
+    /// consistent with how ``buildMdocMetadata(offer:mddlSchema:)`` populates `ClaimMeta.path`.
+    /// Decode and parse a stored mdoc credential's raw base64url CBOR into its
+    /// `DocumentMdoc` shape (unwrapping the `DeviceResponse`-style envelope
+    /// per wallet-frontend#191). Returns nil if the raw string isn't
+    /// valid base64url or doesn't parse as an mdoc document.
     public static func parseMdocDocument(_ rawCredential: String) -> DocumentMdoc? {
         guard let bytes = base64UrlDecode(rawCredential) else { return nil }
         do {
