@@ -163,28 +163,20 @@ extension SirosWallet {
                 try await engine.awaitConnected()
                 // Client attestation for the resumed flow: Execute() sets up
                 // h.attestationProvider identically whether msg.AuthCode is
-                // set or not (it runs before that branch), so the ONLY thing
-                // missing here was the client never sending it - the backend
-                // already handled resume correctly. Confirmed missing via a
-                // real geneva2026.mdoc.online conformance run: the token
-                // request (which only ever happens via this resume path for
-                // redirect-based authorization_code issuers) showed "No OAuth
-                // Client Attestations were provided".
-                var clientAttestation: (String, String)?
-                if let offerJson = pending.offer,
-                   let data = offerJson.data(using: .utf8),
-                   let offerObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let issuerUrl = offerObj["credential_issuer"] as? String {
-                    clientAttestation = await resolveClientAttestation(issuerUrl: issuerUrl)
-                }
+                // set or not (it runs before that branch), so the engine
+                // sends its `request_attestation` sign request on resume
+                // exactly as on a fresh start - and the token request (which
+                // only ever happens via this resume path for redirect-based
+                // authorization_code issuers; a real geneva2026.mdoc.online
+                // run once showed "No OAuth Client Attestations were
+                // provided" when resume skipped it) gets the headers from
+                // `handleSignRequest`'s answer. Nothing to pre-resolve here.
                 engine.resumeIssuance(
                     offer: pending.offer,
                     credentialOfferUri: pending.credentialOfferUri,
                     redirectUri: pending.redirectUri,
                     authCode: code,
-                    codeVerifier: pending.codeVerifier,
-                    clientAttestation: clientAttestation?.0,
-                    clientAttestationPoP: clientAttestation?.1
+                    codeVerifier: pending.codeVerifier
                 )
             } catch {
                 lock.lock(); let listener = eventListener; lock.unlock()

@@ -166,7 +166,7 @@ extension SirosWallet {
                 // iss doesn't need to equal client_id for THIS PoP - it's
                 // validated by our own backend (WIAService.validatePop only
                 // checks iss is non-empty), unlike the per-issuer PoP built in
-                // resolveClientAttestation. clientAttestationClientId() is
+                // buildClientAttestationPoP. clientAttestationClientId() is
                 // still a reasonable choice: consistent, and non-empty.
                 issuer: clientAttestationClientId(),
                 // Must match the backend's configured wallet_provider_uri, if
@@ -262,48 +262,13 @@ extension SirosWallet {
     /// The OAuth `client_id` this wallet uses in OID4VCI/OID4VP flows.
     /// Mirrors go-wallet-backend's `OID4VCIHandler.clientID` default
     /// (`h.clientID = h.redirectURI`, OID4VCI §7.1's unregistered-client
-    /// convention) - known to be correct for any issuer that doesn't have its
-    /// own registered client_id override server-side (the common case; a
-    /// registered override isn't visible to the client, so a cached WIA/PoP
-    /// built against this default would be spec-inconsistent for that rarer
-    /// case - a known, accepted limitation rather than something this method
-    /// can resolve without per-issuer client_id discovery).
+    /// convention). Used as the WIA-request PoP's `iss` and as the fallback
+    /// per-flow PoP `iss` when the engine's `request_attestation` carries no
+    /// `issuer`; when it does, that value wins - it is the effective
+    /// client_id for the flow, including any registered per-issuer override
+    /// that is not visible client-side.
     private func clientAttestationClientId() -> String {
         config.redirectUri
-    }
-
-    /// Resolve OAuth Client Attestation (a WIA plus a fresh per-flow PoP) for
-    /// an issuance flow targeting `issuerUrl` - the pair the engine forwards
-    /// as `OAuth-Client-Attestation`/`OAuth-Client-Attestation-PoP` headers to
-    /// the credential issuer.
-    ///
-    /// The PoP's `aud` targets the issuer's own authorization server if
-    /// discoverable from its metadata, falling back to the credential issuer
-    /// URL itself for issuers that self-host their AS at the same origin.
-    /// Its `iss` is the same client_id used for the WIA's `sub` (see
-    /// `ensureWalletInstanceAttestation`) - draft-ietf-oauth-attestation-based-client-auth-10
-    /// requires both to match. Its `challenge` claim, when the AS publishes a
-    /// `challenge_endpoint` in its metadata, is fetched fresh from there
-    /// (§ "Challenge Endpoint" - POST returns `{"attestation_challenge": ...}`);
-    /// omitted otherwise, since the claim is optional per spec.
-    ///
-    /// Best-effort: returns nil on any failure - missing/misconfigured WIA
-    /// support must never block issuance itself.
-    // Not `private`: `SirosWallet+Lifecycle.swift` needs it too - same
-    // cross-file-extension-access reason as `keystore` above.
-    func resolveClientAttestation(issuerUrl: String) async -> (String, String)? {
-        guard let wia = await ensureWalletInstanceAttestation() else { return nil }
-        let asUrl: String
-        if let metadata = try? await fetchIssuerMetadata(issuerUrl: issuerUrl),
-           let server = metadata.authorizationServers?.first(where: { !$0.isEmpty }) {
-            asUrl = server
-        } else {
-            asUrl = issuerUrl
-        }
-        guard let pop = await buildClientAttestationPoP(asUrl: asUrl, clientId: clientAttestationClientId()) else {
-            return nil
-        }
-        return (wia, pop)
     }
 
     /// Answer the engine's `request_attestation` sign request
@@ -348,9 +313,10 @@ extension SirosWallet {
     /// to), `iss` = `clientId` (must equal the WIA's `sub` per
     /// draft-ietf-oauth-attestation-based-client-auth-10), plus a `challenge`
     /// claim when `asUrl` publishes a `challenge_endpoint` (see
-    /// `fetchAttestationChallenge`). Shared by the FlowStart-time
-    /// `resolveClientAttestation` and the engine-requested
-    /// `clientAttestation(forEngineRequest:)`.
+    /// `fetchAttestationChallenge`). Used by the engine-requested
+    /// `clientAttestation(forEngineRequest:)`; kept separate so a future
+    /// caller that already knows the AS can sign a PoP without going through
+    /// the sign-request params.
     ///
     /// Best-effort: returns nil on any failure rather than throwing.
     func buildClientAttestationPoP(asUrl: String, clientId: String) async -> String? {
@@ -478,12 +444,12 @@ extension SirosWallet {
                 offerJson = "{}"
             }
 
-            let clientAttestation = await resolveClientAttestation(issuerUrl: offer.credentialIssuerIdentifier)
+            // Wallet attestation is engine-requested (`request_attestation`
+            // sign request, answered in `handleSignRequest`) - nothing to
+            // resolve or attach up front.
             engine.startIssuance(
                 offer: offerJson,
-                redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
-                clientAttestation: clientAttestation?.0,
-                clientAttestationPoP: clientAttestation?.1
+                redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri
             )
         } catch {
             // A synchronous start failure here means the flow was never
@@ -525,20 +491,15 @@ extension SirosWallet {
                 )
                 lock.lock(); activeVctm = vctm; activeMddlSchema = mddlSchema; lock.unlock()
             }
-            // Resolve OAuth Client Attestation once, independent of whether the
-            // display-metadata resolution above succeeded - a client that can't
-            // be shown a name/logo should still get an attestation attached.
-            var attestation: String?
-            var attestationPoP: String?
-            if let header = await extractOfferHeader(offerUri),
-               let pair = await resolveClientAttestation(issuerUrl: header.credentialIssuer) {
-                attestation = pair.0
-                attestationPoP = pair.1
-            }
+            // Wallet attestation is engine-requested (`request_attestation`
+            // sign request, answered in `handleSignRequest`): the engine
+            // resolves the offer and the issuer's authorization server itself
+            // and tells us the exact PoP audience/client_id, so there is no
+            // second client-side fetch of the offer or metadata for it here.
             if offerUri.hasPrefix("openid-credential-offer://") {
                 // Deep-link URI with inline offer - send as "offer" so the engine
                 // extracts the credential_offer query parameter instead of HTTP-fetching.
-                engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                engine.startIssuance(offer: offerUri)
             } else if offerUri.hasPrefix("http") {
                 // Universal-link-style offer: the credential_offer/credential_offer_uri
                 // live in the URI's own query string (e.g. an issuer's wallet-redirect
@@ -550,14 +511,14 @@ extension SirosWallet {
                     queryItems.first(where: { $0.name == name })?.value
                 }
                 if let credentialOffer = queryValue("credential_offer") {
-                    engine.startIssuance(offer: credentialOffer, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                    engine.startIssuance(offer: credentialOffer)
                 } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                    engine.startIssuance(credentialOfferUri: credentialOfferUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                    engine.startIssuance(credentialOfferUri: credentialOfferUri)
                 } else {
-                    engine.startIssuance(credentialOfferUri: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                    engine.startIssuance(credentialOfferUri: offerUri)
                 }
             } else {
-                engine.startIssuance(offer: offerUri, clientAttestation: attestation, clientAttestationPoP: attestationPoP)
+                engine.startIssuance(offer: offerUri)
             }
         } catch {
             // A synchronous start failure here means the flow was never

@@ -384,18 +384,42 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
 
     /// Start an OID4VCI credential issuance flow.
     ///
-    /// - Parameters:
-    ///   - clientAttestation: optional Wallet Instance Attestation JWT (OAuth
-    ///     Client Attestation, draft-ietf-oauth-attestation-based-client-auth-04
-    ///     §3.1) - see `FlowStartMessage.clientAttestation`.
-    ///   - clientAttestationPoP: the matching per-flow PoP JWT, required
-    ///     whenever `clientAttestation` is set.
+    /// Wallet attestation is not supplied here: once the engine has resolved
+    /// the issuer's authorization server it sends a `request_attestation`
+    /// sign request (go-wallet-backend#304), answered from `signRequests()`
+    /// via `sendSignResponse(clientAttestation:clientAttestationPoP:)` with a
+    /// PoP bound to exactly the `audience`/`issuer` the engine asks for.
+    public func startIssuance(
+        offer: String? = nil,
+        credentialOfferUri: String? = nil,
+        redirectUri: String? = nil
+    ) {
+        send(FlowStartMessage(
+            protocol: "oid4vci",
+            offer: offer,
+            credentialOfferUri: credentialOfferUri,
+            redirectUri: redirectUri
+        ))
+    }
+
+    /// Start an OID4VCI issuance flow with a pre-built Wallet Instance
+    /// Attestation + PoP on the FlowStart itself.
+    ///
+    /// Deprecated: building the PoP up front forces the client to discover
+    /// the issuer's authorization server (and guess the flow's `client_id`)
+    /// on its own, duplicating work the engine does anyway - and getting it
+    /// wrong for issuers with a registered client_id override. Use the
+    /// parameterless `startIssuance(offer:credentialOfferUri:redirectUri:)`
+    /// and answer the engine's `request_attestation` sign request instead.
+    /// The engine still honors attestation supplied this way, so existing
+    /// callers keep working.
+    @available(*, deprecated, message: "Answer the engine's request_attestation sign request via sendSignResponse(clientAttestation:clientAttestationPoP:) instead of pre-supplying attestation on FlowStart.")
     public func startIssuance(
         offer: String? = nil,
         credentialOfferUri: String? = nil,
         redirectUri: String? = nil,
-        clientAttestation: String? = nil,
-        clientAttestationPoP: String? = nil
+        clientAttestation: String?,
+        clientAttestationPoP: String?
     ) {
         send(FlowStartMessage(
             protocol: "oid4vci",
@@ -578,21 +602,40 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// the original flow_id, which is not guaranteed to still be alive after
     /// the redirect round-trip. Mirrors the wallet-backend's
     /// `resumeWithAuthCode` contract already used by the web client.
-    /// - Parameters:
-    ///   - clientAttestation/clientAttestationPoP: OAuth Client Attestation
-    ///     for the resumed flow - go-wallet-backend's `Execute()` sets up its
-    ///     attestation provider identically regardless of whether this is a
-    ///     fresh flow or a resume (the setup runs before branching on
-    ///     `msg.AuthCode`), so this is just as meaningful here as on the
-    ///     original `startIssuance` call - see `FlowStartMessage.clientAttestation`.
+    ///
+    /// Wallet attestation for the resumed flow arrives the same way as for a
+    /// fresh one: go-wallet-backend's `Execute()` runs its attestation setup
+    /// before branching on `msg.AuthCode`, so it sends `request_attestation`
+    /// here too - see `startIssuance(offer:credentialOfferUri:redirectUri:)`.
+    public func resumeIssuance(
+        offer: String? = nil,
+        credentialOfferUri: String? = nil,
+        redirectUri: String? = nil,
+        authCode: String,
+        codeVerifier: String? = nil
+    ) {
+        send(FlowStartMessage(
+            protocol: "oid4vci",
+            offer: offer,
+            credentialOfferUri: credentialOfferUri,
+            redirectUri: redirectUri,
+            authCode: authCode,
+            codeVerifier: codeVerifier
+        ))
+    }
+
+    /// Resume an OID4VCI issuance flow with a pre-built Wallet Instance
+    /// Attestation + PoP on the FlowStart itself. Deprecated for the same
+    /// reason as the matching `startIssuance` overload.
+    @available(*, deprecated, message: "Answer the engine's request_attestation sign request via sendSignResponse(clientAttestation:clientAttestationPoP:) instead of pre-supplying attestation on resume.")
     public func resumeIssuance(
         offer: String? = nil,
         credentialOfferUri: String? = nil,
         redirectUri: String? = nil,
         authCode: String,
         codeVerifier: String? = nil,
-        clientAttestation: String? = nil,
-        clientAttestationPoP: String? = nil
+        clientAttestation: String?,
+        clientAttestationPoP: String?
     ) {
         send(FlowStartMessage(
             protocol: "oid4vci",

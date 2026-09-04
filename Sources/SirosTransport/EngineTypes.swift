@@ -74,6 +74,11 @@ public struct FlowStartMessage: Codable, Sendable {
     /// obtained from this wallet's own backend (`/wallet-provider/wia/generate`).
     /// Forwarded by go-wallet-backend as the `OAuth-Client-Attestation` HTTP
     /// header on PAR/token requests to the credential issuer.
+    ///
+    /// Supplying it here is the legacy, client-discovers-everything path and
+    /// is deprecated on `WalletEngineSession`: when absent, the engine asks
+    /// for it with a `request_attestation` sign request once it knows the
+    /// issuer's authorization server (`SignResponseMessage.clientAttestation`).
     public var clientAttestation: String?
     /// The matching PoP JWT (`typ: oauth-client-attestation-pop+jwt`), freshly
     /// signed per flow with `aud` = the credential issuer's own authorization

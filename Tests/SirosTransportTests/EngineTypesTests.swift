@@ -34,6 +34,25 @@ final class EngineTypesTests: XCTestCase {
         XCTAssertTrue(text.contains("redirect_uri"))
     }
 
+    /// The SDK no longer pre-supplies wallet attestation on FlowStart (it
+    /// answers the engine's `request_attestation` sign request instead), so
+    /// the plain issuance FlowStart must not carry - not even as `null` -
+    /// the `client_attestation*` keys the engine treats as "already
+    /// attested, don't ask".
+    func testFlowStartIssuanceOmitsClientAttestationByDefault() throws {
+        let msg = FlowStartMessage(
+            protocol: "oid4vci",
+            credentialOfferUri: "https://issuer.example.com/offer/1",
+            redirectUri: "https://wallet.example.com/cb"
+        )
+        let data = try encoder.encode(msg)
+        let text = String(data: data, encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"credential_offer_uri\""))
+        XCTAssertFalse(text.contains("client_attestation"))
+        XCTAssertFalse(text.contains("client_attestation_pop"))
+    }
+
     func testFlowStartPresentationEncoding() throws {
         let msg = FlowStartMessage(
             protocol: "oid4vp",
