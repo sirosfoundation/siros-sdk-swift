@@ -520,7 +520,7 @@ public protocol SirosBlobBuilderProtocol : AnyObject {
     func addCredential(credential: FfiCredential) 
     
     /**
-     * Add an icon, referenced by [`FfiCredential::icon_id`].
+     * Add an icon, referenced by a credential's icon id.
      *
      * Stored once and shared: wallets routinely hold several credentials from
      * one issuer, and repeating that issuer's logo per credential makes the
@@ -541,10 +541,12 @@ public protocol SirosBlobBuilderProtocol : AnyObject {
      *
      * # Errors
      *
-     * [`BlobError::UnknownIcon`] when a credential names an icon that was
-     * never added — a dangling reference would otherwise cost that credential
-     * its picture with nothing said. [`BlobError::Encoding`] if serialisation
-     * fails.
+     * In Rust and Swift the error type is `BlobError`; Kotlin renames it to
+     * `BlobException`. Either way there are two variants.
+     *
+     * `UnknownIcon` when a credential names an icon that was never added — a
+     * dangling reference would otherwise cost that credential its picture
+     * with nothing said. `Encoding` if serialisation fails.
      */
     func build() throws  -> Data
     
@@ -638,7 +640,7 @@ open func addCredential(credential: FfiCredential) {try! rustCall() {
 }
     
     /**
-     * Add an icon, referenced by [`FfiCredential::icon_id`].
+     * Add an icon, referenced by a credential's icon id.
      *
      * Stored once and shared: wallets routinely hold several credentials from
      * one issuer, and repeating that issuer's logo per credential makes the
@@ -670,10 +672,12 @@ open func addZkSystem(capability: FfiCapability) {try! rustCall() {
      *
      * # Errors
      *
-     * [`BlobError::UnknownIcon`] when a credential names an icon that was
-     * never added — a dangling reference would otherwise cost that credential
-     * its picture with nothing said. [`BlobError::Encoding`] if serialisation
-     * fails.
+     * In Rust and Swift the error type is `BlobError`; Kotlin renames it to
+     * `BlobException`. Either way there are two variants.
+     *
+     * `UnknownIcon` when a credential names an icon that was never added — a
+     * dangling reference would otherwise cost that credential its picture
+     * with nothing said. `Encoding` if serialisation fails.
      */
 open func build()throws  -> Data {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeBlobError.lift) {
@@ -865,7 +869,7 @@ public struct FfiClaim {
      */
     public var display: String
     /**
-     * Human-readable value, when it differs from [`Self::value`].
+     * Human-readable value, when it differs from the `value` field.
      */
     public var displayValue: String?
 
@@ -886,7 +890,7 @@ public struct FfiClaim {
          * Human-readable label.
          */display: String, 
         /**
-         * Human-readable value, when it differs from [`Self::value`].
+         * Human-readable value, when it differs from the `value` field.
          */displayValue: String?) {
         self.path = path
         self.value = value
@@ -1062,7 +1066,7 @@ public struct FfiCredential {
      */
     public var subtitle: String
     /**
-     * Icon added via [`SirosBlobBuilder::add_icon`], by its id.
+     * An icon added to the blob when it was built, by its id.
      */
     public var iconId: String?
     /**
@@ -1097,7 +1101,7 @@ public struct FfiCredential {
          * Secondary line, typically the issuer.
          */subtitle: String, 
         /**
-         * Icon added via [`SirosBlobBuilder::add_icon`], by its id.
+         * An icon added to the blob when it was built, by its id.
          */iconId: String?, 
         /**
          * Claims available for matching and display.
@@ -1464,12 +1468,12 @@ public func FfiConverterTypeFfiMatchedCredential_lower(_ value: FfiMatchedCreden
 /**
  * The credentials answering one credential query.
  *
- * Complete, and independent of [`FfiMatchOutcome::combinations`]. Callers that
- * only need "which credentials qualify for this query" must read this rather
- * than unioning the combinations: the combination list is *capped*, because
- * its length is a product of the per-query candidate counts, so a union of it
- * can omit credentials that do qualify. Filtering on such a union silently
- * drops them from what a user is offered.
+ * Complete, and independent of the `combinations` field on `FfiMatchOutcome`.
+ * Callers that only need "which credentials qualify for this query" must read
+ * this rather than unioning the combinations: the combination list is
+ * *capped*, because its length is a product of the per-query candidate
+ * counts, so a union of it can omit credentials that do qualify. Filtering on
+ * such a union silently drops them from what a user is offered.
  */
 public struct FfiQueryMatch {
     /**
@@ -1978,7 +1982,8 @@ fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
  *
  * # Errors
  *
- * See [`MatchError`].
+ * See the match error type — `MatchError` in Rust and Swift,
+ * `MatchException` in Kotlin.
  */
 public func matchDcApiRequest(blob: Data, requestJson: String)throws  -> FfiMatchOutcome {
     return try  FfiConverterTypeFfiMatchOutcome.lift(try rustCallWithError(FfiConverterTypeMatchError.lift) {
@@ -1997,7 +2002,8 @@ public func matchDcApiRequest(blob: Data, requestJson: String)throws  -> FfiMatc
  *
  * # Errors
  *
- * See [`MatchError`].
+ * See the match error type — `MatchError` in Rust and Swift,
+ * `MatchException` in Kotlin.
  */
 public func matchDcql(blob: Data, dcqlJson: String)throws  -> FfiMatchOutcome {
     return try  FfiConverterTypeFfiMatchOutcome.lift(try rustCallWithError(FfiConverterTypeMatchError.lift) {
@@ -2023,22 +2029,22 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_siros_dc_matcher_ffi_checksum_func_match_dc_api_request() != 60054) {
+    if (uniffi_siros_dc_matcher_ffi_checksum_func_match_dc_api_request() != 49337) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql() != 59469) {
+    if (uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql() != 1962) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_credential() != 64015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_icon() != 53556) {
+    if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_icon() != 3617) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_zk_system() != 50234) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_build() != 51313) {
+    if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_build() != 43215) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_set_debug() != 60199) {
