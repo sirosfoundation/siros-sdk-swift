@@ -149,8 +149,12 @@ final class BbsIssuanceParticipantTests: XCTestCase {
             holderClaimsJson: holderClaims, keybindPublicKeys: [], signer: refusingSigner
         )
         let fields = prepared.credentialRequestFields
-        XCTAssertEqual(Set(fields.keys),
-                       [BbsIssuanceParticipant.commitmentField, BbsIssuanceParticipant.pointersField])
+        XCTAssertEqual(Set(fields.keys), [
+            BbsIssuanceParticipant.commitmentField,
+            BbsIssuanceParticipant.pointersField,
+            BbsIssuanceParticipant.keyBindingField,
+            BbsIssuanceParticipant.suiteField,
+        ])
 
         let commitment = try XCTUnwrap(fields[BbsIssuanceParticipant.commitmentField])
         let decodedCommitment = try JSONSerialization.jsonObject(

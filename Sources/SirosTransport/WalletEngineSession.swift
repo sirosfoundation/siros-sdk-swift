@@ -488,6 +488,10 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// `request_attestation`).
     ///
     /// - Parameters:
+    ///   - credentialRequestExtras: extra members for the credential request
+    ///     the backend will send - see
+    ///     `SignResponseMessage.credentialRequestExtras`. Nil for every flow
+    ///     that does not need them.
     ///   - clientAttestation/clientAttestationPoP: the WIA and per-flow PoP
     ///     answering a `request_attestation` action - see
     ///     `SignResponseMessage.clientAttestation`.
@@ -496,6 +500,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         proofJwt: String? = nil,
         vpToken: String? = nil,
         proofs: [ProofObject]? = nil,
+        credentialRequestExtras: [String: AnyCodable]? = nil,
         clientAttestation: String? = nil,
         clientAttestationPoP: String? = nil,
         messageId: String? = nil
@@ -506,6 +511,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             proofJwt: proofJwt,
             vpToken: vpToken,
             proofs: proofs,
+            credentialRequestExtras: credentialRequestExtras,
             clientAttestation: clientAttestation,
             clientAttestationPoP: clientAttestationPoP
         ))
