@@ -35,7 +35,7 @@ public struct TransactionDataItem: Sendable {
 /// let keystore = WscdKeystoreAdapter(signer: wscdSigner)
 /// let wallet = SirosWallet(keystore: keystore)
 /// ```
-public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, WscdManager {
+public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, WscdManager, ExtensionStore {
 
     private let signer: Signer
 
@@ -176,6 +176,30 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     /// See `JweKeystore.removeCredentialRefreshToken`.
     public func removeCredentialRefreshToken(batchId: Int64) async {
         await credentialsKeystore.removeCredentialRefreshToken(batchId: batchId)
+    }
+
+    // MARK: - ExtensionStore conformance
+
+    // Extension state has to land in the same blob the credentials do, or
+    // it does not reach the account's other devices - and
+    // `credentialsKeystore` is the JweKeystore that owns this adapter's
+    // container. Swift has no `by`-delegation, so each method forwards
+    // explicitly; the semantics (including throwing while locked) are
+    // `JweKeystore`'s.
+
+    /// See `JweKeystore.extensionEntries`.
+    public func extensionEntries(namespace: String) async -> [String: String] {
+        await credentialsKeystore.extensionEntries(namespace: namespace)
+    }
+
+    /// See `JweKeystore.setExtensionEntry`.
+    public func setExtensionEntry(namespace: String, key: String, value: String) async throws {
+        try await credentialsKeystore.setExtensionEntry(namespace: namespace, key: key, value: value)
+    }
+
+    /// See `JweKeystore.removeExtensionEntry`.
+    public func removeExtensionEntry(namespace: String, key: String) async throws {
+        try await credentialsKeystore.removeExtensionEntry(namespace: namespace, key: key)
     }
 
     public func generateKey(algorithm: String) async throws -> String {
