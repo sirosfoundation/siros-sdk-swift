@@ -87,11 +87,7 @@ extension SirosWallet {
             let batchInstances = allCredentials.filter { $0.batchId == batchId }
             guard let representative = batchInstances.first(where: { $0.instanceId == 0 }) ?? batchInstances.first else { continue }
             let threshold = renewThresholdFor(representative.credentialConfigurationId)
-            let eligible = CredentialUtils.eligibleInstances(
-                instances: batchInstances,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            )
+            let eligible = eligibleInstances(from: batchInstances)
             if eligible.count <= threshold {
                 lock.lock(); let listener = eventListener; lock.unlock()
                 listener?.onCredentialNearExpiry(credential: representative, eligibleRemaining: eligible.count, threshold: threshold)

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `PresentationRecord.zkProof` (`zk_proof`): whether a presentation was a
+  zero-knowledge proof rather than a raw disclosure, set on the DC API and both
+  engine selection paths; sample-app history shows a lock badge for it
+- `SirosWallet.availableKeyIds` and an `isZkPresentation` resolver on
+  `SirosWallet.eligibleInstances(from:)` / `CredentialUtils.eligibleInstances`
+
+### Changed
+- `CredentialUtils.eligibleInstances`/`isBelowRenewThreshold` now require
+  `availableKeyIds` and, under every policy, exclude an instance whose bound
+  signing key the keystore no longer holds
+- `CredentialConsumptionPolicy.consumeNonZkp` now actually distinguishes a
+  `mso_mdoc_zk` presentation (never consumed) from a raw one (consumed), decided
+  by the first-match query per credential
+
+### Fixed
+- `PresentationRecord` decoding tolerates the enrichment fields being absent, so
+  records reloaded from the encrypted container (which only carries the
+  privatedata-spec-normative fields) no longer fail to decode
+
 ## [0.6.1]
 
 Re-release of 0.6.0. No SDK or sample-app source changes.

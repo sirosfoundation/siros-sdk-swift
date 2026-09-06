@@ -279,6 +279,7 @@
     "flowIdLabel": "Flödes-ID: %1$@",
     "statusLabel": "Status: %1$@",
     "statusSuccessful": "Lyckad",
-    "statusFailed": "Misslyckad"
+    "statusFailed": "Misslyckad",
+    "zkProof": "Nollkunskapsbevis"
   }
 }

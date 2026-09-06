@@ -512,14 +512,30 @@ public enum CredentialUtils {
         return results.sorted(by: { ($0.credential.issuedAt ?? 0) > ($1.credential.issuedAt ?? 0) })
     }
 
-    /// Every credential format this SDK currently supports discloses via
-    /// salted-hash element digests (mdoc's MSO, SD-JWT's `_sd` array) - none
-    /// is a real ZKP predicate proof - so ``CredentialConsumptionPolicy/consumeNonZkp``
-    /// is indistinguishable from ``CredentialConsumptionPolicy/consumeAll``
-    /// today. Kept as a real, separate policy value (not collapsed into one)
-    /// since it's the right shape for once a ZKP-based format exists; this
-    /// function is the single place that would need updating then.
-    private static func isZkpFormat(_ format: String) -> Bool { false }
+    /// True for `"mso_mdoc_zk"` - a real ZKP predicate-proof format now exists
+    /// (`LongfellowZkProofSystem`, wired into `SirosWallet.handleDCAPIRequest`
+    /// and the engine's `sign_presentation` ZK branch), unlike every other
+    /// format this SDK supports, which discloses via salted-hash element
+    /// digests (mdoc's MSO, SD-JWT's `_sd` array).
+    ///
+    /// Note this checks a *requested/presented* format, not necessarily
+    /// `StoredCredential.format` - a ZK presentation is a presentation-time
+    /// transform of an ordinarily-stored `"mso_mdoc"` credential (see
+    /// `CredentialMatcher.matchesFormat`'s doc comment), so the stored
+    /// instance's own format is never `"mso_mdoc_zk"`. Callers that know
+    /// which *query* format matched a given instance for the presentation in
+    /// progress should pass that via ``eligibleInstances(instances:policy:presentationHistory:availableKeyIds:isZkPresentation:)``'s
+    /// `isZkPresentation` parameter rather than relying on that function's
+    /// default fallback of checking `StoredCredential.format` directly
+    /// (which - for exactly the reason above - never returns true).
+    ///
+    /// Public (Kotlin keeps it private) only because a public function's
+    /// default argument can't reference a less-visible symbol in Swift, and
+    /// so the wallet's own "which matched queries are ZK" derivation shares
+    /// this one string comparison instead of repeating it.
+    public static func isZkpFormat(_ format: String) -> Bool {
+        format.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame
+    }
 
     /// Instances from `instances` (all copies of one batch - see
     /// `StoredCredential.batchId`) that are still allowed to be used for a
@@ -529,18 +545,42 @@ public enum CredentialUtils {
     /// "remaining copies" ribbon never disagree.
     ///
     /// ``CredentialConsumptionPolicy/neverConsume`` (the default - today's
-    /// actual behavior) returns every instance unconditionally. Otherwise, an
-    /// instance is eligible only if it hasn't already been presented
-    /// (`sigCount == 0`) - each instance is bound to its own device key
-    /// specifically so a verifier can't correlate repeated presentations by a
-    /// reused key/signature; reusing an already-presented instance would
+    /// actual behavior) skips the usage check, but every policy still
+    /// requires the instance's bound signing key to actually exist in
+    /// `availableKeyIds` - a real, recurring bug found via live testing: a
+    /// software key only ever lives in the WSCD's process memory plus
+    /// whatever was last folded into the persisted container, so a lost
+    /// sync (or, per privatedata-spec#1/siros-wscd-manager#68, a concurrent-
+    /// write merge conflict on the legacy, non-namespaced `S.keypairs`
+    /// field) can silently strand a credential with no usable key. Without
+    /// this check, `neverConsume` made every such credential report
+    /// "available" forever, right up until a live presentation attempt
+    /// failed deep inside key selection with no user-facing signal at all.
+    /// See `hasAvailableKey` for how a nil `StoredCredential.kid` is handled.
+    ///
+    /// Otherwise, an instance is eligible only if it hasn't already been
+    /// presented (`sigCount == 0`) - each instance is bound to its own device
+    /// key specifically so a verifier can't correlate repeated presentations
+    /// by a reused key/signature; reusing an already-presented instance would
     /// throw that guarantee away.
+    ///
+    /// - Parameter isZkPresentation: Whether presenting `instances`' given
+    ///   member THIS time will be a ZK proof rather than a raw disclosure -
+    ///   defaults to checking `StoredCredential.format` via `isZkpFormat`
+    ///   (which, per that function's own doc comment, is never true, since
+    ///   ZK-ness lives in the matched DCQL query's format, not the stored
+    ///   credential's). Callers that know the matched query format for each
+    ///   candidate (e.g. `SirosWallet.handleDCAPIRequest`) should pass a real
+    ///   resolver so ``CredentialConsumptionPolicy/consumeNonZkp`` actually
+    ///   distinguishes ZK presentations (never consumed) from raw ones
+    ///   (consumed).
     public static func eligibleInstances(
         instances: [StoredCredential],
         policy: CredentialConsumptionPolicy,
-        presentationHistory: [PresentationRecord]
+        presentationHistory: [PresentationRecord],
+        availableKeyIds: Set<String>,
+        isZkPresentation: (StoredCredential) -> Bool = { isZkpFormat($0.format) }
     ) -> [StoredCredential] {
-        guard policy != .neverConsume else { return instances }
         // A single pass building this set, rather than rescanning all of
         // presentationHistory per instance (O(instances x history) before),
         // matters once either grows - this can run on every UI update.
@@ -549,9 +589,34 @@ public enum CredentialUtils {
             usedCredentialIds.formUnion(record.credentialIds)
         }
         return instances.filter { instance in
-            let consumes = policy == .consumeAll || !isZkpFormat(instance.format)
-            return !consumes || !usedCredentialIds.contains(instance.id)
+            let keyAvailable = hasAvailableKey(instance.kid, availableKeyIds)
+            let consumptionEligible: Bool
+            if policy == .neverConsume {
+                consumptionEligible = true
+            } else {
+                let consumes = policy == .consumeAll || !isZkPresentation(instance)
+                consumptionEligible = !consumes || !usedCredentialIds.contains(instance.id)
+            }
+            return keyAvailable && consumptionEligible
         }
+    }
+
+    /// Whether `kid` (a `StoredCredential.kid`) can actually be used to sign,
+    /// given the signer's current `availableKeyIds` - the single rule behind
+    /// `eligibleInstances`' key gate, so nothing else in the SDK gets to
+    /// disagree about whether a credential is really usable.
+    ///
+    /// A nil `kid` can't be matched against a specific entry, but every
+    /// credential issued through the current per-credential-key architecture
+    /// gets a kid at storage time - a real `StoredCredential` with a nil kid
+    /// reaching here is a sign its binding was silently lost (e.g. a
+    /// concurrent-flow race), not a legitimate legacy case. The best check
+    /// still possible without a specific kid to match is whether the signer
+    /// holds *any* key at all; with zero keys, a nil-kid credential is
+    /// certain to fail to sign exactly like a known-but-missing kid would.
+    private static func hasAvailableKey(_ kid: String?, _ availableKeyIds: Set<String>) -> Bool {
+        if let kid { return availableKeyIds.contains(kid) }
+        return !availableKeyIds.isEmpty
     }
 
     /// Below this many eligible (unused) instances remaining, the UI should
@@ -560,17 +625,24 @@ public enum CredentialUtils {
     public static let renewThreshold = 0
 
     /// True when `instances`' eligible (unused) count under `policy`/
-    /// `presentationHistory` has dropped to or below `threshold` - the
-    /// proactive-renewal trigger (plan §4.3). Note `CredentialConsumptionPolicy.neverConsume`
-    /// makes `eligibleInstances` always return every instance, so this only
-    /// ever fires under a consuming policy.
+    /// `presentationHistory`/`availableKeyIds` has dropped to or below
+    /// `threshold` - the proactive-renewal trigger (plan §4.3). Note
+    /// `CredentialConsumptionPolicy.neverConsume` makes `eligibleInstances`
+    /// return every instance whose key still exists, so this only ever fires
+    /// under a consuming policy or once keys go missing.
     public static func isBelowRenewThreshold(
         instances: [StoredCredential],
         policy: CredentialConsumptionPolicy,
         presentationHistory: [PresentationRecord],
+        availableKeyIds: Set<String>,
         threshold: Int = renewThreshold
     ) -> Bool {
-        eligibleInstances(instances: instances, policy: policy, presentationHistory: presentationHistory).count <= threshold
+        eligibleInstances(
+            instances: instances,
+            policy: policy,
+            presentationHistory: presentationHistory,
+            availableKeyIds: availableKeyIds
+        ).count <= threshold
     }
 
     /// Compares two versions of the same credential's claims (by `key`, not
@@ -627,8 +699,10 @@ public enum CredentialConsumptionPolicy: String, Sendable, CaseIterable {
     /// Every successful presentation exhausts the instance it used, regardless of format.
     case consumeAll
 
-    /// Same as ``consumeAll`` until a real ZKP presentation format exists (see
-    /// `CredentialUtils.isZkpFormat`).
+    /// A raw disclosure exhausts the instance; a ZK proof of it does not, since
+    /// the verifier learns nothing that links two proofs. Which of the two a
+    /// presentation is comes from the matched query's format - see the
+    /// `isZkPresentation` parameter of `CredentialUtils.eligibleInstances`.
     case consumeNonZkp
 
     /// Instances are never exhausted - a presentation may reuse any matching instance.

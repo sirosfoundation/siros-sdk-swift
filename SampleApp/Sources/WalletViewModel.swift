@@ -943,17 +943,15 @@ final class WalletViewModel: ObservableObject {
         wallet?.presentationHistory ?? []
     }
 
-    /// Mirrors `CredentialUtils.eligibleInstances` bound to `wallet`'s current
-    /// `credentialConsumptionPolicy`/`presentationHistory` - passed to
-    /// `BlePeripheralServer`/`BleCentralClient` and `ProximityConsentSheet`
-    /// so a family the user approves can't be signed with (or picked for)
-    /// an exhausted instance.
+    /// `SirosWallet.eligibleInstances(from:)` bound to `wallet`'s current
+    /// `credentialConsumptionPolicy`/`presentationHistory`/live key set -
+    /// passed to `BlePeripheralServer`/`BleCentralClient` and
+    /// `ProximityConsentSheet` so a family the user approves can't be signed
+    /// with (or picked for) an exhausted instance, or one whose signing key
+    /// has silently gone missing. Without a wallet there is no keystore to
+    /// sign with, so nothing is eligible.
     func filterEligibleForProximity(_ instances: [StoredCredential]) -> [StoredCredential] {
-        CredentialUtils.eligibleInstances(
-            instances: instances,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: currentPresentationHistory
-        )
+        wallet?.eligibleInstances(from: instances) ?? []
     }
 
     /// Mirrors `SirosWallet.evaluateReaderTrust` - passed to
@@ -978,11 +976,7 @@ final class WalletViewModel: ObservableObject {
     /// user shouldn't be let all the way to "Share" only to have it silently
     /// fail.
     func eligibleCredentialIds(from candidates: [StoredCredential]) -> [Int64] {
-        CredentialUtils.eligibleInstances(
-            instances: candidates,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: currentPresentationHistory
-        ).map(\.id)
+        filterEligibleForProximity(candidates).map(\.id)
     }
 
     /// Renew `credential`'s batch, for `CredentialCardView`'s "Renew" action

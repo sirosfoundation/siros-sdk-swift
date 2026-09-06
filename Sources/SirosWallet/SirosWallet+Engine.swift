@@ -467,12 +467,12 @@ extension SirosWallet {
         // usable - mirrors the legacy engine path's handleMatchRequest (and
         // Kotlin's matchRequests() collector) so a credential exhausted under
         // CONSUME_ALL/CONSUME_NON_ZKP can't be matched into a new
-        // presentation via this transport either.
-        let eligibleCreds = CredentialUtils.eligibleInstances(
-            instances: candidates,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: presentationHistory
+        // presentation via this transport either. Same first-match ZK rule
+        // as the other two selection paths (see `Self.zkRequestedIds`).
+        let zkRequestedIds = Self.zkRequestedIds(
+            matchResultByCredentialId: Self.firstMatchByCredentialId(candidates: candidates, matchResults: matchResults)
         )
+        let eligibleCreds = eligibleInstances(from: candidates, isZkPresentation: { zkRequestedIds.contains($0.id) })
 
         // Cache for the later sign_presentation step, mirroring
         // handleCredentialSelection/handleMatchRequest - see
@@ -788,7 +788,7 @@ extension SirosWallet {
         audience: String,
         msg: SignRequestMessage
     ) async throws -> String {
-        if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+        if let format = matchResult?.format, CredentialUtils.isZkpFormat(format) {
             // ZK-wrapped mDoc presentation - see handleDCAPIRequest's
             // identical branch, which this mirrors for the WS-engine/
             // redirect-flow transport instead of DC API.
@@ -901,12 +901,19 @@ extension SirosWallet {
     /// falls back to auto-selecting every currently-eligible candidate
     /// otherwise - mirrors Kotlin's identical fallback in each of its three
     /// equivalent collectors/handlers.
+    ///
+    /// Also resolves, once, which selected ids will be presented as a ZK
+    /// proof rather than disclosed (`zkRequestedIds` - the same first-match
+    /// rule the `sign_presentation` handler applies), so consumption
+    /// accounting (`consumeNonZkp`) and the recorded `PresentationRecord.zkProof`
+    /// agree with what is actually sent. Mirrors Kotlin's `handleDCAPIRequest`
+    /// / `matchRequests()` / `handleCredentialSelection`.
     private func matchAndSelectCredentials(
         dcqlQuery: [String: Any]?,
         allCreds: [StoredCredential],
         verifierName: String?,
         trustResult: TrustResult?
-    ) async -> (matchResults: [CredentialMatcher.MatchResult], candidates: [StoredCredential], selectedIds: [Int64]) {
+    ) async -> EngineSelection {
         let matchResults: [CredentialMatcher.MatchResult]
         if let dcqlQuery {
             matchResults = CredentialMatcher.match(dcqlQuery: dcqlQuery, credentials: allCreds)
@@ -915,6 +922,10 @@ extension SirosWallet {
         }
         var seenIds = Set<Int64>()
         let candidates = matchResults.flatMap { $0.candidates }.filter { seenIds.insert($0.id).inserted }
+        let zkRequestedIds = Self.zkRequestedIds(
+            matchResultByCredentialId: Self.firstMatchByCredentialId(candidates: candidates, matchResults: matchResults)
+        )
+        let isZk: (StoredCredential) -> Bool = { zkRequestedIds.contains($0.id) }
 
         lock.lock(); let listener = eventListener; lock.unlock()
         let selectedIds: [Int64]
@@ -928,13 +939,36 @@ extension SirosWallet {
                 )
             )
         } else {
-            selectedIds = CredentialUtils.eligibleInstances(
-                instances: candidates,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            ).map(\.id)
+            selectedIds = eligibleInstances(from: candidates, isZkPresentation: isZk).map(\.id)
         }
-        return (matchResults, candidates, selectedIds)
+
+        // The app is trusted to only return IDs it was offered, but shouldn't
+        // be the only thing enforcing consumption - re-validate here too
+        // (defense in depth). Computed once here rather than in each caller
+        // so the two engine handlers can't apply different rules.
+        let eligibleIds = Set(eligibleInstances(from: candidates, isZkPresentation: isZk).map(\.id))
+        return EngineSelection(
+            matchResults: matchResults,
+            candidates: candidates,
+            selectedIds: selectedIds,
+            zkRequestedIds: zkRequestedIds,
+            allSelectedEligible: selectedIds.allSatisfy { eligibleIds.contains($0) }
+        )
+    }
+
+    /// `matchAndSelectCredentials`' result - see that function's doc comment.
+    struct EngineSelection {
+        let matchResults: [CredentialMatcher.MatchResult]
+        let candidates: [StoredCredential]
+        let selectedIds: [Int64]
+        /// Selected-or-not candidates whose first-match query is `mso_mdoc_zk`.
+        let zkRequestedIds: Set<Int64>
+        /// False if the listener returned an id the active policy/keystore
+        /// no longer considers usable.
+        let allSelectedEligible: Bool
+        /// Whether presenting ANY of `selectedIds` is a ZK proof - the
+        /// recorded `PresentationRecord.zkProof`.
+        var zkProof: Bool { selectedIds.contains(where: { zkRequestedIds.contains($0) }) }
     }
 
     /// Builds the `"selected_credentials"` flow-action payload the engine's
@@ -1022,12 +1056,14 @@ extension SirosWallet {
             // entry - see `handleMatchRequest`'s identical comment.
             lock.lock(); let trustResult = lastTrustResults[flowId]; lock.unlock()
 
-            let (matchResults, candidates, selectedIds) = await matchAndSelectCredentials(
+            let selection = await matchAndSelectCredentials(
                 dcqlQuery: dcqlQuery,
                 allCreds: allCreds,
                 verifierName: verifierName,
                 trustResult: trustResult
             )
+            let matchResults = selection.matchResults
+            let selectedIds = selection.selectedIds
 
             // This (not handleMatchRequest's match_request collector) is the
             // code path actually exercised by the redirect-flow/haip-vp://
@@ -1047,12 +1083,7 @@ extension SirosWallet {
             // The app is trusted to only return IDs it was offered, but
             // shouldn't be the only thing enforcing consumption -
             // re-validate here too (defense in depth).
-            let eligibleIds = Set(CredentialUtils.eligibleInstances(
-                instances: candidates,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            ).map(\.id))
-            guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+            guard selection.allSelectedEligible else {
                 throw SirosError.wallet(message: "Selected credential has no eligible copies remaining - renew it to get more")
             }
 
@@ -1065,7 +1096,8 @@ extension SirosWallet {
                 credentialIds: selectedIds,
                 credentialNames: selectedIds.compactMap { id in allCreds.first(where: { $0.id == id })?.metadata?.name },
                 requestedClaims: requestedClaims,
-                timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+                timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+                zkProof: selection.zkProof
             ))
 
             let consentPayload = Self.buildConsentPayload(matchResults: matchResults, selectedIds: selectedIds, allCreds: allCreds)
@@ -1105,12 +1137,15 @@ extension SirosWallet {
         // its own "dcql_query" key) - a separate wire shape from
         // "credential_selection"'s flow_progress payload, which wraps it.
         let dcqlQuery = msg.dcqlQuery?.objectValue.map { anyCodableDictToAny($0) }
-        let (matchResults, candidates, selectedIds) = await matchAndSelectCredentials(
+        let selection = await matchAndSelectCredentials(
             dcqlQuery: dcqlQuery,
             allCreds: allCreds,
             verifierName: verifierName,
             trustResult: trustResult
         )
+        let matchResults = selection.matchResults
+        let candidates = selection.candidates
+        let selectedIds = selection.selectedIds
 
         // Cache for the later sign_presentation step's ZK branch - mirrors
         // handleCredentialSelection and Kotlin's matchRequests() collector,
@@ -1120,12 +1155,7 @@ extension SirosWallet {
         // The app is trusted to only return IDs it was offered, but shouldn't
         // be the only thing enforcing consumption - re-validate here too
         // (defense in depth).
-        let eligibleIds = Set(CredentialUtils.eligibleInstances(
-            instances: candidates,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: presentationHistory
-        ).map(\.id))
-        guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+        guard selection.allSelectedEligible else {
             #if canImport(os)
             logger.error("Selected credential has no eligible copies remaining")
             #endif
@@ -1142,7 +1172,8 @@ extension SirosWallet {
                 candidates.first(where: { $0.id == id })?.metadata?.name
             },
             requestedClaims: requestedClaims,
-            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+            zkProof: selection.zkProof
         ))
 
         let matches: [CredentialMatch] = selectedIds.compactMap { id in

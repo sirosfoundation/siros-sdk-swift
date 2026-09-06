@@ -334,9 +334,10 @@ final class CredentialUtilsTests: XCTestCase {
         id: Int64,
         batchId: Int64 = 1,
         instanceId: Int = 0,
-        format: String = "vc+sd-jwt"
+        format: String = "vc+sd-jwt",
+        kid: String? = nil
     ) -> StoredCredential {
-        StoredCredential(id: id, format: format, raw: "raw-\(id)", batchId: batchId, instanceId: instanceId)
+        StoredCredential(id: id, format: format, raw: "raw-\(id)", kid: kid, batchId: batchId, instanceId: instanceId)
     }
 
     private func presentationRecord(_ credentialIds: Int64...) -> PresentationRecord {
@@ -352,7 +353,7 @@ final class CredentialUtilsTests: XCTestCase {
         let instances = [consumptionCredential(id: 1, instanceId: 0), consumptionCredential(id: 2, instanceId: 1)]
         let history = [presentationRecord(1), presentationRecord(2)]
 
-        let result = CredentialUtils.eligibleInstances(instances: instances, policy: .neverConsume, presentationHistory: history)
+        let result = CredentialUtils.eligibleInstances(instances: instances, policy: .neverConsume, presentationHistory: history, availableKeyIds: ["irrelevant-kid"])
 
         XCTAssertEqual(result, instances)
     }
@@ -362,7 +363,7 @@ final class CredentialUtilsTests: XCTestCase {
         let unused = consumptionCredential(id: 2, instanceId: 1)
         let history = [presentationRecord(1)]
 
-        let result = CredentialUtils.eligibleInstances(instances: [used, unused], policy: .consumeAll, presentationHistory: history)
+        let result = CredentialUtils.eligibleInstances(instances: [used, unused], policy: .consumeAll, presentationHistory: history, availableKeyIds: ["irrelevant-kid"])
 
         XCTAssertEqual(result, [unused])
     }
@@ -370,7 +371,7 @@ final class CredentialUtilsTests: XCTestCase {
     func testEligibleInstancesConsumeAllWithNoHistoryEveryInstanceIsEligible() {
         let instances = [consumptionCredential(id: 1, instanceId: 0), consumptionCredential(id: 2, instanceId: 1)]
 
-        let result = CredentialUtils.eligibleInstances(instances: instances, policy: .consumeAll, presentationHistory: [])
+        let result = CredentialUtils.eligibleInstances(instances: instances, policy: .consumeAll, presentationHistory: [], availableKeyIds: ["irrelevant-kid"])
 
         XCTAssertEqual(result, instances)
     }
@@ -380,30 +381,222 @@ final class CredentialUtilsTests: XCTestCase {
         let b = consumptionCredential(id: 2, instanceId: 1)
         let history = [presentationRecord(1), presentationRecord(2)]
 
-        let result = CredentialUtils.eligibleInstances(instances: [a, b], policy: .consumeAll, presentationHistory: history)
+        let result = CredentialUtils.eligibleInstances(instances: [a, b], policy: .consumeAll, presentationHistory: history, availableKeyIds: ["irrelevant-kid"])
 
         XCTAssertEqual(result, [])
     }
 
-    func testEligibleInstancesConsumeNonZkpBehavesIdenticallyToConsumeAllSinceNoZkpFormatExistsYet() {
-        // Every format this SDK supports today discloses via salted-hash
-        // digests, not a real ZKP proof - see CredentialUtils.isZkpFormat's
-        // doc comment. This test pins that current equivalence so a future
-        // change introducing a real ZKP format is forced to reconsider it.
+    func testEligibleInstancesConsumeNonZkpWithDefaultResolverConsumesStoredMdocLikeConsumeAll() {
+        // A stored credential's own format is never "mso_mdoc_zk" - ZK-ness
+        // lives in the matched query's format (see CredentialUtils.isZkpFormat's
+        // doc comment) - so the default resolver treats every stored
+        // instance as a raw disclosure and consumeNonZkp behaves like
+        // consumeAll. Callers that know better pass isZkPresentation (below).
         let used = consumptionCredential(id: 1, instanceId: 0, format: "mso_mdoc")
         let unused = consumptionCredential(id: 2, instanceId: 1, format: "mso_mdoc")
         let history = [presentationRecord(1)]
 
-        let result = CredentialUtils.eligibleInstances(instances: [used, unused], policy: .consumeNonZkp, presentationHistory: history)
+        let result = CredentialUtils.eligibleInstances(instances: [used, unused], policy: .consumeNonZkp, presentationHistory: history, availableKeyIds: ["irrelevant-kid"])
 
         XCTAssertEqual(result, [unused])
+    }
+
+    func testIsZkpFormatRecognisesMsoMdocZkCaseInsensitively() {
+        XCTAssertTrue(CredentialUtils.isZkpFormat("mso_mdoc_zk"))
+        XCTAssertTrue(CredentialUtils.isZkpFormat("MSO_MDOC_ZK"))
+        XCTAssertFalse(CredentialUtils.isZkpFormat("mso_mdoc"))
+        XCTAssertFalse(CredentialUtils.isZkpFormat("dc+sd-jwt"))
+    }
+
+    func testEligibleInstancesConsumeNonZkpWithResolverReturningTrueKeepsUsedInstanceEligible() {
+        // A real ZK presentation (per the caller's own resolver - see
+        // eligibleInstances' isZkPresentation doc comment) is never
+        // consumed under consumeNonZkp, even if it was already presented.
+        let used = consumptionCredential(id: 1, instanceId: 0, format: "mso_mdoc")
+        let history = [presentationRecord(1)]
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [used],
+            policy: .consumeNonZkp,
+            presentationHistory: history,
+            availableKeyIds: ["irrelevant-kid"],
+            isZkPresentation: { _ in true }
+        )
+
+        XCTAssertEqual(result, [used])
+    }
+
+    func testEligibleInstancesConsumeNonZkpWithResolverReturningFalseExcludesUsedInstance() {
+        // A raw disclosure (per the caller's resolver) is consumed under
+        // consumeNonZkp just like under consumeAll.
+        let used = consumptionCredential(id: 1, instanceId: 0, format: "mso_mdoc")
+        let unused = consumptionCredential(id: 2, instanceId: 1, format: "mso_mdoc")
+        let history = [presentationRecord(1)]
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [used, unused],
+            policy: .consumeNonZkp,
+            presentationHistory: history,
+            availableKeyIds: ["irrelevant-kid"],
+            isZkPresentation: { _ in false }
+        )
+
+        XCTAssertEqual(result, [unused])
+    }
+
+    func testEligibleInstancesConsumeNonZkpResolverIsEvaluatedPerInstance() {
+        // The resolver is evaluated per-instance, not once for the whole
+        // batch - a zk instance and a raw instance already presented in the
+        // same batch must be judged independently of each other.
+        let zkUsed = consumptionCredential(id: 1, instanceId: 0, format: "mso_mdoc")
+        let rawUsed = consumptionCredential(id: 2, instanceId: 1, format: "mso_mdoc")
+        let history = [presentationRecord(1), presentationRecord(2)]
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [zkUsed, rawUsed],
+            policy: .consumeNonZkp,
+            presentationHistory: history,
+            availableKeyIds: ["irrelevant-kid"],
+            isZkPresentation: { $0.id == zkUsed.id }
+        )
+
+        XCTAssertEqual(result, [zkUsed])
+    }
+
+    func testEligibleInstancesConsumeAllIgnoresTheResolver() {
+        // consumeAll consumes regardless of ZK-ness: a resolver claiming
+        // every presentation is ZK must not resurrect a used instance.
+        let used = consumptionCredential(id: 1, instanceId: 0, format: "mso_mdoc")
+        let history = [presentationRecord(1)]
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [used],
+            policy: .consumeAll,
+            presentationHistory: history,
+            availableKeyIds: ["irrelevant-kid"],
+            isZkPresentation: { _ in true }
+        )
+
+        XCTAssertEqual(result, [])
+    }
+
+    // MARK: - eligibleInstances key-availability checks
+    // A real, recurring bug (found via live proximity-presentation testing):
+    // a credential whose signing key was silently lost (e.g. a sync that
+    // never folded a software key into the persisted container) kept
+    // reporting "available" under neverConsume forever, since the old
+    // 3-arg eligibleInstances was entirely blind to key existence.
+
+    func testEligibleInstancesNeverConsumeStillExcludesInstanceWhoseKeyIsMissing() {
+        let hasKey = consumptionCredential(id: 1, instanceId: 0, kid: "kid-1")
+        let missingKey = consumptionCredential(id: 2, instanceId: 1, kid: "kid-2")
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [hasKey, missingKey],
+            policy: .neverConsume,
+            presentationHistory: [],
+            availableKeyIds: ["kid-1"]
+        )
+
+        XCTAssertEqual(result, [hasKey])
+    }
+
+    func testEligibleInstancesNilKidIsEligibleWhenSignerHoldsAnyKeyAtAll() {
+        // A nil kid can't be matched against a specific availableKeyIds
+        // entry, but as long as the signer holds *some* key, the low-level
+        // "no specific kid" signing call shape can still succeed.
+        let noKidBinding = consumptionCredential(id: 1, instanceId: 0, kid: nil)
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [noKidBinding],
+            policy: .neverConsume,
+            presentationHistory: [],
+            availableKeyIds: ["some-other-kid"]
+        )
+
+        XCTAssertEqual(result, [noKidBinding])
+    }
+
+    func testEligibleInstancesNilKidIsExcludedWhenSignerHoldsNoKeysAtAll() {
+        // With zero keys in the signer, a nil-kid credential is certain to
+        // fail to sign exactly like a known-but-missing kid would, so it
+        // must be excluded the same way.
+        let noKidBinding = consumptionCredential(id: 1, instanceId: 0, kid: nil)
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [noKidBinding],
+            policy: .neverConsume,
+            presentationHistory: [],
+            availableKeyIds: []
+        )
+
+        XCTAssertEqual(result, [])
+    }
+
+    func testEligibleInstancesConsumeAllExcludesInstanceThatIsBothUnusedAndKeyless() {
+        // Consumption-eligible (never presented) but its key is gone -
+        // both conditions are independently enforced.
+        let keyless = consumptionCredential(id: 1, instanceId: 0, kid: "kid-1")
+
+        let result = CredentialUtils.eligibleInstances(
+            instances: [keyless],
+            policy: .consumeAll,
+            presentationHistory: [],
+            availableKeyIds: []
+        )
+
+        XCTAssertEqual(result, [])
+    }
+
+    func testIsBelowRenewThresholdFiresUnderNeverConsumeOnceEveryKeyIsMissing() {
+        // The policy never consumes, but with no usable key nothing is
+        // eligible - the renewal trigger is the one user-facing signal that
+        // something is wrong with this batch.
+        let instances = [consumptionCredential(id: 1, instanceId: 0, kid: "kid-1")]
+
+        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .neverConsume, presentationHistory: [], availableKeyIds: []))
+    }
+
+    // MARK: - PresentationRecord decoding
+
+    func testPresentationRecordDecodesZkProofWhenPresent() throws {
+        let json = """
+        {"id": 7, "flow_id": "f", "credential_ids": [1, 2], "timestamp": 1000, "success": true, "zk_proof": true}
+        """
+        let record = try JSONDecoder().decode(PresentationRecord.self, from: Data(json.utf8))
+        XCTAssertTrue(record.zkProof)
+        XCTAssertEqual(record.credentialIds, [1, 2])
+    }
+
+    func testPresentationRecordDecodesOlderRecordWithoutZkProofAsFalse() throws {
+        // A record persisted before zk_proof existed - or reloaded from the
+        // encrypted container, which only carries the privatedata-spec's
+        // normative fields (see JweKeystore.loadPresentations) - must still
+        // decode, with every enrichment field at its default.
+        let json = """
+        {"id": 7, "flow_id": "", "credential_ids": [1], "timestamp": 1000}
+        """
+        let record = try JSONDecoder().decode(PresentationRecord.self, from: Data(json.utf8))
+        XCTAssertFalse(record.zkProof)
+        XCTAssertTrue(record.success)
+        XCTAssertEqual(record.credentialNames, [])
+        XCTAssertEqual(record.requestedClaims, [])
+        XCTAssertNil(record.verifierName)
+    }
+
+    func testPresentationRecordRoundTripsZkProof() throws {
+        let original = PresentationRecord(id: 9, flowId: "flow", credentialIds: [3], timestamp: 5, zkProof: true)
+        let data = try JSONEncoder().encode(original)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["zk_proof"] as? Bool, true)
+        XCTAssertEqual(try JSONDecoder().decode(PresentationRecord.self, from: data), original)
     }
 
     func testEligibleInstancesSigCountOfTwoOrMoreStillCountsAsUsedNotJustExactlyOne() {
         let overused = consumptionCredential(id: 1, instanceId: 0)
         let history = [presentationRecord(1), presentationRecord(1), presentationRecord(1)]
 
-        let result = CredentialUtils.eligibleInstances(instances: [overused], policy: .consumeAll, presentationHistory: history)
+        let result = CredentialUtils.eligibleInstances(instances: [overused], policy: .consumeAll, presentationHistory: history, availableKeyIds: ["irrelevant-kid"])
 
         XCTAssertEqual(result, [])
     }
@@ -454,7 +647,7 @@ final class CredentialUtilsTests: XCTestCase {
     func testIsBelowRenewThresholdFalseWhenEligibleCountExceedsDefaultThreshold() {
         let instances = [consumptionCredential(id: 1, instanceId: 0), consumptionCredential(id: 2, instanceId: 1)]
 
-        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .consumeAll, presentationHistory: []))
+        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .consumeAll, presentationHistory: [], availableKeyIds: ["irrelevant-kid"]))
     }
 
     func testIsBelowRenewThresholdTrueWhenEligibleCountDropsToDefaultThresholdOfZero() {
@@ -462,7 +655,7 @@ final class CredentialUtilsTests: XCTestCase {
         let b = consumptionCredential(id: 2, instanceId: 1)
         let history = [presentationRecord(1), presentationRecord(2)]
 
-        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history))
+        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, availableKeyIds: ["irrelevant-kid"]))
     }
 
     func testIsBelowRenewThresholdNeverConsumeNeverFiresSinceEveryInstanceStaysEligible() {
@@ -472,7 +665,7 @@ final class CredentialUtilsTests: XCTestCase {
         let instances = [consumptionCredential(id: 1, instanceId: 0)]
         let history = [presentationRecord(1), presentationRecord(1), presentationRecord(1)]
 
-        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .neverConsume, presentationHistory: history))
+        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: instances, policy: .neverConsume, presentationHistory: history, availableKeyIds: ["irrelevant-kid"]))
     }
 
     func testIsBelowRenewThresholdRespectsACustomThreshold() {
@@ -481,8 +674,8 @@ final class CredentialUtilsTests: XCTestCase {
         let history = [presentationRecord(1)]
 
         // 1 eligible instance remains (b) - at or below a threshold of 1, but not 0.
-        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, threshold: 1))
-        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, threshold: 0))
+        XCTAssertTrue(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, availableKeyIds: ["irrelevant-kid"], threshold: 1))
+        XCTAssertFalse(CredentialUtils.isBelowRenewThreshold(instances: [a, b], policy: .consumeAll, presentationHistory: history, availableKeyIds: ["irrelevant-kid"], threshold: 0))
     }
 
     // MARK: - computeAttributeDiff (AttributeDiffService-equivalent, ISSU_59)

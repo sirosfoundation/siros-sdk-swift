@@ -55,10 +55,21 @@ struct PresentationRecordRow: View {
                         .foregroundColor(record.success ? SirosTheme.brand : SirosTheme.error)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(record.verifierName ?? L10n.string("history.unknownVerifier"))
-                            .font(.body.weight(.medium))
-                            .foregroundColor(SirosTheme.onSurface)
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(record.verifierName ?? L10n.string("history.unknownVerifier"))
+                                .font(.body.weight(.medium))
+                                .foregroundColor(SirosTheme.onSurface)
+                                .lineLimit(1)
+                            // A ZK proof disclosed nothing the verifier could
+                            // link across presentations - worth a glance-level
+                            // signal in the row, matching the Android sample.
+                            if record.zkProof {
+                                Image(systemName: "lock.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(SirosTheme.brand)
+                                    .accessibilityLabel(L10n.string("history.zkProof"))
+                            }
+                        }
 
                         if !record.credentialNames.isEmpty {
                             Text(record.credentialNames.joined(separator: ", "))
