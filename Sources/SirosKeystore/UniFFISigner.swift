@@ -293,7 +293,8 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     /// (`Algorithm::as_str` in siros-wscd-manager), used as the SDK-side
     /// algorithm string since JOSE has none for it. Same string as the
     /// Kotlin SDK's `BLS12381_G1_SCHNORR_NAME`.
-    static let bls12381G1SchnorrName = "EcsdsaBls12381Bp1Sha256Sec1"
+    private static let bls12381G1SchnorrName = "EcsdsaBls12381Bp1Sha256Sec1"
+    private static let bls12381G1SchnorrNameUppercased = bls12381G1SchnorrName.uppercased()
 
     private static func mapAlgorithm(_ s: String) throws -> FfiAlgorithm {
         switch s.uppercased() {
@@ -302,7 +303,7 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         // The manager's own name for it (`Algorithm::as_str`), since JOSE has
         // no `alg` for a BLS12-381 Schnorr key. Blind BBS key binding, COSE
         // -65609; only the fido2 plugin serves it, on YubiKey 5.8 alpha.
-        case Self.bls12381G1SchnorrName.uppercased(): return .bls12381G1Schnorr
+        case Self.bls12381G1SchnorrNameUppercased: return .bls12381G1Schnorr
         default: throw UniFFISignerError.unsupportedAlgorithm(s)
         }
     }
