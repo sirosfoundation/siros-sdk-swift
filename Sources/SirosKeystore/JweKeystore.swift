@@ -822,6 +822,22 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         }
     }
 
+    /// The top-level `S` members `buildWalletStateV3()` produces from its own
+    /// in-memory state. Every OTHER member of the loaded `S` is passed through
+    /// untouched - see the pass-through loop at the end of that function.
+    /// Adding a new field this class owns means adding it here too, or the
+    /// stale loaded copy would overwrite the freshly built one on export.
+    private static let ownedWalletStateMembers: Set<String> = [
+        "schemaVersion",
+        "keypairs",
+        "credentials",
+        "presentations",
+        "settings",
+        "credentialIssuanceSessions",
+        "wscdCredentials",
+        "credentialRefreshTokens",
+    ]
+
     private func buildWalletStateV3() -> [String: Any] {
         // Preserve existing state if available, otherwise initialize fresh.
         // NOTE: this must NOT short-circuit and return existingState verbatim -
@@ -984,6 +1000,24 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager {
         if !credentialRefreshTokens.isEmpty {
             sDict["credentialRefreshTokens"] = credentialRefreshTokens.reduce(into: [String: Any]()) { result, entry in
                 result[String(entry.key)] = entry.value.toJsonObject()
+            }
+        }
+
+        // Every other top-level `S` member is carried verbatim from the
+        // container this session was unlocked against. `S` is shared with
+        // wallet-frontend and siros-sdk-kotlin, and either may write members
+        // this build has never heard of (privatedata-spec §6.1 `S.extensions`
+        // is the normative example); rebuilding `S` from the closed key list
+        // above used to drop all of them on export - and a member such as
+        // `extensions["org.siros.bbs"]`, another client's blind-BBS holder
+        // state, cannot be recomputed once it is gone. Only members this
+        // class itself produces are excluded: for those the in-memory state
+        // IS the source of truth, and carrying the loaded copy would
+        // resurrect entries the session deliberately removed (see
+        // `wscdCredentials`/`credentialRefreshTokens` above).
+        if let existingS {
+            for (member, value) in existingS where !Self.ownedWalletStateMembers.contains(member) {
+                sDict[member] = value
             }
         }
 
