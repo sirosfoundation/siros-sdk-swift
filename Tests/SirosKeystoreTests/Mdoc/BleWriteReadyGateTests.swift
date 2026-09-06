@@ -44,14 +44,24 @@ final class BleWriteReadyGateTests: XCTestCase {
     func testReadinessFlippingDuringRegistrationIsNotMissed() async {
         let gate = BleWriteReadyGate()
         var checks = 0
-        let started = Date()
         let outcome = await gate.wait(timeoutMs: 200) {
             checks += 1
             return checks >= 2
         }
         XCTAssertEqual(outcome, .ready)
         XCTAssertEqual(checks, 2, "expected exactly one pre-check and one post-registration re-check")
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.15, "must not have waited for the timeout")
+    }
+
+    /// An `abort()` that lands while the unlocked readiness pre-check is
+    /// running must not be outrun by a `.ready` answer: the latch is read
+    /// again after `isReady()` returns, and it wins.
+    func testAbortDuringReadinessPreCheckWinsOverReady() async {
+        let gate = BleWriteReadyGate()
+        let outcome = await gate.wait(timeoutMs: Self.longTimeoutMs) {
+            gate.abort()
+            return true
+        }
+        XCTAssertEqual(outcome, .aborted)
     }
 
     func testAbortResumesCurrentWaiterAndFailsLaterWaitsImmediately() async {

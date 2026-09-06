@@ -74,11 +74,22 @@ final class BleWriteReadyGate: @unchecked Sendable {
 
     /// Suspends until `signalReady()` is called, `isReady()` is observed true,
     /// `abort()` is called, or `timeoutMs` elapses - whichever comes first.
-    /// `isReady` is consulted once before registering and once more under
-    /// the lock after registering (see the type doc comment).
+    /// `isReady` is consulted once before registering (unlocked) and once
+    /// more under the lock after registering (see the type doc comment), so
+    /// it must be a plain state read that does not call back into this gate
+    /// from that second call (production: `canSendWriteWithoutResponse`).
     func wait(timeoutMs: UInt64, isReady: () -> Bool) async -> Outcome {
-        if isAborted { return .aborted }
-        if isReady() { return .ready }
+        if isReady() {
+            // The fast path decides `.ready` without holding the lock across
+            // `isReady()`, so an `abort()` can land while it runs. `aborted`
+            // is monotonic (set once, never cleared), which makes reading it
+            // AFTER `isReady()` returned sufficient: any abort that happened
+            // before this point - including one racing the readiness check
+            // - is observed, and the latch wins over readiness. An abort
+            // landing after this return is not a lost latch, just a normal
+            // "decided, then the connection went away".
+            return isAborted ? .aborted : .ready
+        }
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
             lock.lock()
