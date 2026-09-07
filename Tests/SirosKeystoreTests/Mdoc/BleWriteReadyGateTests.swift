@@ -74,9 +74,15 @@ final class BleWriteReadyGateTests: XCTestCase {
 
         // Latched: the connection is gone, so even a peripheral that claims
         // to be ready must not be written to, and nobody waits out a timeout.
+        // The peripheral is not even asked: its state is meaningless now.
+        var readinessChecks = 0
         let started = Date()
-        let second = await gate.wait(timeoutMs: Self.longTimeoutMs) { true }
+        let second = await gate.wait(timeoutMs: Self.longTimeoutMs) {
+            readinessChecks += 1
+            return true
+        }
         XCTAssertEqual(second, .aborted)
+        XCTAssertEqual(readinessChecks, 0, "a latched gate must not consult the peripheral")
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
     }
 

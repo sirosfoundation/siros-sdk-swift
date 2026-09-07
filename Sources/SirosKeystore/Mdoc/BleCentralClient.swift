@@ -79,6 +79,11 @@ final class BleWriteReadyGate: @unchecked Sendable {
     /// it must be a plain state read that does not call back into this gate
     /// from that second call (production: `canSendWriteWithoutResponse`).
     func wait(timeoutMs: UInt64, isReady: () -> Bool) async -> Outcome {
+        // Once latched, the peripheral is not consulted at all: after a
+        // disconnect its state is meaningless (and `stop()` may have dropped
+        // the reference the closure captured), so the answer is known
+        // without asking.
+        if isAborted { return .aborted }
         if isReady() {
             // The fast path decides `.ready` without holding the lock across
             // `isReady()`, so an `abort()` can land while it runs. `aborted`
