@@ -2,21 +2,6 @@
 
 import Foundation
 
-// The whole implementation is iOS-only because the native library is: the
-// zk-cred-bbs XCFramework ships iOS slices only, and the generated bindings
-// carry the same gate. Same arrangement as LongfellowZkProofSystem.
-#if os(iOS)
-
-// INSIDE the gate, not above it. CryptoKit does not exist on Linux, and
-// this package's CI builds SirosCredentials there - an import above the
-// `#if` compiles on every platform regardless of what it guards, so it
-// fails the Linux build even though nothing that uses it is reachable.
-// swift-crypto's `Crypto` is not the answer either: Package.swift scopes
-// that product to Linux only, so it is unavailable here. ZkProofSystem.swift
-// needs the `#if canImport(CryptoKit)` dance because its code really does
-// run on both; this file's does not.
-import CryptoKit
-
 /// The holder-side state a BBS credential needs that its container does not
 /// carry.
 ///
@@ -55,6 +40,26 @@ public struct BbsHolderState: Sendable, Equatable {
         self.keybindPublicKeys = keybindPublicKeys
     }
 }
+
+// Everything from here on is iOS-only because the native library is: the
+// zk-cred-bbs XCFramework ships iOS slices only, and the generated bindings
+// carry the same gate. Same arrangement as LongfellowZkProofSystem.
+// `BbsHolderState` above sits OUTSIDE the gate on purpose: it is plain data
+// with no native dependency, and SirosKeystore's `BbsHolderStateVault`
+// persists it on every platform the container format is shared across -
+// keeping it here would make the vault (and its wire-format tests)
+// unbuildable anywhere but iOS.
+#if os(iOS)
+
+// INSIDE the gate, not above it. CryptoKit does not exist on Linux, and
+// this package's CI builds SirosCredentials there - an import above the
+// `#if` compiles on every platform regardless of what it guards, so it
+// fails the Linux build even though nothing that uses it is reachable.
+// swift-crypto's `Crypto` is not the answer either: Package.swift scopes
+// that product to Linux only, so it is unavailable here. ZkProofSystem.swift
+// needs the `#if canImport(CryptoKit)` dance because its code really does
+// run on both; this file's does not.
+import CryptoKit
 
 /// Where `BbsProofSystem` looks up a credential's ``BbsHolderState``.
 ///
