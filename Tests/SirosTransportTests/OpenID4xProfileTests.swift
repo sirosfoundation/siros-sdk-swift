@@ -113,6 +113,34 @@ final class OpenID4xProfileTests: XCTestCase {
         XCTAssertEqual(params?["dpop_proof"], .string("dpop"))
     }
 
+    /// A DPoP-only `sign_client_auth` (credential / deferred / notification
+    /// request) has no audience and no c_nonce; a peer that omits the members
+    /// instead of sending "" must still reach the handler.
+    func testSignClientAuthWithoutAudienceOrNonceStillDecodes() async throws {
+        let ctx = MockPeerContext()
+        var receivedParams: SignSubFlowParams?
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, params in
+                receivedParams = params
+                return SignSubFlowResult(dpopKeyId: "k-1", dpopProof: "dpop")
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        let payload: [String: AnyCodable] = [
+            "action": .string("sign_client_auth"), "htm": .string("POST"),
+            "htu": .string("https://issuer.example.com/credential"), "ath": .string("h"),
+        ]
+        await profile.handleProgress(params: FlowProgressParams(flowId: "flow-1", step: "sign_request", payload: .object_(payload)))
+
+        XCTAssertEqual(receivedParams?.action, "sign_client_auth")
+        XCTAssertEqual(receivedParams?.audience, "")
+        XCTAssertEqual(receivedParams?.nonce, "")
+        XCTAssertEqual(receivedParams?.htm, "POST")
+        XCTAssertEqual(ctx.notifications.count, 1)
+        XCTAssertEqual(ctx.notifications[0].params?["dpop_proof"], .string("dpop"))
+    }
+
     func testHandleProgressMatchRequestCallsOnMatchRequest() async throws {
         let ctx = MockPeerContext()
         var receivedFlowId: String?

@@ -167,6 +167,59 @@ public struct SignSubFlowParams: Codable, Sendable {
         case dpopNonce = "dpop_nonce"
         case keyId = "key_id"
     }
+
+    public init(
+        action: String,
+        nonce: String = "",
+        audience: String = "",
+        proofType: String? = nil,
+        parentFlowId: String? = nil,
+        count: Int? = nil,
+        transactionData: [TransactionData]? = nil,
+        issuer: String? = nil,
+        htm: String? = nil,
+        htu: String? = nil,
+        dpopNonce: String? = nil,
+        ath: String? = nil,
+        keyId: String? = nil
+    ) {
+        self.action = action
+        self.nonce = nonce
+        self.audience = audience
+        self.proofType = proofType
+        self.parentFlowId = parentFlowId
+        self.count = count
+        self.transactionData = transactionData
+        self.issuer = issuer
+        self.htm = htm
+        self.htu = htu
+        self.dpopNonce = dpopNonce
+        self.ath = ath
+        self.keyId = keyId
+    }
+
+    /// `nonce` and `audience` stay non-optional for the `generate_proof` /
+    /// `sign_presentation` callers that always have them, but a
+    /// `sign_client_auth` request for a DPoP-only resource request carries
+    /// no audience (and no c_nonce), and a peer may omit the members rather
+    /// than send empty strings. Decode them as empty when absent instead of
+    /// failing the whole sub-flow with INVALID_PARAMS.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        action = try c.decode(String.self, forKey: .action)
+        nonce = try c.decodeIfPresent(String.self, forKey: .nonce) ?? ""
+        audience = try c.decodeIfPresent(String.self, forKey: .audience) ?? ""
+        proofType = try c.decodeIfPresent(String.self, forKey: .proofType)
+        parentFlowId = try c.decodeIfPresent(String.self, forKey: .parentFlowId)
+        count = try c.decodeIfPresent(Int.self, forKey: .count)
+        transactionData = try c.decodeIfPresent([TransactionData].self, forKey: .transactionData)
+        issuer = try c.decodeIfPresent(String.self, forKey: .issuer)
+        htm = try c.decodeIfPresent(String.self, forKey: .htm)
+        htu = try c.decodeIfPresent(String.self, forKey: .htu)
+        dpopNonce = try c.decodeIfPresent(String.self, forKey: .dpopNonce)
+        ath = try c.decodeIfPresent(String.self, forKey: .ath)
+        keyId = try c.decodeIfPresent(String.self, forKey: .keyId)
+    }
 }
 
 // MARK: - Client Attestation (WIA)
