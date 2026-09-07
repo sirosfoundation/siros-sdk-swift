@@ -288,4 +288,67 @@ final class SirosWalletCredentialSelectionDcqlIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(disclosed.compactMap(\.stringValue), ["pairwise_pseudonym"])
     }
+
+    // MARK: - zkRequestedIds / firstMatchByCredentialId
+    // The shared first-match derivation behind `PresentationRecord.zkProof`
+    // and the `consumeNonZkp` resolver on the DC API and both engine
+    // selection paths. Mirrors the Kotlin regression test
+    // `handleDCAPIRequest_credentialMatchesBothZkAndPlainQuery_usesFirstMatchForZkFlag`.
+
+    /// A single stored mso_mdoc credential is a candidate under BOTH a plain
+    /// and a zk query (`CredentialMatcher.matchesFormat`'s zk-matches-plain
+    /// rule). First-match over the request's own `credentials` order decides
+    /// - plain first means a raw disclosure, so the id must NOT be zk here,
+    /// even though it is a candidate under the zk query too.
+    func testZkRequestedIds_plainQueryFirst_isNotZk() throws {
+        let dcqlQuery = try JSONSerialization.jsonObject(with: Data("""
+        {"credentials": [
+            {"id": "mdl_plain", "format": "mso_mdoc", "meta": {"doctype_value": "org.iso.18013.5.1.mDL"}},
+            {"id": "mdl_zk", "format": "mso_mdoc_zk", "meta": {"doctype_value": "org.iso.18013.5.1.mDL"}}
+        ]}
+        """.utf8)) as! [String: Any]
+        let mdl = makeCredential(id: 1, format: "mso_mdoc", doctype: "org.iso.18013.5.1.mDL")
+
+        let matchResults = CredentialMatcher.match(dcqlQuery: dcqlQuery, credentials: [mdl])
+        XCTAssertEqual(matchResults.map(\.queryId), ["mdl_plain", "mdl_zk"], "both queries must match the one credential")
+
+        let byId = SirosWallet.firstMatchByCredentialId(candidates: [mdl], matchResults: matchResults)
+        XCTAssertEqual(byId[1]?.queryId, "mdl_plain")
+        XCTAssertEqual(SirosWallet.zkRequestedIds(matchResultByCredentialId: byId), [])
+    }
+
+    /// Same request with the zk query first: the same credential now IS
+    /// presented as a ZK proof.
+    func testZkRequestedIds_zkQueryFirst_isZk() throws {
+        let dcqlQuery = try JSONSerialization.jsonObject(with: Data("""
+        {"credentials": [
+            {"id": "mdl_zk", "format": "mso_mdoc_zk", "meta": {"doctype_value": "org.iso.18013.5.1.mDL"}},
+            {"id": "mdl_plain", "format": "mso_mdoc", "meta": {"doctype_value": "org.iso.18013.5.1.mDL"}}
+        ]}
+        """.utf8)) as! [String: Any]
+        let mdl = makeCredential(id: 1, format: "mso_mdoc", doctype: "org.iso.18013.5.1.mDL")
+
+        let matchResults = CredentialMatcher.match(dcqlQuery: dcqlQuery, credentials: [mdl])
+        let byId = SirosWallet.firstMatchByCredentialId(candidates: [mdl], matchResults: matchResults)
+
+        XCTAssertEqual(byId[1]?.queryId, "mdl_zk")
+        XCTAssertEqual(SirosWallet.zkRequestedIds(matchResultByCredentialId: byId), [1])
+    }
+
+    /// Two credentials, each governed by a different query - the zk flag is
+    /// per credential id, never "any zk query anywhere in the request".
+    func testZkRequestedIds_isPerCredential() {
+        let pid = makeCredential(id: 1, format: "mso_mdoc", doctype: "eu.europa.ec.eudi.pid.1")
+        let mdl = makeCredential(id: 2, format: "mso_mdoc", doctype: "org.iso.18013.5.1.mDL")
+        let matchResults = [
+            CredentialMatcher.MatchResult(queryId: "pid_zk", format: "MSO_MDOC_ZK", candidates: [pid], requestedClaims: []),
+            CredentialMatcher.MatchResult(queryId: "mdl_plain", format: "mso_mdoc", candidates: [mdl], requestedClaims: []),
+            CredentialMatcher.MatchResult(queryId: "default", format: nil, candidates: [pid, mdl], requestedClaims: []),
+        ]
+
+        let byId = SirosWallet.firstMatchByCredentialId(candidates: [pid, mdl], matchResults: matchResults)
+
+        XCTAssertEqual(SirosWallet.zkRequestedIds(matchResultByCredentialId: byId), [1], "case-insensitive, and only the pid")
+        XCTAssertEqual(byId[2]?.queryId, "mdl_plain")
+    }
 }

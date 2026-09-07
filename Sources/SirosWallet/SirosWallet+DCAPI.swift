@@ -57,7 +57,9 @@ extension SirosWallet {
         let trustResult = try await resolveDCAPITrust(request: request, origin: origin)
 
         let allCreds = await credentialStore.getAll()
-        let (matchResults, selectedIds) = try dcapiSelectCandidates(request: request, allCreds: allCreds)
+        let selection = try dcapiSelectCandidates(request: request, allCreds: allCreds)
+        let matchResults = selection.matchResults
+        let selectedIds = selection.selectedIds
 
         // "origin:<value>" per OpenID4VP 1.0 Appendix A is only used for the
         // VP token audience claim at signing time - trust evaluation above
@@ -67,7 +69,7 @@ extension SirosWallet {
 
         let (tokensByQueryId, queryIdOrder) = try await dcapiSignTokens(
             selectedIds: selectedIds,
-            matchResults: matchResults,
+            matchResultByCredentialId: selection.matchResultByCredentialId,
             allCreds: allCreds,
             origin: origin,
             audience: audience,
@@ -95,7 +97,8 @@ extension SirosWallet {
             credentialIds: selectedIds,
             credentialNames: selectedIds.compactMap { id in allCreds.first(where: { $0.id == id })?.metadata?.name },
             requestedClaims: requestedClaims,
-            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+            zkProof: selectedIds.contains(where: { selection.zkRequestedIds.contains($0) })
         ))
 
         return DCAPIPresentationResult(responseJson: finalResponseJson, credentialIds: selectedIds)
@@ -140,13 +143,75 @@ extension SirosWallet {
         return trustResult
     }
 
+    /// What `dcapiSelectCandidates` resolves once, up front, so every later
+    /// step of `handleDCAPIRequest` (eligibility, token signing, the history
+    /// record) agrees on which query governs each credential.
+    struct DCAPISelection {
+        let matchResults: [CredentialMatcher.MatchResult]
+        /// Which query result actually governs each candidate - the same
+        /// first-match selection `dcapiSignTokens` uses when building
+        /// tokens (a credential id can appear as a candidate under more than
+        /// one query, e.g. one plain and one "mso_mdoc_zk", so this must be
+        /// resolved once and reused everywhere rather than re-derived with
+        /// different semantics in different places).
+        let matchResultByCredentialId: [Int64: CredentialMatcher.MatchResult]
+        /// Candidates that will actually be presented as a ZK proof (vs a
+        /// raw disclosure) for THIS request - see `zkRequestedIds(...)`.
+        let zkRequestedIds: Set<Int64>
+        let selectedIds: [Int64]
+    }
+
+    /// Which candidates will be presented as a ZK proof rather than
+    /// disclosed, given the first-match query per credential id - a
+    /// credential's stored format is always plain "mso_mdoc" even under a
+    /// ZK query (see `CredentialMatcher.matchesFormat`), so this must come
+    /// from the MATCHED query's format, not the candidate's own. Derived from
+    /// the first-match query per id, not from "is this id a candidate under
+    /// ANY zk query" - a credential that also matches some other, non-zk
+    /// query first would otherwise be wrongly marked zk here even though the
+    /// token-building/consent step (which also uses first-match) will
+    /// actually raw-disclose it. Feeds `eligibleInstances(from:isZkPresentation:)`
+    /// so `CredentialConsumptionPolicy.consumeNonZkp` actually distinguishes
+    /// the two, per that policy's own doc comment, and the recorded
+    /// `PresentationRecord.zkProof`. Shared by the DC API and both engine
+    /// selection paths so the three never disagree.
+    static func zkRequestedIds(
+        matchResultByCredentialId: [Int64: CredentialMatcher.MatchResult]
+    ) -> Set<Int64> {
+        Set(matchResultByCredentialId.compactMap { id, result in
+            guard let format = result.format, CredentialUtils.isZkpFormat(format) else { return nil }
+            return id
+        })
+    }
+
+    /// First-match query per candidate id, in `matchResults` order (the same
+    /// order as the request's own `credentials` array) - see
+    /// `DCAPISelection.matchResultByCredentialId`.
+    static func firstMatchByCredentialId(
+        candidates: [StoredCredential],
+        matchResults: [CredentialMatcher.MatchResult]
+    ) -> [Int64: CredentialMatcher.MatchResult] {
+        // One pass over the results in request order; the first result to
+        // name an id wins and later ones are skipped, which is the
+        // first-match rule stated in terms of the query list rather than a
+        // per-candidate search back through it.
+        let wanted = Set(candidates.map(\.id))
+        var byId: [Int64: CredentialMatcher.MatchResult] = [:]
+        for result in matchResults {
+            for candidate in result.candidates where wanted.contains(candidate.id) && byId[candidate.id] == nil {
+                byId[candidate.id] = result
+            }
+        }
+        return byId
+    }
+
     /// DCQL-match, dedupe, and apply the credential-consumption eligibility
     /// filter for a DC API request - split out of `handleDCAPIRequest`, see
     /// that function's doc comment for the overall flow.
     private func dcapiSelectCandidates(
         request: DCAPIRequest,
         allCreds: [StoredCredential]
-    ) throws -> (matchResults: [CredentialMatcher.MatchResult], selectedIds: [Int64]) {
+    ) throws -> DCAPISelection {
         let dcqlOutput: CredentialMatcher.DcqlMatchOutput
         if let dcqlQuery = request.dcqlQuery {
             dcqlOutput = CredentialMatcher.matchDcql(dcqlQuery: dcqlQuery, credentials: allCreds)
@@ -167,6 +232,9 @@ extension SirosWallet {
             return true
         }
 
+        let matchResultByCredentialId = Self.firstMatchByCredentialId(candidates: candidates, matchResults: matchResults)
+        let zkRequestedIds = Self.zkRequestedIds(matchResultByCredentialId: matchResultByCredentialId)
+
         // Unlike the QR/redirect flow, credential selection and consent
         // already happened natively - the OS's own credential picker showed
         // the matching registered entries and the user picked one before
@@ -174,11 +242,7 @@ extension SirosWallet {
         // interactive onCredentialSelectionRequired here would suspend
         // waiting for an in-app consent screen that this headless flow
         // never shows.
-        let eligible = CredentialUtils.eligibleInstances(
-            instances: candidates,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: presentationHistory
-        )
+        let eligible = eligibleInstances(from: candidates, isZkPresentation: { zkRequestedIds.contains($0.id) })
         let selectedIds = eligible.map(\.id)
 
         if selectedIds.isEmpty {
@@ -187,7 +251,12 @@ extension SirosWallet {
                 : "No eligible copies of the requested credential remain - renew it to get more"
             )
         }
-        return (matchResults, selectedIds)
+        return DCAPISelection(
+            matchResults: matchResults,
+            matchResultByCredentialId: matchResultByCredentialId,
+            zkRequestedIds: zkRequestedIds,
+            selectedIds: selectedIds
+        )
     }
 
     /// Resolve the verifier's response-encryption key (for `dc_api.jwt`) and
@@ -218,7 +287,7 @@ extension SirosWallet {
     /// function's original cyclomatic-complexity/length lint violations.
     private func dcapiSignTokens(
         selectedIds: [Int64],
-        matchResults: [CredentialMatcher.MatchResult],
+        matchResultByCredentialId: [Int64: CredentialMatcher.MatchResult],
         allCreds: [StoredCredential],
         origin: String,
         audience: String,
@@ -238,7 +307,10 @@ extension SirosWallet {
         var queryIdOrder: [String] = []
         for id in selectedIds {
             guard let cred = allCreds.first(where: { $0.id == id }) else { continue }
-            let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
+            // The same first-match query `dcapiSelectCandidates` already
+            // resolved for eligibility and the zk flag - never re-derived
+            // here, so the ZK-vs-raw decision can't drift between the two.
+            let matchResult = matchResultByCredentialId[id]
             let queryId = matchResult?.queryId ?? "_default"
             let disclosedClaims = matchResult?.requestedClaims.compactMap(\.last)
 
@@ -273,7 +345,7 @@ extension SirosWallet {
         request: DCAPIRequest,
         encryptionThumbprint: String?
     ) async throws -> String {
-        if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+        if let format = matchResult?.format, CredentialUtils.isZkpFormat(format) {
             // ZK-wrapped mDoc presentation - see the shared
             // `buildZkPresentationToken` helper's doc comment.
             guard let credBytes = Self.b64UrlDecode(cred.raw) else {

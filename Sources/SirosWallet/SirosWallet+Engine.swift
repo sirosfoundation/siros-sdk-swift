@@ -467,12 +467,12 @@ extension SirosWallet {
         // usable - mirrors the legacy engine path's handleMatchRequest (and
         // Kotlin's matchRequests() collector) so a credential exhausted under
         // CONSUME_ALL/CONSUME_NON_ZKP can't be matched into a new
-        // presentation via this transport either.
-        let eligibleCreds = CredentialUtils.eligibleInstances(
-            instances: candidates,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: presentationHistory
+        // presentation via this transport either. Same first-match ZK rule
+        // as the other two selection paths (see `Self.zkRequestedIds`).
+        let zkRequestedIds = Self.zkRequestedIds(
+            matchResultByCredentialId: Self.firstMatchByCredentialId(candidates: candidates, matchResults: matchResults)
         )
+        let eligibleCreds = eligibleInstances(from: candidates, isZkPresentation: { zkRequestedIds.contains($0.id) })
 
         // Cache for the later sign_presentation step, mirroring
         // handleCredentialSelection/handleMatchRequest - see
@@ -788,7 +788,7 @@ extension SirosWallet {
         audience: String,
         msg: SignRequestMessage
     ) async throws -> String {
-        if matchResult?.format?.caseInsensitiveCompare("mso_mdoc_zk") == .orderedSame {
+        if let format = matchResult?.format, CredentialUtils.isZkpFormat(format) {
             // ZK-wrapped mDoc presentation - see handleDCAPIRequest's
             // identical branch, which this mirrors for the WS-engine/
             // redirect-flow transport instead of DC API.
@@ -889,103 +889,6 @@ extension SirosWallet {
         }
     }
 
-    /// Shared DCQL-match + user-consent-selection logic for the three
-    /// credential-matching call sites: the legacy engine's `match_request`
-    /// (`handleMatchRequest`), WMP's `matching_credentials`/`match_request`
-    /// step (`handleWmpMatchRequest`), and the `"credential_selection"`
-    /// flow_progress step (`handleCredentialSelection` - the actual live
-    /// path exercised by redirect-flow/haip-vp:// presentations). Filters
-    /// `allCreds` against `dcqlQuery` (`nil` matches everything, preserving
-    /// each caller's prior no-DCQL fallback behavior), offers the matched
-    /// candidates to `eventListener` for consent when one is registered, and
-    /// falls back to auto-selecting every currently-eligible candidate
-    /// otherwise - mirrors Kotlin's identical fallback in each of its three
-    /// equivalent collectors/handlers.
-    private func matchAndSelectCredentials(
-        dcqlQuery: [String: Any]?,
-        allCreds: [StoredCredential],
-        verifierName: String?,
-        trustResult: TrustResult?
-    ) async -> (matchResults: [CredentialMatcher.MatchResult], candidates: [StoredCredential], selectedIds: [Int64]) {
-        let matchResults: [CredentialMatcher.MatchResult]
-        if let dcqlQuery {
-            matchResults = CredentialMatcher.match(dcqlQuery: dcqlQuery, credentials: allCreds)
-        } else {
-            matchResults = [CredentialMatcher.MatchResult(queryId: "_default", format: nil, candidates: allCreds, requestedClaims: [])]
-        }
-        var seenIds = Set<Int64>()
-        let candidates = matchResults.flatMap { $0.candidates }.filter { seenIds.insert($0.id).inserted }
-
-        lock.lock(); let listener = eventListener; lock.unlock()
-        let selectedIds: [Int64]
-        if let listener, !candidates.isEmpty {
-            selectedIds = await listener.onCredentialSelectionRequired(
-                request: PresentationRequest(
-                    verifierName: verifierName,
-                    trustResult: trustResult,
-                    candidates: candidates,
-                    requestedClaims: matchResults.flatMap { $0.requestedClaims }
-                )
-            )
-        } else {
-            selectedIds = CredentialUtils.eligibleInstances(
-                instances: candidates,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            ).map(\.id)
-        }
-        return (matchResults, candidates, selectedIds)
-    }
-
-    /// Builds the `"selected_credentials"` flow-action payload the engine's
-    /// `"consent"` action expects for the `"credential_selection"` step -
-    /// matches go-wallet-backend's `ConsentSelection` wire shape
-    /// (`credential_query_id`, `credential_id`, `disclosed_claims`) exactly,
-    /// mirroring Kotlin's `handleCredentialSelection`'s identical payload
-    /// construction. Internal (not private) and static so it's directly
-    /// unit-testable without a live `WalletEngineSession` - see
-    /// `requestBackendKeyAttestation`'s doc comment for this file's existing
-    /// testability precedent.
-    static func buildConsentPayload(
-        matchResults: [CredentialMatcher.MatchResult],
-        selectedIds: [Int64],
-        allCreds: [StoredCredential]
-    ) -> [String: AnyCodable] {
-        var entries: [AnyCodable] = []
-        for id in selectedIds {
-            guard allCreds.contains(where: { $0.id == id }) else { continue }
-            let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
-            var obj: [String: AnyCodable] = [:]
-            // Always set credential_query_id, even for an id that (should
-            // never happen, but see below) isn't in any matchResult - the
-            // "_default" fallback mirrors the no-DCQL synthetic MatchResult
-            // matchAndSelectCredentials builds, and keeps this payload
-            // honoring the backend's documented wire contract unconditionally
-            // rather than silently omitting the field if a caller ever
-            // passes a selectedId inconsistent with matchResults (e.g. a
-            // misbehaving eventListener implementation).
-            obj["credential_query_id"] = .string(matchResult?.queryId ?? "_default")
-            // Legacy engine JSON-RPC protocol keeps credential_id as a string
-            // wire contract - a separate contract from privatedata-spec's
-            // numeric StoredCredential.id, so it deliberately stays String
-            // (mirrors every other call site's identical stringification).
-            obj["credential_id"] = .string(String(id))
-            // Each requestedClaims entry is a full DCQL claim PATH (e.g.
-            // ["eu.europa.ec.eudi.pid.1", "pairwise_pseudonym"]) - only the
-            // last segment is the actual disclosable element id (mirrors
-            // handleDCAPIRequest's identical `compactMap(\.last)`): the
-            // native Longfellow ZK prover validates every requested claim
-            // strictly and throws on a raw, un-trimmed path.
-            var seenClaims = Set<String>()
-            let disclosedClaims = (matchResult?.requestedClaims ?? [])
-                .compactMap(\.last)
-                .filter { seenClaims.insert($0).inserted }
-            obj["disclosed_claims"] = .array(disclosedClaims.map { .string($0) })
-            entries.append(.object_(obj))
-        }
-        return ["selected_credentials": .array(entries)]
-    }
-
     /// Handle the `"credential_selection"` flow_progress step - the actual,
     /// live code path exercised by the redirect-flow (haip-vp://) protocol
     /// for credential matching + consent (confirmed empirically in the
@@ -1022,12 +925,14 @@ extension SirosWallet {
             // entry - see `handleMatchRequest`'s identical comment.
             lock.lock(); let trustResult = lastTrustResults[flowId]; lock.unlock()
 
-            let (matchResults, candidates, selectedIds) = await matchAndSelectCredentials(
+            let selection = await matchAndSelectCredentials(
                 dcqlQuery: dcqlQuery,
                 allCreds: allCreds,
                 verifierName: verifierName,
                 trustResult: trustResult
             )
+            let matchResults = selection.matchResults
+            let selectedIds = selection.selectedIds
 
             // This (not handleMatchRequest's match_request collector) is the
             // code path actually exercised by the redirect-flow/haip-vp://
@@ -1047,12 +952,7 @@ extension SirosWallet {
             // The app is trusted to only return IDs it was offered, but
             // shouldn't be the only thing enforcing consumption -
             // re-validate here too (defense in depth).
-            let eligibleIds = Set(CredentialUtils.eligibleInstances(
-                instances: candidates,
-                policy: credentialConsumptionPolicy,
-                presentationHistory: presentationHistory
-            ).map(\.id))
-            guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+            guard selection.allSelectedEligible else {
                 throw SirosError.wallet(message: "Selected credential has no eligible copies remaining - renew it to get more")
             }
 
@@ -1065,7 +965,8 @@ extension SirosWallet {
                 credentialIds: selectedIds,
                 credentialNames: selectedIds.compactMap { id in allCreds.first(where: { $0.id == id })?.metadata?.name },
                 requestedClaims: requestedClaims,
-                timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+                timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+                zkProof: selection.zkProof
             ))
 
             let consentPayload = Self.buildConsentPayload(matchResults: matchResults, selectedIds: selectedIds, allCreds: allCreds)
@@ -1105,12 +1006,15 @@ extension SirosWallet {
         // its own "dcql_query" key) - a separate wire shape from
         // "credential_selection"'s flow_progress payload, which wraps it.
         let dcqlQuery = msg.dcqlQuery?.objectValue.map { anyCodableDictToAny($0) }
-        let (matchResults, candidates, selectedIds) = await matchAndSelectCredentials(
+        let selection = await matchAndSelectCredentials(
             dcqlQuery: dcqlQuery,
             allCreds: allCreds,
             verifierName: verifierName,
             trustResult: trustResult
         )
+        let matchResults = selection.matchResults
+        let candidates = selection.candidates
+        let selectedIds = selection.selectedIds
 
         // Cache for the later sign_presentation step's ZK branch - mirrors
         // handleCredentialSelection and Kotlin's matchRequests() collector,
@@ -1120,12 +1024,7 @@ extension SirosWallet {
         // The app is trusted to only return IDs it was offered, but shouldn't
         // be the only thing enforcing consumption - re-validate here too
         // (defense in depth).
-        let eligibleIds = Set(CredentialUtils.eligibleInstances(
-            instances: candidates,
-            policy: credentialConsumptionPolicy,
-            presentationHistory: presentationHistory
-        ).map(\.id))
-        guard selectedIds.allSatisfy({ eligibleIds.contains($0) }) else {
+        guard selection.allSelectedEligible else {
             #if canImport(os)
             logger.error("Selected credential has no eligible copies remaining")
             #endif
@@ -1142,7 +1041,8 @@ extension SirosWallet {
                 candidates.first(where: { $0.id == id })?.metadata?.name
             },
             requestedClaims: requestedClaims,
-            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+            zkProof: selection.zkProof
         ))
 
         let matches: [CredentialMatch] = selectedIds.compactMap { id in

@@ -76,7 +76,10 @@ private final class FakeKeystoreManager: KeystoreManager, @unchecked Sendable {
     }
 
     func exportEncryptedContainer() async throws -> Data { Data() }
-    func listKeys() -> [KeyInfo] { [] }
+    /// One key, so a fixture credential with a nil `kid` passes
+    /// `eligibleInstances`' key-availability gate ("any key at all") - the
+    /// Kotlin suite's `every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", ...))`.
+    func listKeys() -> [KeyInfo] { [KeyInfo(keyId: "test-kid", algorithm: "ES256")] }
     func saveCredential(id: Int64, json: String) async throws {}
     func getCredential(id: Int64) async throws -> String? { nil }
     func getAllCredentials() async throws -> [Int64: String] { [:] }
@@ -239,6 +242,84 @@ final class SirosWalletDCAPITests: XCTestCase {
         XCTAssertEqual(call.nonce, "dc-nonce-mdl")
         XCTAssertEqual(call.origin, "https://relying-party.example")
         XCTAssertNil(call.encryptionPublicJwkThumbprint, "plain dc_api mode must not pass an encryption thumbprint")
+        XCTAssertEqual(wallet.presentationHistory.first?.zkProof, false, "a raw mdoc disclosure is not a ZK proof")
+    }
+
+    /// Regression test (ported from Kotlin): a single stored mso_mdoc
+    /// credential can legitimately appear as a candidate under BOTH a plain
+    /// "mso_mdoc" query and an "mso_mdoc_zk" query in the same request
+    /// (`CredentialMatcher.matchesFormat`'s own zk-matches-plain rule). Which
+    /// one actually governs the presentation - and thus whether a ZK proof or
+    /// a raw disclosure happens - is decided by first-match over
+    /// `queryResults`, same order as the request's own `credentials` array.
+    /// Here the plain query comes first, so this MUST be a raw disclosure:
+    /// `signMdocPresentationForDCAPI` is called (never the ZK branch) and
+    /// `PresentationRecord.zkProof` is false, even though the same id is
+    /// also a candidate under the zk query.
+    func testHandleDCAPIRequestCredentialMatchingBothZkAndPlainQueryUsesFirstMatchForZkFlag() async throws {
+        let store = InMemoryCredentialStore()
+        let rawMdoc = Data("fake-cbor".utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        await store.save(makeCredential(id: 1, format: "mso_mdoc", raw: rawMdoc, name: "mDL", doctype: "org.iso.18013.5.1.mDL"))
+        let keystore = FakeKeystoreManager()
+        let wallet = makeWallet(store: store, keystore: keystore)
+
+        let requestJson = wrapDCAPIRequest(protocolIdentifier: "openid4vp-v1-unsigned", data: [
+            "nonce": "dc-nonce-mixed",
+            "response_mode": "dc_api",
+            "dcql_query": [
+                "credentials": [
+                    ["id": "mdl_plain", "format": "mso_mdoc", "meta": ["doctype_value": "org.iso.18013.5.1.mDL"]],
+                    ["id": "mdl_zk", "format": "mso_mdoc_zk", "meta": ["doctype_value": "org.iso.18013.5.1.mDL"]],
+                ],
+            ],
+        ])
+
+        let result = try await wallet.handleDCAPIRequest(rawRequestJson: requestJson, origin: "https://relying-party.example")
+
+        XCTAssertEqual(keystore.signMdocCalls.count, 1)
+        XCTAssertEqual(keystore.signMdocCalls.first?.nonce, "dc-nonce-mixed")
+        XCTAssertEqual(result.credentialIds, [1])
+        XCTAssertEqual(wallet.presentationHistory.count, 1)
+        XCTAssertEqual(wallet.presentationHistory.first?.zkProof, false)
+    }
+
+    /// The key-availability gate (`CredentialUtils.eligibleInstances`): a
+    /// credential whose bound `kid` the keystore no longer holds must not be
+    /// presented, even under the default `neverConsume` policy - the
+    /// user-facing "no eligible copies" error replaces a failure deep inside
+    /// key selection.
+    func testHandleDCAPIRequestCredentialWithMissingKeyIsNotEligible() async {
+        let store = InMemoryCredentialStore()
+        await store.save(StoredCredential(
+            id: 1,
+            format: "dc+sd-jwt",
+            raw: "issuer.payload.sig~",
+            kid: "kid-that-was-lost",
+            metadata: CredentialMetadata(name: "Diploma", vct: "urn:example:vct"),
+            batchId: 1,
+            instanceId: 0
+        ))
+        let keystore = FakeKeystoreManager()
+        let wallet = makeWallet(store: store, keystore: keystore)
+
+        let requestJson = wrapDCAPIRequest(protocolIdentifier: "openid4vp-v1-unsigned", data: [
+            "nonce": "n",
+            "response_mode": "dc_api",
+            "dcql_query": ["credentials": [["id": "query1", "format": "dc+sd-jwt"]]],
+        ])
+
+        do {
+            _ = try await wallet.handleDCAPIRequest(rawRequestJson: requestJson, origin: "https://relying-party.example")
+            XCTFail("expected an error for a credential with no usable key")
+        } catch SirosError.wallet(let message, _) {
+            XCTAssertTrue(message.contains("No eligible copies"), "unexpected message: \(message)")
+        } catch {
+            XCTFail("expected SirosError.wallet, got \(error)")
+        }
+        XCTAssertTrue(keystore.signVpTokenCalls.isEmpty)
     }
 
     // MARK: - No matching credential

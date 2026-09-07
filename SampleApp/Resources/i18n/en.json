@@ -279,6 +279,7 @@
     "flowIdLabel": "Flow ID: %1$@",
     "statusLabel": "Status: %1$@",
     "statusSuccessful": "Successful",
-    "statusFailed": "Failed"
+    "statusFailed": "Failed",
+    "zkProof": "Zero-knowledge proof"
   }
 }
