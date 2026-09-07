@@ -1,0 +1,147 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import Foundation
+import SirosCredentials
+import SirosTransport
+
+// Credential matching and selection shared by the engine's presentation
+// handlers (`SirosWallet+Engine.swift`). Split out of that file because the
+// three handlers that need it - WMP `match_request`, legacy `match_request`
+// and the `credential_selection` flow_progress step - must apply exactly one
+// rule, and that rule is easier to read (and keep single) on its own than
+// buried between the transport handlers it serves.
+extension SirosWallet {
+
+    /// `matchAndSelectCredentials`' result - see that function's doc comment.
+    struct EngineSelection {
+        let matchResults: [CredentialMatcher.MatchResult]
+        let candidates: [StoredCredential]
+        let selectedIds: [Int64]
+        /// Selected-or-not candidates whose first-match query is `mso_mdoc_zk`.
+        let zkRequestedIds: Set<Int64>
+        /// False if the listener returned an id the active policy/keystore
+        /// no longer considers usable.
+        let allSelectedEligible: Bool
+        /// Whether presenting ANY of `selectedIds` is a ZK proof - the
+        /// recorded `PresentationRecord.zkProof`.
+        var zkProof: Bool { selectedIds.contains(where: { zkRequestedIds.contains($0) }) }
+    }
+
+    /// Shared credential matching + selection for the WMP `match_request`
+    /// step (`handleWmpMatchRequest`), and the `"credential_selection"`
+    /// flow_progress step (`handleCredentialSelection` - the actual live
+    /// path exercised by redirect-flow/haip-vp:// presentations). Filters
+    /// `allCreds` against `dcqlQuery` (`nil` matches everything, preserving
+    /// each caller's prior no-DCQL fallback behavior), offers the matched
+    /// candidates to `eventListener` for consent when one is registered, and
+    /// falls back to auto-selecting every currently-eligible candidate
+    /// otherwise - mirrors Kotlin's identical fallback in each of its three
+    /// equivalent collectors/handlers.
+    ///
+    /// Also resolves, once, which selected ids will be presented as a ZK
+    /// proof rather than disclosed (`zkRequestedIds` - the same first-match
+    /// rule the `sign_presentation` handler applies), so consumption
+    /// accounting (`consumeNonZkp`) and the recorded `PresentationRecord.zkProof`
+    /// agree with what is actually sent. Mirrors Kotlin's `handleDCAPIRequest`
+    /// / `matchRequests()` / `handleCredentialSelection`.
+    func matchAndSelectCredentials(
+        dcqlQuery: [String: Any]?,
+        allCreds: [StoredCredential],
+        verifierName: String?,
+        trustResult: TrustResult?
+    ) async -> EngineSelection {
+        let matchResults: [CredentialMatcher.MatchResult]
+        if let dcqlQuery {
+            matchResults = CredentialMatcher.match(dcqlQuery: dcqlQuery, credentials: allCreds)
+        } else {
+            matchResults = [CredentialMatcher.MatchResult(queryId: "_default", format: nil, candidates: allCreds, requestedClaims: [])]
+        }
+        var seenIds = Set<Int64>()
+        let candidates = matchResults.flatMap { $0.candidates }.filter { seenIds.insert($0.id).inserted }
+        let zkRequestedIds = Self.zkRequestedIds(
+            matchResultByCredentialId: Self.firstMatchByCredentialId(candidates: candidates, matchResults: matchResults)
+        )
+
+        // Evaluated exactly once: it reads the keystore's live key list, and
+        // both the auto-selection fallback and the defense-in-depth check
+        // below must see the same answer.
+        let eligible = eligibleInstances(from: candidates, isZkPresentation: { zkRequestedIds.contains($0.id) })
+
+        lock.lock(); let listener = eventListener; lock.unlock()
+        let selectedIds: [Int64]
+        if let listener, !candidates.isEmpty {
+            selectedIds = await listener.onCredentialSelectionRequired(
+                request: PresentationRequest(
+                    verifierName: verifierName,
+                    trustResult: trustResult,
+                    candidates: candidates,
+                    requestedClaims: matchResults.flatMap { $0.requestedClaims }
+                )
+            )
+        } else {
+            selectedIds = eligible.map(\.id)
+        }
+
+        // The app is trusted to only return IDs it was offered, but shouldn't
+        // be the only thing enforcing consumption - re-validate here too
+        // (defense in depth). Computed once here rather than in each caller
+        // so the two engine handlers can't apply different rules.
+        let eligibleIds = Set(eligible.map(\.id))
+        return EngineSelection(
+            matchResults: matchResults,
+            candidates: candidates,
+            selectedIds: selectedIds,
+            zkRequestedIds: zkRequestedIds,
+            allSelectedEligible: selectedIds.allSatisfy { eligibleIds.contains($0) }
+        )
+    }
+
+    /// Builds the `"selected_credentials"` flow-action payload the engine's
+    /// `"consent"` action expects for the `"credential_selection"` step -
+    /// matches go-wallet-backend's `ConsentSelection` wire shape
+    /// (`credential_query_id`, `credential_id`, `disclosed_claims`) exactly,
+    /// mirroring Kotlin's `handleCredentialSelection`'s identical payload
+    /// construction. Internal (not private) and static so it's directly
+    /// unit-testable without a live `WalletEngineSession` - see
+    /// `requestBackendKeyAttestation`'s doc comment for this file's existing
+    /// testability precedent.
+    static func buildConsentPayload(
+        matchResults: [CredentialMatcher.MatchResult],
+        selectedIds: [Int64],
+        allCreds: [StoredCredential]
+    ) -> [String: AnyCodable] {
+        var entries: [AnyCodable] = []
+        for id in selectedIds {
+            guard allCreds.contains(where: { $0.id == id }) else { continue }
+            let matchResult = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == id }) })
+            var obj: [String: AnyCodable] = [:]
+            // Always set credential_query_id, even for an id that (should
+            // never happen, but see below) isn't in any matchResult - the
+            // "_default" fallback mirrors the no-DCQL synthetic MatchResult
+            // matchAndSelectCredentials builds, and keeps this payload
+            // honoring the backend's documented wire contract unconditionally
+            // rather than silently omitting the field if a caller ever
+            // passes a selectedId inconsistent with matchResults (e.g. a
+            // misbehaving eventListener implementation).
+            obj["credential_query_id"] = .string(matchResult?.queryId ?? "_default")
+            // Legacy engine JSON-RPC protocol keeps credential_id as a string
+            // wire contract - a separate contract from privatedata-spec's
+            // numeric StoredCredential.id, so it deliberately stays String
+            // (mirrors every other call site's identical stringification).
+            obj["credential_id"] = .string(String(id))
+            // Each requestedClaims entry is a full DCQL claim PATH (e.g.
+            // ["eu.europa.ec.eudi.pid.1", "pairwise_pseudonym"]) - only the
+            // last segment is the actual disclosable element id (mirrors
+            // handleDCAPIRequest's identical `compactMap(\.last)`): the
+            // native Longfellow ZK prover validates every requested claim
+            // strictly and throws on a raw, un-trimmed path.
+            var seenClaims = Set<String>()
+            let disclosedClaims = (matchResult?.requestedClaims ?? [])
+                .compactMap(\.last)
+                .filter { seenClaims.insert($0).inserted }
+            obj["disclosed_claims"] = .array(disclosedClaims.map { .string($0) })
+            entries.append(.object_(obj))
+        }
+        return ["selected_credentials": .array(entries)]
+    }
+}

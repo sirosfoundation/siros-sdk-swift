@@ -191,10 +191,15 @@ extension SirosWallet {
         candidates: [StoredCredential],
         matchResults: [CredentialMatcher.MatchResult]
     ) -> [Int64: CredentialMatcher.MatchResult] {
+        // One pass over the results in request order; the first result to
+        // name an id wins and later ones are skipped, which is the
+        // first-match rule stated in terms of the query list rather than a
+        // per-candidate search back through it.
+        let wanted = Set(candidates.map(\.id))
         var byId: [Int64: CredentialMatcher.MatchResult] = [:]
-        for candidate in candidates {
-            if let first = matchResults.first(where: { result in result.candidates.contains(where: { $0.id == candidate.id }) }) {
-                byId[candidate.id] = first
+        for result in matchResults {
+            for candidate in result.candidates where wanted.contains(candidate.id) && byId[candidate.id] == nil {
+                byId[candidate.id] = result
             }
         }
         return byId
