@@ -22,20 +22,15 @@ private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 /// dispatcher be unit-tested with a recording fake (see
 /// `SirosWalletSignRequestTests`) without a reachable backend.
 protocol SignResponseSender {
-    func sendSignResponse(
-        flowId: String,
-        proofJwt: String?,
-        vpToken: String?,
-        proofs: [ProofObject]?,
-        clientAttestation: String?,
-        clientAttestationPoP: String?,
-        dpopKeyId: String?,
-        dpopProof: String?,
-        messageId: String?
-    )
+    /// Send one `sign_response`. The message carries every optional member
+    /// (proof, vp_token, attestation, DPoP) so the seam has a single
+    /// requirement rather than one positional parameter per member.
+    func sendSignResponse(_ message: SignResponseMessage)
 }
 
 extension SignResponseSender {
+    /// Keyword convenience used by the dispatcher; every member defaults to
+    /// absent so a call names only what it carries.
     func sendSignResponse(
         flowId: String,
         proofJwt: String? = nil,
@@ -47,21 +42,35 @@ extension SignResponseSender {
         dpopProof: String? = nil,
         messageId: String? = nil
     ) {
-        sendSignResponse(
+        sendSignResponse(SignResponseMessage(
             flowId: flowId,
+            messageId: messageId,
             proofJwt: proofJwt,
             vpToken: vpToken,
             proofs: proofs,
             clientAttestation: clientAttestation,
             clientAttestationPoP: clientAttestationPoP,
             dpopKeyId: dpopKeyId,
-            dpopProof: dpopProof,
-            messageId: messageId
-        )
+            dpopProof: dpopProof
+        ))
     }
 }
 
-extension WalletEngineSession: SignResponseSender {}
+extension WalletEngineSession: SignResponseSender {
+    func sendSignResponse(_ message: SignResponseMessage) {
+        sendSignResponse(
+            flowId: message.flowId,
+            proofJwt: message.proofJwt,
+            vpToken: message.vpToken,
+            proofs: message.proofs,
+            clientAttestation: message.clientAttestation,
+            clientAttestationPoP: message.clientAttestationPoP,
+            dpopKeyId: message.dpopKeyId,
+            dpopProof: message.dpopProof,
+            messageId: message.messageId
+        )
+    }
+}
 
 extension SirosWallet {
     // MARK: - Engine connection

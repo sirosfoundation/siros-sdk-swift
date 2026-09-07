@@ -95,14 +95,11 @@ private final class RecordingSignResponseSender: SignResponseSender, @unchecked 
     }
     private(set) var sent: [Sent] = []
 
-    func sendSignResponse(
-        flowId: String, proofJwt: String?, vpToken: String?, proofs: [ProofObject]?,
-        clientAttestation: String?, clientAttestationPoP: String?, dpopKeyId: String?, dpopProof: String?, messageId: String?
-    ) {
+    func sendSignResponse(_ m: SignResponseMessage) {
         sent.append(Sent(
-            flowId: flowId, proofJwt: proofJwt, vpToken: vpToken, proofs: proofs,
-            clientAttestation: clientAttestation, clientAttestationPoP: clientAttestationPoP,
-            dpopKeyId: dpopKeyId, dpopProof: dpopProof, messageId: messageId
+            flowId: m.flowId, proofJwt: m.proofJwt, vpToken: m.vpToken, proofs: m.proofs,
+            clientAttestation: m.clientAttestation, clientAttestationPoP: m.clientAttestationPoP,
+            dpopKeyId: m.dpopKeyId, dpopProof: m.dpopProof, messageId: m.messageId
         ))
     }
 }
