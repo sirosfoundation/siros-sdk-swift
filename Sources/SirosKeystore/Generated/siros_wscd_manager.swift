@@ -2344,6 +2344,12 @@ public enum FfiAlgorithm {
     
     case es256
     case edDsa
+    /**
+     * See [`InternalAlgorithm::Bls12381G1Schnorr`] — BBS key binding,
+     * COSE -65609. Only the `fido2` plugin can serve this, and only on
+     * YubiKey 5.8 alpha firmware.
+     */
+    case bls12381G1Schnorr
 }
 
 
@@ -2361,6 +2367,8 @@ public struct FfiConverterTypeFfiAlgorithm: FfiConverterRustBuffer {
         
         case 2: return .edDsa
         
+        case 3: return .bls12381G1Schnorr
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -2375,6 +2383,10 @@ public struct FfiConverterTypeFfiAlgorithm: FfiConverterRustBuffer {
         
         case .edDsa:
             writeInt(&buf, Int32(2))
+        
+        
+        case .bls12381G1Schnorr:
+            writeInt(&buf, Int32(3))
         
         }
     }
