@@ -53,6 +53,66 @@ final class EngineTypesTests: XCTestCase {
         XCTAssertFalse(text.contains("client_attestation_pop"))
     }
 
+    /// `sign_client_auth` reply (go-wallet-backend#317): the key identifier,
+    /// DPoP proof and fresh attestation ride on the sign_response under the
+    /// backend's `SignResponseMessage` wire names.
+    func testSignResponseEncodesClientAuthMembers() throws {
+        let msg = SignResponseMessage(
+            flowId: "flow-77",
+            messageId: "msg-9",
+            clientAttestation: "wia-jwt",
+            clientAttestationPoP: "pop-jwt",
+            dpopKeyId: "instance-key-1",
+            dpopProof: "dpop-jwt"
+        )
+        let text = String(data: try encoder.encode(msg), encoding: .utf8)!
+        XCTAssertTrue(text.contains("\"dpop_key_id\":\"instance-key-1\""))
+        XCTAssertTrue(text.contains("\"dpop_proof\":\"dpop-jwt\""))
+        XCTAssertTrue(text.contains("\"client_attestation\":\"wia-jwt\""))
+        XCTAssertTrue(text.contains("\"client_attestation_pop\":\"pop-jwt\""))
+
+        // Absent members stay off the wire, as for every other optional.
+        let bare = String(data: try encoder.encode(SignResponseMessage(flowId: "f", messageId: "m")), encoding: .utf8)!
+        XCTAssertFalse(bare.contains("dpop_key_id"))
+        XCTAssertFalse(bare.contains("dpop_proof"))
+    }
+
+    /// The engine's `sign_client_auth` params decode under their wire names.
+    func testSignRequestDecodesClientAuthParams() throws {
+        let json = """
+        {"type":"sign_request","flow_id":"f","message_id":"m","action":"sign_client_auth",
+         "params":{"audience":"https://as.example.com","issuer":"siros-sample://callback",
+                   "htm":"POST","htu":"https://as.example.com/token","dpop_nonce":"n-1","ath":"h","key_id":"k-1"}}
+        """
+        let msg = try JSONDecoder().decode(SignRequestMessage.self, from: Data(json.utf8))
+        XCTAssertEqual(msg.action, "sign_client_auth")
+        XCTAssertEqual(msg.params.htm, "POST")
+        XCTAssertEqual(msg.params.htu, "https://as.example.com/token")
+        XCTAssertEqual(msg.params.dpopNonce, "n-1")
+        XCTAssertEqual(msg.params.ath, "h")
+        XCTAssertEqual(msg.params.keyId, "k-1")
+        XCTAssertEqual(msg.params.audience, "https://as.example.com")
+        XCTAssertEqual(msg.params.issuer, "siros-sample://callback")
+    }
+
+    /// A renewal names the client-held key the refresh_token is bound to,
+    /// and `flow_complete` is where that name arrives.
+    func testRenewalCarriesDpopKeyId() throws {
+        let start = FlowStartMessage(protocol: "oid4vci", refreshToken: "rt", credentialIssuer: "https://issuer.example.com",
+                                     selectedCredentialConfigurationId: "pid", dpopKeyId: "instance-key-1")
+        let text = String(data: try encoder.encode(start), encoding: .utf8)!
+        XCTAssertTrue(text.contains("\"dpop_key_id\":\"instance-key-1\""))
+        XCTAssertFalse(text.contains("dpop_jwk"))
+
+        let complete = """
+        {"type":"flow_complete","flow_id":"f","refresh_token":"rt","dpop_key_id":"instance-key-1"}
+        """
+        let msg = try JSONDecoder().decode(FlowCompleteMessage.self, from: Data(complete.utf8))
+        XCTAssertEqual(msg.refreshToken, "rt")
+        XCTAssertEqual(msg.dpopKeyId, "instance-key-1")
+        XCTAssertNil(msg.dpopJwk)
+    }
+
     func testFlowStartPresentationEncoding() throws {
         let msg = FlowStartMessage(
             protocol: "oid4vp",

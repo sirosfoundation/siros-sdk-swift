@@ -286,6 +286,33 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return "\(signingInput).\(sigB64)"
     }
 
+    public func generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String?,
+        accessTokenHash: String?
+    ) async throws -> String {
+        try checkUnlocked()
+        let keys = try await signer.listKeys()
+        guard let key = keys.first(where: { $0.keyId == keyId }) else {
+            throw KeystoreError.keyNotFound("Key not found: \(keyId)")
+        }
+        let pubKeyJwk = try jsonDict(from: try await signer.exportPublicKey(keyId: keyId))
+
+        let header = JwtHelpers.jsonBase64Url([
+            "alg": algorithmJoseId(key.algorithm),
+            "typ": "dpop+jwt",
+            "jwk": pubKeyJwk,
+        ] as [String: Any])
+        let claims = JwtHelpers.jsonBase64Url(dpopClaims(htm: htm, htu: htu, nonce: nonce, accessTokenHash: accessTokenHash))
+
+        let signingInput = "\(header).\(claims)"
+        let signature = try await signer.sign(keyId: keyId, data: Data(signingInput.utf8))
+        let sigB64 = EncryptedContainer.base64UrlEncode(signature)
+        return "\(signingInput).\(sigB64)"
+    }
+
     public func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()

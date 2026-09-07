@@ -17,12 +17,25 @@ public struct CredentialRefreshTokenEntry: Sendable, Equatable {
     public let dpopJwk: String?
     public let credentialIssuerIdentifier: String
     public let credentialConfigurationId: String
+    /// Identifier of the client-held DPoP key the token is bound to when this
+    /// wallet signed the DPoP proofs itself (`sign_client_auth`,
+    /// go-wallet-backend#317) - `dpopJwk` is nil in that case. Presented back
+    /// as `dpop_key_id` on renewal so the engine asks this wallet to sign with
+    /// the same key.
+    public let dpopKeyId: String?
 
-    public init(refreshToken: String, dpopJwk: String?, credentialIssuerIdentifier: String, credentialConfigurationId: String) {
+    public init(
+        refreshToken: String,
+        dpopJwk: String?,
+        credentialIssuerIdentifier: String,
+        credentialConfigurationId: String,
+        dpopKeyId: String? = nil
+    ) {
         self.refreshToken = refreshToken
         self.dpopJwk = dpopJwk
         self.credentialIssuerIdentifier = credentialIssuerIdentifier
         self.credentialConfigurationId = credentialConfigurationId
+        self.dpopKeyId = dpopKeyId
     }
 
     fileprivate func toJsonObject() -> [String: Any] {
@@ -32,6 +45,7 @@ public struct CredentialRefreshTokenEntry: Sendable, Equatable {
             "credentialConfigurationId": credentialConfigurationId,
         ]
         if let dpopJwk { dict["dpopJwk"] = dpopJwk }
+        if let dpopKeyId { dict["dpopKeyId"] = dpopKeyId }
         return dict
     }
 
@@ -46,6 +60,7 @@ public struct CredentialRefreshTokenEntry: Sendable, Equatable {
             dpopJwk: obj["dpopJwk"] as? String,
             credentialIssuerIdentifier: credentialIssuerIdentifier,
             credentialConfigurationId: credentialConfigurationId,
+            dpopKeyId: obj["dpopKeyId"] as? String
         )
     }
 }
@@ -315,6 +330,33 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         ]
         for (k, v) in extraClaims { claimsDict[k] = v }
         let claims = JwtHelpers.jsonBase64Url(claimsDict)
+
+        let signingInput = "\(header).\(claims)"
+        let signature = try key.signature(for: Data(signingInput.utf8))
+        let sigB64 = EncryptedContainer.base64UrlEncode(signature.rawRepresentation)
+        return "\(signingInput).\(sigB64)"
+    }
+
+    public func generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String?,
+        accessTokenHash: String?
+    ) async throws -> String {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+
+        guard let key = keys[keyId] else {
+            throw KeystoreError.keyNotFound("Key not found: \(keyId)")
+        }
+        let header = JwtHelpers.jsonBase64Url([
+            "alg": "ES256",
+            "typ": "dpop+jwt",
+            "jwk": JwtHelpers.publicKeyJwk(key),
+        ] as [String: Any])
+        let claims = JwtHelpers.jsonBase64Url(dpopClaims(htm: htm, htu: htu, nonce: nonce, accessTokenHash: accessTokenHash))
 
         let signingInput = "\(header).\(claims)"
         let signature = try key.signature(for: Data(signingInput.utf8))

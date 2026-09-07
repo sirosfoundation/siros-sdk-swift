@@ -145,12 +145,27 @@ public struct SignSubFlowParams: Codable, Sendable {
     public var parentFlowId: String?
     public var count: Int?
     public var transactionData: [TransactionData]?
+    /// PoP/proof `iss` (the flow's OAuth client_id) for `request_attestation`
+    /// and `sign_client_auth`.
+    public var issuer: String?
+    /// `sign_client_auth` parameters (go-wallet-backend#317), same names and
+    /// meaning as the legacy transport's `SignRequestParams`: `htm`/`htu` ask
+    /// for a DPoP proof (with `dpopNonce` and `ath` claims), `keyId` names
+    /// the key to sign with on a renewal. `audience` doubles as the
+    /// attestation PoP aud when the request also needs client attestation.
+    public var htm: String?
+    public var htu: String?
+    public var dpopNonce: String?
+    public var ath: String?
+    public var keyId: String?
 
     enum CodingKeys: String, CodingKey {
-        case action, nonce, audience, count
+        case action, nonce, audience, count, issuer, htm, htu, ath
         case proofType = "proof_type"
         case parentFlowId = "parent_flow_id"
         case transactionData = "transaction_data"
+        case dpopNonce = "dpop_nonce"
+        case keyId = "key_id"
     }
 }
 
@@ -195,15 +210,32 @@ public struct SignSubFlowResult: Sendable {
     /// either without a second code path, and so a flow behaves the same
     /// whichever transport it runs over.
     public var credentialRequestExtras: [String: AnyCodable]?
+    /// `request_attestation` / `sign_client_auth` results, carried on the
+    /// wire under the same names as the legacy transport's
+    /// `SignResponseMessage` (`client_attestation`, `client_attestation_pop`,
+    /// `dpop_key_id`, `dpop_proof`) so a backend accepts either transport
+    /// without a second code path.
+    public var clientAttestation: String?
+    public var clientAttestationPoP: String?
+    public var dpopKeyId: String?
+    public var dpopProof: String?
 
     public init(
         proofs: [ProofObject]? = nil,
         vpToken: String? = nil,
-        credentialRequestExtras: [String: AnyCodable]? = nil
+        credentialRequestExtras: [String: AnyCodable]? = nil,
+        clientAttestation: String? = nil,
+        clientAttestationPoP: String? = nil,
+        dpopKeyId: String? = nil,
+        dpopProof: String? = nil
     ) {
         self.proofs = proofs
         self.vpToken = vpToken
         self.credentialRequestExtras = credentialRequestExtras
+        self.clientAttestation = clientAttestation
+        self.clientAttestationPoP = clientAttestationPoP
+        self.dpopKeyId = dpopKeyId
+        self.dpopProof = dpopProof
     }
 }
 
@@ -404,6 +436,10 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
         if let extras = result.credentialRequestExtras {
             params["credential_request_extras"] = .object_(extras)
         }
+        if let wia = result.clientAttestation { params["client_attestation"] = .string(wia) }
+        if let pop = result.clientAttestationPoP { params["client_attestation_pop"] = .string(pop) }
+        if let keyId = result.dpopKeyId { params["dpop_key_id"] = .string(keyId) }
+        if let proof = result.dpopProof { params["dpop_proof"] = .string(proof) }
         try? await peer.notify(method: WmpMethods.flowAction, params: params)
     }
 

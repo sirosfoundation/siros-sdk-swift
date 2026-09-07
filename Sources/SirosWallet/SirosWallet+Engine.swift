@@ -29,6 +29,8 @@ protocol SignResponseSender {
         proofs: [ProofObject]?,
         clientAttestation: String?,
         clientAttestationPoP: String?,
+        dpopKeyId: String?,
+        dpopProof: String?,
         messageId: String?
     )
 }
@@ -41,6 +43,8 @@ extension SignResponseSender {
         proofs: [ProofObject]? = nil,
         clientAttestation: String? = nil,
         clientAttestationPoP: String? = nil,
+        dpopKeyId: String? = nil,
+        dpopProof: String? = nil,
         messageId: String? = nil
     ) {
         sendSignResponse(
@@ -50,6 +54,8 @@ extension SignResponseSender {
             proofs: proofs,
             clientAttestation: clientAttestation,
             clientAttestationPoP: clientAttestationPoP,
+            dpopKeyId: dpopKeyId,
+            dpopProof: dpopProof,
             messageId: messageId
         )
     }
@@ -433,6 +439,41 @@ extension SirosWallet {
             )
             return SignSubFlowResult(vpToken: vpToken)
 
+        // Client authentication, same semantics as the legacy transport's
+        // request_attestation / sign_client_auth cases in handleSignRequest:
+        // the WMP sign sub-flow carries the same params and the result goes
+        // back under the same member names.
+        case "request_attestation":
+            let material = await buildClientAuth(
+                flowId: flowId,
+                keyIdHint: nil,
+                audience: params.audience,
+                issuer: params.issuer,
+                htm: nil,
+                htu: nil,
+                dpopNonce: nil,
+                ath: nil
+            )
+            return SignSubFlowResult(clientAttestation: material.wia, clientAttestationPoP: material.pop)
+
+        case "sign_client_auth":
+            let material = await buildClientAuth(
+                flowId: flowId,
+                keyIdHint: params.keyId,
+                audience: params.audience,
+                issuer: params.issuer,
+                htm: params.htm,
+                htu: params.htu,
+                dpopNonce: params.dpopNonce,
+                ath: params.ath
+            )
+            return SignSubFlowResult(
+                clientAttestation: material.wia,
+                clientAttestationPoP: material.pop,
+                dpopKeyId: material.keyId,
+                dpopProof: material.dpopProof
+            )
+
         default:
             throw SirosError.auth(message: "Unknown sign action: \(params.action)")
         }
@@ -745,6 +786,23 @@ extension SirosWallet {
                     flowId: msg.flowId,
                     clientAttestation: pair?.0,
                     clientAttestationPoP: pair?.1,
+                    messageId: msg.messageId
+                )
+
+            case "sign_client_auth":
+                // Engine-requested client authentication for one outbound
+                // request (go-wallet-backend#317): a DPoP proof and/or a
+                // fresh attestation PoP, both signed with the instance key.
+                // Never throws; whatever could not be produced is absent
+                // and the engine decides what that means (see
+                // `buildClientAuth`).
+                let material = await buildClientAuth(flowId: msg.flowId, params: msg.params)
+                engine.sendSignResponse(
+                    flowId: msg.flowId,
+                    clientAttestation: material.wia,
+                    clientAttestationPoP: material.pop,
+                    dpopKeyId: material.keyId,
+                    dpopProof: material.dpopProof,
                     messageId: msg.messageId
                 )
 

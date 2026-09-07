@@ -233,6 +233,24 @@ public protocol KeystoreManager: AnyObject, Sendable {
         audience: String,
         extraClaims: [String: String]
     ) async throws -> String
+
+    /// Sign an RFC 9449 DPoP proof JWT (`typ: dpop+jwt`, public key in the
+    /// `jwk` header) with `keyId` over the HTTP method `htm` and URL `htu`.
+    /// `nonce` is the server-provided DPoP nonce (§8) and `accessTokenHash`
+    /// the `ath` claim for resource requests, both omitted when nil. Fresh
+    /// `jti` and `iat` per call. Answers the engine's `sign_client_auth` sign
+    /// request (go-wallet-backend#317), where the same key is the WIA `cnf`
+    /// key so the sender-constrained token is bound to the attested key.
+    ///
+    /// Default implementation throws so existing implementations continue to
+    /// compile.
+    func generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String?,
+        accessTokenHash: String?
+    ) async throws -> String
 }
 
 /// Default implementation for optional methods.
@@ -290,6 +308,32 @@ public extension KeystoreManager {
     ) async throws -> String {
         throw KeystoreError.invalidParameter("generateKeyProof not supported by this keystore")
     }
+
+    func generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String?,
+        accessTokenHash: String?
+    ) async throws -> String {
+        throw KeystoreError.invalidParameter("generateDPoPProof not supported by this keystore")
+    }
+}
+
+/// The claims of an RFC 9449 §4.2 DPoP proof: `jti`, `htm`, `htu`, `iat`,
+/// plus `nonce` (§8) and `ath` (§4.2, resource requests) when given.
+/// Deliberately no `iss`/`aud`/`exp` - those are PoP claims, not DPoP ones.
+/// Shared by every `KeystoreManager` implementation in this module.
+func dpopClaims(htm: String, htu: String, nonce: String?, accessTokenHash: String?) -> [String: Any] {
+    var claims: [String: Any] = [
+        "jti": UUID().uuidString.lowercased(),
+        "htm": htm,
+        "htu": htu,
+        "iat": Int(Date().timeIntervalSince1970),
+    ]
+    if let nonce, !nonce.isEmpty { claims["nonce"] = nonce }
+    if let accessTokenHash, !accessTokenHash.isEmpty { claims["ath"] = accessTokenHash }
+    return claims
 }
 
 /// Result of a generateKeypairs call.
