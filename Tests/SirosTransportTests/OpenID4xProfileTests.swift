@@ -72,6 +72,75 @@ final class OpenID4xProfileTests: XCTestCase {
         }
     }
 
+    /// `sign_client_auth` over WMP (go-wallet-backend#317): the sub-flow params
+    /// decode under the engine's wire names, and the result members go back
+    /// under the legacy `sign_response` names so a backend needs one code path.
+    func testHandleProgressSignClientAuthRoundTripsClientAuthMembers() async throws {
+        let ctx = MockPeerContext()
+        var receivedParams: SignSubFlowParams?
+
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, params in
+                receivedParams = params
+                return SignSubFlowResult(
+                    clientAttestation: "wia", clientAttestationPoP: "pop", dpopKeyId: "k-1", dpopProof: "dpop"
+                )
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        let payload: [String: AnyCodable] = [
+            "action": .string("sign_client_auth"), "nonce": .string(""), "audience": .string("https://as.example.com"),
+            "issuer": .string("siros-sample://callback"), "htm": .string("POST"), "htu": .string("https://as.example.com/token"),
+            "dpop_nonce": .string("n-1"), "ath": .string("h"), "key_id": .string("k-1"),
+        ]
+        await profile.handleProgress(params: FlowProgressParams(flowId: "flow-1", step: "sign_request", payload: .object_(payload)))
+
+        XCTAssertEqual(receivedParams?.action, "sign_client_auth")
+        XCTAssertEqual(receivedParams?.issuer, "siros-sample://callback")
+        XCTAssertEqual(receivedParams?.htm, "POST")
+        XCTAssertEqual(receivedParams?.htu, "https://as.example.com/token")
+        XCTAssertEqual(receivedParams?.dpopNonce, "n-1")
+        XCTAssertEqual(receivedParams?.ath, "h")
+        XCTAssertEqual(receivedParams?.keyId, "k-1")
+
+        XCTAssertEqual(ctx.notifications.count, 1)
+        let params = ctx.notifications[0].params
+        XCTAssertEqual(params?["action"], .string("sign_response"))
+        XCTAssertEqual(params?["client_attestation"], .string("wia"))
+        XCTAssertEqual(params?["client_attestation_pop"], .string("pop"))
+        XCTAssertEqual(params?["dpop_key_id"], .string("k-1"))
+        XCTAssertEqual(params?["dpop_proof"], .string("dpop"))
+    }
+
+    /// A DPoP-only `sign_client_auth` (credential / deferred / notification
+    /// request) has no audience and no c_nonce; a peer that omits the members
+    /// instead of sending "" must still reach the handler.
+    func testSignClientAuthWithoutAudienceOrNonceStillDecodes() async throws {
+        let ctx = MockPeerContext()
+        var receivedParams: SignSubFlowParams?
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, params in
+                receivedParams = params
+                return SignSubFlowResult(dpopKeyId: "k-1", dpopProof: "dpop")
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        let payload: [String: AnyCodable] = [
+            "action": .string("sign_client_auth"), "htm": .string("POST"),
+            "htu": .string("https://issuer.example.com/credential"), "ath": .string("h"),
+        ]
+        await profile.handleProgress(params: FlowProgressParams(flowId: "flow-1", step: "sign_request", payload: .object_(payload)))
+
+        XCTAssertEqual(receivedParams?.action, "sign_client_auth")
+        XCTAssertEqual(receivedParams?.audience, "")
+        XCTAssertEqual(receivedParams?.nonce, "")
+        XCTAssertEqual(receivedParams?.htm, "POST")
+        XCTAssertEqual(ctx.notifications.count, 1)
+        XCTAssertEqual(ctx.notifications[0].params?["dpop_proof"], .string("dpop"))
+    }
+
     func testHandleProgressMatchRequestCallsOnMatchRequest() async throws {
         let ctx = MockPeerContext()
         var receivedFlowId: String?

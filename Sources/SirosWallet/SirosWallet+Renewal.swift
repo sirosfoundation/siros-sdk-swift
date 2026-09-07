@@ -163,7 +163,8 @@ extension SirosWallet {
                 refreshToken: candidate.refreshToken,
                 credentialIssuer: candidate.credentialIssuerIdentifier,
                 selectedCredentialConfigurationId: candidate.credentialConfigurationId,
-                dpopJwk: candidate.dpopJwk
+                dpopJwk: candidate.dpopJwk,
+                dpopKeyId: candidate.dpopKeyId
             )
         } catch {
             // Same rationale as `startIssuance`'s catch block: a synchronous

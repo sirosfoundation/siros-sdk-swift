@@ -438,6 +438,97 @@ extension SirosWallet {
         return (wia, pop)
     }
 
+    /// What one `sign_client_auth` request produced - see `buildClientAuth`.
+    /// `keyId` is nil only when even naming the key failed, which the engine
+    /// reads as "action unsupported" and falls back to its own DPoP key.
+    struct ClientAuthMaterial {
+        let keyId: String?
+        let dpopProof: String?
+        let wia: String?
+        let pop: String?
+    }
+
+    /// `buildClientAuth` from the legacy transport's `SignRequestParams`.
+    func buildClientAuth(flowId: String, params: SignRequestParams) async -> ClientAuthMaterial {
+        await buildClientAuth(
+            flowId: flowId,
+            keyIdHint: params.keyId,
+            audience: params.audience,
+            issuer: params.issuer,
+            htm: params.htm,
+            htu: params.htu,
+            dpopNonce: params.dpopNonce,
+            ath: params.ath
+        )
+    }
+
+    /// Produce the client authentication material the engine asked for in
+    /// one `sign_client_auth` sign request (go-wallet-backend#317),
+    /// transport-agnostic: the legacy `handleSignRequest` and the WMP
+    /// `handleWmpSignRequest` both call this.
+    ///
+    /// The key is this wallet's instance key (`ensureInstanceKeyId`) - the
+    /// same key `ensureWalletInstanceAttestation` binds as the WIA `cnf`, so
+    /// the DPoP-bound token and the attestation are bound to one key (EC TS03
+    /// §2.2.1.1). On a renewal the engine names the key it must be
+    /// (`keyIdHint`, the `dpop_key_id` this wallet returned at issuance) and
+    /// that is used instead. A DPoP proof is produced when `htm`/`htu` are
+    /// given; a WIA and a **fresh** PoP (new `jti`, `aud` = `audience`) when
+    /// `audience` is given. Never throws: whatever could not be produced is
+    /// simply absent, and the engine decides what that means for the request
+    /// it was building (a missing DPoP proof fails it; missing attestation
+    /// proceeds unattested).
+    func buildClientAuth(
+        flowId: String,
+        keyIdHint: String?,
+        audience: String?,
+        issuer: String?,
+        htm: String?,
+        htu: String?,
+        dpopNonce: String?,
+        ath: String?
+    ) async -> ClientAuthMaterial {
+        let clientId: String
+        if let issuer, !issuer.isEmpty { clientId = issuer } else { clientId = clientAttestationClientId() }
+        var keyId: String?
+        var dpopProof: String?
+        var wia: String?
+        var pop: String?
+        do {
+            if let keyIdHint, !keyIdHint.isEmpty {
+                keyId = keyIdHint
+            } else {
+                keyId = try await ensureInstanceKeyId()
+            }
+            if let htm, !htm.isEmpty, let htu, !htu.isEmpty, let signingKeyId = keyId {
+                dpopProof = try await keystore.generateDPoPProof(
+                    keyId: signingKeyId,
+                    htm: htm,
+                    htu: htu,
+                    nonce: (dpopNonce?.isEmpty == false) ? dpopNonce : nil,
+                    accessTokenHash: (ath?.isEmpty == false) ? ath : nil
+                )
+            }
+            if let audience, !audience.isEmpty {
+                wia = await ensureWalletInstanceAttestation()
+                if wia != nil {
+                    pop = await buildClientAttestationPoP(asUrl: audience, clientId: clientId)
+                }
+            }
+        } catch {
+            #if canImport(os)
+            logger.warning("sign_client_auth for flow \(flowId, privacy: .public) failed part-way: \(error.localizedDescription)")
+            #endif
+        }
+        let attested = wia != nil && pop != nil
+        return ClientAuthMaterial(
+            keyId: keyId,
+            dpopProof: dpopProof,
+            wia: attested ? wia : nil,
+            pop: attested ? pop : nil
+        )
+    }
+
     /// Sign a fresh per-flow OAuth Client Attestation PoP
     /// (`typ: oauth-client-attestation-pop+jwt`) with this instance's key:
     /// `aud` = `asUrl` (the authorization server the PAR/token request goes

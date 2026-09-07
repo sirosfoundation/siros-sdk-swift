@@ -22,18 +22,15 @@ private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 /// dispatcher be unit-tested with a recording fake (see
 /// `SirosWalletSignRequestTests`) without a reachable backend.
 protocol SignResponseSender {
-    func sendSignResponse(
-        flowId: String,
-        proofJwt: String?,
-        vpToken: String?,
-        proofs: [ProofObject]?,
-        clientAttestation: String?,
-        clientAttestationPoP: String?,
-        messageId: String?
-    )
+    /// Send one `sign_response`. The message carries every optional member
+    /// (proof, vp_token, attestation, DPoP) so the seam has a single
+    /// requirement rather than one positional parameter per member.
+    func sendSignResponse(_ message: SignResponseMessage)
 }
 
 extension SignResponseSender {
+    /// Keyword convenience used by the dispatcher; every member defaults to
+    /// absent so a call names only what it carries.
     func sendSignResponse(
         flowId: String,
         proofJwt: String? = nil,
@@ -41,21 +38,39 @@ extension SignResponseSender {
         proofs: [ProofObject]? = nil,
         clientAttestation: String? = nil,
         clientAttestationPoP: String? = nil,
+        dpopKeyId: String? = nil,
+        dpopProof: String? = nil,
         messageId: String? = nil
     ) {
-        sendSignResponse(
+        sendSignResponse(SignResponseMessage(
             flowId: flowId,
+            messageId: messageId,
             proofJwt: proofJwt,
             vpToken: vpToken,
             proofs: proofs,
             clientAttestation: clientAttestation,
             clientAttestationPoP: clientAttestationPoP,
-            messageId: messageId
-        )
+            dpopKeyId: dpopKeyId,
+            dpopProof: dpopProof
+        ))
     }
 }
 
-extension WalletEngineSession: SignResponseSender {}
+extension WalletEngineSession: SignResponseSender {
+    func sendSignResponse(_ message: SignResponseMessage) {
+        sendSignResponse(
+            flowId: message.flowId,
+            proofJwt: message.proofJwt,
+            vpToken: message.vpToken,
+            proofs: message.proofs,
+            clientAttestation: message.clientAttestation,
+            clientAttestationPoP: message.clientAttestationPoP,
+            dpopKeyId: message.dpopKeyId,
+            dpopProof: message.dpopProof,
+            messageId: message.messageId
+        )
+    }
+}
 
 extension SirosWallet {
     // MARK: - Engine connection
@@ -433,6 +448,41 @@ extension SirosWallet {
             )
             return SignSubFlowResult(vpToken: vpToken)
 
+        // Client authentication, same semantics as the legacy transport's
+        // request_attestation / sign_client_auth cases in handleSignRequest:
+        // the WMP sign sub-flow carries the same params and the result goes
+        // back under the same member names.
+        case "request_attestation":
+            let material = await buildClientAuth(
+                flowId: flowId,
+                keyIdHint: nil,
+                audience: params.audience,
+                issuer: params.issuer,
+                htm: nil,
+                htu: nil,
+                dpopNonce: nil,
+                ath: nil
+            )
+            return SignSubFlowResult(clientAttestation: material.wia, clientAttestationPoP: material.pop)
+
+        case "sign_client_auth":
+            let material = await buildClientAuth(
+                flowId: flowId,
+                keyIdHint: params.keyId,
+                audience: params.audience,
+                issuer: params.issuer,
+                htm: params.htm,
+                htu: params.htu,
+                dpopNonce: params.dpopNonce,
+                ath: params.ath
+            )
+            return SignSubFlowResult(
+                clientAttestation: material.wia,
+                clientAttestationPoP: material.pop,
+                dpopKeyId: material.keyId,
+                dpopProof: material.dpopProof
+            )
+
         default:
             throw SirosError.auth(message: "Unknown sign action: \(params.action)")
         }
@@ -745,6 +795,23 @@ extension SirosWallet {
                     flowId: msg.flowId,
                     clientAttestation: pair?.0,
                     clientAttestationPoP: pair?.1,
+                    messageId: msg.messageId
+                )
+
+            case "sign_client_auth":
+                // Engine-requested client authentication for one outbound
+                // request (go-wallet-backend#317): a DPoP proof and/or a
+                // fresh attestation PoP, both signed with the instance key.
+                // Never throws; whatever could not be produced is absent
+                // and the engine decides what that means (see
+                // `buildClientAuth`).
+                let material = await buildClientAuth(flowId: msg.flowId, params: msg.params)
+                engine.sendSignResponse(
+                    flowId: msg.flowId,
+                    clientAttestation: material.wia,
+                    clientAttestationPoP: material.pop,
+                    dpopKeyId: material.keyId,
+                    dpopProof: material.dpopProof,
                     messageId: msg.messageId
                 )
 

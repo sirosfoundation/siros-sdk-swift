@@ -439,7 +439,8 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         credentialIssuer: String,
         selectedCredentialConfigurationId: String,
         reissuanceKid: String? = nil,
-        dpopJwk: String? = nil
+        dpopJwk: String? = nil,
+        dpopKeyId: String? = nil
     ) {
         send(FlowStartMessage(
             protocol: "oid4vci",
@@ -447,7 +448,8 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             credentialIssuer: credentialIssuer,
             selectedCredentialConfigurationId: selectedCredentialConfigurationId,
             reissuanceKid: reissuanceKid,
-            dpopJwk: dpopJwk
+            dpopJwk: dpopJwk,
+            dpopKeyId: dpopKeyId
         ))
     }
 
@@ -503,6 +505,8 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         credentialRequestExtras: [String: AnyCodable]? = nil,
         clientAttestation: String? = nil,
         clientAttestationPoP: String? = nil,
+        dpopKeyId: String? = nil,
+        dpopProof: String? = nil,
         messageId: String? = nil
     ) {
         send(SignResponseMessage(
@@ -513,7 +517,9 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             proofs: proofs,
             credentialRequestExtras: credentialRequestExtras,
             clientAttestation: clientAttestation,
-            clientAttestationPoP: clientAttestationPoP
+            clientAttestationPoP: clientAttestationPoP,
+            dpopKeyId: dpopKeyId,
+            dpopProof: dpopProof
         ))
     }
 

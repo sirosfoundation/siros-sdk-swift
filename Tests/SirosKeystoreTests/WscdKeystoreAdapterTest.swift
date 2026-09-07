@@ -211,6 +211,33 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertNil(claims?["nonce"])
     }
 
+    func testGenerateDPoPProofBuildsProofThroughSigner() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+
+        let jwt = try await adapter.generateDPoPProof(
+            keyId: "test-key-1",
+            htm: "POST",
+            htu: "https://issuer.example.com/credential",
+            nonce: "n-1",
+            accessTokenHash: "ath-value"
+        )
+
+        let header = JwtHelpers.parseJwtHeader(jwt)
+        XCTAssertEqual(header?["typ"] as? String, "dpop+jwt")
+        XCTAssertEqual(header?["alg"] as? String, "ES256")
+        XCTAssertNotNil(header?["jwk"])
+
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertEqual(claims?["htm"] as? String, "POST")
+        XCTAssertEqual(claims?["htu"] as? String, "https://issuer.example.com/credential")
+        XCTAssertEqual(claims?["nonce"] as? String, "n-1")
+        XCTAssertEqual(claims?["ath"] as? String, "ath-value")
+        XCTAssertNotNil(claims?["jti"])
+        XCTAssertNil(claims?["iss"])
+        XCTAssertNil(claims?["exp"])
+    }
+
     func testGenerateKeyProofThrowsForUnknownKeyId() async throws {
         let adapter = try await unlockedAdapter()
 

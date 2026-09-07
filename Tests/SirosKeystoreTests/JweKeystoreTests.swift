@@ -121,6 +121,55 @@ final class JweKeystoreTests: XCTestCase {
         XCTAssertNotNil(claims?["exp"])
     }
 
+    func testGenerateDPoPProofBuildsRfc9449Proof() async throws {
+        let keystore = JweKeystore()
+        try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+        let keyId = try await keystore.generateKey()
+
+        let jwt = try await keystore.generateDPoPProof(
+            keyId: keyId,
+            htm: "POST",
+            htu: "https://as.example.com/token",
+            nonce: "server-nonce",
+            accessTokenHash: "fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo"
+        )
+
+        let header = JwtHelpers.parseJwtHeader(jwt)
+        XCTAssertEqual(header?["typ"] as? String, "dpop+jwt")
+        XCTAssertEqual(header?["alg"] as? String, "ES256")
+        XCTAssertNotNil(header?["jwk"], "the DPoP proof carries its public key in the jwk header")
+
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertEqual(claims?["htm"] as? String, "POST")
+        XCTAssertEqual(claims?["htu"] as? String, "https://as.example.com/token")
+        XCTAssertEqual(claims?["nonce"] as? String, "server-nonce")
+        XCTAssertEqual(claims?["ath"] as? String, "fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo")
+        XCTAssertNotNil(claims?["jti"])
+        XCTAssertNotNil(claims?["iat"])
+        // DPoP proofs carry no PoP claims.
+        XCTAssertNil(claims?["iss"])
+        XCTAssertNil(claims?["aud"])
+        XCTAssertNil(claims?["exp"])
+
+        // Fresh jti per call, and nonce/ath omitted when absent.
+        let again = try await keystore.generateDPoPProof(keyId: keyId, htm: "POST", htu: "https://as.example.com/token", nonce: nil, accessTokenHash: nil)
+        let againClaims = JwtHelpers.parseJwtPayload(again)
+        XCTAssertNotEqual(againClaims?["jti"] as? String, claims?["jti"] as? String)
+        XCTAssertNil(againClaims?["nonce"])
+        XCTAssertNil(againClaims?["ath"])
+    }
+
+    func testGenerateDPoPProofThrowsForUnknownKeyId() async throws {
+        let keystore = JweKeystore()
+        try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)
+        do {
+            _ = try await keystore.generateDPoPProof(keyId: "does-not-exist", htm: "POST", htu: "https://x", nonce: nil, accessTokenHash: nil)
+            XCTFail("expected keyNotFound")
+        } catch KeystoreError.keyNotFound {
+            // expected
+        }
+    }
+
     func testGenerateKeyProofThrowsForUnknownKeyId() async throws {
         let keystore = JweKeystore()
         try await keystore.unlock(prfOutput: fakePrfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo)

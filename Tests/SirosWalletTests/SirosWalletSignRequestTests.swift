@@ -26,6 +26,7 @@ private final class RecordingKeystoreManager: KeystoreManager, @unchecked Sendab
     var isUnlocked: Bool = false
     var refuseKeyProof = false
     private(set) var keyProofCalls: [(keyId: String, typ: String, issuer: String, audience: String, extraClaims: [String: String])] = []
+    private(set) var dpopProofCalls: [(keyId: String, htm: String, htu: String, nonce: String?, accessTokenHash: String?)] = []
 
     func unlock(prfOutput: Data, encryptedContainer: Data, hkdfSalt: Data, hkdfInfo: Data) async throws {}
     func lock() {}
@@ -66,6 +67,12 @@ private final class RecordingKeystoreManager: KeystoreManager, @unchecked Sendab
         return [header, payload, Data("sig".utf8)].map(Self.b64url).joined(separator: ".")
     }
 
+    func generateDPoPProof(keyId: String, htm: String, htu: String, nonce: String?, accessTokenHash: String?) async throws -> String {
+        dpopProofCalls.append((keyId, htm, htu, nonce, accessTokenHash))
+        if refuseKeyProof { throw Refused() }
+        return "dpop-proof-for-\(keyId)"
+    }
+
     private static func b64url(_ d: Data) -> String {
         d.base64EncodedString().replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
@@ -82,17 +89,17 @@ private final class RecordingSignResponseSender: SignResponseSender, @unchecked 
         let proofs: [ProofObject]?
         let clientAttestation: String?
         let clientAttestationPoP: String?
+        let dpopKeyId: String?
+        let dpopProof: String?
         let messageId: String?
     }
     private(set) var sent: [Sent] = []
 
-    func sendSignResponse(
-        flowId: String, proofJwt: String?, vpToken: String?, proofs: [ProofObject]?,
-        clientAttestation: String?, clientAttestationPoP: String?, messageId: String?
-    ) {
+    func sendSignResponse(_ m: SignResponseMessage) {
         sent.append(Sent(
-            flowId: flowId, proofJwt: proofJwt, vpToken: vpToken, proofs: proofs,
-            clientAttestation: clientAttestation, clientAttestationPoP: clientAttestationPoP, messageId: messageId
+            flowId: m.flowId, proofJwt: m.proofJwt, vpToken: m.vpToken, proofs: m.proofs,
+            clientAttestation: m.clientAttestation, clientAttestationPoP: m.clientAttestationPoP,
+            dpopKeyId: m.dpopKeyId, dpopProof: m.dpopProof, messageId: m.messageId
         ))
     }
 }
@@ -161,6 +168,91 @@ final class SirosWalletSignRequestTests: XCTestCase {
         XCTAssertEqual(call.typ, "oauth-client-attestation-pop+jwt")
         XCTAssertEqual(call.keyId, "instance-key-1", "PoP must be signed with the persistent instance key")
         XCTAssertNil(call.extraClaims["challenge"], "unreachable AS publishes no challenge_endpoint, so no challenge claim")
+    }
+
+    /// `sign_client_auth` (go-wallet-backend#317): the engine asks for a DPoP
+    /// proof and a fresh attestation PoP for one request. Both must be signed
+    /// with the instance key - the WIA's `cnf` key - and the reply must name
+    /// that key as `dpop_key_id`, so the token ends up bound to the attested
+    /// key.
+    func testSignClientAuthSignsDpopAndFreshPopWithInstanceKey() async throws {
+        let keystore = RecordingKeystoreManager()
+        let wallet = makeWallet(keystore: keystore)
+        wallet.cachedWia = "cached-wia-jwt"
+        wallet.cachedWiaExpiresAt = Int(Date().timeIntervalSince1970) + 3600
+        let sender = RecordingSignResponseSender()
+
+        let msg = try signRequest(action: "sign_client_auth", params: [
+            "audience": "https://as.example.invalid",
+            "issuer": "https://registered-client-id.example.invalid",
+            "htm": "POST",
+            "htu": "https://as.example.invalid/token",
+            "dpop_nonce": "n-1",
+            "ath": "ath-value",
+        ])
+        await wallet.handleSignRequest(engine: sender, msg: msg)
+
+        XCTAssertEqual(sender.sent.count, 1)
+        let sent = try XCTUnwrap(sender.sent.first)
+        XCTAssertEqual(sent.messageId, "msg-42")
+        XCTAssertEqual(sent.dpopKeyId, "instance-key-1", "the key is named so the engine can ask for it again on renewal")
+        XCTAssertEqual(sent.dpopProof, "dpop-proof-for-instance-key-1")
+        XCTAssertEqual(sent.clientAttestation, "cached-wia-jwt")
+        let pop = try XCTUnwrap(sent.clientAttestationPoP)
+        let claims = try decodePayload(pop)
+        XCTAssertEqual(claims["aud"] as? String, "https://as.example.invalid")
+        XCTAssertEqual(claims["iss"] as? String, "https://registered-client-id.example.invalid")
+
+        XCTAssertEqual(keystore.dpopProofCalls.count, 1)
+        let dpop = try XCTUnwrap(keystore.dpopProofCalls.first)
+        XCTAssertEqual(dpop.keyId, "instance-key-1", "DPoP proof and PoP must be signed with one key")
+        XCTAssertEqual(dpop.htm, "POST")
+        XCTAssertEqual(dpop.htu, "https://as.example.invalid/token")
+        XCTAssertEqual(dpop.nonce, "n-1")
+        XCTAssertEqual(dpop.accessTokenHash, "ath-value")
+        XCTAssertEqual(keystore.keyProofCalls.first?.keyId, "instance-key-1")
+    }
+
+    /// A resource-request `sign_client_auth` (no audience) yields a DPoP proof
+    /// only, and a renewal's `key_id` picks the key the refresh_token was
+    /// bound to instead of the current instance key. No PoP either way.
+    func testSignClientAuthDpopOnlyHonoursKeyIdHint() async throws {
+        let keystore = RecordingKeystoreManager()
+        let wallet = makeWallet(keystore: keystore)
+        let sender = RecordingSignResponseSender()
+
+        await wallet.handleSignRequest(engine: sender, msg: try signRequest(action: "sign_client_auth", params: [
+            "htm": "POST", "htu": "https://issuer.example.invalid/credential", "ath": "ath-value", "key_id": "old-instance-key",
+        ]))
+
+        XCTAssertEqual(sender.sent.count, 1)
+        let sent = try XCTUnwrap(sender.sent.first)
+        XCTAssertEqual(sent.dpopKeyId, "old-instance-key")
+        XCTAssertEqual(sent.dpopProof, "dpop-proof-for-old-instance-key")
+        XCTAssertNil(sent.clientAttestation)
+        XCTAssertNil(sent.clientAttestationPoP)
+        XCTAssertEqual(keystore.dpopProofCalls.first?.keyId, "old-instance-key")
+        XCTAssertNil(keystore.dpopProofCalls.first?.nonce)
+        XCTAssertTrue(keystore.keyProofCalls.isEmpty, "no attestation was asked for")
+    }
+
+    /// A failing keystore still gets exactly one answer: the key is named
+    /// (so the engine knows the action is understood) but no proof - the
+    /// engine then fails that request rather than silently downgrading.
+    func testSignClientAuthWithFailingKeystoreStillAnswersOnce() async throws {
+        let keystore = RecordingKeystoreManager()
+        keystore.refuseKeyProof = true
+        let wallet = makeWallet(keystore: keystore)
+        let sender = RecordingSignResponseSender()
+
+        await wallet.handleSignRequest(engine: sender, msg: try signRequest(action: "sign_client_auth", params: [
+            "htm": "POST", "htu": "https://as.example.invalid/token",
+        ]))
+
+        XCTAssertEqual(sender.sent.count, 1)
+        XCTAssertEqual(sender.sent.first?.messageId, "msg-42")
+        XCTAssertEqual(sender.sent.first?.dpopKeyId, "instance-key-1")
+        XCTAssertNil(sender.sent.first?.dpopProof)
     }
 
     /// No `issuer` from the engine: fall back to the wallet's own default

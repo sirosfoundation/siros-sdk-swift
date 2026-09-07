@@ -380,7 +380,8 @@ extension SirosWallet {
                 refreshToken: token,
                 dpopJwk: msg.dpopJwk,
                 credentialIssuerIdentifier: issuerIdentifier,
-                credentialConfigurationId: configId
+                credentialConfigurationId: configId,
+                dpopKeyId: msg.dpopKeyId
             )
         )
     }
