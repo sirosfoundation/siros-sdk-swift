@@ -1099,7 +1099,21 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             "settings": settings,
             "credentialIssuanceSessions": credentialIssuanceSessions,
         ]
+        appendExtensionMembers(to: &sDict, existingS: existingS)
 
+        return [
+            "lastEventHash": lastEventHash,
+            "events": events,
+            "S": sDict,
+        ]
+    }
+
+    /// The `S` members beyond privatedata-spec's normative core: the
+    /// native-SDK extension fields this class owns, then everything else the
+    /// loaded container carried. Split out of `buildWalletStateV3()` only to
+    /// keep that function's body within the lint limit; the two are one
+    /// export step.
+    private func appendExtensionMembers(to sDict: inout [String: Any], existingS: [String: Any]?) {
         // wscdCredentials (privatedata-spec §6.1, native-SDK-only extension)
         // - wscdCredentials the in-memory dictionary IS the source of truth
         // once loaded (see loadFromWalletStateV3), no need to merge against
@@ -1146,12 +1160,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 sDict[member] = value
             }
         }
-
-        return [
-            "lastEventHash": lastEventHash,
-            "events": events,
-            "S": sDict,
-        ]
     }
 
     // MARK: - JWE encrypt/decrypt (A256GCMKW / A256GCM)

@@ -4,17 +4,71 @@ import Foundation
 import XCTest
 @testable import SirosKeystore
 
-#if canImport(CryptoKit)
-import CryptoKit
-
 /// Reads and rewrites a container's plaintext the way a *peer* client would -
 /// decrypting here rather than adding test-only accessors to production code.
 ///
 /// Shared by the tests that need to look at (or tamper with) what `JweKeystore`
 /// actually wrote, independently of what its accessors report. The JWE
-/// encrypt/decrypt below mirrors `JweKeystore`'s private A256GCMKW/A256GCM
-/// implementation.
+/// encrypt/decrypt in the CryptoKit-gated extension below mirrors
+/// `JweKeystore`'s private A256GCMKW/A256GCM implementation; `jsonEqual` has
+/// no crypto dependency and stays outside the gate so its own behaviour is
+/// tested on every platform.
 enum ContainerTestSupport {
+
+    /// Recursive structural equality for heterogeneous JSON trees produced by
+    /// `JSONSerialization` ([String: Any], [Any], NSNumber, NSString, NSNull).
+    ///
+    /// `JSONSerialization` surfaces both numbers and booleans as `NSNumber`,
+    /// and `NSNumber == NSNumber` compares by value, so `true` would equal `1`
+    /// and `false` would equal `0`. A round-trip test that re-typed a boolean
+    /// into a number (or the reverse) would therefore pass. Booleans and
+    /// numbers are told apart first and never compare equal to each other.
+    static func jsonEqual(_ a: Any?, _ b: Any?) -> Bool {
+        switch (a, b) {
+        case (nil, nil):
+            return true
+        case (.some(let a), .some(let b)):
+            if let a = a as? [String: Any], let b = b as? [String: Any] {
+                guard Set(a.keys) == Set(b.keys) else { return false }
+                return a.allSatisfy { key, value in jsonEqual(value, b[key]) }
+            }
+            if let a = a as? [Any], let b = b as? [Any] {
+                guard a.count == b.count else { return false }
+                return zip(a, b).allSatisfy { jsonEqual($0, $1) }
+            }
+            if let a = a as? NSNumber, let b = b as? NSNumber {
+                guard isBoolean(a) == isBoolean(b) else { return false }
+                return a == b
+            }
+            if let a = a as? String, let b = b as? String { return a == b }
+            if a is NSNull && b is NSNull { return true }
+            return false
+        default:
+            return false
+        }
+    }
+
+    /// Whether an `NSNumber` out of `JSONSerialization` came from a JSON
+    /// boolean rather than a JSON number.
+    ///
+    /// On Apple platforms JSON booleans are the `CFBoolean` singletons, which
+    /// have their own CF type. swift-corelibs-foundation has no CFBoolean, but
+    /// its `JSONSerialization` builds booleans as `NSNumber(value: Bool)`,
+    /// whose `objCType` is "c" (Int8/BOOL), while every JSON number it produces
+    /// is an Int, Int64, UInt64 or Double - none of which encode as "c".
+    static func isBoolean(_ number: NSNumber) -> Bool {
+        #if canImport(Darwin)
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+        #else
+        return String(cString: number.objCType) == "c"
+        #endif
+    }
+}
+
+#if canImport(CryptoKit)
+import CryptoKit
+
+extension ContainerTestSupport {
 
     /// Decrypt a container to its plaintext `WalletStateContainer` JSON.
     static func plaintext(of container: Data, prfOutput: Data, hkdfSalt: Data) throws -> [String: Any] {
@@ -81,30 +135,6 @@ enum ContainerTestSupport {
             transform(&extensions)
             s["extensions"] = extensions
             state["S"] = s
-        }
-    }
-
-    /// Recursive structural equality for heterogeneous JSON trees produced by
-    /// `JSONSerialization` ([String: Any], [Any], NSNumber, NSString, NSNull).
-    static func jsonEqual(_ a: Any?, _ b: Any?) -> Bool {
-        switch (a, b) {
-        case (nil, nil):
-            return true
-        case (.some(let a), .some(let b)):
-            if let a = a as? [String: Any], let b = b as? [String: Any] {
-                guard Set(a.keys) == Set(b.keys) else { return false }
-                return a.allSatisfy { key, value in jsonEqual(value, b[key]) }
-            }
-            if let a = a as? [Any], let b = b as? [Any] {
-                guard a.count == b.count else { return false }
-                return zip(a, b).allSatisfy { jsonEqual($0, $1) }
-            }
-            if let a = a as? NSNumber, let b = b as? NSNumber { return a == b }
-            if let a = a as? String, let b = b as? String { return a == b }
-            if a is NSNull && b is NSNull { return true }
-            return false
-        default:
-            return false
         }
     }
 
