@@ -186,10 +186,24 @@ public struct ClientAttestation: Codable, Sendable {
 public struct SignSubFlowResult: Sendable {
     public var proofs: [ProofObject]?
     public var vpToken: String?
+    /// Extra members for the OID4VCI credential request the backend is
+    /// about to send on this wallet's behalf.
+    ///
+    /// Same field, same meaning and same reserved-name rule as the legacy
+    /// protocol's `SignResponseMessage.credentialRequestExtras`. The two
+    /// transports carry it identically on the wire so a backend can accept
+    /// either without a second code path, and so a flow behaves the same
+    /// whichever transport it runs over.
+    public var credentialRequestExtras: [String: AnyCodable]?
 
-    public init(proofs: [ProofObject]? = nil, vpToken: String? = nil) {
+    public init(
+        proofs: [ProofObject]? = nil,
+        vpToken: String? = nil,
+        credentialRequestExtras: [String: AnyCodable]? = nil
+    ) {
         self.proofs = proofs
         self.vpToken = vpToken
+        self.credentialRequestExtras = credentialRequestExtras
     }
 }
 
@@ -375,12 +389,20 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
             let encoded = proofs.map { proof -> [String: AnyCodable] in
                 var dict: [String: AnyCodable] = ["proof_type": .string(proof.proofType)]
                 if let jwt = proof.jwt { dict["jwt"] = .string(jwt) }
+                // Key-attestation proofs carry their payload here, not in
+                // `jwt`; the legacy transport's Codable encoding includes it
+                // and this hand-rolled one must too, or an `attestation`
+                // proof arrives at the backend with no proof in it.
+                if let attestation = proof.attestation { dict["attestation"] = .string(attestation) }
                 return dict
             }
             params["proofs"] = .array(encoded.map { .object_($0) })
         }
         if let vpToken = result.vpToken {
             params["vp_token"] = .string(vpToken)
+        }
+        if let extras = result.credentialRequestExtras {
+            params["credential_request_extras"] = .object_(extras)
         }
         try? await peer.notify(method: WmpMethods.flowAction, params: params)
     }

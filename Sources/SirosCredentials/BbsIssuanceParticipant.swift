@@ -58,6 +58,42 @@ public struct BbsIssuanceParticipant: ZkIssuanceParticipant {
     /// taking the wallet's word for it.
     public static let pointersField = "bbs_committed_claims"
 
+    /// Credential-request member saying whether the commitment carries key
+    /// binding keys.
+    ///
+    /// The issuer cannot see inside the commitment, and this selects the
+    /// message layout the credential is signed under - which a verifier
+    /// reads back out of the header, so the two ends have to agree. It is
+    /// not taken on trust: the issuer's signer checks the assertion against
+    /// the commitment and refuses to sign a mismatch, so getting this wrong
+    /// costs an issuance rather than producing a credential that claims a
+    /// binding it does not have.
+    public static let keyBindingField = "bbs_key_binding"
+
+    /// Credential-request member naming the cipher suite the commitment was
+    /// built under.
+    ///
+    /// The suite selects the domain separation everything is computed
+    /// under, so the issuer must build its side under the same one or the
+    /// commitment verifies against nothing. It cannot infer it: a wrong
+    /// guess is indistinguishable from a corrupt commitment, a wrong issuer
+    /// key or a tampered proof, so the wallet says.
+    ///
+    /// A different axis from `keyBindingField` despite the similar name.
+    /// This picks the domain separation; that one picks the message layout
+    /// a verifier reads under. `schnorr` with no key binding keys is the
+    /// ordinary unbound issuance, which is exactly why the issuer cannot
+    /// derive one from the other.
+    public static let suiteField = "bbs_suite"
+
+    /// The wire name for a suite, as the issuer reads it.
+    public static func wireName(_ suiteId: BbsSuiteId) -> String {
+        switch suiteId {
+        case .plain: return "plain"
+        case .schnorr: return "schnorr"
+        }
+    }
+
     public let systemId: String
     private let suiteId: BbsSuiteId
 
@@ -183,9 +219,16 @@ public struct BbsIssuancePreparation: ZkIssuancePreparation {
         // include claim names, which a hostile issuer or a careless schema
         // can put anything in, and a request that is not valid JSON is the
         // better outcome only if it is never produced in the first place.
+        //
+        // The key binding flag is a JSON boolean on the wire, not a quoted
+        // string - the issuer decodes it into a bool. Spelled out rather
+        // than routed through JSONSerialization, whose Bool-to-NSNumber
+        // bridging is not the same on every Foundation.
         [
             BbsIssuanceParticipant.commitmentField: Self.jsonEncoded(base64Url(commitmentWithProof)),
             BbsIssuanceParticipant.pointersField: Self.jsonEncoded(holderPointers),
+            BbsIssuanceParticipant.keyBindingField: keybindPublicKeys.isEmpty ? "false" : "true",
+            BbsIssuanceParticipant.suiteField: Self.jsonEncoded(BbsIssuanceParticipant.wireName(suiteId)),
         ]
     }
 
