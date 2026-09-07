@@ -152,6 +152,24 @@ final class CredentialRequestExtrasTests: XCTestCase {
         )
     }
 
+    /// The proofs the two transports carry alongside the extras must agree
+    /// too. WMP hand-rolls the `proofs` encoding, and until now it forwarded
+    /// only `proof_type` and `jwt` - an `attestation` proof (the key
+    /// attestation the wallet produces for `request_attestation`-style
+    /// issuance) lost its payload on that transport alone.
+    func testBothTransportsCarryAttestationProofs() async throws {
+        let proof = ProofObject(proofType: "attestation", attestation: "key-attestation-jwt")
+
+        let legacy = try encodeLegacy(SignResponseMessage(flowId: "f1", proofs: [proof]))
+        let legacyProof = try XCTUnwrap(legacy["proofs"]?.arrayValue?.first?.objectValue)
+
+        let wmp = try await runWmpSignFlow(returning: SignSubFlowResult(proofs: [proof]))
+        let wmpProof = try XCTUnwrap(wmp["proofs"]?.arrayValue?.first?.objectValue)
+
+        XCTAssertEqual(legacyProof["attestation"], .string("key-attestation-jwt"))
+        XCTAssertEqual(wmpProof, legacyProof, "the two transports must serialise a proof identically")
+    }
+
     /// A backend reading the legacy shape must tolerate the member being
     /// absent, which is what every deployed wallet sends today.
     func testAnOlderWalletsMessageStillDecodes() throws {

@@ -389,6 +389,11 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
             let encoded = proofs.map { proof -> [String: AnyCodable] in
                 var dict: [String: AnyCodable] = ["proof_type": .string(proof.proofType)]
                 if let jwt = proof.jwt { dict["jwt"] = .string(jwt) }
+                // Key-attestation proofs carry their payload here, not in
+                // `jwt`; the legacy transport's Codable encoding includes it
+                // and this hand-rolled one must too, or an `attestation`
+                // proof arrives at the backend with no proof in it.
+                if let attestation = proof.attestation { dict["attestation"] = .string(attestation) }
                 return dict
             }
             params["proofs"] = .array(encoded.map { .object_($0) })
