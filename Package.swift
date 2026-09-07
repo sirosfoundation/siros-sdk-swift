@@ -70,8 +70,8 @@ let package = Package(
         // Headers/module.modulemap.
         .binaryTarget(
             name: "siros_dc_matcher_ffiFFI",
-            url: "https://github.com/sirosfoundation/siros-dc-matcher/releases/download/v0.6.1/siros_dc_matcher_ffi.xcframework.zip",
-            checksum: "1205cae35b30c67e5491dc4e1c13f017fb747b3d2668fee3c92b970cd7e3b593"
+            url: "https://github.com/sirosfoundation/siros-dc-matcher/releases/download/v0.6.2/siros_dc_matcher_ffi.xcframework.zip",
+            checksum: "319c9b1979c42a3569ef9d413d013729f81dc39560f61a0471e19f38123c389c"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
