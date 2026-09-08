@@ -22,6 +22,73 @@ final class BackendApiClientTests: XCTestCase {
         XCTAssertEqual(req.headers["Authorization"], "Bearer token-abc")
     }
 
+    // MARK: - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319)
+
+    private func bodyJSON(_ req: MockHttpServer.RecordedRequest) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(req.body)) as? [String: Any])
+    }
+
+    func testGenerateWIASendsCredentialIdOnlyWhenGiven() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"wallet_instance_attestation":"wia.jwt"}"#)
+        server.enqueue(#"{"wallet_instance_attestation":"wia.jwt"}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        _ = try await client.generateWIA(pop: "pop.jwt", challenge: "c-1", clientId: "siros://cb", credentialId: "pk-1")
+        _ = try await client.generateWIA(pop: "pop.jwt", challenge: "c-2")
+
+        XCTAssertEqual(try bodyJSON(server.requests[0])["credential_id"] as? String, "pk-1")
+        XCTAssertNil(try bodyJSON(server.requests[1])["credential_id"])
+    }
+
+    func testListWalletInstancesDecodesBackendShape() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"instances":[{"id":"jkt-1","tenant_id":"default","user_id":"u1","status":"suspended","wscd_type":"native_ios","credential_id":"pk-1","attestation_source":"app_attest","last_attested_at":"2026-09-08T10:00:00Z","status_reason":"lost phone","unknown_member":1},{"id":"bad","status":"weird"}]}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        let instances = try await client.listWalletInstances()
+
+        XCTAssertEqual(server.requests[0].method, "GET")
+        XCTAssertEqual(server.requests[0].path, "/user/session/instances")
+        XCTAssertEqual(instances.count, 1, "an entry with an unknown status is skipped, not fatal")
+        XCTAssertEqual(instances[0].id, "jkt-1")
+        XCTAssertEqual(instances[0].status, .suspended)
+        XCTAssertEqual(instances[0].credentialId, "pk-1")
+        XCTAssertEqual(instances[0].statusReason, "lost phone")
+    }
+
+    func testSetWalletInstanceStatusPutsStatusAndReason() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"id":"jkt-1","status":"suspended"}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        let result = try await client.setWalletInstanceStatus(instanceId: "jkt-1", status: .suspended, reason: "lost phone")
+
+        XCTAssertEqual(server.requests[0].method, "PUT")
+        XCTAssertEqual(server.requests[0].path, "/user/session/instances/jkt-1/status")
+        let body = try bodyJSON(server.requests[0])
+        XCTAssertEqual(body["status"] as? String, "suspended")
+        XCTAssertEqual(body["reason"] as? String, "lost phone")
+        XCTAssertEqual(result.status, .suspended)
+    }
+
+    func testRevokeAllWalletInstancesPostsAndReturnsCount() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"revoked":2}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        let revoked = try await client.revokeAllWalletInstances(reason: "device stolen")
+
+        XCTAssertEqual(server.requests[0].method, "POST")
+        XCTAssertEqual(server.requests[0].path, "/user/session/instances/revoke-all")
+        XCTAssertEqual(try bodyJSON(server.requests[0])["reason"] as? String, "device stolen")
+        XCTAssertEqual(revoked, 2)
+    }
+
     func testUnauthenticatedRequestOmitsAuthorizationHeader() async throws {
         let server = MockHttpServer()
         server.enqueue("{}")

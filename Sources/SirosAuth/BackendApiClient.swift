@@ -236,11 +236,17 @@ public final class BackendApiClient: @unchecked Sendable {
     ///     `sub` claim. draft-ietf-oauth-attestation-based-client-auth-10 requires
     ///     "the sub claim MUST specify client_id value of the OAuth Client";
     ///     omitting this falls back to the instance identifier (jkt) server-side.
+    ///   - credentialId: base64url WebAuthn credential id of the passkey this
+    ///     installation logs in with. The backend records it on the wallet
+    ///     instance so that suspending or revoking the instance also refuses
+    ///     login with that passkey (SID-AUTH-06, go-wallet-backend#319).
+    ///     Optional; older backends ignore it.
     public func generateWIA(
         pop: String,
         challenge: String,
         clientId: String? = nil,
-        nativeAttestation: [String: Any]? = nil
+        nativeAttestation: [String: Any]? = nil,
+        credentialId: String? = nil
     ) async throws -> String {
         var body: [String: Any] = [
             "pop": pop,
@@ -251,6 +257,9 @@ public final class BackendApiClient: @unchecked Sendable {
         }
         if let native = nativeAttestation {
             body["native_attestation"] = native
+        }
+        if let credentialId, !credentialId.isEmpty {
+            body["credential_id"] = credentialId
         }
         let result = try await post("/wallet-provider/wia/generate", body: body)
         guard let wia = result["wallet_instance_attestation"] as? String else {
@@ -284,7 +293,45 @@ public final class BackendApiClient: @unchecked Sendable {
         _ = try await post("/wallet-provider/fido2-attestation/register", body: body)
     }
 
+    // MARK: - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319)
+
+    /// GET /user/session/instances — this user's wallet instances in the current tenant.
+    public func listWalletInstances() async throws -> [WalletInstance] {
+        let result = try await get("/user/session/instances")
+        guard let raw = result["instances"] as? [[String: Any]] else { return [] }
+        return raw.compactMap(WalletInstance.init(json:))
+    }
+
+    /// PUT /user/session/instances/{id}/status — suspend, reactivate or revoke
+    /// one of this user's instances. Throws `SirosError.backendApi` with code
+    /// 404 for an instance that is not the caller's and 409 for an invalid
+    /// transition (e.g. reactivating a revoked instance).
+    public func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) async throws -> WalletInstance {
+        var body: [String: Any] = ["status": status.rawValue]
+        if let reason, !reason.isEmpty { body["reason"] = reason }
+        let result = try await put("/user/session/instances/\(instanceId)/status", body: body)
+        let id = result["id"] as? String ?? instanceId
+        let newStatus = (result["status"] as? String).flatMap(WalletInstance.Status.init(rawValue:)) ?? status
+        return WalletInstance(id: id, status: newStatus)
+    }
+
+    /// POST /user/session/instances/revoke-all — deactivate the wallet: every
+    /// instance revoked, wallet data erased server-side, new enrollment
+    /// required. Returns how many instances were revoked by this call.
+    public func revokeAllWalletInstances(reason: String? = nil) async throws -> Int {
+        var body: [String: Any] = [:]
+        if let reason, !reason.isEmpty { body["reason"] = reason }
+        let result = try await post("/user/session/instances/revoke-all", body: body)
+        return result["revoked"] as? Int ?? 0
+    }
+
     // MARK: - HTTP primitives
+
+    private func put(_ path: String, body: [String: Any]) async throws -> [String: Any] {
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let data = try await request("PUT", path: path, body: bodyData)
+        return try parseJsonObject(data)
+    }
 
     private func get(_ path: String) async throws -> [String: Any] {
         let data = try await request("GET", path: path)
