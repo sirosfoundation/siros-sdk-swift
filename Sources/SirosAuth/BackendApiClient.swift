@@ -295,9 +295,11 @@ public final class BackendApiClient: @unchecked Sendable {
 
     // MARK: - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319)
 
+    private static let pathInstances = "/user/session/instances"
+
     /// GET /user/session/instances — this user's wallet instances in the current tenant.
     public func listWalletInstances() async throws -> [WalletInstance] {
-        let result = try await get("/user/session/instances")
+        let result = try await get(Self.pathInstances)
         guard let raw = result["instances"] as? [[String: Any]] else {
             // The backend always sends the array (empty when the user has no
             // instances); its absence is a malformed or non-JSON response, not
@@ -314,7 +316,7 @@ public final class BackendApiClient: @unchecked Sendable {
     public func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) async throws -> WalletInstance {
         var body: [String: Any] = ["status": status.rawValue]
         if let reason, !reason.isEmpty { body["reason"] = reason }
-        let result = try await put("/user/session/instances/\(instanceId)/status", body: body)
+        let result = try await put("\(Self.pathInstances)/\(instanceId)/status", body: body)
         // Today the backend answers {id, status}; decode the whole object when
         // it sends more, so callers see every field it returns.
         if let full = WalletInstance(json: result) {
@@ -332,7 +334,7 @@ public final class BackendApiClient: @unchecked Sendable {
     public func revokeAllWalletInstances(reason: String? = nil) async throws -> Int {
         var body: [String: Any] = [:]
         if let reason, !reason.isEmpty { body["reason"] = reason }
-        let result = try await post("/user/session/instances/revoke-all", body: body)
+        let result = try await post("\(Self.pathInstances)/revoke-all", body: body)
         guard let revoked = result["revoked"] as? Int else {
             throw SirosError.backendApi(code: 0, message: "Missing revoked count in response", body: "")
         }
