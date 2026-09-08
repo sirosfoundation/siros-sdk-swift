@@ -59,6 +59,32 @@ final class BackendApiClientTests: XCTestCase {
         XCTAssertEqual(instances[0].statusReason, "lost phone")
     }
 
+    func testListWalletInstancesFailsOnMalformedResponse() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"unexpected":true}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+        do {
+            _ = try await client.listWalletInstances()
+            XCTFail("a response without the instances array must not read as 'no instances'")
+        } catch SirosError.backendApi(_, let message, _) {
+            XCTAssertTrue(message.contains("instances"))
+        }
+    }
+
+    func testSetWalletInstanceStatusDecodesFullObjectWhenReturned() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"id":"jkt-1","tenant_id":"default","status":"revoked","wscd_type":"native_ios","credential_id":"pk-1","status_reason":"stolen"}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        let result = try await client.setWalletInstanceStatus(instanceId: "jkt-1", status: .revoked, reason: "stolen")
+
+        XCTAssertEqual(result.status, .revoked)
+        XCTAssertEqual(result.credentialId, "pk-1")
+        XCTAssertEqual(result.statusReason, "stolen")
+    }
+
     func testSetWalletInstanceStatusPutsStatusAndReason() async throws {
         let server = MockHttpServer()
         server.enqueue(#"{"id":"jkt-1","status":"suspended"}"#)

@@ -298,7 +298,12 @@ public final class BackendApiClient: @unchecked Sendable {
     /// GET /user/session/instances — this user's wallet instances in the current tenant.
     public func listWalletInstances() async throws -> [WalletInstance] {
         let result = try await get("/user/session/instances")
-        guard let raw = result["instances"] as? [[String: Any]] else { return [] }
+        guard let raw = result["instances"] as? [[String: Any]] else {
+            // The backend always sends the array (empty when the user has no
+            // instances); its absence is a malformed or non-JSON response, not
+            // "no instances", so surface it rather than mask it.
+            throw SirosError.backendApi(code: 0, message: "Missing instances in response", body: "")
+        }
         return raw.compactMap(WalletInstance.init(json:))
     }
 
@@ -310,9 +315,15 @@ public final class BackendApiClient: @unchecked Sendable {
         var body: [String: Any] = ["status": status.rawValue]
         if let reason, !reason.isEmpty { body["reason"] = reason }
         let result = try await put("/user/session/instances/\(instanceId)/status", body: body)
-        let id = result["id"] as? String ?? instanceId
-        let newStatus = (result["status"] as? String).flatMap(WalletInstance.Status.init(rawValue:)) ?? status
-        return WalletInstance(id: id, status: newStatus)
+        // Today the backend answers {id, status}; decode the whole object when
+        // it sends more, so callers see every field it returns.
+        if let full = WalletInstance(json: result) {
+            return full
+        }
+        guard let newStatus = (result["status"] as? String).flatMap(WalletInstance.Status.init(rawValue:)) else {
+            throw SirosError.backendApi(code: 0, message: "Missing status in response", body: "")
+        }
+        return WalletInstance(id: result["id"] as? String ?? instanceId, status: newStatus)
     }
 
     /// POST /user/session/instances/revoke-all — deactivate the wallet: every

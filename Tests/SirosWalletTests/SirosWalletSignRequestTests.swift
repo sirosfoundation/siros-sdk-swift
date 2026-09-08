@@ -354,3 +354,68 @@ final class SirosWalletSignRequestTests: XCTestCase {
         XCTAssertNil(sent.clientAttestation); XCTAssertNil(sent.clientAttestationPoP)
     }
 }
+
+// MARK: - Wallet instance lifecycle facade (SID-AUTH-06)
+
+/// `SirosWallet.listWalletInstances()` / `setWalletInstanceStatus(...)`: the
+/// facade refuses when not logged in and otherwise forwards to the backend
+/// client. `deactivateWallet` is not covered here: its local half touches the
+/// Keychain-backed account registry.
+final class SirosWalletLifecycleFacadeTests: XCTestCase {
+    private func makeWallet() -> SirosWallet {
+        let config = WalletConfig(backendUrl: "https://backend.example.invalid", redirectUri: "https://wallet.example.invalid/cb")
+        return SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: RecordingKeystoreManager())!
+    }
+
+    /// Minimal recording HTTP function: captures method/path/body and answers with the queued JSON.
+    private final class Recorder: @unchecked Sendable {
+        var calls: [(method: String, path: String, body: [String: Any]?)] = []
+        var responses: [String]
+        init(_ responses: [String]) { self.responses = responses }
+        var httpFn: @Sendable (String, URL, [String: String], Data?) async throws -> Data {
+            { [self] method, url, _, body in
+                let parsed = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                self.calls.append((method, url.path, parsed))
+                return Data(self.responses.removeFirst().utf8)
+            }
+        }
+    }
+
+    func testNotLoggedInIsAnAuthError() async {
+        let wallet = makeWallet()
+        XCTAssertNil(wallet.apiClient)
+        do {
+            _ = try await wallet.listWalletInstances()
+            XCTFail("expected SirosError.auth")
+        } catch SirosError.auth { }
+        catch { XCTFail("unexpected \(error)") }
+        do {
+            _ = try await wallet.setWalletInstanceStatus(instanceId: "x", status: .suspended)
+            XCTFail("expected SirosError.auth")
+        } catch SirosError.auth { }
+        catch { XCTFail("unexpected \(error)") }
+    }
+
+    func testFacadeForwardsToTheBackendClient() async throws {
+        let wallet = makeWallet()
+        let recorder = Recorder([
+            #"{"instances":[{"id":"jkt-1","status":"active","credential_id":"pk-1"}]}"#,
+            #"{"id":"jkt-1","status":"suspended"}"#,
+        ])
+        let client = BackendApiClient(baseUrl: "https://backend.example.invalid", tenantId: "default", httpFn: recorder.httpFn)
+        client.setAppToken("t")
+        wallet.apiClient = client
+
+        let instances = try await wallet.listWalletInstances()
+        XCTAssertEqual(instances.map(\.id), ["jkt-1"])
+        XCTAssertEqual(recorder.calls[0].method, "GET")
+        XCTAssertEqual(recorder.calls[0].path, "/user/session/instances")
+
+        let updated = try await wallet.setWalletInstanceStatus(instanceId: "jkt-1", status: .suspended, reason: "lost")
+        XCTAssertEqual(updated.status, .suspended)
+        XCTAssertEqual(recorder.calls[1].method, "PUT")
+        XCTAssertEqual(recorder.calls[1].path, "/user/session/instances/jkt-1/status")
+        XCTAssertEqual(recorder.calls[1].body?["status"] as? String, "suspended")
+        XCTAssertEqual(recorder.calls[1].body?["reason"] as? String, "lost")
+    }
+}
