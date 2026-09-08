@@ -28,21 +28,29 @@ import Security
 /// `evaluateMdocTrustRemote`/`evaluateMdocTrustLocally` for the reference
 /// this file ports.
 extension SirosWallet {
+    /// - Parameter subjectId: what the registry is asked about. Defaults to
+    ///   the leaf certificate's SHA-256, which identifies the certificate
+    ///   itself (RICAL/VICAL validate the chain and ignore it); a caller
+    ///   whose registry resolves an entity by name passes that name instead.
+    ///   `resource.id` always stays the certificate hash: it identifies the
+    ///   key material carried in `resource.key`, not the entity.
     func evaluateMdocTrustRemote(
         x5chain: [[UInt8]],
         actionName: String,
         defaultFramework: String,
+        subjectId: String? = nil,
         extraContext: [String: Any]? = nil
     ) async throws -> TrustResult {
         lock.lock(); let client = apiClient; lock.unlock()
         guard let client else { throw SirosError.wallet(message: "Not connected") }
 
-        let subjectId = sha256Hex(x5chain[0])
+        let certificateId = sha256Hex(x5chain[0])
+        let subjectId = subjectId ?? certificateId
         let x5c = x5chain.map { Data($0).base64EncodedString() }
 
         var evaluationRequest: [String: Any] = [
             "subject": ["type": "key", "id": subjectId],
-            "resource": ["type": "x5c", "id": subjectId, "key": x5c],
+            "resource": ["type": "x5c", "id": certificateId, "key": x5c],
             "action": ["name": actionName],
         ]
         if let extraContext {
