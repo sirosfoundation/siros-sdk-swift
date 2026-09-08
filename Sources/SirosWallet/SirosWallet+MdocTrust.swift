@@ -9,6 +9,10 @@ import SirosCredentials
 import SirosKeystore
 #if canImport(CryptoKit)
 import CryptoKit
+#else
+// swift-crypto's `Crypto` module mirrors CryptoKit's API 1:1, including
+// SHA256 - see Package.swift's SirosWallet dependencies.
+import Crypto
 #endif
 #if canImport(Security)
 import Security
@@ -45,11 +49,11 @@ extension SirosWallet {
         guard let client else { throw SirosError.wallet(message: "Not connected") }
 
         let certificateId = sha256Hex(x5chain[0])
-        let subjectId = subjectId ?? certificateId
+        let resolvedSubjectId = subjectId ?? certificateId
         let x5c = x5chain.map { Data($0).base64EncodedString() }
 
         var evaluationRequest: [String: Any] = [
-            "subject": ["type": "key", "id": subjectId],
+            "subject": ["type": "key", "id": resolvedSubjectId],
             "resource": ["type": "x5c", "id": certificateId, "key": x5c],
             "action": ["name": actionName],
         ]
@@ -66,7 +70,7 @@ extension SirosWallet {
             framework: (respContext?["framework"] as? String) ?? defaultFramework,
             reason: (respContext?["reason"] as? String) ?? (respContext?["message"] as? String),
             entityName: respContext?["entity_name"] as? String,
-            identifier: subjectId
+            identifier: resolvedSubjectId
         )
     }
 
@@ -182,11 +186,6 @@ extension SirosWallet {
     #endif
 
     func sha256Hex(_ bytes: [UInt8]) -> String {
-        #if canImport(CryptoKit)
-        let digest = SHA256.hash(data: Data(bytes))
-        return digest.map { String(format: "%02x", $0) }.joined()
-        #else
-        return bytes.map { String(format: "%02x", $0) }.joined()
-        #endif
+        SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }
 }
