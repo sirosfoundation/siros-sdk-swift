@@ -101,6 +101,19 @@ final class BackendApiClientTests: XCTestCase {
         XCTAssertEqual(result.status, .suspended)
     }
 
+    func testRevokeAllWalletInstancesFailsOnMalformedResponse() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"ok":true}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+        do {
+            _ = try await client.revokeAllWalletInstances()
+            XCTFail("a reply without the revoked count must not read as zero revoked")
+        } catch SirosError.backendApi(_, let message, _) {
+            XCTAssertTrue(message.contains("revoked"))
+        }
+    }
+
     func testRevokeAllWalletInstancesPostsAndReturnsCount() async throws {
         let server = MockHttpServer()
         server.enqueue(#"{"revoked":2}"#)

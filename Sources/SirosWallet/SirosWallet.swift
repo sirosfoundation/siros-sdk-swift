@@ -103,8 +103,13 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Remove a cached account (forgets it from the login screen).
     public func forgetAccount(accountId: String) {
+        // Decide before removing: AccountRegistry.removeAccount clears the
+        // active id when it points at this account, so checking afterwards
+        // never saw a match and the active account was forgotten without a
+        // logout, leaving tokens and session state in place.
+        let wasActive = accountRegistry.activeAccountId == accountId
         accountRegistry.removeAccount(accountId: accountId)
-        if accountRegistry.activeAccountId == accountId {
+        if wasActive {
             logout()
         } else {
             // Re-emit state so UI reflects the removed account

@@ -333,7 +333,10 @@ public final class BackendApiClient: @unchecked Sendable {
         var body: [String: Any] = [:]
         if let reason, !reason.isEmpty { body["reason"] = reason }
         let result = try await post("/user/session/instances/revoke-all", body: body)
-        return result["revoked"] as? Int ?? 0
+        guard let revoked = result["revoked"] as? Int else {
+            throw SirosError.backendApi(code: 0, message: "Missing revoked count in response", body: "")
+        }
+        return revoked
     }
 
     // MARK: - HTTP primitives
