@@ -103,8 +103,13 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Remove a cached account (forgets it from the login screen).
     public func forgetAccount(accountId: String) {
+        // Decide before removing: AccountRegistry.removeAccount clears the
+        // active id when it points at this account, so checking afterwards
+        // never saw a match and the active account was forgotten without a
+        // logout, leaving tokens and session state in place.
+        let wasActive = accountRegistry.activeAccountId == accountId
         accountRegistry.removeAccount(accountId: accountId)
-        if accountRegistry.activeAccountId == accountId {
+        if wasActive {
             logout()
         } else {
             // Re-emit state so UI reflects the removed account
@@ -128,6 +133,48 @@ public final class SirosWallet: @unchecked Sendable {
             $0.credentialId == credentialId ? CachedPasskey(credentialId: $0.credentialId, prfSalt: $0.prfSalt, nickname: nickname) : $0
         }
         accountRegistry.upsertAccount(account)
+    }
+
+    // MARK: - Wallet instance lifecycle (SID-AUTH-06)
+
+    /// This user's wallet instances in the current tenant, from the backend
+    /// (`GET /user/session/instances`). One instance per installation; match
+    /// an instance to a passkey via `WalletInstance.credentialId` when present.
+    /// Requires a backend with go-wallet-backend#319; older backends answer
+    /// 404, surfaced as `SirosError.backendApi`.
+    public func listWalletInstances() async throws -> [WalletInstance] {
+        guard let client = apiClient else { throw SirosError.auth(message: "Not logged in") }
+        return try await client.listWalletInstances()
+    }
+
+    /// Suspend, reactivate or revoke one of this user's wallet instances
+    /// (`PUT /user/session/instances/{id}/status`). Suspension is reversible
+    /// and only blocks that installation (login, attestation, sessions);
+    /// revocation is terminal. Revoking the last non-revoked instance
+    /// deactivates the wallet - prefer `deactivateWallet(reason:)` for that,
+    /// which also clears local state.
+    public func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) async throws -> WalletInstance {
+        guard let client = apiClient else { throw SirosError.auth(message: "Not logged in") }
+        return try await client.setWalletInstanceStatus(instanceId: instanceId, status: status, reason: reason)
+    }
+
+    /// Deactivate this wallet: revoke every wallet instance of the user
+    /// (`POST /user/session/instances/revoke-all`). The backend erases the
+    /// wallet's private data and server-side credentials and refuses every
+    /// passkey of the user at login with `WALLET_REVOKED`; a new enrollment
+    /// is required afterwards. The local cached account is forgotten and the
+    /// wallet logged out, since the vault it decrypts no longer exists.
+    /// - Returns: how many instances the backend revoked.
+    @discardableResult
+    public func deactivateWallet(reason: String? = nil) async throws -> Int {
+        guard let client = apiClient else { throw SirosError.auth(message: "Not logged in") }
+        let revoked = try await client.revokeAllWalletInstances(reason: reason)
+        if let active = accountRegistry.activeAccountId {
+            forgetAccount(accountId: active)
+        } else {
+            logout()
+        }
+        return revoked
     }
 
     // MARK: - Configuration & dependencies

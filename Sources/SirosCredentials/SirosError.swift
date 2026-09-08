@@ -27,6 +27,27 @@ public enum SirosError: Error, Sendable {
     /// retried as a full re-issuance.
     case renewalUnavailable(batchId: Int64)
 
+    /// Stable codes a SIROS backend returns with `403` when passkey login is
+    /// refused for wallet lifecycle reasons (SID-AUTH-06,
+    /// go-wallet-backend#319). Neither is retryable: a suspended instance is
+    /// reactivated from another device or by the provider; a revoked one
+    /// means the wallet was deactivated and a new enrollment is required.
+    public enum WalletLifecycleRefusal: String, Sendable {
+        case suspended = "WALLET_SUSPENDED"
+        case revoked = "WALLET_REVOKED"
+    }
+
+    /// The lifecycle refusal carried by a `403 .backendApi` error, or nil for
+    /// every other error. Kept as a helper rather than a new enum case so
+    /// exhaustive `switch`es over `SirosError` keep compiling.
+    public var walletLifecycleRefusal: WalletLifecycleRefusal? {
+        guard case let .backendApi(code, _, body) = self, code == 403, let body,
+              let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = json["error"] as? String else { return nil }
+        return WalletLifecycleRefusal(rawValue: error)
+    }
+
     /// Machine-readable error code for i18n mapping.
     public var errorCode: String {
         switch self {

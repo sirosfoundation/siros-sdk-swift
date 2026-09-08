@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319):
+  `SirosWallet.listWalletInstances()`, `setWalletInstanceStatus(instanceId:status:reason:)`
+  and `deactivateWallet(reason:)` (revokes every instance server-side, then
+  forgets the local account), backed by the new `WalletInstance` type and
+  `BackendApiClient` methods. WIA generation now sends the logged-in passkey's
+  `credential_id` so the backend can link the instance to the passkey.
+  `SirosError.walletLifecycleRefusal` reads the `WALLET_SUSPENDED` /
+  `WALLET_REVOKED` codes off a 403 login refusal without adding an enum case.
 - `PresentationRecord.zkProof` (`zk_proof`): whether a presentation was a
   zero-knowledge proof rather than a raw disclosure, set on the DC API and both
   engine selection paths; sample-app history shows a lock badge for it

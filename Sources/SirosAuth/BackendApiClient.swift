@@ -236,11 +236,17 @@ public final class BackendApiClient: @unchecked Sendable {
     ///     `sub` claim. draft-ietf-oauth-attestation-based-client-auth-10 requires
     ///     "the sub claim MUST specify client_id value of the OAuth Client";
     ///     omitting this falls back to the instance identifier (jkt) server-side.
+    ///   - credentialId: base64url WebAuthn credential id of the passkey this
+    ///     installation logs in with. The backend records it on the wallet
+    ///     instance so that suspending or revoking the instance also refuses
+    ///     login with that passkey (SID-AUTH-06, go-wallet-backend#319).
+    ///     Optional; older backends ignore it.
     public func generateWIA(
         pop: String,
         challenge: String,
         clientId: String? = nil,
-        nativeAttestation: [String: Any]? = nil
+        nativeAttestation: [String: Any]? = nil,
+        credentialId: String? = nil
     ) async throws -> String {
         var body: [String: Any] = [
             "pop": pop,
@@ -251,6 +257,9 @@ public final class BackendApiClient: @unchecked Sendable {
         }
         if let native = nativeAttestation {
             body["native_attestation"] = native
+        }
+        if let credentialId, !credentialId.isEmpty {
+            body["credential_id"] = credentialId
         }
         let result = try await post("/wallet-provider/wia/generate", body: body)
         guard let wia = result["wallet_instance_attestation"] as? String else {
@@ -284,7 +293,61 @@ public final class BackendApiClient: @unchecked Sendable {
         _ = try await post("/wallet-provider/fido2-attestation/register", body: body)
     }
 
+    // MARK: - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319)
+
+    private static let pathInstances = "/user/session/instances"
+
+    /// GET /user/session/instances — this user's wallet instances in the current tenant.
+    public func listWalletInstances() async throws -> [WalletInstance] {
+        let result = try await get(Self.pathInstances)
+        guard let raw = result["instances"] as? [[String: Any]] else {
+            // The backend always sends the array (empty when the user has no
+            // instances); its absence is a malformed or non-JSON response, not
+            // "no instances", so surface it rather than mask it.
+            throw SirosError.backendApi(code: 0, message: "Missing instances in response", body: "")
+        }
+        return raw.compactMap(WalletInstance.init(json:))
+    }
+
+    /// PUT /user/session/instances/{id}/status — suspend, reactivate or revoke
+    /// one of this user's instances. Throws `SirosError.backendApi` with code
+    /// 404 for an instance that is not the caller's and 409 for an invalid
+    /// transition (e.g. reactivating a revoked instance).
+    public func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) async throws -> WalletInstance {
+        var body: [String: Any] = ["status": status.rawValue]
+        if let reason, !reason.isEmpty { body["reason"] = reason }
+        let result = try await put("\(Self.pathInstances)/\(instanceId)/status", body: body)
+        // Today the backend answers {id, status}; decode the whole object when
+        // it sends more, so callers see every field it returns.
+        if let full = WalletInstance(json: result) {
+            return full
+        }
+        guard let newStatus = (result["status"] as? String).flatMap(WalletInstance.Status.init(rawValue:)) else {
+            throw SirosError.backendApi(code: 0, message: "Missing status in response", body: "")
+        }
+        return WalletInstance(id: result["id"] as? String ?? instanceId, status: newStatus)
+    }
+
+    /// POST /user/session/instances/revoke-all — deactivate the wallet: every
+    /// instance revoked, wallet data erased server-side, new enrollment
+    /// required. Returns how many instances were revoked by this call.
+    public func revokeAllWalletInstances(reason: String? = nil) async throws -> Int {
+        var body: [String: Any] = [:]
+        if let reason, !reason.isEmpty { body["reason"] = reason }
+        let result = try await post("\(Self.pathInstances)/revoke-all", body: body)
+        guard let revoked = result["revoked"] as? Int else {
+            throw SirosError.backendApi(code: 0, message: "Missing revoked count in response", body: "")
+        }
+        return revoked
+    }
+
     // MARK: - HTTP primitives
+
+    private func put(_ path: String, body: [String: Any]) async throws -> [String: Any] {
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let data = try await request("PUT", path: path, body: bodyData)
+        return try parseJsonObject(data)
+    }
 
     private func get(_ path: String) async throws -> [String: Any] {
         let data = try await request("GET", path: path)

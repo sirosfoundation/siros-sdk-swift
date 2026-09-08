@@ -349,7 +349,11 @@ extension SirosWallet {
                 // confirmed via a real geneva2026.mdoc.online conformance run
                 // that flagged sub=<instance jkt> as a FAIL.
                 clientId: clientAttestationClientId(),
-                nativeAttestation: nativeAttestation
+                nativeAttestation: nativeAttestation,
+                // Links this instance to the passkey it logs in with, so
+                // suspending or revoking the instance also refuses login
+                // with that passkey (SID-AUTH-06, go-wallet-backend#319).
+                credentialId: sessionStore.credentialId
             )
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
             lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
