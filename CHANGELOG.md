@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Platform floor is now iOS 18 / macOS 15** (was iOS 16 / macOS 13). The
+  wallet's key material is derived from the login passkey's WebAuthn PRF
+  output, and Apple's PRF extension exists from iOS 18; on 16 and 17 the
+  package built and ran but login could not unlock the wallet. The
+  `#available(iOS 18)` branches around PRF are gone (security-key PRF stays
+  gated at 26.4); macOS is a build/test platform only. Consumers on an older
+  deployment target must raise it to adopt this release.
+
 ### Added
 - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319):
   `SirosWallet.listWalletInstances()`, `setWalletInstanceStatus(instanceId:status:reason:)`

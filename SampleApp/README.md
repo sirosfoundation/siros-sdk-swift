@@ -14,7 +14,7 @@ A sample iOS wallet app demonstrating the SIROS Swift SDK.
 ## Requirements
 
 - Xcode 16+
-- iOS 16.0+
+- iOS 18.0+
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (for project generation)
 
 ## Setup

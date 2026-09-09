@@ -22,7 +22,7 @@ Native Swift SDK for integrating SIROS ID wallet infrastructure into iOS and mac
 
 ## Requirements
 
-- iOS 16+ / macOS 13+
+- iOS 18+ (macOS 15+ for building and running the test suite only; the native XCFrameworks ship iOS slices)
 - Swift 5.10+
 - Xcode 16+ (for Apple platforms)
 
@@ -123,7 +123,7 @@ swift test --parallel
 # Build for iOS Simulator
 swift build \
   --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-  --triple arm64-apple-ios16.0-simulator
+  --triple arm64-apple-ios18.0-simulator
 ```
 
 ## Documentation
