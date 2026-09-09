@@ -73,7 +73,7 @@ jobs:
         run: |
           swift build \
             --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-            --triple arm64-apple-ios16.0-simulator
+            --triple arm64-apple-ios18.0-simulator
 
   test-linux:
     name: Test (Linux)

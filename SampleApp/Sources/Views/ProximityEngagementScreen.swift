@@ -364,10 +364,7 @@ private struct ProximityProgressView: View {
                 ProgressView(value: maxProgress)
                     .tint(SirosTheme.brand)
                     .onAppear { maxProgress = max(maxProgress, stepProgress) }
-                    // Single-param onChange(of:perform:) - matches
-                    // FlowActiveView's own choice, since this app's
-                    // deployment target is iOS 16.
-                    .onChange(of: stepProgress) { newValue in
+                    .onChange(of: stepProgress) { _, newValue in
                         maxProgress = max(maxProgress, newValue)
                     }
             } else {

@@ -6,8 +6,17 @@ import PackageDescription
 let package = Package(
     name: "SirosSDK",
     platforms: [
-        .iOS(.v16),
-        .macOS(.v13),
+        // iOS 18 is the real floor: the wallet's key material is derived from
+        // the WebAuthn PRF output of the login passkey, and Apple's PRF
+        // extension (ASAuthorizationPublicKeyCredentialPRFAssertionInput)
+        // exists from iOS 18 / macOS 15. On 16 and 17 the package compiled and
+        // ran, and login then could not unlock anything. Security-key PRF is
+        // gated higher still (26.4) and stays a runtime check.
+        .iOS("18.0"),
+        // macOS is a CI/test platform only: the native XCFrameworks ship iOS
+        // slices, and everything FFI-backed is iOS-gated. Nothing here is a
+        // macOS wallet.
+        .macOS("15.0"),
     ],
     products: [
         .library(name: "SirosCredentials", targets: ["SirosCredentials"]),

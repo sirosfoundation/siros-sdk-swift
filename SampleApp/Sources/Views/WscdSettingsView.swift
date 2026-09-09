@@ -117,7 +117,7 @@ private struct PluginSpecificSection: View {
         // Mirrors the Kotlin reference's `rememberSaveable(pluginId)` -
         // switching tabs always starts the Developer section collapsed
         // again, rather than leaving whichever tab was expanded before.
-        .onChange(of: viewModel.selectedPluginId) { _ in
+        .onChange(of: viewModel.selectedPluginId) {
             developerExpanded = false
         }
     }

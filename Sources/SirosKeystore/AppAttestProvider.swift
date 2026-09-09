@@ -18,7 +18,6 @@ public protocol AppAttestServiceProviding: Sendable {
     func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data
 }
 
-@available(iOS 14.0, macOS 12.0, *)
 extension DCAppAttestService: AppAttestServiceProviding {}
 
 /// Provides Apple App Attest attestation for wallet instance authentication.
@@ -32,7 +31,6 @@ extension DCAppAttestService: AppAttestServiceProviding {}
 /// let keyId = try await provider.generateKey()
 /// let attestation = try await provider.attest(keyId: keyId, challenge: challengeData)
 /// ```
-@available(iOS 14.0, macOS 12.0, *)
 public final class AppAttestProvider: NativeAttestationProvider, @unchecked Sendable {
 
     /// Errors specific to App Attest operations.

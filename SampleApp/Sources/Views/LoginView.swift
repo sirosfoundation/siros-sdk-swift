@@ -235,10 +235,7 @@ struct PreLoginSettingsView: View {
                         .textInputAutocapitalization(.never)
                         .frame(minHeight: 80)
                         .onAppear { zkCircuitUrlsText = viewModel.zkCircuitUrls.joined(separator: "\n") }
-                        // Single-param onChange(of:perform:) - the two-param
-                        // (oldValue, newValue) overload needs iOS 17+, but
-                        // this app's deployment target is iOS 16.
-                        .onChange(of: zkCircuitUrlsText) { newValue in
+                        .onChange(of: zkCircuitUrlsText) { _, newValue in
                             viewModel.zkCircuitUrls = newValue
                                 .split(separator: "\n", omittingEmptySubsequences: false)
                                 .map { $0.trimmingCharacters(in: .whitespaces) }

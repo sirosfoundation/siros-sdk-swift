@@ -2,7 +2,7 @@ name: SirosSampleApp
 options:
   bundleIdPrefix: org.siros.sdk
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "18.0"
   xcodeVersion: "16.0"
 
 packages:

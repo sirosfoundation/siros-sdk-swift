@@ -8,7 +8,8 @@ import SirosCredentials
 import CryptoKit
 #endif
 
-/// AuthProvider implementation using ASAuthorization (iOS 16+ / macOS 13+).
+/// AuthProvider implementation using ASAuthorization (iOS 18+ / macOS 15+,
+/// the package's platform floor - set by the PRF extension this relies on).
 ///
 /// This provider bridges the SIROS SDK's `AuthProvider` protocol to Apple's
 /// `ASAuthorizationPlatformPublicKeyCredentialProvider` (the built-in
@@ -27,7 +28,6 @@ import CryptoKit
 /// let authProvider = ASAuthorizationAuthProvider(presentationAnchor: window)
 /// let wallet = SirosWallet(config: config, authProvider: authProvider)
 /// ```
-@available(iOS 16.0, macOS 13.0, *)
 public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAutoEnrollHint, @unchecked Sendable {
     private let anchor: ASPresentationAnchor
     private let lock = NSLock()
@@ -146,7 +146,7 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
         // ceremony, when a salt was supplied. Registration can only check
         // for PRF support (see below) — the actual salt-derived secret is
         // only obtainable via a PRF-enabled assertion, per Apple's API.
-        if #available(iOS 18.0, macOS 15.0, *), let salt = options.prfSalt {
+        if let salt = options.prfSalt {
             let inputValues = ASAuthorizationPublicKeyCredentialPRFAssertionInput.InputValues(
                 saltInput1: salt, saltInput2: nil
             )
@@ -169,10 +169,7 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
         switch authorization.credential {
         case let credential as ASAuthorizationPlatformPublicKeyCredentialAssertion:
             setLastWasSecurityKeyAssertion(false)
-            var prfOutput: PrfOutput?
-            if #available(iOS 18.0, macOS 15.0, *) {
-                prfOutput = Self.prfOutput(from: credential.prf)
-            }
+            let prfOutput = Self.prfOutput(from: credential.prf)
             return AuthenticateResult(
                 credentialId: credential.credentialID,
                 authenticatorData: credential.rawAuthenticatorData,
@@ -232,11 +229,11 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
     ///
     /// Falls back to a local HKDF-of-credentialId derivation — which is
     /// **not** secret and **not** gated by device authentication — only when
-    /// the real PRF path is unavailable (pre-iOS-18/macOS-15, no prior
-    /// register/authenticate call to learn the rpId from, or the
-    /// authenticator completed the ceremony without returning a PRF value).
+    /// the real PRF path is unavailable (no prior register/authenticate call
+    /// to learn the rpId from, or the authenticator completed the ceremony
+    /// without returning a PRF value).
     public func getPrfOutput(credentialId: Data, salt: Data) async throws -> PrfOutput {
-        if #available(iOS 18.0, macOS 15.0, *), let rpId = currentRpId() {
+        if let rpId = currentRpId() {
             if let real = try? await requestRealPrfOutput(rpId: rpId, credentialId: credentialId, salt: salt) {
                 return real
             }
@@ -246,7 +243,6 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
 
     // MARK: - PRF helpers
 
-    @available(iOS 18.0, macOS 15.0, *)
     private static func prfOutput(from output: ASAuthorizationPublicKeyCredentialPRFAssertionOutput?) -> PrfOutput? {
         guard let output else { return nil }
         let first = output.first.withUnsafeBytes { Data($0) }
@@ -254,7 +250,6 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
         return PrfOutput(first: first, second: second)
     }
 
-    @available(iOS 18.0, macOS 15.0, *)
     private func requestRealPrfOutput(rpId: String, credentialId: Data, salt: Data) async throws -> PrfOutput? {
         // The challenge here is never verified by a server — this ceremony
         // exists purely to extract the PRF output for a specific
@@ -302,7 +297,7 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
     }
 
     /// Weaker, non-real fallback used only when the real WebAuthn PRF
-    /// extension is unavailable (pre-iOS-18/macOS-15, or the authenticator
+    /// extension is unavailable (the authenticator
     /// doesn't support `hmac-secret`/PRF). This derives a value from the
     /// credential ID via HKDF, which is **not secret** (a credential ID
     /// isn't a private value) and **not gated by device authentication at
@@ -351,7 +346,6 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
     }
 }
 
-@available(iOS 16.0, macOS 13.0, *)
 extension ASAuthorizationAuthProvider: ASAuthorizationControllerDelegate {
     public func authorizationController(
         controller: ASAuthorizationController,
@@ -376,7 +370,6 @@ extension ASAuthorizationAuthProvider: ASAuthorizationControllerDelegate {
     }
 }
 
-@available(iOS 16.0, macOS 13.0, *)
 extension ASAuthorizationAuthProvider: ASAuthorizationControllerPresentationContextProviding {
     public func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
         anchor
