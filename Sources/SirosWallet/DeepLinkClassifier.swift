@@ -16,6 +16,14 @@ public enum DeepLinkType: Sendable, Equatable {
 
 /// Classifies incoming deep-link URIs.
 public enum DeepLinkClassifier {
+    /// Every custom URL scheme the SDK's flows can be started from. A host
+    /// app registers these under `CFBundleURLTypes` (plus its own
+    /// authorization-callback scheme) and routes `onOpenURL` to
+    /// `classify(_:)`. Same set the Kotlin SDK's sample manifest declares.
+    public static let credentialOfferSchemes: [String] = ["openid-credential-offer", "haip-vci"]
+    public static let presentationRequestSchemes: [String] = ["openid4vp", "mdoc-openid4vp", "haip", "haip-vp"]
+    public static var handledSchemes: [String] { credentialOfferSchemes + presentationRequestSchemes }
+
     /// Classify a deep-link URL string.
     public static func classify(_ urlString: String) -> DeepLinkType {
         guard let components = URLComponents(string: urlString) else {
@@ -27,8 +35,10 @@ public enum DeepLinkClassifier {
             queryItems.first(where: { $0.name == name })?.value
         }
 
+        let scheme = components.scheme?.lowercased()
+
         // Credential offer deep links
-        if urlString.hasPrefix("openid-credential-offer://") {
+        if let scheme, credentialOfferSchemes.contains(scheme) {
             return .credentialOffer(uri: urlString)
         }
         if queryValue("credential_offer_uri") != nil || queryValue("credential_offer") != nil {
@@ -36,7 +46,7 @@ public enum DeepLinkClassifier {
         }
 
         // Presentation request deep links
-        if urlString.hasPrefix("openid4vp://") || urlString.hasPrefix("haip://") {
+        if let scheme, presentationRequestSchemes.contains(scheme) {
             return .presentationRequest(uri: urlString)
         }
 
