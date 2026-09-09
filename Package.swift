@@ -211,6 +211,11 @@ let package = Package(
                 "SirosKeystore",
                 "SirosFlow",
                 "SirosCredentials",
+                // Same arrangement as SirosCredentials: CryptoKit on Apple
+                // platforms, swift-crypto's API-identical `Crypto` on Linux,
+                // so the certificate hashes the trust evaluation sends are
+                // real SHA-256 digests on every platform the tests run on.
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             ],
             path: "Sources/SirosWallet"
         ),

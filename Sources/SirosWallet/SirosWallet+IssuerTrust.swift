@@ -13,8 +13,10 @@ extension SirosWallet {
     /// to `evaluateReaderTrust`, called defensively when a newly-issued
     /// `mso_mdoc` credential is about to be stored, before it's trusted.
     /// Mirrors `evaluateReaderTrust`'s exact remote-then-local-fallback
-    /// shape with a `"mdoc-issuer-auth"` action name against go-trust's
-    /// `vical` registry. Only ever called with an x5chain whose `issuerAuth`
+    /// shape with a `"mdoc-issuer-auth"` action name; go-trust answers it
+    /// from whichever issuer registry the deployment has - `mdociaca` (keyed
+    /// on the issuer URL the DS certificate names, see
+    /// `evaluateIssuerTrustRemote`) or `vical`. Only ever called with an x5chain whose `issuerAuth`
     /// COSE_Sign1 signature has ALREADY verified locally (see
     /// `MdocCose.verify1`) - this method is purely the trust decision.
     /// Ported from the Kotlin SDK's `SirosWallet.evaluateIssuerTrust`.
@@ -47,11 +49,21 @@ extension SirosWallet {
         }
     }
 
+    /// The subject is the issuer's URL as its DS certificate names it (see
+    /// `MdocIssuerIdentity`), not the certificate's hash: go-trust's
+    /// `mdociaca` registry - the one that validates an mdoc chain against
+    /// the issuer's published IACAs - keys its allowlist and its IACA fetch
+    /// on that URL, and it is the identity the verifier side derives for the
+    /// same certificate, so both ends ask about the same subject. A `vical`
+    /// registry ignores the subject and validates the chain, so it is
+    /// unaffected. Falls back to the hash only for a certificate that names
+    /// no URL at all, which no registry can resolve either way.
     private func evaluateIssuerTrustRemote(_ x5chain: [[UInt8]], docType: String?) async throws -> TrustResult {
         try await evaluateMdocTrustRemote(
             x5chain: x5chain,
             actionName: "mdoc-issuer-auth",
             defaultFramework: "vical",
+            subjectId: MdocIssuerIdentity.fromDer(x5chain[0]),
             extraContext: docType.map { ["doc_type": $0] }
         )
     }

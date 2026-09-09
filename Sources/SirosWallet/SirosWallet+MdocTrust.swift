@@ -9,6 +9,10 @@ import SirosCredentials
 import SirosKeystore
 #if canImport(CryptoKit)
 import CryptoKit
+#else
+// swift-crypto's `Crypto` module mirrors CryptoKit's API 1:1, including
+// SHA256 - see Package.swift's SirosWallet dependencies.
+import Crypto
 #endif
 #if canImport(Security)
 import Security
@@ -28,21 +32,29 @@ import Security
 /// `evaluateMdocTrustRemote`/`evaluateMdocTrustLocally` for the reference
 /// this file ports.
 extension SirosWallet {
+    /// - Parameter subjectId: what the registry is asked about. Defaults to
+    ///   the leaf certificate's SHA-256, which identifies the certificate
+    ///   itself (RICAL/VICAL validate the chain and ignore it); a caller
+    ///   whose registry resolves an entity by name passes that name instead.
+    ///   `resource.id` always stays the certificate hash: it identifies the
+    ///   key material carried in `resource.key`, not the entity.
     func evaluateMdocTrustRemote(
         x5chain: [[UInt8]],
         actionName: String,
         defaultFramework: String,
+        subjectId: String? = nil,
         extraContext: [String: Any]? = nil
     ) async throws -> TrustResult {
         lock.lock(); let client = apiClient; lock.unlock()
         guard let client else { throw SirosError.wallet(message: "Not connected") }
 
-        let subjectId = sha256Hex(x5chain[0])
+        let certificateId = sha256Hex(x5chain[0])
+        let resolvedSubjectId = subjectId ?? certificateId
         let x5c = x5chain.map { Data($0).base64EncodedString() }
 
         var evaluationRequest: [String: Any] = [
-            "subject": ["type": "key", "id": subjectId],
-            "resource": ["type": "x5c", "id": subjectId, "key": x5c],
+            "subject": ["type": "key", "id": resolvedSubjectId],
+            "resource": ["type": "x5c", "id": certificateId, "key": x5c],
             "action": ["name": actionName],
         ]
         if let extraContext {
@@ -58,7 +70,7 @@ extension SirosWallet {
             framework: (respContext?["framework"] as? String) ?? defaultFramework,
             reason: (respContext?["reason"] as? String) ?? (respContext?["message"] as? String),
             entityName: respContext?["entity_name"] as? String,
-            identifier: subjectId
+            identifier: resolvedSubjectId
         )
     }
 
@@ -174,11 +186,6 @@ extension SirosWallet {
     #endif
 
     func sha256Hex(_ bytes: [UInt8]) -> String {
-        #if canImport(CryptoKit)
-        let digest = SHA256.hash(data: Data(bytes))
-        return digest.map { String(format: "%02x", $0) }.joined()
-        #else
-        return bytes.map { String(format: "%02x", $0) }.joined()
-        #endif
+        SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }
 }
