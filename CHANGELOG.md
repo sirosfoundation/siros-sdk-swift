@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `HostAppRequirements`: what a host app must declare for each SDK feature
+  (Info.plist usage descriptions, `CFBundleURLTypes` schemes, entitlements)
+  and an `audit(bundle:)` that reports what the bundle is missing. iOS has
+  no manifest merging, so this is the SDK's side of the integration
+  contract; the sample app runs it at startup in debug builds.
+- `URLSessionR2psTransport` moved into `SirosKeystore` as the default
+  `R2psTransportProvider`, so a host app no longer copies it from the
+  sample app.
+- `DeepLinkClassifier.handledSchemes` (with `credentialOfferSchemes` /
+  `presentationRequestSchemes`); `mdoc-openid4vp`, `haip-vp` and `haip-vci`
+  are now classified by scheme, as the Kotlin SDK does.
 - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319):
   `SirosWallet.listWalletInstances()`, `setWalletInstanceStatus(instanceId:status:reason:)`
   and `deactivateWallet(reason:)` (revokes every instance server-side, then

@@ -740,29 +740,11 @@ extension SirosWallet {
             // resolves the offer and the issuer's authorization server itself
             // and tells us the exact PoP audience/client_id, so there is no
             // second client-side fetch of the offer or metadata for it here.
-            if offerUri.hasPrefix("openid-credential-offer://") {
-                // Deep-link URI with inline offer - send as "offer" so the engine
-                // extracts the credential_offer query parameter instead of HTTP-fetching.
-                engine.startIssuance(offer: offerUri)
-            } else if offerUri.hasPrefix("http") {
-                // Universal-link-style offer: the credential_offer/credential_offer_uri
-                // live in the URI's own query string (e.g. an issuer's wallet-redirect
-                // page), so the URI itself is not fetchable as the offer JSON - unlike
-                // the engine's openid-credential-offer:// handling, it only strips
-                // that query param for that exact scheme, so it must be extracted here.
-                let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
-                func queryValue(_ name: String) -> String? {
-                    queryItems.first(where: { $0.name == name })?.value
-                }
-                if let credentialOffer = queryValue("credential_offer") {
-                    engine.startIssuance(offer: credentialOffer)
-                } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                    engine.startIssuance(credentialOfferUri: credentialOfferUri)
-                } else {
-                    engine.startIssuance(credentialOfferUri: offerUri)
-                }
-            } else {
-                engine.startIssuance(offer: offerUri)
+            switch IssuanceStart.resolve(offerUri: offerUri) {
+            case .offer(let offer):
+                engine.startIssuance(offer: offer)
+            case .credentialOfferUri(let uri):
+                engine.startIssuance(credentialOfferUri: uri)
             }
         } catch {
             // A synchronous start failure here means the flow was never
@@ -816,22 +798,17 @@ extension SirosWallet {
     /// Extract the raw `credential_offer` JSON object from any of the shapes
     /// `startIssuance` accepts.
     private func extractOfferHeader(_ offerUri: String) async -> RawCredentialOfferHeader? {
-        if offerUri.hasPrefix("openid-credential-offer://") || offerUri.hasPrefix("http") {
-            let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
-            func queryValue(_ name: String) -> String? {
-                queryItems.first(where: { $0.name == name })?.value
-            }
-            if let credentialOffer = queryValue("credential_offer"),
-               let data = credentialOffer.data(using: .utf8) {
-                return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
-            } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                return await fetchOfferHeader(credentialOfferUri)
-            }
-            return nil
-        } else {
-            // Not a URI at all - offerUri is itself the raw offer JSON.
-            guard let data = offerUri.data(using: .utf8) else { return nil }
+        // Same shape resolution as the engine dispatch in `startIssuance`, so
+        // whatever starts issuance also yields its display metadata.
+        switch IssuanceStart.resolve(offerUri: offerUri) {
+        case .offer(let offer):
+            // Inline offer JSON (unpacked from a query parameter, or the raw
+            // object itself). A URI the engine is left to interpret is not
+            // JSON and decodes to nothing.
+            guard let data = offer.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
+        case .credentialOfferUri(let uri):
+            return await fetchOfferHeader(uri)
         }
     }
 
@@ -853,5 +830,42 @@ extension SirosWallet {
         }
         try await ensureEngineConnected(engine)
         engine.startPresentation(requestUri: requestUri)
+    }
+}
+
+/// How a credential-offer URI handed to `SirosWallet.startIssuance(offerUri:)`
+/// reaches the engine. Pure, so the mapping is testable without a connection.
+///
+/// The engine's own `startIssuance(offer:)` strips the `credential_offer`
+/// query parameter for exactly one scheme, lowercase `openid-credential-offer`.
+/// Every other carrier of an offer - `haip-vci://`, an issuer's `https://`
+/// wallet-redirect page, an upper-cased scheme from a QR code - has to be
+/// unpacked here, or the whole URI is sent as if it were the offer JSON and
+/// issuance fails on the engine side. So the query parameters decide first,
+/// regardless of scheme; what remains is either a fetchable `https://` offer
+/// URI or something the engine is trusted to interpret itself.
+public enum IssuanceStart: Equatable {
+    /// `engine.startIssuance(offer:)` - inline offer JSON, or a URI the engine unpacks.
+    case offer(String)
+    /// `engine.startIssuance(credentialOfferUri:)` - the engine fetches it.
+    case credentialOfferUri(String)
+
+    public static func resolve(offerUri: String) -> IssuanceStart {
+        let components = URLComponents(string: offerUri)
+        let queryItems = components?.queryItems ?? []
+        func queryValue(_ name: String) -> String? {
+            queryItems.first(where: { $0.name == name })?.value
+        }
+        if let credentialOffer = queryValue("credential_offer") {
+            return .offer(credentialOffer)
+        }
+        if let credentialOfferUri = queryValue("credential_offer_uri") {
+            return .credentialOfferUri(credentialOfferUri)
+        }
+        let scheme = components?.scheme?.lowercased()
+        if scheme == "https" || scheme == "http" {
+            return .credentialOfferUri(offerUri)
+        }
+        return .offer(offerUri)
     }
 }

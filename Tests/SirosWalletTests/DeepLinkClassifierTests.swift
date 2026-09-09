@@ -41,6 +41,32 @@ final class DeepLinkClassifierTests: XCTestCase {
         }
     }
 
+    /// The schemes the Kotlin SDK's sample manifest also declares. Without
+    /// an explicit rule these fell through to the query heuristics, so a
+    /// bare `mdoc-openid4vp://` or `haip-vp://` link with no recognisable
+    /// query was `.unknown`, and `haip-vci://` depended on the offer being
+    /// passed by value or URI rather than on the scheme saying what it is.
+    func testEveryHandledSchemeClassifiesBySchemeAlone() {
+        for scheme in DeepLinkClassifier.presentationRequestSchemes {
+            guard case .presentationRequest = DeepLinkClassifier.classify("\(scheme)://") else {
+                return XCTFail("\(scheme):// must classify as a presentation request")
+            }
+        }
+        for scheme in DeepLinkClassifier.credentialOfferSchemes {
+            guard case .credentialOffer = DeepLinkClassifier.classify("\(scheme)://") else {
+                return XCTFail("\(scheme):// must classify as a credential offer")
+            }
+        }
+        XCTAssertEqual(
+            Set(DeepLinkClassifier.handledSchemes),
+            ["openid-credential-offer", "haip-vci", "openid4vp", "mdoc-openid4vp", "haip", "haip-vp"]
+        )
+        // Scheme matching is case-insensitive, as URL schemes are.
+        guard case .presentationRequest = DeepLinkClassifier.classify("OPENID4VP://?request_uri=x") else {
+            return XCTFail("scheme comparison must be case-insensitive")
+        }
+    }
+
     func testPresentationRequestViaRequestUri() {
         let result = DeepLinkClassifier.classify("https://wallet.example.com/present?request_uri=https://verifier.example.com/req")
         if case .presentationRequest = result {

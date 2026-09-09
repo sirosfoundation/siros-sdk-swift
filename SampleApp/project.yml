@@ -61,10 +61,16 @@ targets:
         UILaunchScreen: {}
         CFBundleURLTypes:
           - CFBundleURLSchemes:
+              # The app's own authorization callback, then every scheme
+              # DeepLinkClassifier.handledSchemes lists - keep in step with it
+              # (and with the Kotlin sample's manifest).
               - siros-sample
               - openid-credential-offer
+              - haip-vci
               - openid4vp
+              - mdoc-openid4vp
               - haip
+              - haip-vp
         NSCameraUsageDescription: "Camera is used to scan QR codes and for identity verification via 3D liveness detection."
         NSBluetoothAlwaysUsageDescription: "Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader."
         NSFaceIDUsageDescription: "Face ID is used to authenticate and protect your credentials."
