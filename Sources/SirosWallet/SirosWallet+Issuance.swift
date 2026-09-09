@@ -798,22 +798,17 @@ extension SirosWallet {
     /// Extract the raw `credential_offer` JSON object from any of the shapes
     /// `startIssuance` accepts.
     private func extractOfferHeader(_ offerUri: String) async -> RawCredentialOfferHeader? {
-        if offerUri.hasPrefix("openid-credential-offer://") || offerUri.hasPrefix("http") {
-            let queryItems = URLComponents(string: offerUri)?.queryItems ?? []
-            func queryValue(_ name: String) -> String? {
-                queryItems.first(where: { $0.name == name })?.value
-            }
-            if let credentialOffer = queryValue("credential_offer"),
-               let data = credentialOffer.data(using: .utf8) {
-                return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
-            } else if let credentialOfferUri = queryValue("credential_offer_uri") {
-                return await fetchOfferHeader(credentialOfferUri)
-            }
-            return nil
-        } else {
-            // Not a URI at all - offerUri is itself the raw offer JSON.
-            guard let data = offerUri.data(using: .utf8) else { return nil }
+        // Same shape resolution as the engine dispatch in `startIssuance`, so
+        // whatever starts issuance also yields its display metadata.
+        switch IssuanceStart.resolve(offerUri: offerUri) {
+        case .offer(let offer):
+            // Inline offer JSON (unpacked from a query parameter, or the raw
+            // object itself). A URI the engine is left to interpret is not
+            // JSON and decodes to nothing.
+            guard let data = offer.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode(RawCredentialOfferHeader.self, from: data)
+        case .credentialOfferUri(let uri):
+            return await fetchOfferHeader(uri)
         }
     }
 
