@@ -52,9 +52,7 @@ struct ContentView: View {
         // Non-blocking dismissable banner, replacing the blocking `.alert()`
         // this used to show for errorMessage/infoMessage - see
         // `MessageBanner.swift`'s doc comment (mirrors siros-sdk-kotlin
-        // PR #106's identical fix). Single-param onChange(of:perform:) -
-        // the two-param (oldValue, newValue) overload needs iOS 17+, but
-        // this app's deployment target is iOS 16.
+        // PR #106's identical fix).
         //
         // `.onAppear` covers the case where `viewModel` already has an
         // error/info message set the first time `ContentView` renders (e.g.
@@ -63,10 +61,10 @@ struct ContentView: View {
         // `.alert(isPresented:)`'s "presents immediately" behavior would be
         // lost for that one case.
         .onAppear { syncBanner() }
-        .onChange(of: viewModel.showError) { _ in syncBanner() }
-        .onChange(of: viewModel.showInfo) { _ in syncBanner() }
-        .onChange(of: viewModel.errorMessage) { _ in syncBanner() }
-        .onChange(of: viewModel.infoMessage) { _ in syncBanner() }
+        .onChange(of: viewModel.showError) { syncBanner() }
+        .onChange(of: viewModel.showInfo) { syncBanner() }
+        .onChange(of: viewModel.errorMessage) { syncBanner() }
+        .onChange(of: viewModel.infoMessage) { syncBanner() }
         .onPreferenceChange(BottomBarHeightKey.self) { bottomBarHeight = $0 }
         .messageBanner(banner, bottomInset: bottomBarHeight) {
             dismissBanner()
@@ -201,10 +199,7 @@ struct FlowActiveView: View {
                 ProgressView(value: maxProgress)
                     .tint(SirosTheme.brand)
                     .onAppear { maxProgress = max(maxProgress, stepProgress) }
-                    // Single-param onChange(of:perform:) - the two-param
-                    // (oldValue, newValue) overload needs iOS 17+, but this
-                    // app's deployment target is iOS 16.
-                    .onChange(of: stepProgress) { newValue in
+                    .onChange(of: stepProgress) { _, newValue in
                         maxProgress = max(maxProgress, newValue)
                     }
             } else {

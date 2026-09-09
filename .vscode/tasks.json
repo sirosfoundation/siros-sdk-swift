@@ -18,13 +18,13 @@
     {
       "label": "Swift Build (iOS Simulator)",
       "type": "shell",
-      "command": "swift build --sdk $(xcrun --sdk iphonesimulator --show-sdk-path) --triple arm64-apple-ios16.0-simulator",
+      "command": "swift build --sdk $(xcrun --sdk iphonesimulator --show-sdk-path) --triple arm64-apple-ios18.0-simulator",
       "problemMatcher": ["$swiftc"]
     },
     {
       "label": "Swift Build (iOS Device)",
       "type": "shell",
-      "command": "swift build --sdk $(xcrun --sdk iphoneos --show-sdk-path) --triple arm64-apple-ios16.0",
+      "command": "swift build --sdk $(xcrun --sdk iphoneos --show-sdk-path) --triple arm64-apple-ios18.0",
       "problemMatcher": ["$swiftc"]
     }
   ]

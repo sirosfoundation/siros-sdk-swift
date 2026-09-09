@@ -1290,7 +1290,7 @@ final class WalletViewModel: ObservableObject {
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider
         // (Face ID/Touch ID/roaming security keys) and is used on every
-        // platform it supports (iOS 16+ and macOS 13+, matching Package.swift's
+        // platform it supports (iOS 18+ and macOS 15+, matching Package.swift's
         // declared platforms). LocalAuthProvider is an explicit, clearly
         // labeled dev/test-only fallback for anything else — never a silent
         // per-platform default for a "supported" platform.

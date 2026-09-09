@@ -101,6 +101,6 @@ All errors conform to `Error`, `Sendable`, and `LocalizedError`:
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| iOS 16+  | Full   | CryptoKit, ASAuthorization, Keychain |
-| macOS 13+| Full   | CryptoKit, ASAuthorization, Keychain |
+| iOS 18+  | Full   | CryptoKit, ASAuthorization with the WebAuthn PRF extension, Keychain |
+| macOS 15+| Build and test only | The native XCFrameworks ship iOS slices; nothing FFI-backed runs here |
 | Linux    | Partial| No CryptoKit — provide custom KeystoreManager |
