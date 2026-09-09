@@ -195,15 +195,15 @@ import SirosCredentials
 /// (via `maybeWriteStateStart`) before writing STATE_START, since only the
 /// END STATE (not the exact callback order) matters for correctness.
 ///
-/// UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
-/// GATT-server test tool available yet (the same gap the Kotlin SDK's
-/// equivalent class doc comment notes: siros-verifier-cli's `siros-verify
-/// read` command, https://github.com/sirosfoundation/siros-verifier-cli,
-/// uses `bleak`, which is central/client-only on every platform, the same
-/// role this class plays - it cannot stand in as a peripheral to test
-/// against).
-/// Needs testing against either a real ISO 18013-5 reader or a purpose-built
-/// BLE-peripheral test script before relying on it.
+/// Verified against real ISO 18013-5 readers in this role at the Geneva 2026
+/// interop event (30-31 August 2026; e.g. com.ingenutec.sigil_id, see
+/// `stateEndDelayMs` below), with transport fixes landing through
+/// 7 September 2026. What is still true: there is no local GATT-server test
+/// tool for regression runs - siros-verifier-cli's `siros-verify read`
+/// (https://github.com/sirosfoundation/siros-verifier-cli) uses `bleak`,
+/// which is central/client-only on every platform, the same role this class
+/// plays - so exercising this path again needs a real reader or a
+/// purpose-built BLE-peripheral script.
 public final class BleCentralClient: NSObject {
 
     // Table 6 - mdoc reader service characteristics (present when the reader is the GATT server).
