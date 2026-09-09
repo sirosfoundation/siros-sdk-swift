@@ -101,7 +101,7 @@ None of this can be done from CI; it needs a Developer Program account.
 **1. App ID.** In the Apple Developer portal, register `org.siros.sdk.sample` and
 enable the capabilities the app's entitlements request:
 
-- **Near Field Communication Tag Reading** (`com.apple.developer.nfc.readerSession.formats`)
+- **Near Field Communication Tag Reading** (`com.apple.developer.nfc.readersession.formats`)
 - **App Attest** (`com.apple.developer.devicecheck.appattest-environment`)
 
 If these aren't enabled on the App ID, provisioning-profile creation fails during
