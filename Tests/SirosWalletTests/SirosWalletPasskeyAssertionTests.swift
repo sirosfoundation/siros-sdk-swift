@@ -169,7 +169,7 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         let otherCredentialId = Data("other-cred".utf8)
         let account = CachedAccount(
             userId: "user-\(UUID().uuidString)",
-            tenantId: "test-tenant",
+            tenantId: "default",
             displayName: "Alice",
             backendUrl: "https://example.invalid",
             passkeys: [
@@ -217,11 +217,11 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
 
         wallet.accountRegistry.upsertAccount(CachedAccount(
-            userId: "other-user", tenantId: "test-tenant", displayName: "Bob", backendUrl: "https://example.invalid",
+            userId: "other-user", tenantId: "default", displayName: "Bob", backendUrl: "https://example.invalid",
             passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(provider.credentialId), prfSalt: "")]
         ))
         wallet.accountRegistry.upsertAccount(CachedAccount(
-            userId: "active-user", tenantId: "test-tenant", displayName: "Alice", backendUrl: "https://example.invalid",
+            userId: "active-user", tenantId: "default", displayName: "Alice", backendUrl: "https://example.invalid",
             passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("alice-cred".utf8)), prfSalt: SirosWallet.b64Encode(activeSalt))]
         ))
 
@@ -240,7 +240,7 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         let wallet = makeWallet(authProvider: provider, sessionStore: InMemorySessionStore())
         func account(_ user: String, _ cred: Data, _ salt: UInt8) -> CachedAccount {
             CachedAccount(
-                userId: user, tenantId: "test-tenant", displayName: user, backendUrl: "https://example.invalid",
+                userId: user, tenantId: "default", displayName: user, backendUrl: "https://example.invalid",
                 passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(cred), prfSalt: SirosWallet.b64Encode(Data(repeating: salt, count: 32)))]
             )
         }
@@ -257,8 +257,19 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         XCTAssertEqual(provider.lastAuthenticateOptions?.allowCredentials?.map(\.id), [provider.credentialId],
                        "discovery is restricted to the resumed account's passkeys")
 
+        // Accounts from another tenant or backend are never offered to this
+        // wallet's auth server, even though the registry keeps them.
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "carol", tenantId: "other-tenant", displayName: "Carol", backendUrl: "https://example.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("carol-cred".utf8)), prfSalt: SirosWallet.b64Encode(Data(repeating: 0x0c, count: 32)))]
+        ))
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "dave", tenantId: "default", displayName: "Dave", backendUrl: "https://other.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("dave-cred".utf8)), prfSalt: SirosWallet.b64Encode(Data(repeating: 0x0d, count: 32)))]
+        ))
         _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
-        XCTAssertEqual(provider.lastAuthenticateOptions?.prfSaltsByCredential?.count, 2, "login offers every account")
+        XCTAssertEqual(provider.lastAuthenticateOptions?.prfSaltsByCredential?.count, 2,
+                       "login offers every account of this tenant and backend, and only those")
         XCTAssertNil(provider.lastAuthenticateOptions?.allowCredentials, "login lets the user pick any account")
 
         // The platform ignored the allowlist and answered with Bob's passkey

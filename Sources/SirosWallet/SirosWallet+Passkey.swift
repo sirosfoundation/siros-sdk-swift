@@ -122,12 +122,15 @@ extension SirosWallet {
     }
 
     /// `(credentialId, prfSalt)` for every passkey the ceremony should offer:
-    /// just `accountId`'s when given, otherwise every loginable account's,
-    /// since which one the user picks is only known once the ceremony
+    /// just `accountId`'s when given, otherwise every loginable account's on
+    /// THIS wallet's backend and tenant - the registry spans environments, and
+    /// the auth server the challenge came from can only authenticate its own
+    /// passkeys. Which one the user picks is only known once the ceremony
     /// completes. Mirrors the Kotlin SDK's `loginCandidates`.
     func loginPrfCandidates(accountId: String? = nil) -> [Data: Data] {
         let accounts = accountId.map { id in accountRegistry.findAccount(accountId: id).map { [$0] } ?? [] }
-            ?? accountRegistry.listLoginableAccounts()
+            ?? accountRegistry.listLoginableAccounts(tenantId: config.tenantId)
+                .filter { $0.backendUrl == config.backendUrl }
         var candidates: [Data: Data] = [:]
         for account in accounts {
             for passkey in account.passkeys where !passkey.prfSalt.isEmpty {
