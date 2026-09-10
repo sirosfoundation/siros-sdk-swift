@@ -4,9 +4,6 @@
 import AuthenticationServices
 import Foundation
 import SirosCredentials
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
 
 /// AuthProvider implementation using ASAuthorization (iOS 18+ / macOS 15+,
 /// the package's platform floor - set by the PRF extension this relies on).
@@ -227,18 +224,31 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
     /// `authenticate(options:)` call with the same salt should prefer that
     /// instead of calling this again, to avoid a redundant prompt.
     ///
-    /// Falls back to a local HKDF-of-credentialId derivation — which is
-    /// **not** secret and **not** gated by device authentication — only when
-    /// the real PRF path is unavailable (no prior register/authenticate call
-    /// to learn the rpId from, or the authenticator completed the ceremony
-    /// without returning a PRF value).
+    /// Fails closed. There is no software substitute for the PRF output:
+    /// the wallet's container key is derived from it, and the only value
+    /// available without an authenticator is the credential ID, which is
+    /// public (it is in every assertion and on the backend). Until
+    /// 2026-09-10 this fell back to `HKDF(credentialId, salt)` in that case -
+    /// a container sealed under a key anyone holding the credential ID could
+    /// derive, with no device authentication in the way. The Kotlin SDK's
+    /// production provider never had such a fallback; this is parity with
+    /// it. Containers sealed under the old fallback (a security key on
+    /// iOS/macOS below 26.4, where the security-key PRF API does not exist)
+    /// can no longer be opened; there is deliberately no migration, since
+    /// re-deriving that key would reproduce the weakness.
+    ///
+    /// - Throws: `SirosError.auth` when no register/authenticate ceremony has
+    ///   established an rpId, or the authenticator completed the ceremony
+    ///   without a PRF value. Cancellation and other ceremony errors
+    ///   propagate as they are.
     public func getPrfOutput(credentialId: Data, salt: Data) async throws -> PrfOutput {
-        if let rpId = currentRpId() {
-            if let real = try? await requestRealPrfOutput(rpId: rpId, credentialId: credentialId, salt: salt) {
-                return real
-            }
+        guard let rpId = currentRpId() else {
+            throw SirosError.auth(message: "PRF output requested before any passkey ceremony established the relying party")
         }
-        return try hkdfFallback(credentialId: credentialId, salt: salt)
+        guard let real = try await requestRealPrfOutput(rpId: rpId, credentialId: credentialId, salt: salt) else {
+            throw SirosError.auth(message: "PRF extension not supported by this authenticator")
+        }
+        return real
     }
 
     // MARK: - PRF helpers
@@ -294,25 +304,6 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
         default:
             return nil
         }
-    }
-
-    /// Weaker, non-real fallback used only when the real WebAuthn PRF
-    /// extension is unavailable (the authenticator
-    /// doesn't support `hmac-secret`/PRF). This derives a value from the
-    /// credential ID via HKDF, which is **not secret** (a credential ID
-    /// isn't a private value) and **not gated by device authentication at
-    /// all**. It exists only so older OS versions get *a* deterministic
-    /// value instead of an error — the real PRF path above should always be
-    /// preferred when available.
-    private func hkdfFallback(credentialId: Data, salt: Data) throws -> PrfOutput {
-        #if canImport(CryptoKit)
-        let key = SymmetricKey(data: credentialId)
-        let derived = HKDF<SHA256>.deriveKey(inputKeyMaterial: key, salt: salt, outputByteCount: 32)
-        let data = derived.withUnsafeBytes { Data($0) }
-        return PrfOutput(first: data)
-        #else
-        throw SirosError.auth(message: "PRF output requires CryptoKit")
-        #endif
     }
 
     private func setLastRpId(_ rpId: String) {

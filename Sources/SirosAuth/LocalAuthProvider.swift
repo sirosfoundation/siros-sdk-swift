@@ -302,6 +302,14 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
         return hash
     }
 
+    /// Software PRF for this dev/test provider: HMAC-SHA-256 keyed with the
+    /// credential ID over the salt. Documented divergence from the Kotlin
+    /// SDK's `LocalAuthProvider`, which keys the same HMAC with
+    /// `credentialId || "SIROS-LOCAL-PRF-v1"`. Neither provider's credentials
+    /// roam, so a container sealed by one is never presented to the other;
+    /// reconciling would only re-key existing dev wallets on one platform.
+    /// Not a substitute for a real authenticator's PRF - see
+    /// `ASAuthorizationAuthProvider.getPrfOutput`, which fails closed.
     private func computePrf(credentialId: Data, salt: Data) -> PrfOutput {
         // HMAC-SHA-256 with credentialId as key and salt as message
         let key = credentialId
