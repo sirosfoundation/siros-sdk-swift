@@ -25,6 +25,14 @@
 └───────────────────────────────────────────────────┘
 ```
 
+## Two APIs
+
+`SirosWallet` is a facade, not the only entry point. Hosts that already run
+the flows compose `SirosKeystore`, `SirosAuth` and `SirosCredentials` directly
+and never construct the facade - which is what pulls `SirosFlow` and the
+engine conversation in. See [docs/TWO-APIS.md](docs/TWO-APIS.md), including
+the parity gaps against the Android SDK.
+
 ## Module Responsibilities
 
 ### SirosTransport
