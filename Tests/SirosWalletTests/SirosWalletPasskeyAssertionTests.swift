@@ -22,12 +22,14 @@ private final class RecordingAuthProvider: AuthProvider, @unchecked Sendable {
     var separatePrf: PrfOutput?
 
     private(set) var authenticateCalls = 0
+    private(set) var lastAuthenticateOptions: AuthenticateOptions?
     private(set) var getPrfCalls: [(credentialId: Data, salt: Data)] = []
 
     func register(options: RegisterOptions) async throws -> RegisterResult { throw NotImplemented() }
 
     func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
         authenticateCalls += 1
+        lastAuthenticateOptions = options
         return AuthenticateResult(
             credentialId: credentialId,
             authenticatorData: Data("authData".utf8),
@@ -48,7 +50,7 @@ private final class RecordingAuthProvider: AuthProvider, @unchecked Sendable {
 /// A fake auth server: answers `login/begin` with a well-formed challenge and
 /// records every path it is POSTed to.
 private final class FakeAuthServer: @unchecked Sendable {
-    private(set) var postedPaths: [String] = []
+    var postedPaths: [String] = []
 
     func makeClient() -> AuthServerClient {
         AuthServerClient(baseUrl: "https://as.example.invalid", tenantId: "default") { [self] _, url, _, _ in
@@ -84,7 +86,10 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
 
     private func makeWallet(authProvider: AuthProvider, sessionStore: InMemorySessionStore) -> SirosWallet {
         let config = WalletConfig(backendUrl: "https://example.invalid")
-        let wallet = SirosWallet(config: config, authProvider: authProvider, sessionStore: sessionStore)
+        let wallet = SirosWallet(
+            config: config, authProvider: authProvider, sessionStore: sessionStore,
+            accountRegistry: .inMemory()
+        )
         XCTAssertNotNil(wallet, "wallet should initialise with default keystore on CryptoKit platforms")
         return wallet!
     }
@@ -146,6 +151,140 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         XCTAssertEqual(provider.getPrfCalls.count, 1)
         XCTAssertEqual(provider.getPrfCalls.first?.credentialId, provider.credentialId, "never an empty placeholder")
         XCTAssertEqual(provider.getPrfCalls.first?.salt, storedSalt, "the stored PRF salt, so the unwrap key is stable")
+        XCTAssertEqual(assertion.prfSalt, storedSalt)
+    }
+
+    /// Login after `logout()`: the account-scoped session store is empty, so
+    /// the salt has to come from the account registry - offered per credential
+    /// in the ceremony itself, and used for the separate probe when the
+    /// ceremony carried no PRF. A fresh random salt here would derive a key the
+    /// container was never sealed with (review finding on PR #139).
+    func testAfterLogoutSaltsComeFromAccountRegistryPerCredential() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = nil
+        provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
+        let server = FakeAuthServer()
+        let registeredSalt = Data(repeating: 0x11, count: 32)
+        let otherSalt = Data(repeating: 0x22, count: 32)
+        let otherCredentialId = Data("other-cred".utf8)
+        let account = CachedAccount(
+            userId: "user-\(UUID().uuidString)",
+            tenantId: "default",
+            displayName: "Alice",
+            backendUrl: "https://example.invalid",
+            passkeys: [
+                CachedPasskey(credentialId: SirosWallet.b64UrlEncode(provider.credentialId), prfSalt: SirosWallet.b64Encode(registeredSalt)),
+                CachedPasskey(credentialId: SirosWallet.b64UrlEncode(otherCredentialId), prfSalt: SirosWallet.b64Encode(otherSalt)),
+            ],
+            hkdfSalt: SirosWallet.b64Encode(Data(repeating: 0x33, count: 32)),
+            hkdfInfo: SirosWallet.b64Encode(Data("info".utf8))
+        )
+        // Reproduce logout(): the store was scoped to the account and held its
+        // salt; clear() wipes the account's values but keeps activeAccountId.
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = account.accountId
+        sessionStore.prfSalt = SirosWallet.b64Encode(registeredSalt)
+        sessionStore.clear()
+        XCTAssertNil(sessionStore.prfSalt, "precondition: post-logout store holds no salt")
+        XCTAssertEqual(sessionStore.activeAccountId, account.accountId, "precondition: clear() keeps the scope id")
+        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
+        wallet.accountRegistry.upsertAccount(account)
+
+        let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+
+        let offered = provider.lastAuthenticateOptions?.prfSaltsByCredential
+        XCTAssertEqual(offered?[provider.credentialId], registeredSalt, "every loginable credential is offered with its own salt")
+        XCTAssertEqual(offered?[otherCredentialId], otherSalt)
+        XCTAssertEqual(provider.getPrfCalls.first?.salt, registeredSalt, "the probe uses the salt of the credential actually used")
+        XCTAssertEqual(assertion.prfSalt, registeredSalt)
+        XCTAssertEqual(assertion.cachedAccount?.accountId, account.accountId, "login() can restore hkdfSalt/hkdfInfo from this account")
+    }
+
+    /// The session store's salt belongs to the active account. A credential
+    /// known to belong to a different cached account (here one whose registry
+    /// entry carries no salt, so it is absent from the candidates) must never be
+    /// probed with it - that would derive a real PRF under the wrong salt and
+    /// fail only later, at unwrap.
+    func testSessionSaltIsNotPairedWithAnotherAccountsCredential() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = nil
+        provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
+        let server = FakeAuthServer()
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = "default:active-user"
+        let activeSalt = Data(repeating: 0x5a, count: 32)
+        sessionStore.prfSalt = SirosWallet.b64Encode(activeSalt)
+        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
+
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "other-user", tenantId: "default", displayName: "Bob", backendUrl: "https://example.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(provider.credentialId), prfSalt: "")]
+        ))
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "active-user", tenantId: "default", displayName: "Alice", backendUrl: "https://example.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("alice-cred".utf8)), prfSalt: SirosWallet.b64Encode(activeSalt))]
+        ))
+
+        let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+
+        XCTAssertNotEqual(provider.getPrfCalls.first?.salt, activeSalt, "another account's credential never gets the active account's salt")
+        XCTAssertEqual(assertion.cachedAccount?.userId, "other-user")
+    }
+
+    /// `unlockKeystore()` unwraps the resumed account's container, so only that
+    /// account's passkeys may be offered - not every cached account's.
+    func testCandidatesScopedToAccountForUnlock() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = PrfOutput(first: Data("prf".utf8))
+        let server = FakeAuthServer()
+        let wallet = makeWallet(authProvider: provider, sessionStore: InMemorySessionStore())
+        func account(_ user: String, _ cred: Data, _ salt: UInt8) -> CachedAccount {
+            CachedAccount(
+                userId: user, tenantId: "default", displayName: user, backendUrl: "https://example.invalid",
+                passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(cred), prfSalt: SirosWallet.b64Encode(Data(repeating: salt, count: 32)))]
+            )
+        }
+        let alice = account("alice", provider.credentialId, 0x0a)
+        let bobCred = Data("bob-cred".utf8)
+        wallet.accountRegistry.upsertAccount(alice)
+        wallet.accountRegistry.upsertAccount(account("bob", bobCred, 0x0b))
+
+        _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient(), accountId: alice.accountId)
+        let scoped = provider.lastAuthenticateOptions?.prfSaltsByCredential
+        XCTAssertEqual(scoped?.count, 1)
+        XCTAssertNotNil(scoped?[provider.credentialId])
+        XCTAssertNil(scoped?[bobCred], "the other account's passkey is not offered on unlock")
+        XCTAssertEqual(provider.lastAuthenticateOptions?.allowCredentials?.map(\.id), [provider.credentialId],
+                       "discovery is restricted to the resumed account's passkeys")
+
+        // Accounts from another tenant or backend are never offered to this
+        // wallet's auth server, even though the registry keeps them.
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "carol", tenantId: "other-tenant", displayName: "Carol", backendUrl: "https://example.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("carol-cred".utf8)), prfSalt: SirosWallet.b64Encode(Data(repeating: 0x0c, count: 32)))]
+        ))
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "dave", tenantId: "default", displayName: "Dave", backendUrl: "https://other.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("dave-cred".utf8)), prfSalt: SirosWallet.b64Encode(Data(repeating: 0x0d, count: 32)))]
+        ))
+        _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+        XCTAssertEqual(provider.lastAuthenticateOptions?.prfSaltsByCredential?.count, 2,
+                       "login offers every account of this tenant and backend, and only those")
+        XCTAssertNil(provider.lastAuthenticateOptions?.allowCredentials, "login lets the user pick any account")
+
+        // The platform ignored the allowlist and answered with Bob's passkey
+        // (the provider always returns its own credentialId): reject before
+        // the caller can hand loginFinish a valid assertion.
+        wallet.accountRegistry.upsertAccount(account("bob", provider.credentialId, 0x0b))
+        wallet.accountRegistry.upsertAccount(account("alice", Data("alice-cred".utf8), 0x0a))
+        server.postedPaths.removeAll()
+        do {
+            _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient(), accountId: alice.accountId)
+            XCTFail("a credential owned by another account must not complete a scoped unlock")
+        } catch let e as SirosError {
+            XCTAssertTrue("\(e)".contains("different account"), "\(e)")
+        }
+        XCTAssertEqual(server.postedPaths, ["/auth/passkey/login/begin"])
     }
 }
 

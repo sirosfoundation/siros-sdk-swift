@@ -90,20 +90,45 @@ public struct AuthenticateOptions: Sendable {
     public var challenge: Data
     public var allowCredentials: [AllowCredential]?
     public var userVerification: String
+    /// One PRF salt for whichever credential the user picks. Ignored when
+    /// `prfSaltsByCredential` is non-empty.
     public var prfSalt: Data?
+    /// PRF salt per credential ID - WebAuthn's `prf.evalByCredential`. Each
+    /// account's passkey was sealed with its own salt, so login offers every
+    /// loginable credential with its own salt and the authenticator evaluates
+    /// PRF with the right one in a single ceremony; no fixed/shared salt, no
+    /// guessing the account in advance, no second prompt. Takes precedence
+    /// over `prfSalt` when non-empty.
+    public var prfSaltsByCredential: [Data: Data]?
 
     public init(
         rpId: String,
         challenge: Data,
         allowCredentials: [AllowCredential]? = nil,
         userVerification: String = "preferred",
-        prfSalt: Data? = nil
+        prfSalt: Data? = nil,
+        prfSaltsByCredential: [Data: Data]? = nil
     ) {
         self.rpId = rpId
         self.challenge = challenge
         self.allowCredentials = allowCredentials
         self.userVerification = userVerification
         self.prfSalt = prfSalt
+        self.prfSaltsByCredential = prfSaltsByCredential
+    }
+
+    /// The salt that applies to `credentialId`.
+    ///
+    /// With a non-empty `prfSaltsByCredential`, only that map counts: the
+    /// credential's own entry, or `nil` when it has none - never the shared
+    /// `prfSalt`, which was meant for a different credential and would derive
+    /// a key the container was not sealed with. The shared `prfSalt` applies
+    /// only when the map is nil or empty.
+    public func prfSalt(for credentialId: Data) -> Data? {
+        if let byCredential = prfSaltsByCredential, !byCredential.isEmpty {
+            return byCredential[credentialId]
+        }
+        return prfSalt
     }
 }
 

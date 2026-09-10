@@ -332,7 +332,9 @@ public final class SirosWallet: @unchecked Sendable {
     // cross-file-extension-access reason as `keystore` above.
     let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
-    private let accountRegistry: AccountRegistry
+    // Not `private`: `SirosWallet+Passkey.swift` reads it for the login PRF
+    // candidates - same cross-file-extension-access reason as `keystore`.
+    let accountRegistry: AccountRegistry
 
     /// Client for go-zk-circuits' `/v1` REST API, built from
     /// `config.zkCircuitUrls`. Feeds `zkProofSystemRegistry` below.
@@ -618,12 +620,15 @@ public final class SirosWallet: @unchecked Sendable {
     ///   - sessionStore: persistent session storage. Defaults to in-memory.
     ///   - keystore: encrypted keystore. Defaults to JweKeystore on Apple platforms.
     ///     On Linux, you **must** provide a custom `KeystoreManager`.
+    ///   - accountRegistry: the cross-logout account cache. Defaults to the
+    ///     Keychain-backed registry; pass `AccountRegistry.inMemory()` in tests.
     /// - Returns: `nil` if no keystore is available (Linux without custom keystore).
     public init?(
         config: WalletConfig,
         authProvider: AuthProvider,
         sessionStore: SessionStoreProtocol = InMemorySessionStore(),
-        keystore: KeystoreManager? = nil
+        keystore: KeystoreManager? = nil,
+        accountRegistry: AccountRegistry? = nil
     ) {
         self.config = config
         self.authProvider = authProvider
@@ -640,7 +645,7 @@ public final class SirosWallet: @unchecked Sendable {
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
 
-        self.accountRegistry = AccountRegistry()
+        self.accountRegistry = accountRegistry ?? AccountRegistry()
 
         self.wscdSelectionPolicy = WscdSelectionPolicy(
             sessionStore: sessionStore,
@@ -953,12 +958,31 @@ public final class SirosWallet: @unchecked Sendable {
                 credential: assertion.credential
             )
 
+            // Scope the session store to the account the server confirmed,
+            // BEFORE anything is read from or written to it: the store may
+            // still be scoped to a previous account (or to none, after
+            // logout), and `fetchPrivateData` writes the container it fetches
+            // into the active scope. The registry's active account is only
+            // moved once the unlock has succeeded.
+            let accountId = "\(config.tenantId):\(session.uuid)"
+            sessionStore.activeAccountId = accountId
+
             setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
 
-            let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) } ?? Self.randomBytes(32)
-            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
-            let prfSaltBytes = sessionStore.prfSalt.flatMap { Self.b64Decode($0) } ?? Self.randomBytes(32)
+            // HKDF parameters: this account's session store first (unlock
+            // after resume), then its registry entry (login after logout, when
+            // the account-scoped store has been cleared), then fresh values for
+            // a first login on this install. The registry entry counts only if
+            // it is the account the server just confirmed.
+            let cached = assertion.cachedAccount.flatMap { $0.accountId == accountId ? $0 : nil }
+            let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
+                ?? cached.flatMap { Self.b64Decode($0.hkdfSalt) }
+                ?? Self.randomBytes(32)
+            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) }
+                ?? cached.flatMap { Self.b64Decode($0.hkdfInfo) }
+                ?? Data(Self.hkdfInfo.utf8)
+            let prfSaltBytes = assertion.prfSalt
 
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
@@ -967,9 +991,6 @@ public final class SirosWallet: @unchecked Sendable {
                 hkdfInfo: hkdfInfo
             )
 
-            // Scope session store to this account
-            let accountId = "\(config.tenantId):\(session.uuid)"
-            sessionStore.activeAccountId = accountId
             accountRegistry.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
@@ -1071,8 +1092,12 @@ public final class SirosWallet: @unchecked Sendable {
               let asClient = authServerClient else { return }
         do {
             // Use AS login to get PRF output via biometric assertion, then
-            // complete it (refreshes the session cookie).
-            let assertion = try await performPasskeyAssertion(asClient: asClient)
+            // complete it (refreshes the session cookie). Candidates are scoped
+            // to the resumed account: its container is what gets unwrapped, so
+            // another account's passkey must not be offered here.
+            let assertion = try await performPasskeyAssertion(
+                asClient: asClient, accountId: sessionStore.activeAccountId
+            )
             let prfOutput = assertion.prfOutput
             _ = try await asClient.loginFinish(
                 challengeId: assertion.challengeId,

@@ -12,6 +12,11 @@ extension SirosWallet {
         let challengeId: String
         let credential: [String: Any]
         let prfOutput: PrfOutput
+        /// The salt `prfOutput` was evaluated for - what the session store must
+        /// record, since the container's PRF key is bound to it.
+        let prfSalt: Data
+        /// The cached account whose passkey answered the ceremony, if known.
+        let cachedAccount: CachedAccount?
     }
 
     /// Runs `loginBegin` -> platform `authenticate` -> PRF resolution.
@@ -20,8 +25,19 @@ extension SirosWallet {
     /// here, BEFORE the caller's `loginFinish`: `getPrfOutput` fails closed for
     /// an authenticator without PRF, and the server must not be handed a
     /// completed login for a session this side can never unlock.
-    func performPasskeyAssertion(asClient: AuthServerClient) async throws -> PasskeyAssertion {
+    ///
+    /// - Parameter accountId: restrict the offered passkeys to this cached
+    ///   account (unlock of a resumed session, whose container is fixed); nil
+    ///   offers every loginable account's passkeys (login).
+    func performPasskeyAssertion(asClient: AuthServerClient, accountId: String? = nil) async throws -> PasskeyAssertion {
+        // After logout() the account-scoped session store is empty, so the
+        // durable source of salts is the account registry: offer every
+        // loginable credential with its own salt (WebAuthn evalByCredential)
+        // and let the authenticator evaluate PRF for whichever one the user
+        // picks. The session store's salt still covers the unlock-after-resume
+        // case, where the active account is known.
         let storedPrfSalt = sessionStore.prfSalt.flatMap { Self.b64Decode($0) }
+        let candidates = loginPrfCandidates(accountId: accountId)
 
         let challengeResponse = try await asClient.loginBegin()
         guard let challengeId = challengeResponse["challengeId"] as? String else {
@@ -39,11 +55,29 @@ extension SirosWallet {
             throw SirosError.auth(message: "Missing challenge")
         }
 
-        let result = try await authProvider.authenticate(options: AuthenticateOptions(
+        // When scoped to one account, also restrict discovery to its passkeys:
+        // the PRF map only supplies inputs, it does not stop the platform from
+        // offering every passkey for the RP.
+        let allow: [AllowCredential]? = accountId == nil || candidates.isEmpty
+            ? nil
+            : candidates.keys.map { AllowCredential(id: $0) }
+        let options = AuthenticateOptions(
             rpId: rpId,
             challenge: challenge,
-            prfSalt: storedPrfSalt
-        ))
+            allowCredentials: allow,
+            prfSalt: storedPrfSalt,
+            prfSaltsByCredential: candidates.isEmpty ? nil : candidates
+        )
+        let result = try await authProvider.authenticate(options: options)
+
+        // Belt and braces for the scoped case: a credential known to belong to
+        // a different cached account must not complete this ceremony - the
+        // resumed account's container could never be unwrapped with it, and
+        // loginFinish would still have been handed a valid assertion.
+        let cachedAccount = cachedAccount(owning: result.credentialId)
+        if let accountId, let owner = cachedAccount?.accountId, owner != accountId {
+            throw SirosError.auth(message: "Passkey belongs to a different account than the one being unlocked")
+        }
 
         var responseDict: [String: Any] = [
             "authenticatorData": Self.b64UrlEncode(result.authenticatorData),
@@ -59,12 +93,61 @@ extension SirosWallet {
             "type": "public-key",
             "response": responseDict,
         ]
+        // The salt that applies to the credential the user actually used: its
+        // registry entry first; else the session store's salt, but only when
+        // the credential is not known to belong to a different cached account
+        // (the session salt is the active account's - pairing it with another
+        // account's credential would derive a real PRF under the wrong salt
+        // and fail only later, at unwrap). A fresh random salt is only right
+        // when nothing is known about this credential at all (first login on
+        // a new install with no registry entry) - then no container could be
+        // opened anyway and the unlock fails on unwrap rather than on a
+        // silently wrong key.
+        let sessionSaltApplies = cachedAccount == nil || cachedAccount?.accountId == sessionStore.activeAccountId
+        let prfSalt = options.prfSalt(for: result.credentialId)
+            ?? (sessionSaltApplies ? storedPrfSalt : nil)
+            ?? Self.randomBytes(32)
         let prfOutput = try await resolvePrfOutput(
             ceremonyPrf: result.prfOutput,
             credentialId: result.credentialId,
-            salt: storedPrfSalt ?? Self.randomBytes(32)
+            salt: prfSalt
         )
-        return PasskeyAssertion(challengeId: challengeId, credential: credential, prfOutput: prfOutput)
+        return PasskeyAssertion(
+            challengeId: challengeId,
+            credential: credential,
+            prfOutput: prfOutput,
+            prfSalt: prfSalt,
+            cachedAccount: cachedAccount
+        )
+    }
+
+    /// `(credentialId, prfSalt)` for every passkey the ceremony should offer:
+    /// just `accountId`'s when given, otherwise every loginable account's on
+    /// THIS wallet's backend and tenant - the registry spans environments, and
+    /// the auth server the challenge came from can only authenticate its own
+    /// passkeys. Which one the user picks is only known once the ceremony
+    /// completes. Mirrors the Kotlin SDK's `loginCandidates`.
+    func loginPrfCandidates(accountId: String? = nil) -> [Data: Data] {
+        let accounts = accountId.map { id in accountRegistry.findAccount(accountId: id).map { [$0] } ?? [] }
+            ?? accountRegistry.listLoginableAccounts(tenantId: config.tenantId)
+                .filter { $0.backendUrl == config.backendUrl }
+        var candidates: [Data: Data] = [:]
+        for account in accounts {
+            for passkey in account.passkeys where !passkey.prfSalt.isEmpty {
+                guard let credentialId = Self.b64UrlDecode(passkey.credentialId),
+                      let salt = Self.b64Decode(passkey.prfSalt) else { continue }
+                candidates[credentialId] = salt
+            }
+        }
+        return candidates
+    }
+
+    /// The cached account that registered `credentialId`, if any.
+    func cachedAccount(owning credentialId: Data) -> CachedAccount? {
+        let credIdB64url = Self.b64UrlEncode(credentialId)
+        return accountRegistry.listAccounts().first { account in
+            account.passkeys.contains { $0.credentialId == credIdB64url }
+        }
     }
 
     /// Resolves the PRF output for a completed WebAuthn ceremony.

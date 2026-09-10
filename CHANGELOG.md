@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Login after logout could never unlock the wallet.** `logout()` clears the
+  account-scoped session store, so the next `login()` had no PRF salt to
+  offer: the ceremony carried no PRF and the separate probe derived one for
+  a fresh random salt the container was never sealed with. Login now offers
+  every cached account's passkey with its own salt in the single ceremony
+  (WebAuthn `prf.evalByCredential`; `AuthenticateOptions.prfSaltsByCredential`,
+  Apple's `perCredentialInputValues`), uses the salt of the credential the
+  user actually picked for the probe, and restores that account's
+  `hkdfSalt`/`hkdfInfo` from the registry - the Kotlin SDK's
+  `loginCandidates` pattern. Surfaced by review on #139.
+
+### Added
+- `AuthenticateOptions.prfSaltsByCredential` and `prfSalt(for:)`; custom
+  `AuthProvider`s should evaluate PRF for the salt of the credential used.
+- `AccountRegistry.inMemory()` and a `SirosWallet.init(accountRegistry:)`
+  parameter, so tests and previews do not touch the Keychain.
+
 ### Changed
 - **`ASAuthorizationAuthProvider.getPrfOutput` fails closed.** It no longer
   falls back to `HKDF(credentialId, salt)` when the authenticator returns no

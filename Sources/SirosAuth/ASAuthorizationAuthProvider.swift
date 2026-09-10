@@ -143,11 +143,10 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
         // ceremony, when a salt was supplied. Registration can only check
         // for PRF support (see below) — the actual salt-derived secret is
         // only obtainable via a PRF-enabled assertion, per Apple's API.
-        if let salt = options.prfSalt {
-            let inputValues = ASAuthorizationPublicKeyCredentialPRFAssertionInput.InputValues(
-                saltInput1: salt, saltInput2: nil
-            )
-            let prfInput = ASAuthorizationPublicKeyCredentialPRFAssertionInput.inputValues(inputValues)
+        // Per-credential salts (`evalByCredential`) win over the shared one:
+        // each cached account's container was sealed with its own salt, and
+        // the user picks the credential inside the ceremony.
+        if let prfInput = Self.prfAssertionInput(for: options) {
             platformRequest.prf = prfInput
             // CTAP2 hmac-secret (the security-key analog of PRF) support
             // varies by authenticator; requesting it is harmless when the
@@ -252,6 +251,20 @@ public final class ASAuthorizationAuthProvider: NSObject, AuthProvider, WscdAuto
     }
 
     // MARK: - PRF helpers
+
+    private static func prfAssertionInput(
+        for options: AuthenticateOptions
+    ) -> ASAuthorizationPublicKeyCredentialPRFAssertionInput? {
+        typealias InputValues = ASAuthorizationPublicKeyCredentialPRFAssertionInput.InputValues
+        if let byCredential = options.prfSaltsByCredential, !byCredential.isEmpty {
+            let perCredential = byCredential.mapValues { InputValues(saltInput1: $0, saltInput2: nil) }
+            return .perCredentialInputValues(perCredential)
+        }
+        if let salt = options.prfSalt {
+            return .inputValues(InputValues(saltInput1: salt, saltInput2: nil))
+        }
+        return nil
+    }
 
     private static func prfOutput(from output: ASAuthorizationPublicKeyCredentialPRFAssertionOutput?) -> PrfOutput? {
         guard let output else { return nil }

@@ -67,6 +67,35 @@ final class AuthTypesTests: XCTestCase {
         XCTAssertEqual(opts.userVerification, "preferred")
         XCTAssertNil(opts.allowCredentials)
         XCTAssertNil(opts.prfSalt)
+        XCTAssertNil(opts.prfSaltsByCredential)
+    }
+
+    /// `prfSalt(for:)` resolves the salt the authenticator should evaluate for
+    /// a given credential: per-credential entries win over the shared salt,
+    /// and a credential absent from a non-empty per-credential map gets none
+    /// (never the shared salt, which was meant for a different credential).
+    func testAuthenticateOptionsPrfSaltForCredential() {
+        let credA = Data("cred-a".utf8), credB = Data("cred-b".utf8), credC = Data("cred-c".utf8)
+        let saltA = Data(repeating: 0xa, count: 32), saltB = Data(repeating: 0xb, count: 32)
+        let shared = Data(repeating: 0x5, count: 32)
+
+        let sharedOnly = AuthenticateOptions(rpId: "example.com", challenge: Data([1]), prfSalt: shared)
+        XCTAssertEqual(sharedOnly.prfSalt(for: credA), shared)
+
+        let perCredential = AuthenticateOptions(
+            rpId: "example.com", challenge: Data([1]),
+            prfSalt: shared, prfSaltsByCredential: [credA: saltA, credB: saltB]
+        )
+        XCTAssertEqual(perCredential.prfSalt(for: credA), saltA)
+        XCTAssertEqual(perCredential.prfSalt(for: credB), saltB)
+        XCTAssertNil(perCredential.prfSalt(for: credC))
+
+        let emptyMap = AuthenticateOptions(
+            rpId: "example.com", challenge: Data([1]), prfSalt: shared, prfSaltsByCredential: [:]
+        )
+        XCTAssertEqual(emptyMap.prfSalt(for: credC), shared, "an empty map does not suppress the shared salt")
+
+        XCTAssertNil(AuthenticateOptions(rpId: "example.com", challenge: Data([1])).prfSalt(for: credA))
     }
 
     func testBase64UrlRoundTrip() {
