@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bridge capability vocabulary** in `SirosTransport`: `BridgeCapabilityId`,
+  one parameters struct per capability, `BridgeDescriptor` and
+  `BridgeDescriptorBuilder` - the descriptor a web-view wrapper app advertises
+  to the page it hosts, shaped like WMP's capability map. Generated from
+  `spec/bridge-capabilities.json`, whose source of truth is siros-sdk-kotlin;
+  CI checks the copy and the generated Swift stay in step.
 - `docs/TWO-APIS.md`: the SDK's two entry points - the orchestrated API
   (`SirosWallet`) and the low-level, flow-free composition of keystore, auth
   and credentials - with the Swift specifics and the parity gaps against the

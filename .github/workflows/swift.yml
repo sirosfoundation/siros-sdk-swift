@@ -75,6 +75,30 @@ jobs:
             --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
             --triple arm64-apple-ios18.0-simulator
 
+  bridge-vocabulary:
+    name: Bridge capability vocabulary matches siros-sdk-kotlin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # spec/bridge-capabilities.json is owned by siros-sdk-kotlin; this repo
+      # carries a copy so the Swift twin is generated from the same file. Two
+      # checks: the copy is byte-identical to the Kotlin repo's main, and the
+      # generated Swift is current. Regenerate with
+      #   tools/gen_bridge_capabilities.py --spec spec/bridge-capabilities.json \
+      #     --only swift --swift-out Sources/SirosTransport/BridgeCapabilities.swift
+      - name: Spec copy matches siros-sdk-kotlin main
+        run: |
+          curl -sSfL -o /tmp/upstream.json \
+            https://raw.githubusercontent.com/sirosfoundation/siros-sdk-kotlin/main/spec/bridge-capabilities.json
+          curl -sSfL -o /tmp/upstream_gen.py \
+            https://raw.githubusercontent.com/sirosfoundation/siros-sdk-kotlin/main/tools/gen_bridge_capabilities.py
+          diff -u /tmp/upstream.json spec/bridge-capabilities.json
+          diff -u /tmp/upstream_gen.py tools/gen_bridge_capabilities.py
+      - name: Generated Swift is current
+        run: |
+          python3 tools/gen_bridge_capabilities.py --check --spec spec/bridge-capabilities.json \
+            --only swift --swift-out Sources/SirosTransport/BridgeCapabilities.swift
+
   test-linux:
     name: Test (Linux)
     runs-on: ubuntu-latest

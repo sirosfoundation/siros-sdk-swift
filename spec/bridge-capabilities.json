@@ -1,0 +1,118 @@
+{
+  "$comment": "Capability vocabulary for the native bridge between a SIROS web-view wrapper app and the page it hosts. Single source of truth: tools/gen_bridge_capabilities.py generates the Kotlin, Swift and TypeScript from this file; CI fails if they drift. Mirrors the Wallet Messaging Protocol's capability map (WmpProfile.capabilities / WmpRegistry.allCapabilities): a descriptor is a map from capability id to that capability's parameters, and a capability that is absent is not offered. Ids are stable once published; retire with `deprecated`, never rename.",
+  "vocabulary_version": 1,
+  "descriptor": {
+    "$comment": "What a host advertises to the page. `bridge` is the descriptor schema itself; `vocabulary` says which version of this file the ids come from, so a page can tell 'unknown id' from 'older host'.",
+    "fields": {
+      "bridge": {
+        "type": "object",
+        "fields": {
+          "version": { "type": "integer", "description": "Descriptor schema version. 1." }
+        }
+      },
+      "vocabulary": { "type": "integer", "description": "The vocabulary_version this host was built against." },
+      "platform": { "type": "string", "description": "`android` or `ios`." },
+      "host": {
+        "type": "object",
+        "fields": {
+          "name": { "type": "string", "description": "Host application id (Android applicationId / iOS bundle id)." },
+          "version": { "type": "string", "description": "Host application version string." },
+          "sdk_version": { "type": "string", "description": "SIROS SDK version the host links." }
+        }
+      },
+      "capabilities": { "type": "map", "description": "Capability id to its parameters object. Present means offered." }
+    }
+  },
+  "capabilities": [
+    {
+      "id": "webauthn",
+      "stage": "reached",
+      "description": "Native WebAuthn create()/get() in place of the WebView's, so security keys reach the page over the SDK's own CTAP2 transports and platform passkeys carry the PRF extension.",
+      "params": {
+        "prf": { "type": "boolean", "description": "Assertions can return the WebAuthn PRF extension output." },
+        "security_key_transports": { "type": "string[]", "description": "CTAP2 transports available to the page: `usb`, `nfc`, `ble`, `hybrid`." }
+      }
+    },
+    {
+      "id": "dc_api",
+      "stage": "reached",
+      "description": "The host is a W3C Digital Credentials API provider on this device and mirrors the page's credential list into the platform registry; presentation responses are returned through the host.",
+      "params": {
+        "matcher_version": { "type": "string", "description": "Version of the siros-dc-matcher the host registers." },
+        "formats": { "type": "string[]", "description": "Credential formats the registry accepts: `mso_mdoc`, `dc+sd-jwt`." }
+      }
+    },
+    {
+      "id": "idv.physical_id",
+      "stage": "reached",
+      "description": "Physical identity document scanning and face match, started from the page and returned as an identity-verification result.",
+      "params": {
+        "provider": { "type": "string", "description": "Vendor of the capture SDK, e.g. `facetec`." }
+      }
+    },
+    {
+      "id": "oidc",
+      "stage": "reached",
+      "description": "Host-mediated OpenID Connect login: the authorization request opens in a system browser tab and the response is handed back to the page.",
+      "params": {}
+    },
+    {
+      "id": "proximity.byte_pipe",
+      "stage": "reached",
+      "deprecated": "Superseded by proximity.session; removed once every shipped wrapper advertises the session capability.",
+      "description": "Raw Bluetooth LE byte pipe (client and server) with the ISO 18013-5 session layer implemented by the page.",
+      "params": {
+        "roles": { "type": "string[]", "description": "`client`, `server`." }
+      }
+    },
+    {
+      "id": "proximity.session",
+      "stage": "A",
+      "description": "ISO 18013-5 proximity presentation run natively as a session: device engagement, transport, session encryption and reader authentication in the host; the page supplies credentials, consent and device signatures through callbacks.",
+      "params": {
+        "transports": { "type": "string[]", "description": "`ble_central`, `ble_peripheral`, `nfc`." },
+        "nfc_static_handover": { "type": "boolean", "description": "NFC static handover to BLE is available." },
+        "reader_auth": { "type": "boolean", "description": "Reader authentication against the configured trust lists is evaluated natively." }
+      }
+    },
+    {
+      "id": "zk",
+      "stage": "A",
+      "description": "Zero-knowledge presentation proofs generated natively. The page decides a proof is needed and supplies credential bytes and transcript; the host resolves the circuit, proves, and calls back for the witness signature.",
+      "params": {
+        "systems": { "type": "string[]", "description": "Proof system ids the host can prove for, e.g. `longfellow-libzk-v1`, `vega-mdoc-v1`. From the SDK's ZkMdocPresentation.systemIds()." },
+        "circuit_cache": { "type": "boolean", "description": "Circuits are cached on disk across launches." }
+      }
+    },
+    {
+      "id": "keys",
+      "stage": "B",
+      "description": "Key operations performed natively on a container the page imports and exports around each session: generate, sign, attest, over the SDK's key manager and its WSCD plugins.",
+      "params": {
+        "wscd_plugins": { "type": "string[]", "description": "Registered WSCD plugin ids." }
+      }
+    },
+    {
+      "id": "credentials",
+      "stage": "C",
+      "description": "Credential matching (DCQL) and presentation assembly performed natively over the imported container.",
+      "params": {
+        "formats": { "type": "string[]", "description": "`mso_mdoc`, `dc+sd-jwt`." }
+      }
+    },
+    {
+      "id": "auth",
+      "stage": "D",
+      "description": "Authentication and PRF-derived container ownership held natively; the page no longer derives the unwrap key.",
+      "params": {}
+    },
+    {
+      "id": "engine",
+      "stage": "never",
+      "description": "A native Wallet Messaging Protocol engine. Reserved so that, if it ever exists, it is one more advertised capability rather than a new detection mechanism.",
+      "params": {
+        "wmp_capabilities": { "type": "string[]", "description": "WMP capability names, as WmpRegistry.allCapabilities() reports them: `oid4vci`, `oid4vp`, ..." }
+      }
+    }
+  ]
+}
