@@ -164,9 +164,6 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         provider.ceremonyPrf = nil
         provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
         let server = FakeAuthServer()
-        let sessionStore = InMemorySessionStore() // activeAccountId nil, as after logout()
-        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
-
         let registeredSalt = Data(repeating: 0x11, count: 32)
         let otherSalt = Data(repeating: 0x22, count: 32)
         let otherCredentialId = Data("other-cred".utf8)
@@ -182,6 +179,15 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
             hkdfSalt: SirosWallet.b64Encode(Data(repeating: 0x33, count: 32)),
             hkdfInfo: SirosWallet.b64Encode(Data("info".utf8))
         )
+        // Reproduce logout(): the store was scoped to the account and held its
+        // salt; clear() wipes the account's values but keeps activeAccountId.
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = account.accountId
+        sessionStore.prfSalt = SirosWallet.b64Encode(registeredSalt)
+        sessionStore.clear()
+        XCTAssertNil(sessionStore.prfSalt, "precondition: post-logout store holds no salt")
+        XCTAssertEqual(sessionStore.activeAccountId, account.accountId, "precondition: clear() keeps the scope id")
+        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
         wallet.accountRegistry.upsertAccount(account)
 
         let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
