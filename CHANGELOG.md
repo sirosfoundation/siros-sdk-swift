@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-10
+
+First public SDK release, alongside siros-sdk-kotlin 0.14.0. The 0.7.0 tag
+(2026-09-07) never rolled this section, so some entries below shipped in 0.7.0
+already; everything since 0.6.1 is here. Consumers must raise their deployment
+target to iOS 18 / macOS 15.
+
 ### Fixed
 - **Login after logout could never unlock the wallet.** `logout()` clears the
   account-scoped session store, so the next `login()` had no PRF salt to
