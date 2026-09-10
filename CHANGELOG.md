@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`ASAuthorizationAuthProvider.getPrfOutput` fails closed.** It no longer
+  falls back to `HKDF(credentialId, salt)` when the authenticator returns no
+  PRF output; it throws `SirosError.auth("PRF extension not supported by
+  this authenticator")`, as the Kotlin SDK's production provider always has.
+  The credential ID is public, so a container sealed under that fallback was
+  protected by nothing the user holds. Containers sealed under it - a
+  security key on iOS/macOS below 26.4, where the security-key PRF API does
+  not exist - can no longer be opened; there is deliberately no migration.
+  The dev-only `LocalAuthProvider`s keep their own software PRF (Kotlin's
+  keys the HMAC with `credentialId || "SIROS-LOCAL-PRF-v1"`, Swift's with
+  `credentialId` alone); they never roam, so the divergence is documented
+  rather than reconciled.
 - **Platform floor is now iOS 18 / macOS 15** (was iOS 16 / macOS 13). The
   wallet's key material is derived from the login passkey's WebAuthn PRF
   output, and Apple's PRF extension exists from iOS 18; on 16 and 17 the
