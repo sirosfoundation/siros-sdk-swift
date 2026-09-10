@@ -211,7 +211,7 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
         let server = FakeAuthServer()
         let sessionStore = InMemorySessionStore()
-        sessionStore.activeAccountId = "test-tenant:active-user"
+        sessionStore.activeAccountId = "default:active-user"
         let activeSalt = Data(repeating: 0x5a, count: 32)
         sessionStore.prfSalt = SirosWallet.b64Encode(activeSalt)
         let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
