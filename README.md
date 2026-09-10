@@ -96,6 +96,14 @@ let config = WalletConfig(
 
 `KeystoreManager.generateProof(freshKey:)` supports batch VCI conformance — each credential in a batch is bound to a unique key to prevent verifier linkability.
 
+## Two APIs: orchestrated and low-level
+
+`SirosWallet` runs the whole wallet for you. Hosts that already run the
+OID4VCI/OID4VP flows - a web-view wrapper around the SIROS web wallet, an app
+with its own protocol client - compose `SirosKeystore`, `SirosAuth` and
+`SirosCredentials` directly, without `SirosFlow` or the facade. Both are
+supported; see [docs/TWO-APIS.md](docs/TWO-APIS.md).
+
 ## Architecture
 
 ```

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `docs/TWO-APIS.md`: the SDK's two entry points - the orchestrated API
+  (`SirosWallet`) and the low-level, flow-free composition of keystore, auth
+  and credentials - with the Swift specifics and the parity gaps against the
+  Android SDK (no facade-free ZK presentation entry point, no circuit cache or
+  prover residency, no Vega).
+
 ## [0.8.0] - 2026-09-10
 
 First public SDK release, alongside siros-sdk-kotlin 0.14.0. The 0.7.0 tag
