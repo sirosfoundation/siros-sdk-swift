@@ -862,20 +862,13 @@ public final class SirosWallet: @unchecked Sendable {
                     "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
                 ],
             ]
-            // Prefer the PRF output already produced by the register() ceremony
-            // itself (e.g. LocalAuthProvider computes it locally); only fall back
-            // to a separate getPrfOutput() ceremony — and always pass the real
-            // credential ID, never an empty placeholder — when it isn't present.
             // Resolved BEFORE registerFinish: getPrfOutput fails closed for an
             // authenticator without PRF, and failing here leaves only a stray
             // local passkey behind rather than a server-side enrollment with no
             // container behind it.
-            let prfOutput: PrfOutput
-            if let resultPrf = result.prfOutput {
-                prfOutput = resultPrf
-            } else {
-                prfOutput = try await authProvider.getPrfOutput(credentialId: result.credentialId, salt: prfSalt)
-            }
+            let prfOutput = try await resolvePrfOutput(
+                ceremonyPrf: result.prfOutput, credentialId: result.credentialId, salt: prfSalt
+            )
 
             let session = try await asClient.registerFinish(
                 challengeId: challengeId,
@@ -991,23 +984,14 @@ public final class SirosWallet: @unchecked Sendable {
                 "type": "public-key",
                 "response": responseDict,
             ]
-            // Prefer the PRF output already produced by the authenticate()
-            // ceremony itself (real ASAuthorization PRF assertion, when
-            // supported) to avoid a redundant second device-authentication
-            // prompt; fall back to a separate getPrfOutput() call — with the
-            // real credential ID, never an empty placeholder — otherwise.
             // Resolved BEFORE loginFinish: getPrfOutput fails closed for an
             // authenticator without PRF, and the server should not be handed a
             // completed login for a session this side can never unlock.
-            let prfOutput: PrfOutput
-            if let resultPrf = result.prfOutput {
-                prfOutput = resultPrf
-            } else {
-                prfOutput = try await authProvider.getPrfOutput(
-                    credentialId: result.credentialId,
-                    salt: storedPrfSalt ?? Self.randomBytes(32)
-                )
-            }
+            let prfOutput = try await resolvePrfOutput(
+                ceremonyPrf: result.prfOutput,
+                credentialId: result.credentialId,
+                salt: storedPrfSalt ?? Self.randomBytes(32)
+            )
 
             let session = try await asClient.loginFinish(
                 challengeId: challengeId,
@@ -1165,21 +1149,14 @@ public final class SirosWallet: @unchecked Sendable {
                 "type": "public-key",
                 "response": responseDict,
             ]
-            // Prefer the PRF output already produced by the authenticate()
-            // ceremony itself; fall back to a separate getPrfOutput() call —
-            // with the real credential ID, never an empty placeholder —
-            // otherwise. See login() for the same pattern, and the same
-            // ordering: resolved BEFORE loginFinish, so a fail-closed PRF
-            // failure never refreshes a server session this side cannot use.
-            let prfOutput: PrfOutput
-            if let resultPrf = result.prfOutput {
-                prfOutput = resultPrf
-            } else {
-                prfOutput = try await authProvider.getPrfOutput(
-                    credentialId: result.credentialId,
-                    salt: storedPrfSalt ?? Self.randomBytes(32)
-                )
-            }
+            // Same ordering as login(): resolved BEFORE loginFinish, so a
+            // fail-closed PRF failure never refreshes a server session this
+            // side cannot use.
+            let prfOutput = try await resolvePrfOutput(
+                ceremonyPrf: result.prfOutput,
+                credentialId: result.credentialId,
+                salt: storedPrfSalt ?? Self.randomBytes(32)
+            )
 
             _ = try await asClient.loginFinish(challengeId: challengeId, credential: credential)
 

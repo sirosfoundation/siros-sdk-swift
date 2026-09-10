@@ -1419,6 +1419,20 @@ extension SirosWallet {
         }
     }
 
+    /// Resolves the PRF output for a completed WebAuthn ceremony.
+    ///
+    /// Prefers the PRF output the ceremony itself produced (a real
+    /// ASAuthorization PRF assertion, or LocalAuthProvider's locally computed
+    /// value) so the user isn't prompted twice; otherwise runs a separate
+    /// `getPrfOutput()` ceremony with the real credential ID — never an empty
+    /// placeholder. `getPrfOutput` fails closed for authenticators without
+    /// PRF, so callers resolve this BEFORE completing the server-side
+    /// register/login step.
+    func resolvePrfOutput(ceremonyPrf: PrfOutput?, credentialId: Data, salt: Data) async throws -> PrfOutput {
+        if let ceremonyPrf { return ceremonyPrf }
+        return try await authProvider.getPrfOutput(credentialId: credentialId, salt: salt)
+    }
+
     static func randomBytes(_ count: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: count)
         _ = SecRandomCopyBuffer(&bytes, count)
