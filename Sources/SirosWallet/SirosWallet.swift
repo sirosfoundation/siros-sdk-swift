@@ -862,22 +862,26 @@ public final class SirosWallet: @unchecked Sendable {
                     "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
                 ],
             ]
-            let session = try await asClient.registerFinish(
-                challengeId: challengeId,
-                credential: credential,
-                displayName: displayName
-            )
-
             // Prefer the PRF output already produced by the register() ceremony
             // itself (e.g. LocalAuthProvider computes it locally); only fall back
             // to a separate getPrfOutput() ceremony — and always pass the real
             // credential ID, never an empty placeholder — when it isn't present.
+            // Resolved BEFORE registerFinish: getPrfOutput fails closed for an
+            // authenticator without PRF, and failing here leaves only a stray
+            // local passkey behind rather than a server-side enrollment with no
+            // container behind it.
             let prfOutput: PrfOutput
             if let resultPrf = result.prfOutput {
                 prfOutput = resultPrf
             } else {
                 prfOutput = try await authProvider.getPrfOutput(credentialId: result.credentialId, salt: prfSalt)
             }
+
+            let session = try await asClient.registerFinish(
+                challengeId: challengeId,
+                credential: credential,
+                displayName: displayName
+            )
 
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
@@ -987,16 +991,14 @@ public final class SirosWallet: @unchecked Sendable {
                 "type": "public-key",
                 "response": responseDict,
             ]
-            let session = try await asClient.loginFinish(
-                challengeId: challengeId,
-                credential: credential
-            )
-
             // Prefer the PRF output already produced by the authenticate()
             // ceremony itself (real ASAuthorization PRF assertion, when
             // supported) to avoid a redundant second device-authentication
             // prompt; fall back to a separate getPrfOutput() call — with the
             // real credential ID, never an empty placeholder — otherwise.
+            // Resolved BEFORE loginFinish: getPrfOutput fails closed for an
+            // authenticator without PRF, and the server should not be handed a
+            // completed login for a session this side can never unlock.
             let prfOutput: PrfOutput
             if let resultPrf = result.prfOutput {
                 prfOutput = resultPrf
@@ -1006,6 +1008,11 @@ public final class SirosWallet: @unchecked Sendable {
                     salt: storedPrfSalt ?? Self.randomBytes(32)
                 )
             }
+
+            let session = try await asClient.loginFinish(
+                challengeId: challengeId,
+                credential: credential
+            )
 
             setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
