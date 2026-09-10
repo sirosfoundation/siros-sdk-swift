@@ -943,59 +943,14 @@ public final class SirosWallet: @unchecked Sendable {
         }
         setState(.connecting)
         do {
-            let storedPrfSalt = sessionStore.prfSalt.flatMap { Self.b64Decode($0) }
-
-            // Step 1: Get challenge from AS
-            let challengeResponse = try await asClient.loginBegin()
-            guard let challengeId = challengeResponse["challengeId"] as? String else {
-                throw SirosError.auth(message: "Missing challengeId")
-            }
-            guard let getOptions = challengeResponse["getOptions"] as? [String: Any],
-                  let publicKey = getOptions["publicKey"] as? [String: Any] else {
-                throw SirosError.auth(message: "Missing getOptions.publicKey")
-            }
-            guard let rpId = publicKey["rpId"] as? String else {
-                throw SirosError.auth(message: "Missing rpId")
-            }
-            guard let challengeB64 = publicKey["challenge"] as? String,
-                  let challenge = Self.b64UrlDecode(challengeB64) else {
-                throw SirosError.auth(message: "Missing challenge")
-            }
-
-            // Step 2: Authenticate via platform AuthProvider
-            let result = try await authProvider.authenticate(options: AuthenticateOptions(
-                rpId: rpId,
-                challenge: challenge,
-                prfSalt: storedPrfSalt
-            ))
+            // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
+            let assertion = try await performPasskeyAssertion(asClient: asClient)
+            let prfOutput = assertion.prfOutput
 
             // Step 3: Complete login with AS
-            var responseDict: [String: Any] = [
-                "authenticatorData": Self.b64UrlEncode(result.authenticatorData),
-                "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
-                "signature": Self.b64UrlEncode(result.signature),
-            ]
-            if let uh = result.userHandle {
-                responseDict["userHandle"] = Self.b64UrlEncode(uh)
-            }
-            let credential: [String: Any] = [
-                "id": Self.b64UrlEncode(result.credentialId),
-                "rawId": Self.b64UrlEncode(result.credentialId),
-                "type": "public-key",
-                "response": responseDict,
-            ]
-            // Resolved BEFORE loginFinish: getPrfOutput fails closed for an
-            // authenticator without PRF, and the server should not be handed a
-            // completed login for a session this side can never unlock.
-            let prfOutput = try await resolvePrfOutput(
-                ceremonyPrf: result.prfOutput,
-                credentialId: result.credentialId,
-                salt: storedPrfSalt ?? Self.randomBytes(32)
-            )
-
             let session = try await asClient.loginFinish(
-                challengeId: challengeId,
-                credential: credential
+                challengeId: assertion.challengeId,
+                credential: assertion.credential
             )
 
             setupApiClientWithTokens(tokens)
@@ -1115,50 +1070,14 @@ public final class SirosWallet: @unchecked Sendable {
         guard case .keystoreLocked(let userId, let displayName) = state,
               let asClient = authServerClient else { return }
         do {
-            let storedPrfSalt = sessionStore.prfSalt.flatMap { Self.b64Decode($0) }
-
-            // Use AS login to get PRF output via biometric assertion
-            let challengeResponse = try await asClient.loginBegin()
-            guard let challengeId = challengeResponse["challengeId"] as? String,
-                  let getOptions = challengeResponse["getOptions"] as? [String: Any],
-                  let publicKey = getOptions["publicKey"] as? [String: Any],
-                  let rpId = publicKey["rpId"] as? String,
-                  let challengeB64 = publicKey["challenge"] as? String,
-                  let challenge = Self.b64UrlDecode(challengeB64) else {
-                throw SirosError.auth(message: "Invalid login challenge for keystore unlock")
-            }
-
-            let result = try await authProvider.authenticate(options: AuthenticateOptions(
-                rpId: rpId,
-                challenge: challenge,
-                prfSalt: storedPrfSalt
-            ))
-
-            // Complete login with AS (refreshes session cookie)
-            var responseDict: [String: Any] = [
-                "authenticatorData": Self.b64UrlEncode(result.authenticatorData),
-                "clientDataJSON": Self.b64UrlEncode(result.clientDataJSON),
-                "signature": Self.b64UrlEncode(result.signature),
-            ]
-            if let uh = result.userHandle {
-                responseDict["userHandle"] = Self.b64UrlEncode(uh)
-            }
-            let credential: [String: Any] = [
-                "id": Self.b64UrlEncode(result.credentialId),
-                "rawId": Self.b64UrlEncode(result.credentialId),
-                "type": "public-key",
-                "response": responseDict,
-            ]
-            // Same ordering as login(): resolved BEFORE loginFinish, so a
-            // fail-closed PRF failure never refreshes a server session this
-            // side cannot use.
-            let prfOutput = try await resolvePrfOutput(
-                ceremonyPrf: result.prfOutput,
-                credentialId: result.credentialId,
-                salt: storedPrfSalt ?? Self.randomBytes(32)
+            // Use AS login to get PRF output via biometric assertion, then
+            // complete it (refreshes the session cookie).
+            let assertion = try await performPasskeyAssertion(asClient: asClient)
+            let prfOutput = assertion.prfOutput
+            _ = try await asClient.loginFinish(
+                challengeId: assertion.challengeId,
+                credential: assertion.credential
             )
-
-            _ = try await asClient.loginFinish(challengeId: challengeId, credential: credential)
 
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")
