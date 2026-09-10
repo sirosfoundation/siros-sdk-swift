@@ -1,0 +1,152 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import XCTest
+import SirosAuth
+import SirosCredentials
+@testable import SirosWallet
+
+// `SirosWallet.init` requires a real `JweKeystore`, only available where
+// CryptoKit is (Apple platforms / CI macOS runner) - matching this test
+// target's existing `#if canImport(CryptoKit)` convention.
+#if canImport(CryptoKit)
+
+/// Records every call so the tests can assert on ordering and arguments.
+private final class RecordingAuthProvider: AuthProvider, @unchecked Sendable {
+    struct NotImplemented: Error {}
+    struct PrfUnsupported: Error {}
+
+    let credentialId = Data("cred-id-bytes".utf8)
+    /// PRF the authenticate() ceremony itself yields, if any.
+    var ceremonyPrf: PrfOutput?
+    /// What a separate getPrfOutput() ceremony does: nil = throw PrfUnsupported.
+    var separatePrf: PrfOutput?
+
+    private(set) var authenticateCalls = 0
+    private(set) var getPrfCalls: [(credentialId: Data, salt: Data)] = []
+
+    func register(options: RegisterOptions) async throws -> RegisterResult { throw NotImplemented() }
+
+    func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
+        authenticateCalls += 1
+        return AuthenticateResult(
+            credentialId: credentialId,
+            authenticatorData: Data("authData".utf8),
+            clientDataJSON: Data("clientData".utf8),
+            signature: Data("sig".utf8),
+            userHandle: nil,
+            prfOutput: ceremonyPrf
+        )
+    }
+
+    func getPrfOutput(credentialId: Data, salt: Data) async throws -> PrfOutput {
+        getPrfCalls.append((credentialId, salt))
+        guard let separatePrf else { throw PrfUnsupported() }
+        return separatePrf
+    }
+}
+
+/// A fake auth server: answers `login/begin` with a well-formed challenge and
+/// records every path it is POSTed to.
+private final class FakeAuthServer: @unchecked Sendable {
+    private(set) var postedPaths: [String] = []
+
+    func makeClient() -> AuthServerClient {
+        AuthServerClient(baseUrl: "https://as.example.invalid", tenantId: "default") { [self] _, url, _, _ in
+            self.postedPaths.append(url.path)
+            switch url.path {
+            case "/auth/passkey/login/begin":
+                let challenge = SirosWallet.b64UrlEncode(Data("challenge-bytes".utf8))
+                let json: [String: Any] = [
+                    "challengeId": "challenge-1",
+                    "getOptions": ["publicKey": ["rpId": "as.example.invalid", "challenge": challenge]],
+                ]
+                return try JSONSerialization.data(withJSONObject: json)
+            default:
+                XCTFail("unexpected request to \(url.path)")
+                return Data("{}".utf8)
+            }
+        }
+    }
+}
+
+/// Regression tests for `SirosWallet.performPasskeyAssertion`, the sequence
+/// `login()` and `unlockKeystore()` share and the point at which PRF
+/// resolution fails closed. The invariant under test: when the authenticator
+/// yields no PRF and `getPrfOutput` throws, the helper throws BEFORE returning
+/// the material `loginFinish` needs, so neither caller can complete a
+/// server-side login for a session this side can never unlock.
+///
+/// `login()`/`unlockKeystore()` themselves are not driven end to end here:
+/// they read the wallet's private `authServerClient`, built over a real
+/// network `httpFn`, and there is no seam to substitute a fake at. The helper
+/// takes its client as a parameter precisely so this boundary can be tested.
+final class SirosWalletPasskeyAssertionTests: XCTestCase {
+
+    private func makeWallet(authProvider: AuthProvider, sessionStore: InMemorySessionStore) -> SirosWallet {
+        let config = WalletConfig(backendUrl: "https://example.invalid")
+        let wallet = SirosWallet(config: config, authProvider: authProvider, sessionStore: sessionStore)
+        XCTAssertNotNil(wallet, "wallet should initialise with default keystore on CryptoKit platforms")
+        return wallet!
+    }
+
+    func testPrfFailureThrowsAfterAssertionAndBeforeAnyFinish() async {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = nil
+        provider.separatePrf = nil // getPrfOutput fails closed
+        let server = FakeAuthServer()
+        let wallet = makeWallet(authProvider: provider, sessionStore: InMemorySessionStore())
+
+        do {
+            _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+            XCTFail("expected PRF failure to propagate")
+        } catch is RecordingAuthProvider.PrfUnsupported {
+            // expected
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+
+        XCTAssertEqual(provider.authenticateCalls, 1, "the passkey ceremony itself ran")
+        XCTAssertEqual(provider.getPrfCalls.count, 1, "a separate PRF ceremony was attempted")
+        XCTAssertEqual(
+            server.postedPaths, ["/auth/passkey/login/begin"],
+            "only login/begin may reach the server; no finish request is ever sent"
+        )
+    }
+
+    func testCeremonyPrfIsPreferredOverSeparateCeremony() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = PrfOutput(first: Data("from-ceremony".utf8))
+        provider.separatePrf = PrfOutput(first: Data("should-not-be-used".utf8))
+        let server = FakeAuthServer()
+        let wallet = makeWallet(authProvider: provider, sessionStore: InMemorySessionStore())
+
+        let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+
+        XCTAssertEqual(assertion.prfOutput.first, Data("from-ceremony".utf8))
+        XCTAssertTrue(provider.getPrfCalls.isEmpty, "no redundant second ceremony when the assertion carried PRF")
+        XCTAssertEqual(assertion.challengeId, "challenge-1")
+        XCTAssertEqual(assertion.credential["id"] as? String, SirosWallet.b64UrlEncode(provider.credentialId))
+        XCTAssertEqual(server.postedPaths, ["/auth/passkey/login/begin"])
+    }
+
+    func testSeparatePrfCeremonyUsesRealCredentialIdAndStoredSalt() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = nil
+        provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
+        let server = FakeAuthServer()
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = "default:test-user"
+        let storedSalt = Data(repeating: 0x5a, count: 32)
+        sessionStore.prfSalt = SirosWallet.b64Encode(storedSalt)
+        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
+
+        let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+
+        XCTAssertEqual(assertion.prfOutput.first, Data("from-separate".utf8))
+        XCTAssertEqual(provider.getPrfCalls.count, 1)
+        XCTAssertEqual(provider.getPrfCalls.first?.credentialId, provider.credentialId, "never an empty placeholder")
+        XCTAssertEqual(provider.getPrfCalls.first?.salt, storedSalt, "the stored PRF salt, so the unwrap key is stable")
+    }
+}
+
+#endif
