@@ -1165,12 +1165,12 @@ public final class SirosWallet: @unchecked Sendable {
                 "type": "public-key",
                 "response": responseDict,
             ]
-            _ = try await asClient.loginFinish(challengeId: challengeId, credential: credential)
-
             // Prefer the PRF output already produced by the authenticate()
             // ceremony itself; fall back to a separate getPrfOutput() call —
             // with the real credential ID, never an empty placeholder —
-            // otherwise. See login() for the same pattern.
+            // otherwise. See login() for the same pattern, and the same
+            // ordering: resolved BEFORE loginFinish, so a fail-closed PRF
+            // failure never refreshes a server session this side cannot use.
             let prfOutput: PrfOutput
             if let resultPrf = result.prfOutput {
                 prfOutput = resultPrf
@@ -1180,6 +1180,8 @@ public final class SirosWallet: @unchecked Sendable {
                     salt: storedPrfSalt ?? Self.randomBytes(32)
                 )
             }
+
+            _ = try await asClient.loginFinish(challengeId: challengeId, credential: credential)
 
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")
