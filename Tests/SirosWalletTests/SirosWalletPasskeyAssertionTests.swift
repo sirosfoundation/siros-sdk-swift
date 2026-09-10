@@ -50,7 +50,7 @@ private final class RecordingAuthProvider: AuthProvider, @unchecked Sendable {
 /// A fake auth server: answers `login/begin` with a well-formed challenge and
 /// records every path it is POSTed to.
 private final class FakeAuthServer: @unchecked Sendable {
-    private(set) var postedPaths: [String] = []
+    var postedPaths: [String] = []
 
     func makeClient() -> AuthServerClient {
         AuthServerClient(baseUrl: "https://as.example.invalid", tenantId: "default") { [self] _, url, _, _ in
@@ -254,9 +254,26 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         XCTAssertEqual(scoped?.count, 1)
         XCTAssertNotNil(scoped?[provider.credentialId])
         XCTAssertNil(scoped?[bobCred], "the other account's passkey is not offered on unlock")
+        XCTAssertEqual(provider.lastAuthenticateOptions?.allowCredentials?.map(\.id), [provider.credentialId],
+                       "discovery is restricted to the resumed account's passkeys")
 
         _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
         XCTAssertEqual(provider.lastAuthenticateOptions?.prfSaltsByCredential?.count, 2, "login offers every account")
+        XCTAssertNil(provider.lastAuthenticateOptions?.allowCredentials, "login lets the user pick any account")
+
+        // The platform ignored the allowlist and answered with Bob's passkey
+        // (the provider always returns its own credentialId): reject before
+        // the caller can hand loginFinish a valid assertion.
+        wallet.accountRegistry.upsertAccount(account("bob", provider.credentialId, 0x0b))
+        wallet.accountRegistry.upsertAccount(account("alice", Data("alice-cred".utf8), 0x0a))
+        server.postedPaths.removeAll()
+        do {
+            _ = try await wallet.performPasskeyAssertion(asClient: server.makeClient(), accountId: alice.accountId)
+            XCTFail("a credential owned by another account must not complete a scoped unlock")
+        } catch let e as SirosError {
+            XCTAssertTrue("\(e)".contains("different account"), "\(e)")
+        }
+        XCTAssertEqual(server.postedPaths, ["/auth/passkey/login/begin"])
     }
 }
 

@@ -55,13 +55,29 @@ extension SirosWallet {
             throw SirosError.auth(message: "Missing challenge")
         }
 
+        // When scoped to one account, also restrict discovery to its passkeys:
+        // the PRF map only supplies inputs, it does not stop the platform from
+        // offering every passkey for the RP.
+        let allow: [AllowCredential]? = accountId == nil || candidates.isEmpty
+            ? nil
+            : candidates.keys.map { AllowCredential(id: $0) }
         let options = AuthenticateOptions(
             rpId: rpId,
             challenge: challenge,
+            allowCredentials: allow,
             prfSalt: storedPrfSalt,
             prfSaltsByCredential: candidates.isEmpty ? nil : candidates
         )
         let result = try await authProvider.authenticate(options: options)
+
+        // Belt and braces for the scoped case: a credential known to belong to
+        // a different cached account must not complete this ceremony - the
+        // resumed account's container could never be unwrapped with it, and
+        // loginFinish would still have been handed a valid assertion.
+        let cachedAccount = cachedAccount(owning: result.credentialId)
+        if let accountId, let owner = cachedAccount?.accountId, owner != accountId {
+            throw SirosError.auth(message: "Passkey belongs to a different account than the one being unlocked")
+        }
 
         var responseDict: [String: Any] = [
             "authenticatorData": Self.b64UrlEncode(result.authenticatorData),
@@ -87,7 +103,6 @@ extension SirosWallet {
         // a new install with no registry entry) - then no container could be
         // opened anyway and the unlock fails on unwrap rather than on a
         // silently wrong key.
-        let cachedAccount = cachedAccount(owning: result.credentialId)
         let sessionSaltApplies = cachedAccount == nil || cachedAccount?.accountId == sessionStore.activeAccountId
         let prfSalt = options.prfSalt(for: result.credentialId)
             ?? (sessionSaltApplies ? storedPrfSalt : nil)
