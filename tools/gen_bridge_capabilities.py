@@ -177,13 +177,14 @@ def gen_swift(spec: dict) -> str:
     out.append("")
     out.append("    public static let all: [String] = [" + ", ".join(camel(c["id"]) for c in caps) + "]")
     out.append("    /// Deprecated ids and why.")
-    out.append("    public static let deprecated: [String: String] = [")
     dep = [c for c in caps if c.get("deprecated")]
-    for c in dep:
-        out.append(f"        {camel(c['id'])}: \"{c['deprecated']}\",")
-    if not dep:
-        out.append("        :")
-    out.append("    ]")
+    if dep:
+        out.append("    public static let deprecated: [String: String] = [")
+        for c in dep:
+            out.append(f"        {camel(c['id'])}: \"{c['deprecated']}\",")
+        out.append("    ]")
+    else:
+        out.append("    public static let deprecated: [String: String] = [:]")
     out.append("}")
     out.append("")
     out.append("/// A capability's parameters, encodable into the descriptor's capability map.")
