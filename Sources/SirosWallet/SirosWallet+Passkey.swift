@@ -25,7 +25,11 @@ extension SirosWallet {
     /// here, BEFORE the caller's `loginFinish`: `getPrfOutput` fails closed for
     /// an authenticator without PRF, and the server must not be handed a
     /// completed login for a session this side can never unlock.
-    func performPasskeyAssertion(asClient: AuthServerClient) async throws -> PasskeyAssertion {
+    ///
+    /// - Parameter accountId: restrict the offered passkeys to this cached
+    ///   account (unlock of a resumed session, whose container is fixed); nil
+    ///   offers every loginable account's passkeys (login).
+    func performPasskeyAssertion(asClient: AuthServerClient, accountId: String? = nil) async throws -> PasskeyAssertion {
         // After logout() the account-scoped session store is empty, so the
         // durable source of salts is the account registry: offer every
         // loginable credential with its own salt (WebAuthn evalByCredential)
@@ -33,7 +37,7 @@ extension SirosWallet {
         // picks. The session store's salt still covers the unlock-after-resume
         // case, where the active account is known.
         let storedPrfSalt = sessionStore.prfSalt.flatMap { Self.b64Decode($0) }
-        let candidates = loginPrfCandidates()
+        let candidates = loginPrfCandidates(accountId: accountId)
 
         let challengeResponse = try await asClient.loginBegin()
         guard let challengeId = challengeResponse["challengeId"] as? String else {
@@ -102,12 +106,15 @@ extension SirosWallet {
         )
     }
 
-    /// `(credentialId, prfSalt)` for every passkey login should offer - every
-    /// loginable account's, since which one the user picks is only known once
-    /// the ceremony completes. Mirrors the Kotlin SDK's `loginCandidates`.
-    func loginPrfCandidates() -> [Data: Data] {
+    /// `(credentialId, prfSalt)` for every passkey the ceremony should offer:
+    /// just `accountId`'s when given, otherwise every loginable account's,
+    /// since which one the user picks is only known once the ceremony
+    /// completes. Mirrors the Kotlin SDK's `loginCandidates`.
+    func loginPrfCandidates(accountId: String? = nil) -> [Data: Data] {
+        let accounts = accountId.map { id in accountRegistry.findAccount(accountId: id).map { [$0] } ?? [] }
+            ?? accountRegistry.listLoginableAccounts()
         var candidates: [Data: Data] = [:]
-        for account in accountRegistry.listLoginableAccounts() {
+        for account in accounts {
             for passkey in account.passkeys where !passkey.prfSalt.isEmpty {
                 guard let credentialId = Self.b64UrlDecode(passkey.credentialId),
                       let salt = Self.b64Decode(passkey.prfSalt) else { continue }

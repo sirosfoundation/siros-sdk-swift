@@ -958,14 +958,24 @@ public final class SirosWallet: @unchecked Sendable {
                 credential: assertion.credential
             )
 
+            // Scope the session store to the account the server confirmed,
+            // BEFORE anything is read from or written to it: the store may
+            // still be scoped to a previous account (or to none, after
+            // logout), and `fetchPrivateData` writes the container it fetches
+            // into the active scope. The registry's active account is only
+            // moved once the unlock has succeeded.
+            let accountId = "\(config.tenantId):\(session.uuid)"
+            sessionStore.activeAccountId = accountId
+
             setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
 
-            // Session store first (unlock after resume), then the cached
-            // account that owns the passkey used (login after logout, when the
-            // account-scoped store has been cleared), then fresh values for a
-            // first login on this install.
-            let cached = assertion.cachedAccount
+            // HKDF parameters: this account's session store first (unlock
+            // after resume), then its registry entry (login after logout, when
+            // the account-scoped store has been cleared), then fresh values for
+            // a first login on this install. The registry entry counts only if
+            // it is the account the server just confirmed.
+            let cached = assertion.cachedAccount.flatMap { $0.accountId == accountId ? $0 : nil }
             let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
                 ?? cached.flatMap { Self.b64Decode($0.hkdfSalt) }
                 ?? Self.randomBytes(32)
@@ -981,9 +991,6 @@ public final class SirosWallet: @unchecked Sendable {
                 hkdfInfo: hkdfInfo
             )
 
-            // Scope session store to this account
-            let accountId = "\(config.tenantId):\(session.uuid)"
-            sessionStore.activeAccountId = accountId
             accountRegistry.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
@@ -1085,8 +1092,12 @@ public final class SirosWallet: @unchecked Sendable {
               let asClient = authServerClient else { return }
         do {
             // Use AS login to get PRF output via biometric assertion, then
-            // complete it (refreshes the session cookie).
-            let assertion = try await performPasskeyAssertion(asClient: asClient)
+            // complete it (refreshes the session cookie). Candidates are scoped
+            // to the resumed account: its container is what gets unwrapped, so
+            // another account's passkey must not be offered here.
+            let assertion = try await performPasskeyAssertion(
+                asClient: asClient, accountId: sessionStore.activeAccountId
+            )
             let prfOutput = assertion.prfOutput
             _ = try await asClient.loginFinish(
                 challengeId: assertion.challengeId,
