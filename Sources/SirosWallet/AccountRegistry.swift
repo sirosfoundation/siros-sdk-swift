@@ -18,10 +18,26 @@ public final class AccountRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private let service: String
+    private let storage: AccountRegistryStorage
 
+    /// Registry persisted in the Keychain under `service` (UserDefaults on
+    /// Linux). Survives logout and app reinstall-with-keychain-restore.
     public init(service: String = "org.siros.wallet.accounts") {
-        self.service = service
+        #if canImport(Security)
+        self.storage = KeychainAccountRegistryStorage(service: service)
+        #else
+        self.storage = UserDefaultsAccountRegistryStorage()
+        #endif
+    }
+
+    init(storage: AccountRegistryStorage) {
+        self.storage = storage
+    }
+
+    /// A registry that persists nothing - for tests and previews, and for
+    /// hosts that manage account persistence themselves.
+    public static func inMemory() -> AccountRegistry {
+        AccountRegistry(storage: InMemoryAccountRegistryStorage())
     }
 
     // MARK: - Account CRUD
@@ -113,19 +129,61 @@ public final class AccountRegistry: @unchecked Sendable {
     // MARK: - Storage Backend
 
     private func loadAccountsLocked() -> [CachedAccount] {
-        guard let data = readData(Keys.accounts) else { return [] }
+        guard let data = storage.readData(Keys.accounts) else { return [] }
         return (try? decoder.decode([CachedAccount].self, from: data)) ?? []
     }
 
     private func saveAccountsLocked(_ accounts: [CachedAccount]) {
         guard let data = try? encoder.encode(accounts) else { return }
-        writeData(Keys.accounts, data)
+        storage.writeData(Keys.accounts, data)
     }
 
-    #if canImport(Security)
-    // Keychain-backed storage (Apple platforms)
+    private func readString(_ key: String) -> String? {
+        guard let data = storage.readData(key) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 
-    private func readData(_ key: String) -> Data? {
+    private func writeString(_ key: String, _ value: String) {
+        guard let data = value.data(using: .utf8) else { return }
+        storage.writeData(key, data)
+    }
+
+    private func deleteKey(_ key: String) { storage.deleteKey(key) }
+    private func deleteAll() { storage.deleteAll() }
+
+    private enum Keys {
+        static let accounts = "siros_cached_accounts"
+        static let active = "siros_active_account_id"
+    }
+}
+
+// MARK: - Storage backends
+
+protocol AccountRegistryStorage: Sendable {
+    func readData(_ key: String) -> Data?
+    func writeData(_ key: String, _ data: Data)
+    func deleteKey(_ key: String)
+    func deleteAll()
+}
+
+final class InMemoryAccountRegistryStorage: AccountRegistryStorage, @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String: Data] = [:]
+
+    func readData(_ key: String) -> Data? { lock.withLock { items[key] } }
+    func writeData(_ key: String, _ data: Data) { lock.withLock { items[key] = data } }
+    func deleteKey(_ key: String) { lock.withLock { _ = items.removeValue(forKey: key) } }
+    func deleteAll() { lock.withLock { items.removeAll() } }
+}
+
+#if canImport(Security)
+/// Keychain-backed storage (Apple platforms).
+final class KeychainAccountRegistryStorage: AccountRegistryStorage {
+    private let service: String
+
+    init(service: String) { self.service = service }
+
+    func readData(_ key: String) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -139,7 +197,7 @@ public final class AccountRegistry: @unchecked Sendable {
         return result as? Data
     }
 
-    private func writeData(_ key: String, _ data: Data) {
+    func writeData(_ key: String, _ data: Data) {
         deleteKey(key)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -151,17 +209,7 @@ public final class AccountRegistry: @unchecked Sendable {
         SecItemAdd(query as CFDictionary, nil)
     }
 
-    private func readString(_ key: String) -> String? {
-        guard let data = readData(key) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func writeString(_ key: String, _ value: String) {
-        guard let data = value.data(using: .utf8) else { return }
-        writeData(key, data)
-    }
-
-    private func deleteKey(_ key: String) {
+    func deleteKey(_ key: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -170,31 +218,25 @@ public final class AccountRegistry: @unchecked Sendable {
         SecItemDelete(query as CFDictionary)
     }
 
-    private func deleteAll() {
+    func deleteAll() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
         SecItemDelete(query as CFDictionary)
     }
-
-    #else
-    // UserDefaults fallback (Linux)
+}
+#else
+/// UserDefaults fallback (Linux).
+final class UserDefaultsAccountRegistryStorage: AccountRegistryStorage, @unchecked Sendable {
     private let defaults = UserDefaults.standard
 
-    private func readData(_ key: String) -> Data? { defaults.data(forKey: key) }
-    private func writeData(_ key: String, _ data: Data) { defaults.set(data, forKey: key) }
-    private func readString(_ key: String) -> String? { defaults.string(forKey: key) }
-    private func writeString(_ key: String, _ value: String) { defaults.set(value, forKey: key) }
-    private func deleteKey(_ key: String) { defaults.removeObject(forKey: key) }
-    private func deleteAll() {
-        deleteKey(Keys.accounts)
-        deleteKey(Keys.active)
-    }
-    #endif
-
-    private enum Keys {
-        static let accounts = "siros_cached_accounts"
-        static let active = "siros_active_account_id"
+    func readData(_ key: String) -> Data? { defaults.data(forKey: key) }
+    func writeData(_ key: String, _ data: Data) { defaults.set(data, forKey: key) }
+    func deleteKey(_ key: String) { defaults.removeObject(forKey: key) }
+    func deleteAll() {
+        deleteKey("siros_cached_accounts")
+        deleteKey("siros_active_account_id")
     }
 }
+#endif

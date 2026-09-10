@@ -251,9 +251,9 @@ public final class LocalAuthProvider: AuthProvider, @unchecked Sendable {
 
         let signature = try signWithKey(tag: found.keyTag, data: signedData)
 
-        // PRF output if salt provided
+        // PRF output if a salt applies to the chosen credential
         var prfOutput: PrfOutput?
-        if let salt = options.prfSalt {
+        if let salt = options.prfSalt(for: found.credentialId) {
             prfOutput = computePrf(credentialId: found.credentialId, salt: salt)
         }
 

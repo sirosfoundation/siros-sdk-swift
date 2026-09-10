@@ -22,12 +22,14 @@ private final class RecordingAuthProvider: AuthProvider, @unchecked Sendable {
     var separatePrf: PrfOutput?
 
     private(set) var authenticateCalls = 0
+    private(set) var lastAuthenticateOptions: AuthenticateOptions?
     private(set) var getPrfCalls: [(credentialId: Data, salt: Data)] = []
 
     func register(options: RegisterOptions) async throws -> RegisterResult { throw NotImplemented() }
 
     func authenticate(options: AuthenticateOptions) async throws -> AuthenticateResult {
         authenticateCalls += 1
+        lastAuthenticateOptions = options
         return AuthenticateResult(
             credentialId: credentialId,
             authenticatorData: Data("authData".utf8),
@@ -84,7 +86,10 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
 
     private func makeWallet(authProvider: AuthProvider, sessionStore: InMemorySessionStore) -> SirosWallet {
         let config = WalletConfig(backendUrl: "https://example.invalid")
-        let wallet = SirosWallet(config: config, authProvider: authProvider, sessionStore: sessionStore)
+        let wallet = SirosWallet(
+            config: config, authProvider: authProvider, sessionStore: sessionStore,
+            accountRegistry: .inMemory()
+        )
         XCTAssertNotNil(wallet, "wallet should initialise with default keystore on CryptoKit platforms")
         return wallet!
     }
@@ -146,6 +151,47 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         XCTAssertEqual(provider.getPrfCalls.count, 1)
         XCTAssertEqual(provider.getPrfCalls.first?.credentialId, provider.credentialId, "never an empty placeholder")
         XCTAssertEqual(provider.getPrfCalls.first?.salt, storedSalt, "the stored PRF salt, so the unwrap key is stable")
+        XCTAssertEqual(assertion.prfSalt, storedSalt)
+    }
+
+    /// Login after `logout()`: the account-scoped session store is empty, so
+    /// the salt has to come from the account registry - offered per credential
+    /// in the ceremony itself, and used for the separate probe when the
+    /// ceremony carried no PRF. A fresh random salt here would derive a key the
+    /// container was never sealed with (review finding on PR #139).
+    func testAfterLogoutSaltsComeFromAccountRegistryPerCredential() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = nil
+        provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
+        let server = FakeAuthServer()
+        let sessionStore = InMemorySessionStore() // activeAccountId nil, as after logout()
+        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
+
+        let registeredSalt = Data(repeating: 0x11, count: 32)
+        let otherSalt = Data(repeating: 0x22, count: 32)
+        let otherCredentialId = Data("other-cred".utf8)
+        let account = CachedAccount(
+            userId: "user-\(UUID().uuidString)",
+            tenantId: "test-tenant",
+            displayName: "Alice",
+            backendUrl: "https://example.invalid",
+            passkeys: [
+                CachedPasskey(credentialId: SirosWallet.b64UrlEncode(provider.credentialId), prfSalt: SirosWallet.b64Encode(registeredSalt)),
+                CachedPasskey(credentialId: SirosWallet.b64UrlEncode(otherCredentialId), prfSalt: SirosWallet.b64Encode(otherSalt)),
+            ],
+            hkdfSalt: SirosWallet.b64Encode(Data(repeating: 0x33, count: 32)),
+            hkdfInfo: SirosWallet.b64Encode(Data("info".utf8))
+        )
+        wallet.accountRegistry.upsertAccount(account)
+
+        let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+
+        let offered = provider.lastAuthenticateOptions?.prfSaltsByCredential
+        XCTAssertEqual(offered?[provider.credentialId], registeredSalt, "every loginable credential is offered with its own salt")
+        XCTAssertEqual(offered?[otherCredentialId], otherSalt)
+        XCTAssertEqual(provider.getPrfCalls.first?.salt, registeredSalt, "the probe uses the salt of the credential actually used")
+        XCTAssertEqual(assertion.prfSalt, registeredSalt)
+        XCTAssertEqual(assertion.cachedAccount?.accountId, account.accountId, "login() can restore hkdfSalt/hkdfInfo from this account")
     }
 }
 

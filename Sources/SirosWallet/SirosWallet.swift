@@ -332,7 +332,9 @@ public final class SirosWallet: @unchecked Sendable {
     // cross-file-extension-access reason as `keystore` above.
     let vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
-    private let accountRegistry: AccountRegistry
+    // Not `private`: `SirosWallet+Passkey.swift` reads it for the login PRF
+    // candidates - same cross-file-extension-access reason as `keystore`.
+    let accountRegistry: AccountRegistry
 
     /// Client for go-zk-circuits' `/v1` REST API, built from
     /// `config.zkCircuitUrls`. Feeds `zkProofSystemRegistry` below.
@@ -618,12 +620,15 @@ public final class SirosWallet: @unchecked Sendable {
     ///   - sessionStore: persistent session storage. Defaults to in-memory.
     ///   - keystore: encrypted keystore. Defaults to JweKeystore on Apple platforms.
     ///     On Linux, you **must** provide a custom `KeystoreManager`.
+    ///   - accountRegistry: the cross-logout account cache. Defaults to the
+    ///     Keychain-backed registry; pass `AccountRegistry.inMemory()` in tests.
     /// - Returns: `nil` if no keystore is available (Linux without custom keystore).
     public init?(
         config: WalletConfig,
         authProvider: AuthProvider,
         sessionStore: SessionStoreProtocol = InMemorySessionStore(),
-        keystore: KeystoreManager? = nil
+        keystore: KeystoreManager? = nil,
+        accountRegistry: AccountRegistry? = nil
     ) {
         self.config = config
         self.authProvider = authProvider
@@ -640,7 +645,7 @@ public final class SirosWallet: @unchecked Sendable {
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
 
-        self.accountRegistry = AccountRegistry()
+        self.accountRegistry = accountRegistry ?? AccountRegistry()
 
         self.wscdSelectionPolicy = WscdSelectionPolicy(
             sessionStore: sessionStore,
@@ -956,9 +961,18 @@ public final class SirosWallet: @unchecked Sendable {
             setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
 
-            let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) } ?? Self.randomBytes(32)
-            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
-            let prfSaltBytes = sessionStore.prfSalt.flatMap { Self.b64Decode($0) } ?? Self.randomBytes(32)
+            // Session store first (unlock after resume), then the cached
+            // account that owns the passkey used (login after logout, when the
+            // account-scoped store has been cleared), then fresh values for a
+            // first login on this install.
+            let cached = assertion.cachedAccount
+            let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
+                ?? cached.flatMap { Self.b64Decode($0.hkdfSalt) }
+                ?? Self.randomBytes(32)
+            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) }
+                ?? cached.flatMap { Self.b64Decode($0.hkdfInfo) }
+                ?? Data(Self.hkdfInfo.utf8)
+            let prfSaltBytes = assertion.prfSalt
 
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
