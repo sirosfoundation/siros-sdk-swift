@@ -73,13 +73,21 @@ extension SirosWallet {
             "type": "public-key",
             "response": responseDict,
         ]
-        // The salt that applies to the credential the user actually used. A
-        // fresh random salt is only right when nothing is known about this
-        // credential at all (first login on a new install with no registry
-        // entry) - then no container could be opened anyway and the unlock
-        // fails on unwrap rather than on a silently wrong key.
+        // The salt that applies to the credential the user actually used: its
+        // registry entry first; else the session store's salt, but only when
+        // the credential is not known to belong to a different cached account
+        // (the session salt is the active account's - pairing it with another
+        // account's credential would derive a real PRF under the wrong salt
+        // and fail only later, at unwrap). A fresh random salt is only right
+        // when nothing is known about this credential at all (first login on
+        // a new install with no registry entry) - then no container could be
+        // opened anyway and the unlock fails on unwrap rather than on a
+        // silently wrong key.
         let cachedAccount = cachedAccount(owning: result.credentialId)
-        let prfSalt = options.prfSalt(for: result.credentialId) ?? storedPrfSalt ?? Self.randomBytes(32)
+        let sessionSaltApplies = cachedAccount == nil || cachedAccount?.accountId == sessionStore.activeAccountId
+        let prfSalt = options.prfSalt(for: result.credentialId)
+            ?? (sessionSaltApplies ? storedPrfSalt : nil)
+            ?? Self.randomBytes(32)
         let prfOutput = try await resolvePrfOutput(
             ceremonyPrf: result.prfOutput,
             credentialId: result.credentialId,

@@ -231,7 +231,11 @@ final class KeychainAccountRegistryStorage: AccountRegistryStorage {
 final class UserDefaultsAccountRegistryStorage: AccountRegistryStorage, @unchecked Sendable {
     private let defaults = UserDefaults.standard
 
-    func readData(_ key: String) -> Data? { defaults.data(forKey: key) }
+    /// Older builds stored the active-account id as a String; read it back as
+    /// UTF-8 so an upgraded install still resumes its session.
+    func readData(_ key: String) -> Data? {
+        defaults.data(forKey: key) ?? defaults.string(forKey: key).map { Data($0.utf8) }
+    }
     func writeData(_ key: String, _ data: Data) { defaults.set(data, forKey: key) }
     func deleteKey(_ key: String) { defaults.removeObject(forKey: key) }
     func deleteAll() {

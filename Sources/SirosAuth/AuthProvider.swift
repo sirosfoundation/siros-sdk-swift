@@ -117,8 +117,13 @@ public struct AuthenticateOptions: Sendable {
         self.prfSaltsByCredential = prfSaltsByCredential
     }
 
-    /// The salt that applies to `credentialId`: its per-credential entry, else
-    /// the shared `prfSalt`.
+    /// The salt that applies to `credentialId`.
+    ///
+    /// With a non-empty `prfSaltsByCredential`, only that map counts: the
+    /// credential's own entry, or `nil` when it has none - never the shared
+    /// `prfSalt`, which was meant for a different credential and would derive
+    /// a key the container was not sealed with. The shared `prfSalt` applies
+    /// only when the map is nil or empty.
     public func prfSalt(for credentialId: Data) -> Data? {
         if let byCredential = prfSaltsByCredential, !byCredential.isEmpty {
             return byCredential[credentialId]

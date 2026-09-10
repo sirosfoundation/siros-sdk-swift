@@ -193,6 +193,37 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
         XCTAssertEqual(assertion.prfSalt, registeredSalt)
         XCTAssertEqual(assertion.cachedAccount?.accountId, account.accountId, "login() can restore hkdfSalt/hkdfInfo from this account")
     }
+
+    /// The session store's salt belongs to the active account. A credential
+    /// known to belong to a different cached account (here one whose registry
+    /// entry carries no salt, so it is absent from the candidates) must never be
+    /// probed with it - that would derive a real PRF under the wrong salt and
+    /// fail only later, at unwrap.
+    func testSessionSaltIsNotPairedWithAnotherAccountsCredential() async throws {
+        let provider = RecordingAuthProvider()
+        provider.ceremonyPrf = nil
+        provider.separatePrf = PrfOutput(first: Data("from-separate".utf8))
+        let server = FakeAuthServer()
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = "test-tenant:active-user"
+        let activeSalt = Data(repeating: 0x5a, count: 32)
+        sessionStore.prfSalt = SirosWallet.b64Encode(activeSalt)
+        let wallet = makeWallet(authProvider: provider, sessionStore: sessionStore)
+
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "other-user", tenantId: "test-tenant", displayName: "Bob", backendUrl: "https://example.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(provider.credentialId), prfSalt: "")]
+        ))
+        wallet.accountRegistry.upsertAccount(CachedAccount(
+            userId: "active-user", tenantId: "test-tenant", displayName: "Alice", backendUrl: "https://example.invalid",
+            passkeys: [CachedPasskey(credentialId: SirosWallet.b64UrlEncode(Data("alice-cred".utf8)), prfSalt: SirosWallet.b64Encode(activeSalt))]
+        ))
+
+        let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
+
+        XCTAssertNotEqual(provider.getPrfCalls.first?.salt, activeSalt, "another account's credential never gets the active account's salt")
+        XCTAssertEqual(assertion.cachedAccount?.userId, "other-user")
+    }
 }
 
 #endif
