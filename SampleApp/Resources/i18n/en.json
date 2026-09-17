@@ -56,7 +56,15 @@
     "payloadLabel": "Payload",
     "disclosureLabel": "Disclosure %1$d",
     "rowActionAdd": "Add",
-    "rowActionClose": "Close"
+    "rowActionClose": "Close",
+    "statusExpired": "Expired",
+    "statusNotYetValid": "Not yet valid",
+    "statusRevoked": "Revoked",
+    "statusSuspended": "Suspended",
+    "statusExpiredDetail": "This credential has expired",
+    "statusNotYetValidDetail": "This credential is not valid yet",
+    "statusRevokedDetail": "This credential has been revoked by its issuer",
+    "statusSuspendedDetail": "This credential has been suspended by its issuer"
   },
   "presentation": {
     "title": "Credential Request",
@@ -112,7 +120,8 @@
     "diagnosticMessagesToggle": "Diagnostic Messages",
     "diagnosticMessagesDescription": "Show the raw backend step token alongside the friendly progress label during a flow.",
     "photoIdOnboardingToggle": "PhotoID Onboarding",
-    "photoIdOnboardingDescription": "Show a \"Get your PhotoID\" shortcut on Home when this tenant offers identity-verified PhotoID issuance"
+    "photoIdOnboardingDescription": "Show a \"Get your PhotoID\" shortcut on Home when this tenant offers identity-verified PhotoID issuance",
+    "diipProfile": "DIIP profile"
   },
   "wscd": {
     "title": "WSCA Developer",

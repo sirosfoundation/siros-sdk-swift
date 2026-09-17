@@ -163,6 +163,20 @@ public struct WalletConfig: Sendable {
         set { issuerTrustEvaluationMode = newValue ? .localOnly : .remoteWithLocalFallback }
     }
 
+    /// The DIIP profile version this wallet targets - see ``DiipProfile``.
+    ///
+    /// Defaults to the newest this SDK implements. Each version is additive
+    /// over the one before, so the default does not drop support for an
+    /// ecosystem still on an older release; pin an older one only when a
+    /// deployment needs the wire details of that release exactly.
+    public var diipProfile: DiipProfile
+
+    /// Leeway, in seconds, applied when checking a credential's validity
+    /// window and a Status List Token's own lifetime - so a credential is not
+    /// shown as expired because of a few seconds of clock skew. Matches the
+    /// tolerance wallet-frontend applies to signature verification.
+    public var clockTolerance: TimeInterval
+
     public init(
         backendUrl: String,
         tenantId: String = "default",
@@ -182,7 +196,9 @@ public struct WalletConfig: Sendable {
         issuerTrustRootCertificatesPem: [String] = [],
         preferLocalIssuerTrustEvaluation: Bool = false,
         readerTrustEvaluationMode: MdocTrustEvaluationMode? = nil,
-        issuerTrustEvaluationMode: MdocTrustEvaluationMode? = nil
+        issuerTrustEvaluationMode: MdocTrustEvaluationMode? = nil,
+        diipProfile: DiipProfile = .latest,
+        clockTolerance: TimeInterval = 60
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -209,6 +225,8 @@ public struct WalletConfig: Sendable {
             ?? (preferLocalReaderTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
         self.issuerTrustEvaluationMode = issuerTrustEvaluationMode
             ?? (preferLocalIssuerTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
+        self.diipProfile = diipProfile
+        self.clockTolerance = clockTolerance
     }
 
     /// Discover the engine base URL from the backend's
