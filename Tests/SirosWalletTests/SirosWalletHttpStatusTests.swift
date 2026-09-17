@@ -6,27 +6,72 @@ import SirosCredentials
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
-/// Intercepts `URLSession.shared` so the real transport can be driven with a
-/// chosen status and body. Registered globally, which is what reaches
-/// `URLSession.shared`.
-private final class StubURLProtocol: URLProtocol {
-    nonisolated(unsafe) static var status = 200
-    nonisolated(unsafe) static var body = Data()
+/// A one-shot HTTP/1.1 server on the loopback interface, so the real transport
+/// can be driven with a chosen status and body.
+///
+/// Deliberately not a `URLProtocol` stub: registering one affects
+/// `URLSession.shared` process-wide, and on Linux it does not take effect once
+/// the shared session has been used by an earlier test - which passes in
+/// isolation and fails in the full suite. A real socket has neither problem.
+private final class LoopbackServer: @unchecked Sendable {
+    private let listenFd: Int32
+    let port: UInt16
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    init(status: Int, body: String) throws {
+        listenFd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        guard listenFd >= 0 else { throw Failure.socket }
+        var yes: Int32 = 1
+        setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
 
-    override func startLoading() {
-        let response = HTTPURLResponse(
-            url: request.url!, statusCode: Self.status, httpVersion: "HTTP/1.1", headerFields: nil
-        )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Self.body)
-        client?.urlProtocolDidFinishLoading(self)
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0 // any free port
+        addr.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian) // 127.0.0.1
+        let fd = listenFd
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 1) == 0 else { close(fd); throw Failure.bind }
+
+        var actual = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+        }
+        port = UInt16(bigEndian: actual.sin_port)
+
+        Thread.detachNewThread {
+            let conn = accept(fd, nil, nil)
+            guard conn >= 0 else { return }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            _ = recv(conn, &buf, buf.count, 0) // consume the request line + headers
+            let payload = Data(body.utf8)
+            let head = """
+            HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status))\r
+            Content-Type: application/json\r
+            Content-Length: \(payload.count)\r
+            Connection: close\r
+            \r
+
+            """
+            var out = Data(head.utf8)
+            out.append(payload)
+            out.withUnsafeBytes { _ = send(conn, $0.baseAddress, out.count, 0) }
+            close(conn)
+        }
     }
 
-    override func stopLoading() {}
+    func stop() { close(listenFd) }
+
+    enum Failure: Error { case socket, bind }
 }
 
 /// `SirosWallet.defaultHttpFn` is the transport every client the wallet builds
@@ -38,22 +83,11 @@ private final class StubURLProtocol: URLProtocol {
 /// stayed green. These drive the real function, so reverting it fails them.
 final class SirosWalletHttpStatusTests: XCTestCase {
 
-    override func setUp() {
-        super.setUp()
-        URLProtocol.registerClass(StubURLProtocol.self)
-    }
-
-    override func tearDown() {
-        URLProtocol.unregisterClass(StubURLProtocol.self)
-        super.tearDown()
-    }
-
     private func send(status: Int, body: String) async throws -> Data {
-        StubURLProtocol.status = status
-        StubURLProtocol.body = Data(body.utf8)
-        return try await SirosWallet.defaultHttpFn(
-            "POST", URL(string: "https://backend.example.invalid/auth/passkey/login/finish")!, [:], nil
-        )
+        let server = try LoopbackServer(status: status, body: body)
+        defer { server.stop() }
+        let url = URL(string: "http://127.0.0.1:\(server.port)/auth/passkey/login/finish")!
+        return try await SirosWallet.defaultHttpFn("POST", url, [:], nil)
     }
 
     func testSuccessfulResponseIsReturnedUnchanged() async throws {
@@ -62,7 +96,7 @@ final class SirosWalletHttpStatusTests: XCTestCase {
     }
 
     /// The case the whole blocked-state path depends on.
-    func testLifecycleRefusalArrivesAsBackendApiWithStatusAndBody() async {
+    func testLifecycleRefusalArrivesAsBackendApiWithStatusAndBody() async throws {
         let body = #"{"error":"WALLET_SUSPENDED","message":"This device is suspended"}"#
         do {
             _ = try await send(status: 403, body: body)
@@ -74,13 +108,11 @@ final class SirosWalletHttpStatusTests: XCTestCase {
             XCTAssertEqual(code, 403)
             XCTAssertEqual(carried, body, "the body must survive - the refusal code is in it")
             XCTAssertEqual(error.walletLifecycleRefusal, .suspended)
-        } catch {
-            XCTFail("unexpected \(error)")
         }
     }
 
     /// The case the erasure retry depends on.
-    func testErasureIncompleteArrivesAsBackendApi409() async {
+    func testErasureIncompleteArrivesAsBackendApi409() async throws {
         let body = #"{"error":"ERASURE_INCOMPLETE","revoked":2}"#
         do {
             _ = try await send(status: 409, body: body)
@@ -91,8 +123,6 @@ final class SirosWalletHttpStatusTests: XCTestCase {
             }
             XCTAssertEqual(code, 409)
             XCTAssertEqual(carried, body)
-        } catch {
-            XCTFail("unexpected \(error)")
         }
     }
 }
