@@ -7,10 +7,10 @@ import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
 
-/// The DIIP holder-binding half of the keystore: `did:jwk` key naming, the
-/// `jwt` proof shape, and looking a key up by whichever identifier a
-/// credential happens to name it with.
-final class DiipHolderBindingTests: XCTestCase {
+/// The holder-binding half of the keystore, where HAIP and DIIP part company:
+/// `did:jwk` key naming, the two `jwt` proof shapes, and looking a key up by
+/// whichever identifier a credential happens to name it with.
+final class HolderBindingTests: XCTestCase {
 
     private let prfOutput = Data(0..<32)
     private let hkdfSalt = Data((0..<32).map { UInt8($0 + 0x10) })

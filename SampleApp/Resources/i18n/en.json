@@ -65,7 +65,8 @@
     "statusExpiredDetail": "This credential has expired",
     "statusNotYetValidDetail": "This credential is not valid yet",
     "statusRevokedDetail": "This credential has been revoked by its issuer",
-    "statusSuspendedDetail": "This credential has been suspended by its issuer"
+    "statusSuspendedDetail": "This credential has been suspended by its issuer",
+    "fieldHolderBinding": "Holder binding"
   },
   "presentation": {
     "title": "Credential Request",

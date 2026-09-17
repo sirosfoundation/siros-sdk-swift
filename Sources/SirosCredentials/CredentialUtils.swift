@@ -252,6 +252,25 @@ public enum CredentialUtils {
     /// the advertised type, so an issuer that advertises one type and issues
     /// another would have every one of those decisions made about the wrong
     /// credential.
+    /// How this credential names the Holder key it is bound to - which is also
+    /// which interoperability profile it was issued under.
+    ///
+    /// A `cnf.kid` naming a DID verification method is DIIP; a `cnf.jwk`
+    /// carrying the key is HAIP. An mdoc always carries the device key by
+    /// value, so it is the HAIP form by construction. Nil when the credential
+    /// has no holder binding at all.
+    ///
+    /// Nothing in the wallet needs to be told this - signing follows the `cnf`
+    /// directly (see `KeystoreManager.signVpToken`) - but it is what a person
+    /// debugging a wallet that talks to both ecosystems wants to see.
+    public static func holderBinding(_ credential: StoredCredential) -> HolderBinding? {
+        if credential.format == "mso_mdoc" { return .embeddedJwk }
+        guard let cnf = parseJwtPayload(credential.raw)?["cnf"] as? [String: Any] else { return nil }
+        if cnf["kid"] != nil { return .didJwk }
+        if cnf["jwk"] != nil { return .embeddedJwk }
+        return nil
+    }
+
     /// The claims DIIP's Validity and Revocation Algorithm reads - the
     /// validity window and the Token Status List reference - normalised to one
     /// JSON shape across credential formats.
