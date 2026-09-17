@@ -197,6 +197,33 @@ final class HolderBindingTests: XCTestCase {
         )
     }
 
+    func testABatchIssuanceBindsEachCredentialToItsOwnKey() async throws {
+        // freshKey is what OID4VCI batch issuance means: without it every copy
+        // in the batch shares one holder key, and presenting them is linkable.
+        let keystore = try await unlocked(.diip)
+        var kids: Set<String> = []
+        for _ in 0..<3 {
+            let proof = try await keystore.generateProof(
+                audience: "https://issuer.example", nonce: "nonce", freshKey: true
+            )
+            kids.insert(try XCTUnwrap(JwtHelpers.parseJwtHeader(proof)?["kid"] as? String))
+        }
+        XCTAssertEqual(kids.count, 3, "each proof names a different key")
+        XCTAssertEqual(keystore.listKeys().count, 3)
+    }
+
+    func testWithoutFreshKeyTheWalletReusesTheKeyItHas() async throws {
+        let keystore = try await unlocked(.diip)
+        let kid = try await keystore.generateKey()
+        for _ in 0..<2 {
+            let proof = try await keystore.generateProof(
+                audience: "https://issuer.example", nonce: "nonce", freshKey: false
+            )
+            XCTAssertEqual(JwtHelpers.parseJwtHeader(proof)?["kid"] as? String, kid)
+        }
+        XCTAssertEqual(keystore.listKeys().count, 1)
+    }
+
     // MARK: - presenting what the wallet already holds
 
     func testACredentialBoundByCnfKidIsPresentedWithAKbJwtNamingThatKey() async throws {

@@ -327,21 +327,33 @@ public enum Did {
     /// Strip a JWK down to the members that identify the public key, in a
     /// fixed order, so that the same key always yields the same `did:jwk`.
     ///
-    /// `d` and the other private members must never reach a DID; `ext` and
-    /// `key_ops` are WebCrypto bookkeeping rather than part of the key.
+    /// The members kept are exactly RFC 7638's required ones for the key type
+    /// - the same set a JWK thumbprint is computed over. That is what makes
+    /// the mapping one-to-one: a key that also carries `alg`, `use`, `kid` or
+    /// WebCrypto bookkeeping (`ext`, `key_ops`) must not get a different DID
+    /// from the same key without them, or one wallet's `did:jwk` stops
+    /// matching another's for the same key pair. Private members never reach a
+    /// DID at all.
     ///
-    /// The order is lexicographic, which is not an arbitrary choice: it is
-    /// both RFC 7638's canonicalization and what wallet-frontend ends up
+    /// The order is lexicographic, which is not an arbitrary choice either: it
+    /// is both RFC 7638's canonicalization and what wallet-frontend ends up
     /// emitting (it stringifies a WebCrypto `exportKey("jwk")` result, which
     /// comes back alphabetically ordered, with `ext`/`key_ops` destructured
     /// away). The same key has to produce the same DID on every client that
     /// reads the shared `privatedata` container, so this has to match rather
     /// than merely be stable.
     static func canonicalPublicJwk(_ jwk: [String: String]) -> [(String, String)] {
-        let identifying: Set<String> = ["kty", "crv", "x", "y", "e", "n", "alg", "use"]
-        return jwk.keys.filter { identifying.contains($0) }.sorted().compactMap { member in
-            jwk[member].map { (member, $0) }
+        let required: [String]
+        switch jwk["kty"] {
+        case "EC": required = ["crv", "kty", "x", "y"]
+        case "OKP": required = ["crv", "kty", "x"]
+        case "RSA": required = ["e", "kty", "n"]
+        case "oct": required = ["k", "kty"]
+        // An unknown key type has no defined required set; keeping only what
+        // is certainly part of every JWK is safer than guessing a wider one.
+        default: required = ["kty"]
         }
+        return required.compactMap { member in jwk[member].map { (member, $0) } }
     }
 
     /// The `kid` a credential's `cnf` claim binds it to.

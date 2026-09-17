@@ -26,6 +26,9 @@ private let logger = Logger(subsystem: "org.siros.sdk", category: "TokenStatusLi
 /// - SeeAlso: [draft-ietf-oauth-status-list-15](https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/15/)
 public enum TokenStatusList {
 
+    /// The entry widths the draft allows, in bits.
+    public static let entryWidths: Set<Int> = [1, 2, 4, 8]
+
     /// Status values registered by the Token Status List draft.
     public enum Status {
         public static let valid = 0x00
@@ -74,7 +77,7 @@ public enum TokenStatusList {
     /// within each byte. Returns nil when `bits` is not a legal width or the
     /// index lies past the end of the list.
     public static func readStatus(in list: Data, bits: Int, idx: Int) -> Int? {
-        guard [1, 2, 4, 8].contains(bits), idx >= 0 else { return nil }
+        guard entryWidths.contains(bits), idx >= 0 else { return nil }
         let entriesPerByte = 8 / bits
         let byteIndex = idx / entriesPerByte
         guard byteIndex < list.count else { return nil }
@@ -213,6 +216,15 @@ public actor TokenStatusListClient {
         }
         guard let bits = (statusList["bits"] as? NSNumber)?.intValue else {
             return .unavailable("Status List Token declares no entry width")
+        }
+        // Checked here rather than left to readStatus, which can only report
+        // "no status at this index" - a misleading thing to tell someone
+        // debugging an issuer that published an illegal width.
+        guard TokenStatusList.entryWidths.contains(bits) else {
+            let allowed = TokenStatusList.entryWidths.sorted().map(String.init).joined(separator: ", ")
+            return .unavailable(
+                "Status List Token declares an entry width of \(bits) bits; the draft allows \(allowed)"
+            )
         }
         guard let lst = statusList["lst"] as? String,
               let inflated = TokenStatusList.inflate(EncryptedContainerBase64.urlDecode(lst))

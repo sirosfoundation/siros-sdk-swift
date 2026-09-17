@@ -50,6 +50,17 @@ final class DidTests: XCTestCase {
         XCTAssertFalse(decoded.contains("key_ops"))
     }
 
+    func testOptionalJwkMembersDoNotChangeTheIdentifier() {
+        // A key that also carries `alg`, `use` or a `kid` is the same key, and
+        // must get the same DID - otherwise one client's did:jwk stops
+        // matching another's for the same key pair in the shared container.
+        var annotated = p256Jwk
+        annotated["alg"] = "ES256"
+        annotated["use"] = "sig"
+        annotated["kid"] = "whatever"
+        XCTAssertEqual(Did.createDidJwk(annotated), Did.createDidJwk(p256Jwk))
+    }
+
     func testTheIdentifierIsLexicographicallyOrdered() {
         // Not arbitrary: it is RFC 7638's canonicalization and what
         // wallet-frontend emits, and the same key must yield the same DID on

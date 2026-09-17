@@ -1,6 +1,11 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 @testable import SirosCredentials
 
 final class TokenStatusListTests: XCTestCase {
@@ -41,6 +46,56 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 1, idx: 8))
         XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 8, idx: 1))
         XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 1, idx: -1))
+    }
+
+    func testAnIllegalEntryWidthIsReportedAsSuchNotAsAMissingIndex() async {
+        // "Index 1 is outside the status list" would send whoever is debugging
+        // the issuer looking in entirely the wrong place.
+        let key = P256.Signing.PrivateKey()
+        let token = Self.statusListToken(bits: 3, signedBy: key)
+        let client = TokenStatusListClient(
+            httpGet: { _, _ in Data(token.utf8) },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+        let resolution = await client.resolve(
+            TokenStatusList.Reference(idx: 1, uri: "https://x.example")
+        )
+        guard case .unavailable(let reason) = resolution else {
+            return XCTFail("expected an unavailable status, got \(resolution)")
+        }
+        XCTAssertTrue(reason.contains("entry width of 3 bits"), reason)
+    }
+
+    /// A properly signed Status List Token declaring `bits` as its entry width.
+    ///
+    /// Really signed, because the reader verifies the signature before it
+    /// looks at the list - an unsigned shell never reaches the width check.
+    private static func statusListToken(bits: Int, signedBy key: P256.Signing.PrivateKey) -> String {
+        func b64(_ object: [String: Any]) -> String {
+            EncryptedContainerBase64.urlEncode(
+                // swiftlint:disable:next force_try
+                try! JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
+            )
+        }
+        let header = b64(["alg": "ES256", "typ": "statuslist+jwt"])
+        let payload = b64([
+            "iss": "https://issuer.example",
+            "status_list": ["bits": bits, "lst": "eJw="],
+        ])
+        let signingInput = "\(header).\(payload)"
+        // swiftlint:disable:next force_try
+        let signature = try! key.signature(for: Data(signingInput.utf8))
+        return "\(signingInput).\(EncryptedContainerBase64.urlEncode(signature.rawRepresentation))"
+    }
+
+    private static func publicJwk(of key: P256.Signing.PrivateKey) -> [String: String] {
+        let x963 = key.publicKey.x963Representation
+        return [
+            "kty": "EC",
+            "crv": "P-256",
+            "x": EncryptedContainerBase64.urlEncode(Data(x963[1..<33])),
+            "y": EncryptedContainerBase64.urlEncode(Data(x963[33..<65])),
+        ]
     }
 
     func testAnEntryWidthTheDraftDoesNotDefineIsRefused() {

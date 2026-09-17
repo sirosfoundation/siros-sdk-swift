@@ -424,9 +424,15 @@ final class WalletViewModel: ObservableObject {
     /// id and finds nothing for a credential that is fine.
     func refreshCredentialStatuses() {
         guard let wallet else { return }
-        Task { @MainActor in
+        // Evaluating a credential's status parses it (CBOR, for an mdoc) and
+        // can fetch and verify the issuer's status list, so the work runs off
+        // the main actor; only the result is published back to the UI.
+        Task.detached(priority: .utility) { [weak self] in
             let statuses = await wallet.refreshCredentialStatuses()
-            credentialStatuses = statuses.filter { $0.value != .valid }
+            let unusable = statuses.filter { $0.value != .valid }
+            await MainActor.run { [weak self] in
+                self?.credentialStatuses = unusable
+            }
         }
     }
 

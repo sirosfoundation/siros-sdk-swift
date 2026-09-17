@@ -334,9 +334,15 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         defer { mutex.unlock() }
         try requireUnlocked()
 
+        // `freshKey` means batch issuance: each credential in the batch must
+        // be bound to its own key, or every copy shares one holder key and
+        // presenting them is linkable. Honouring it also keeps the recorded
+        // per-credential `kid` meaningful.
         let keyId: String
         let key: P256.Signing.PrivateKey
-        if let first = keys.first {
+        if freshKey {
+            (keyId, key) = registerNewKey()
+        } else if let first = keys.first {
             (keyId, key) = (first.key, first.value)
         } else {
             (keyId, key) = registerNewKey()
