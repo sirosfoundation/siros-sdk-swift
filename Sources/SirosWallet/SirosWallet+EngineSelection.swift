@@ -129,6 +129,41 @@ extension SirosWallet {
         }
     }
 
+    /// Why a selection cannot be presented even though credentials were
+    /// chosen: the copies behind them are spent (or their keys are gone).
+    /// Shared by both engine handlers so they say the same thing.
+    static let ineligibleSelectionReason = "selected credential has no eligible copies remaining"
+
+    /// Whether this selection can be presented at all, and if not, what to
+    /// tell the engine. `nil` means go ahead: credentials were selected and
+    /// every one of them is still presentable.
+    ///
+    /// Two ways to end up with nothing to send, and neither is a refusal:
+    /// nothing was selected (see `answerForEmptySelection`), or something was
+    /// selected that the consumption policy/keystore no longer considers
+    /// usable. The second is why this is not just an empty-selection check:
+    /// an app following the documented path shows exhausted copies too (so it
+    /// can offer a renewal), so it can hand back an id that cannot be
+    /// presented - which used to throw, and the handler's catch reported that
+    /// to the verifier as a decline, exactly the wallet-side inability
+    /// masquerading as a user refusal this change exists to remove.
+    ///
+    /// A partly-eligible selection is treated the same as a wholly ineligible
+    /// one: `EngineSelection` reduces eligibility to "is everything selected
+    /// still usable", deliberately, and presenting the usable subset would
+    /// send something other than what the user approved - and might not
+    /// satisfy the query anyway.
+    static func unpresentableAnswer(
+        dcqlQuery: [String: Any]?,
+        selection: EngineSelection
+    ) -> NoSelectionAnswer? {
+        if selection.selectedIds.isEmpty {
+            return answerForEmptySelection(dcqlQuery: dcqlQuery, selection: selection)
+        }
+        guard selection.allSelectedEligible else { return .noMatch(reason: ineligibleSelectionReason) }
+        return nil
+    }
+
     /// Which of the two an empty `selectedIds` is.
     ///
     /// The distinction matters on the wire: `decline` is forwarded to the

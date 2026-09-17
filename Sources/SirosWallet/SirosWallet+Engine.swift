@@ -1013,23 +1013,20 @@ extension SirosWallet {
             // format/zkSystemTypes/ppidContext.
             lock.lock(); pendingMatchResultsByFlow[flowId] = matchResults; lock.unlock()
 
-            if selectedIds.isEmpty {
-                switch Self.answerForEmptySelection(dcqlQuery: dcqlQuery, selection: selection) {
+            // Nothing to present - because nothing matched, or because what
+            // was selected can no longer be presented (the app is trusted to
+            // return only ids it was offered, but shouldn't be the only thing
+            // enforcing consumption - defense in depth). Only a user who was
+            // shown a presentable credential and chose it not is a decline;
+            // see `unpresentableAnswer`.
+            if let answer = Self.unpresentableAnswer(dcqlQuery: dcqlQuery, selection: selection) {
+                switch answer {
                 case .noMatch(let reason):
-                    // Nothing to present, and nobody was asked - see
-                    // `answerForEmptySelection` for why this is not a decline.
                     engine.sendCredentialsMatched(flowId: flowId, matches: [], noMatchReason: reason)
                 case .declined:
                     engine.sendFlowAction(flowId: flowId, action: "decline", payload: ["reason": .string("user_declined")])
                 }
                 return
-            }
-
-            // The app is trusted to only return IDs it was offered, but
-            // shouldn't be the only thing enforcing consumption -
-            // re-validate here too (defense in depth).
-            guard selection.allSelectedEligible else {
-                throw SirosError.wallet(message: "Selected credential has no eligible copies remaining - renew it to get more")
             }
 
             var seenClaims = Set<String>()
@@ -1107,7 +1104,7 @@ extension SirosWallet {
             // Still answer: the engine's RequestMatch blocks on a match
             // response, so returning silently left it waiting for one that was
             // never coming.
-            engine.sendMatchResponse(flowId: msg.flowId, matches: [], noMatchReason: "selected credential has no eligible copies remaining")
+            engine.sendMatchResponse(flowId: msg.flowId, matches: [], noMatchReason: Self.ineligibleSelectionReason)
             return
         }
 

@@ -442,13 +442,18 @@ final class SirosWalletNoMatchingCredentialTests: XCTestCase {
 
     // MARK: - decline vs. nothing to present
 
-    private func makeSelection(candidates: [StoredCredential], couldHaveConsented: Bool) -> SirosWallet.EngineSelection {
+    private func makeSelection(
+        candidates: [StoredCredential],
+        couldHaveConsented: Bool,
+        selectedIds: [Int64] = [],
+        allSelectedEligible: Bool = true
+    ) -> SirosWallet.EngineSelection {
         SirosWallet.EngineSelection(
             matchResults: [],
             candidates: candidates,
-            selectedIds: [],
+            selectedIds: selectedIds,
             zkRequestedIds: [],
-            allSelectedEligible: true,
+            allSelectedEligible: allSelectedEligible,
             couldHaveConsented: couldHaveConsented
         )
     }
@@ -499,6 +504,71 @@ final class SirosWalletNoMatchingCredentialTests: XCTestCase {
 
         XCTAssertEqual(answer, .declined)
         XCTAssertEqual(answer.reason, "user selected none of the matching credentials")
+    }
+
+    // MARK: - a selection that cannot be presented
+
+    /// The same failure mode one step later: the app followed the documented
+    /// path, showed an exhausted copy, and the user picked it. That used to
+    /// throw, and the handler's catch reported it to the verifier as a
+    /// decline - the wallet's own inability dressed up as a user refusal.
+    func testUnpresentableAnswer_ineligibleSelection_isNoMatchNotDecline() {
+        let answer = SirosWallet.unpresentableAnswer(
+            dcqlQuery: nil,
+            selection: makeSelection(
+                candidates: [makeCredential(id: 1)],
+                couldHaveConsented: true,
+                selectedIds: [1],
+                allSelectedEligible: false
+            )
+        )
+
+        XCTAssertEqual(answer, .noMatch(reason: SirosWallet.ineligibleSelectionReason))
+    }
+
+    /// A partly-eligible selection takes the same path: `EngineSelection`
+    /// deliberately reduces eligibility to "is everything selected still
+    /// usable", and presenting whichever subset happens to survive would send
+    /// something other than what the user approved - and might not satisfy the
+    /// query anyway.
+    func testUnpresentableAnswer_partlyEligibleSelection_isAlsoNoMatch() {
+        let answer = SirosWallet.unpresentableAnswer(
+            dcqlQuery: nil,
+            selection: makeSelection(
+                candidates: [makeCredential(id: 1), makeCredential(id: 2)],
+                couldHaveConsented: true,
+                selectedIds: [1, 2],
+                allSelectedEligible: false
+            )
+        )
+
+        XCTAssertEqual(answer, .noMatch(reason: SirosWallet.ineligibleSelectionReason))
+    }
+
+    /// The ordinary case: something was chosen and all of it can be
+    /// presented, so the handler goes on to consent.
+    func testUnpresentableAnswer_presentableSelection_isNil() {
+        XCTAssertNil(SirosWallet.unpresentableAnswer(
+            dcqlQuery: nil,
+            selection: makeSelection(
+                candidates: [makeCredential(id: 1)],
+                couldHaveConsented: true,
+                selectedIds: [1]
+            )
+        ))
+    }
+
+    /// An empty selection still answers exactly as `answerForEmptySelection`
+    /// decides - the two callers must not drift apart.
+    func testUnpresentableAnswer_emptySelection_delegatesToEmptySelectionRule() {
+        let declining = makeSelection(candidates: [makeCredential(id: 1)], couldHaveConsented: true)
+        XCTAssertEqual(SirosWallet.unpresentableAnswer(dcqlQuery: nil, selection: declining), .declined)
+
+        let nothingToPresent = makeSelection(candidates: [], couldHaveConsented: false)
+        XCTAssertEqual(
+            SirosWallet.unpresentableAnswer(dcqlQuery: nil, selection: nothingToPresent),
+            .noMatch(reason: "no stored credential matches the request")
+        )
     }
 
     /// `NO_MATCHING_CREDENTIAL`'s details, which the SDK used to decode only

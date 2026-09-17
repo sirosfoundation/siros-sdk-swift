@@ -17,7 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go-wallet-backend (#335/#336) ends the flow at once with
   `NO_MATCHING_CREDENTIAL`, naming the credential types the query asked for,
   and tells the verifier so its session ends rather than expiring. A user
-  who was offered candidates and chose none still declines, as before.
+  who was offered a credential they could actually present, and chose none,
+  still declines, as before.
+- A selection the wallet cannot present - the app may show exhausted copies
+  so it can offer a renewal, and the user may pick one - took the same wrong
+  path one step later: it threw, and the handler's catch reported a decline.
+  It now reports the same empty match set, with a reason saying the copies
+  are spent.
 - `no_match_reason` is no longer dropped on either transport:
   `WalletEngineSession.sendMatchResponse` and the WMP profile's
   `match_response` both carry it (`MatchResult` gained `noMatchReason`).
