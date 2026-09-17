@@ -264,9 +264,40 @@ extension SirosWallet {
         if let existing = sessionStore.instanceKeyId {
             return existing
         }
-        let keyId = try await keystore.generateKey(algorithm: "ES256")
-        sessionStore.instanceKeyId = keyId
-        return keyId
+        // First use has to be serialised. Two callers arriving together - an
+        // engine `buildClientAuth` and a Devices listing, say - would otherwise
+        // each generate an ES256 key and each persist it, and whichever lost
+        // the race would already have published a WIA for a key the store no
+        // longer names. The instance id the backend knows would then disagree
+        // with the one this wallet proves, breaking later PoPs and
+        // `isThisDevice`. Sharing one in-flight task gives every caller the
+        // same key.
+        lock.lock()
+        if let inFlight = instanceKeyTask {
+            lock.unlock()
+            return try await inFlight.value
+        }
+        let task = Task<String, Error> { [weak self] in
+            guard let self else { throw SirosError.wallet(message: "Wallet released") }
+            // Re-check under the task: a caller that lost the race above may
+            // have persisted one already.
+            if let existing = self.sessionStore.instanceKeyId { return existing }
+            let keyId = try await self.keystore.generateKey(algorithm: "ES256")
+            self.sessionStore.instanceKeyId = keyId
+            return keyId
+        }
+        instanceKeyTaskToken &+= 1
+        let token = instanceKeyTaskToken
+        instanceKeyTask = task
+        lock.unlock()
+        defer {
+            lock.lock()
+            // Only clear it if it is still ours, so a failed generation can be
+            // retried by the next caller rather than cached forever.
+            if instanceKeyTaskToken == token { instanceKeyTask = nil }
+            lock.unlock()
+        }
+        return try await task.value
     }
 
     /// Obtain (fetching + caching, refreshing before expiry) a Wallet
@@ -288,7 +319,12 @@ extension SirosWallet {
         if let wia = cached, expiresAt - now > 60 {
             return wia
         }
-        lock.lock(); let client = apiClient; lock.unlock()
+        lock.lock()
+        let client = apiClient
+        // The session this attestation is being fetched for; see where it is
+        // published below.
+        let generation = sessionGeneration
+        lock.unlock()
         guard let client else { return nil }
         do {
             let keyId = try await ensureInstanceKeyId()
@@ -382,7 +418,19 @@ extension SirosWallet {
                 )
             }
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
-            lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
+            lock.lock()
+            // Only publish a WIA that still belongs to the session that asked
+            // for it. This function performs several awaits, and a logout,
+            // account switch or new login landing in that window resets the
+            // cache; storing afterwards would make `thisInstanceId` and
+            // `currentWalletInstanceId()` answer with the PREVIOUS account's
+            // thumbprint for the new session. The caller still gets its own
+            // result - it is only the cache that is refused.
+            if sessionGeneration == generation {
+                cachedWia = wia
+                cachedWiaExpiresAt = expiresAt
+            }
+            lock.unlock()
             return wia
         } catch {
             return nil

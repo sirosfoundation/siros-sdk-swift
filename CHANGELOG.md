@@ -34,9 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     wallet is a state, not an error. Entered from `login()`,
     `unlockKeystore()`, `resumeSession()` and from the SDK's own re-login
     whenever the authorization server answers `403` with `WALLET_SUSPENDED` or
-    `WALLET_REVOKED`. A suspended instance keeps its cached account (it can be
-    reactivated elsewhere); a revoked one forgets it, because its server-side
-    data is erased and that passkey can never log in to this tenant again.
+    `WALLET_REVOKED`. Neither reason discards anything local - see the
+    correction under **Changed** for why `WALLET_REVOKED` is not proof the
+    wallet was erased - and the state carries the backend's own message so the
+    app can tell the user which case it is.
   - **One self-driven re-login after a token cut-off.** Any lifecycle change
     refuses every token issued before it, so the reauthentication signal now
     drops the tokens, API client and engine session and attempts `login()`
