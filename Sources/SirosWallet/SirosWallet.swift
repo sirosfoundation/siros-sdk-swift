@@ -253,6 +253,13 @@ public final class SirosWallet: @unchecked Sendable {
         if let peer { try? await peer.close() }
         cancelEngineTasks()
         authTokens?.clear()
+        // Lock the key material too, the way logout() does. The session is
+        // already gone server-side; if the replacement login then fails (a
+        // cancelled passkey ceremony, no network, or a lifecycle refusal) the
+        // wallet must not be left holding an unlocked keystore whose
+        // credentials are still signable. A successful login() unlocks it
+        // again as part of its normal path.
+        keystore.lock()
         // login() puts every outcome in the state itself; its `throw` is only
         // for the unexpected branch and must not escape a self-driven attempt.
         try? await login()
