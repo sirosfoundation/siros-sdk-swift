@@ -101,6 +101,17 @@ struct CredentialDetailView: View {
 
                 infoRow(L10n.string("credentials.fieldFormat"), credential.format)
 
+                // Which interoperability profile this credential was issued
+                // under, read off its own holder binding. Informational: the
+                // wallet needs no setting to present it correctly, and this is
+                // simply what a dual-ecosystem wallet is hard to debug without.
+                if let binding = CredentialUtils.holderBinding(credential) {
+                    infoRow(
+                        L10n.string("credentials.fieldHolderBinding"),
+                        binding == .didJwk ? "DIIP (cnf.kid)" : "HAIP (cnf.jwk)"
+                    )
+                }
+
                 if let vct = credential.metadata?.vct {
                     infoRow(L10n.string("credentials.fieldType"), vct)
                 }
