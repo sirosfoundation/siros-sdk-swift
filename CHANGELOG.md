@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a generic error. Strings in `SampleApp/Resources/i18n/`.
 
 ### Changed
+- **Source-breaking: `WalletState` has a new case.** `.lifecycleBlocked` means
+  an exhaustive `switch` over `WalletState` no longer compiles without an arm
+  for it (the SampleApp needed one). Add a case, or a `default`, when
+  upgrading.
 - **`SirosWallet.deactivateWallet(reason:)` and
   `BackendApiClient.revokeAllWalletInstances(reason:)` return
   `DeactivationOutcome(revoked:complete:)`** instead of a bare count. The

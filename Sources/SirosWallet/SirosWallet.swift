@@ -981,6 +981,10 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "AuthServerClient not initialized")
         }
         setState(.connecting)
+        // See logout()'s identical reset: this enrollment gets its own
+        // instance key, so any WIA still cached from an earlier account must
+        // not be what identifies this device afterwards.
+        lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
         do {
             let prfSalt = Self.randomBytes(32)
             let hkdfSalt = Self.randomBytes(32)
@@ -1118,6 +1122,10 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "AuthServerClient not initialized")
         }
         setState(.connecting)
+        // See logout()'s identical reset: a WIA still cached from another
+        // account (or from before a re-enrollment) must not be what identifies
+        // this device once this login resolves.
+        lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
         do {
             // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
             let assertion = try await performPasskeyAssertion(asClient: asClient)
@@ -1221,6 +1229,11 @@ public final class SirosWallet: @unchecked Sendable {
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()
+        // The WIA cache is wallet-wide but the instance key it attests is
+        // account-scoped, so a WIA kept across a logout would answer
+        // `thisInstanceId` (and `wallet_instance_id`) with the PREVIOUS
+        // account's thumbprint for the next one. It is cheap to reissue.
+        lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
         Task {
             try? await authServerClient?.logout()
         }
