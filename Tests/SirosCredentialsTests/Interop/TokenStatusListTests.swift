@@ -77,12 +77,17 @@ final class TokenStatusListTests: XCTestCase {
                 try! JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
             )
         }
-        let header = b64(["alg": "ES256", "typ": "statuslist+jwt"])
-        let payload = b64([
+        // Spelled out rather than written as one nested literal: Swift 6.1's
+        // type-checker gives up on the heterogeneous inner dictionary
+        // ("unable to type-check this expression in reasonable time"), which
+        // is the Swift version CI builds Linux with.
+        let header: [String: Any] = ["alg": "ES256", "typ": "statuslist+jwt"]
+        let statusList: [String: Any] = ["bits": bits, "lst": "eJw="]
+        let payload: [String: Any] = [
             "iss": "https://issuer.example",
-            "status_list": ["bits": bits, "lst": "eJw="],
-        ])
-        let signingInput = "\(header).\(payload)"
+            "status_list": statusList,
+        ]
+        let signingInput = "\(b64(header)).\(b64(payload))"
         // swiftlint:disable:next force_try
         let signature = try! key.signature(for: Data(signingInput.utf8))
         return "\(signingInput).\(EncryptedContainerBase64.urlEncode(signature.rawRepresentation))"
@@ -156,9 +161,16 @@ final class TokenStatusListTests: XCTestCase {
         let compressed = Data(base64Encoded: base64)
         XCTAssertNotNil(compressed)
 
-        let expected = Data(
-            (0..<300).map { UInt8(($0 * 7 + 3) % 251) }.repeated(6) + [UInt8](repeating: 0x41, count: 500)
-        )
+        // Built in named steps with explicit types: Swift 6.1's type-checker
+        // gives up on the one-expression form (`.map {}.repeated() + [...]`
+        // inside a `Data.init` overload set), and 6.1 is what CI builds Linux
+        // with.
+        let pattern: [UInt8] = (0..<300).map { index in UInt8((index * 7 + 3) % 251) }
+        let repeatedPattern: [UInt8] = pattern.repeated(6)
+        let run: [UInt8] = [UInt8](repeating: 0x41, count: 500)
+        var bytes: [UInt8] = repeatedPattern
+        bytes.append(contentsOf: run)
+        let expected = Data(bytes)
         XCTAssertEqual(TokenStatusList.inflate(compressed!), expected)
     }
 
