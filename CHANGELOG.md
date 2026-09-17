@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-17
+
 ### Fixed
 - **Type metadata is now resolved *by* the digest a credential pinned, not
   merely checked against it afterwards** (ports siros-sdk-kotlin#191). A
