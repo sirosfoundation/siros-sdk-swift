@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `siros-wscd-manager` XCFramework 0.8.1 -> 0.9.1: key ids minted by the
+  softkey and FIDO2 plugins are now RFC 7638 JWK thumbprints (existing ids
+  keep resolving); FIDO2 plugin state restored via
+  `registerFido2PluginWithState` now rebinds its keys to the plugin.
+
 ## [0.9.0] - 2026-09-16
 
 ### Added
