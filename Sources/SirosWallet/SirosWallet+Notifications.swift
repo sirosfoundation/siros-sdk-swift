@@ -196,7 +196,7 @@ extension SirosWallet {
     }
 
     /// Refuse a credential whose issuer pinned its type metadata to something
-    /// other than what the wallet resolved.
+    /// the wallet cannot find.
     ///
     /// SD-JWT VC Type Metadata lets the credential carry `vct#integrity`, a
     /// digest over the type metadata document. It exists so the *issuer*
@@ -206,24 +206,68 @@ extension SirosWallet {
     /// vouched for it, and even for a type the issuer is legitimately
     /// registered to issue.
     ///
+    /// The pin is an input to resolution, not a verdict on its output. When the
+    /// document the wallet holds disagrees with it, that is ordinary rather
+    /// than hostile: the document may have been cached before the issuer
+    /// changed it, or come from a source serving a different copy. So resolve
+    /// again, directed by the pin this time, and let the credential through if
+    /// the issuer's own document can still be found anywhere. Only a wallet
+    /// that cannot find it at all refuses — the security property is unchanged,
+    /// because a document that does not hash to the pin is never accepted.
+    ///
     /// Only checked when the credential asks for it: a credential with no
     /// `vct#integrity` is making no claim about its metadata, so there is
     /// nothing to disagree with.
-    func verifyVctIntegrity(format: String, payload: [String: Any]) -> String? {
+    func verifyVctIntegrity(format: String, payload: [String: Any]) async -> String? {
         guard format != "mso_mdoc",
               let expected = payload["vct#integrity"] as? String else {
             return nil
         }
-        guard let document = activeVctmDocument else {
-            // The issuer pinned metadata the wallet never resolved. Nothing was
-            // applied, so nothing was tampered with.
+
+        lock.lock()
+        let document = activeVctmDocument
+        let offer = activeOffer
+        lock.unlock()
+
+        if let document,
+           let raw = document.raw.data(using: String.Encoding.utf8),
+           Integrity.matches(raw, expected) {
             return nil
         }
-        guard let raw = document.raw.data(using: String.Encoding.utf8),
-              Integrity.matches(raw, expected) else {
-            return "The issuer's type metadata does not match what it published"
+
+        var rediscovered: VctmDocument?
+        if let offer {
+            rediscovered = await vctmFetcher.fetchDocument(
+                issuerUrl: offer.credentialIssuerIdentifier,
+                scope: offer.credentialConfigurationId,
+                vct: offer.vct,
+                registryUrl: resolvedRegistryUrl,
+                expectedIntegrity: expected
+            )
         }
-        return nil
+
+        if let rediscovered {
+            #if canImport(os)
+            logger.info("Type metadata re-resolved to the document the issuer pinned")
+            #endif
+            lock.lock()
+            activeVctmDocument = rediscovered
+            activeVctm = rediscovered.vctm
+            lock.unlock()
+            return nil
+        }
+
+        if document == nil {
+            // Nothing was applied, so nothing was tampered with - but say so,
+            // because a credential asking to be checked and not being checked
+            // is exactly the state this method exists to make visible.
+            #if canImport(os)
+            logger.warning("Credential pinned vct#integrity but no type metadata could be resolved to check it against")
+            #endif
+            return nil
+        }
+
+        return "The issuer's type metadata does not match what it published"
     }
 
     private func deleteRenewalSourceBatch(_ oldBatchId: Int64) async {
@@ -314,7 +358,7 @@ extension SirosWallet {
         ) {
             return (false, reason)
         }
-        if let reason = verifyVctIntegrity(format: cred.format, payload: payload) {
+        if let reason = await verifyVctIntegrity(format: cred.format, payload: payload) {
             return (false, reason)
         }
 

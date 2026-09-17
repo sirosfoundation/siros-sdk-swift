@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Type metadata is now resolved *by* the digest a credential pinned, not
+  merely checked against it afterwards** (ports siros-sdk-kotlin#191). A
+  credential carries `vct#integrity` so the issuer, rather than whoever serves
+  the document, decides what its type means. The wallet treated that as a
+  verdict on whatever its resolver produced, so when the resolver produced the
+  wrong document the credential was simply refused - and a document cached
+  before an issuer changed what it publishes kept being handed out, with no way
+  for a server-side fix to reach the device.
+  - `VctmFetcher.fetchDocument` takes `expectedIntegrity`. Each source is tried
+    until one yields the document that hashes to it, rather than settling for
+    the first parseable body, and a cached document that fails it is not a hit
+    however fresh it is. With no expectation, behaviour is exactly as before.
+  - `SirosWallet` re-resolves against the pin when the document it holds
+    disagrees, and accepts the credential if the issuer's own document can
+    still be found anywhere. Only a wallet that cannot find it at all refuses,
+    so the security property is unchanged - a document that does not match the
+    pin is never accepted - and a stale cache heals itself.
+
 - **The wallet's own HTTP transport now reports error statuses.**
   `SirosWallet` built every client over a function that discarded the
   response, so a non-2xx arrived as a successful body: a `403` carrying
