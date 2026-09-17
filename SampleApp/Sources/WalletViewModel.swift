@@ -272,7 +272,11 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Wallet instance
 
-    private var wallet: SirosWallet?
+    // `private(set)` rather than `private`: the Devices actions live in
+    // `WalletViewModel+Devices.swift` (Swift extensions cannot hold stored
+    // properties, so only the behaviour moved) and need to read it. Still
+    // assigned only here.
+    private(set) var wallet: SirosWallet?
     private var stateTask: Task<Void, Never>?
     private var pendingAuthFlowId: String?
     /// The flow type of the most recent `.flowActive` state, captured in
@@ -404,13 +408,6 @@ final class WalletViewModel: ObservableObject {
     func renamePasskey(credentialId: String, nickname: String) {
         wallet?.renamePasskey(credentialId: credentialId, nickname: nickname)
         listPasskeysForUI()
-    }
-
-    /// Leaving the session must leave the Devices sub-screen: left set, it
-    /// would be what the next login renders instead of the wallet tabs.
-    private func resetDevicesNavigation() {
-        showDevices = false
-        walletInstances = []
     }
 
     func disconnect() {
@@ -567,97 +564,6 @@ final class WalletViewModel: ObservableObject {
     /// deactivated the wallet, but leaves residual server-side data for an
     /// administrator, and the user should be told which of the two happened.
     @Published var deactivationOutcome: DeactivationOutcome?
-
-    func openDevices() {
-        deactivationOutcome = nil
-        showDevices = true
-    }
-
-    func closeDevices() {
-        showDevices = false
-        devicesError = nil
-    }
-
-    func refreshDevices() {
-        Task { @MainActor in await loadDevices() }
-    }
-
-    /// The listing itself. `async` rather than fire-and-forget, so a caller
-    /// that must not re-enable its buttons until the list is current (see
-    /// `setWalletInstanceStatus`) can await it - otherwise a second status
-    /// write could start against a list still showing the pre-write state, and
-    /// the two refreshes could land out of order.
-    @MainActor
-    private func loadDevices() async {
-        guard let wallet else { return }
-        devicesLoading = true
-        devicesError = nil
-        do {
-            walletInstances = try await wallet.listWalletInstances()
-        } catch {
-            devicesError = error.localizedDescription
-        }
-        devicesLoading = false
-    }
-
-    /// Suspend, reactivate or revoke one instance. The SDK re-logs in after
-    /// the write (the change cuts this session's tokens off), so when the
-    /// target is this device the wallet may land in `.lifecycleBlocked` and
-    /// this screen disappears behind the blocked login screen - which is the
-    /// truthful outcome, not an error to report here.
-    func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) {
-        Task { @MainActor in
-            guard let wallet else { return }
-            devicesBusyInstanceId = instanceId
-            devicesError = nil
-            do {
-                _ = try await wallet.setWalletInstanceStatus(
-                    instanceId: instanceId, status: status, reason: reason
-                )
-                await loadDevices()
-                devicesBusyInstanceId = nil
-            } catch {
-                devicesError = error.localizedDescription
-                devicesBusyInstanceId = nil
-            }
-        }
-    }
-
-    /// Deactivate the wallet. The SDK forgets the local account in both
-    /// outcomes (the revocations stand even when the erasure cascade did not
-    /// finish), so this screen closes either way and the result is kept only
-    /// to be shown once before it does.
-    func deactivateWallet(reason: String? = nil) {
-        Task { @MainActor in
-            guard let wallet else { return }
-            deactivating = true
-            devicesError = nil
-            do {
-                let outcome = try await wallet.deactivateWallet(reason: reason)
-                deactivationOutcome = outcome
-                walletInstances = []
-                showAddCredential = false
-                showDevices = false
-                // deactivateWallet also forgets the account and logs out, so
-                // this screen is gone by the next render. Report the outcome
-                // through the app-wide banner instead, which the login screen
-                // shows too - otherwise a user who deactivated with an
-                // unfinished erasure would never learn that their provider
-                // still has cleanup to do.
-                if outcome.complete {
-                    infoMessage = L10n.string("devices.deactivateComplete", outcome.revoked)
-                    // `infoMessage` alone does not raise the banner - see
-                    // `syncBanner()`, which is driven by these flags.
-                    showInfo = true
-                } else {
-                    setError(L10n.string("devices.deactivateIncomplete", outcome.revoked))
-                }
-            } catch {
-                devicesError = error.localizedDescription
-            }
-            deactivating = false
-        }
-    }
 
     func openWscaDeveloper() {
         showWscaDeveloper = true
