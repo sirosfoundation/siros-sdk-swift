@@ -34,19 +34,43 @@ extension SirosWallet {
 
     /// The configured override for `issuer`, if a specific one was set.
     ///
-    /// A bare `hasPrefix` would also match `https://issuer.example.evil`
-    /// against an override for `https://issuer.example` - a different domain
-    /// entirely, handed another issuer's configuration. The boundary has to be
-    /// a path separator.
+    /// Compared as URLs, not as strings. A string prefix test matches
+    /// `https://issuer.example.evil` against an override for
+    /// `https://issuer.example` - a different domain handed another issuer's
+    /// configuration - and `https://issuer.example@evil.com/x` too, where the
+    /// part that looks like the configured issuer is only userinfo and the
+    /// real host is someone else's. Both are the same bug wearing different
+    /// clothes: whoever controls the matched string controls which profile is
+    /// used.
+    ///
+    /// So: scheme, host and port must be equal, the path must be the
+    /// configured one or a segment under it, and a URL carrying userinfo never
+    /// matches - a legitimate `credential_issuer` has none, and accepting one
+    /// only reopens the trick above.
     func issuerOverride(for issuer: String?) -> InteropProfile? {
-        guard let issuer else { return nil }
+        guard let issuer, let candidate = URL(string: issuer) else { return nil }
         return config.issuerInteropProfiles
-            .filter { entry in
-                let base = entry.key.hasSuffix("/") ? String(entry.key.dropLast()) : entry.key
-                return issuer == base || issuer == entry.key || issuer.hasPrefix(base + "/")
-            }
+            .filter { entry in Self.sameIssuer(candidate, entry.key) }
             .max { $0.key.count < $1.key.count }?
             .value
+    }
+
+    static func sameIssuer(_ candidate: URL, _ configured: String) -> Bool {
+        guard let base = URL(string: configured),
+              candidate.user == nil, candidate.password == nil,
+              base.user == nil, base.password == nil,
+              candidate.scheme?.lowercased() == base.scheme?.lowercased(),
+              candidate.host?.lowercased() == base.host?.lowercased(),
+              candidate.port == base.port
+        else { return false }
+
+        func trimmed(_ path: String) -> String {
+            path.hasSuffix("/") ? String(path.dropLast()) : path
+        }
+        let basePath = trimmed(base.path)
+        let candidatePath = trimmed(candidate.path)
+        if basePath.isEmpty { return true }
+        return candidatePath == basePath || candidatePath.hasPrefix(basePath + "/")
     }
 
     /// How the Holder's key should be named in an OID4VCI proof to `issuer` -
@@ -158,13 +182,34 @@ extension SirosWallet {
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = try? await thirdPartySession.data(for: request),
               let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else { return nil }
         return data
     }
 }
+
+/// The session third-party fetches go out on.
+///
+/// Not attaching an `Authorization` header is not enough on its own to say a
+/// request carries no wallet credentials: `URLSession.shared` keeps a shared
+/// cookie store and credential cache, so a cookie set by one of this wallet's
+/// own hosts would ride along to a third-party domain that happens to match -
+/// a leak no call site can see, because nothing at the call site mentions
+/// cookies. An ephemeral configuration with the cookie and credential storage
+/// removed is what makes the guarantee in `fetchPublicUrl` true rather than
+/// merely intended.
+private let thirdPartySession: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpCookieStorage = nil
+    configuration.httpCookieAcceptPolicy = .never
+    configuration.httpShouldSetCookies = false
+    configuration.urlCredentialStorage = nil
+    configuration.urlCache = nil
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    return URLSession(configuration: configuration)
+}()
 
 /// A small mutable cache of evaluated statuses.
 ///

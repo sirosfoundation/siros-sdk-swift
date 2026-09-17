@@ -89,16 +89,22 @@ final class DidTests: XCTestCase {
         let asked = AskedRecorder()
         let resolver = DidResolver { did in
             await asked.record(did)
-            return [
+            // Built up rather than written as one nested literal, for the same
+            // reason as TokenStatusListTests: Swift 6.1's type-checker gives
+            // up on deeply nested heterogeneous dictionary literals.
+            let jwk: [String: Any] = ["kty": "EC", "crv": "P-256", "x": "aa", "y": "bb"]
+            let method: [String: Any] = [
+                "id": "did:web:issuer.example#key-1",
+                "type": "JsonWebKey2020",
+                "controller": "did:web:issuer.example",
+                "publicKeyJwk": jwk,
+            ]
+            let document: [String: Any] = [
                 "id": "did:web:issuer.example",
-                "verificationMethod": [[
-                    "id": "did:web:issuer.example#key-1",
-                    "type": "JsonWebKey2020",
-                    "controller": "did:web:issuer.example",
-                    "publicKeyJwk": ["kty": "EC", "crv": "P-256", "x": "aa", "y": "bb"],
-                ]],
+                "verificationMethod": [method],
                 "assertionMethod": ["did:web:issuer.example#key-1"],
             ]
+            return document
         }
         let document = await resolver.resolve("did:web:issuer.example").document
         let value = await asked.value
