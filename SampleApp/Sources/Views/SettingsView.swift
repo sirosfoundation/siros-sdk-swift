@@ -58,6 +58,19 @@ struct SettingsView: View {
                     Text("Which secure key storage (software, R2PS remote HSM, or a FIDO2 security key) backs each credential, plus enrollment and developer diagnostics.")
                 }
 
+                // Devices (wallet instances, SID-AUTH-06) - one entry point
+                // into `DevicesView`, which owns the list and the two
+                // actions; this section stays a link, like the WSCD one above.
+                Section {
+                    Button(action: { viewModel.openDevices() }) {
+                        Label(L10n.string("devices.manageButton"), systemImage: "iphone")
+                    }
+                } header: {
+                    Text(L10n.string("devices.title"))
+                } footer: {
+                    Text(L10n.string("devices.description"))
+                }
+
                 // Passkeys section
                 Section("Passkeys") {
                     if viewModel.passkeys.isEmpty {

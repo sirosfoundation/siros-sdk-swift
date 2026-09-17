@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     stable error code and its user-facing explanation, without every call site
     re-parsing the body.
 
+- **Sample app: a Devices screen and a blocked-wallet screen.** Settings →
+  Devices lists this account's wallet instances (this-device badge, status,
+  key storage, last attested, reason) with per-row Suspend / Reactivate /
+  Remove and a footer that deactivates the wallet behind a typed confirmation,
+  reporting whether the backend confirmed the erasure.
+  `WalletState.lifecycleBlocked` gets its own screen - suspended explains and
+  offers a retry, revoked explains and offers a fresh enrollment - instead of
+  a generic error. Strings in `SampleApp/Resources/i18n/`.
+
 ### Changed
 - **`SirosWallet.deactivateWallet(reason:)` and
   `BackendApiClient.revokeAllWalletInstances(reason:)` return

@@ -157,6 +157,7 @@ final class WalletViewModel: ObservableObject {
     @Published var showHistory = false
     @Published var showQrScanner = false
     @Published var showWscaDeveloper = false
+    @Published var showDevices = false
     @Published var showProximityEngagement = false
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
@@ -543,6 +544,89 @@ final class WalletViewModel: ObservableObject {
             }
         }
         #endif
+    }
+
+    // MARK: - Devices (wallet instance lifecycle, SID-AUTH-06)
+
+    @Published var walletInstances: [WalletInstance] = []
+    @Published var devicesLoading = false
+    /// The instance whose status write is in flight, so its row can show a spinner.
+    @Published var devicesBusyInstanceId: String?
+    @Published var devicesError: String?
+    @Published var deactivating = false
+    /// What the last `deactivateWallet` call reported. Kept so the screen can
+    /// say whether the backend confirmed the erasure - an incomplete one still
+    /// deactivated the wallet, but leaves residual server-side data for an
+    /// administrator, and the user should be told which of the two happened.
+    @Published var deactivationOutcome: DeactivationOutcome?
+
+    func openDevices() {
+        deactivationOutcome = nil
+        showDevices = true
+    }
+
+    func closeDevices() {
+        showDevices = false
+        devicesError = nil
+    }
+
+    func refreshDevices() {
+        Task { @MainActor in
+            guard let wallet else { return }
+            devicesLoading = true
+            devicesError = nil
+            do {
+                walletInstances = try await wallet.listWalletInstances()
+            } catch {
+                devicesError = error.localizedDescription
+            }
+            devicesLoading = false
+        }
+    }
+
+    /// Suspend, reactivate or revoke one instance. The SDK re-logs in after
+    /// the write (the change cuts this session's tokens off), so when the
+    /// target is this device the wallet may land in `.lifecycleBlocked` and
+    /// this screen disappears behind the blocked login screen - which is the
+    /// truthful outcome, not an error to report here.
+    func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) {
+        Task { @MainActor in
+            guard let wallet else { return }
+            devicesBusyInstanceId = instanceId
+            devicesError = nil
+            do {
+                _ = try await wallet.setWalletInstanceStatus(
+                    instanceId: instanceId, status: status, reason: reason
+                )
+                devicesBusyInstanceId = nil
+                refreshDevices()
+            } catch {
+                devicesError = error.localizedDescription
+                devicesBusyInstanceId = nil
+            }
+        }
+    }
+
+    /// Deactivate the wallet. The SDK forgets the local account in both
+    /// outcomes (the revocations stand even when the erasure cascade did not
+    /// finish), so this screen closes either way and the result is kept only
+    /// to be shown once before it does.
+    func deactivateWallet(reason: String? = nil) {
+        Task { @MainActor in
+            guard let wallet else { return }
+            deactivating = true
+            devicesError = nil
+            do {
+                let outcome = try await wallet.deactivateWallet(reason: reason)
+                deactivationOutcome = outcome
+                walletInstances = []
+                showAddCredential = false
+                showDevices = false
+            } catch {
+                devicesError = error.localizedDescription
+            }
+            deactivating = false
+        }
     }
 
     func openWscaDeveloper() {
@@ -1358,14 +1442,12 @@ final class WalletViewModel: ObservableObject {
             credentials = creds
             lastFlowType = flowType
         case .lifecycleBlocked(let reason, let message, let accounts):
-            // Minimal handling until the Devices/blocked-login UI lands: the
-            // wallet is signed out and cannot sign back in, so show the
-            // backend's explanation rather than a bare login screen.
-            walletState = .error(message: message ?? "This wallet instance is \(reason.rawValue).")
+            walletState = .lifecycleBlocked(reason: reason, message: message)
             credentials = []
             displayName = nil
             userId = nil
             cachedAccounts = accounts
+            showDevices = false
         case .error(let message):
             walletState = .error(message: message)
         }
@@ -1463,6 +1545,10 @@ enum WalletViewState: Equatable {
     case disconnected
     case connecting
     case ready
+    /// The wallet instance this installation logs in with is suspended, or the
+    /// wallet was deactivated and its data erased (SID-AUTH-06). Not an error
+    /// to retry - only someone else can lift it - so it gets its own screen.
+    case lifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
     case flowActive(flowType: String, status: String)
     case error(message: String)
 }

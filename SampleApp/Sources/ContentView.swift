@@ -40,11 +40,15 @@ struct ContentView: View {
                     AddCredentialView()
                 } else if viewModel.showWscaDeveloper {
                     WscdSettingsView()
+                } else if viewModel.showDevices {
+                    DevicesView()
                 } else {
                     MainTabView()
                 }
             case .flowActive(let flowType, let status):
                 FlowActiveView(flowType: flowType, status: status)
+            case .lifecycleBlocked(let reason, let message):
+                WalletBlockedView(reason: reason, message: message)
             case .error(let message):
                 ErrorView(message: message)
             }
