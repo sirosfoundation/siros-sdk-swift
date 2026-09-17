@@ -110,7 +110,18 @@ jobs:
       # and once with "Error creating asset temp dir", both from the runner
       # rather than from anything here. v0.12.0 landed with one of its four
       # assets until the job was re-run by hand. Retry before giving up.
+      # Each attempt is scoped to the previous attempt's OUTCOME, not to
+      # `failure()`, so a failure anywhere else in the job (the artifact
+      # download, say) does not trigger a pointless re-upload. The earlier
+      # attempts carry continue-on-error so that a flake does not mark the
+      # job failed once a later one has succeeded - v0.12.0 uploaded all
+      # four assets on a retry and still reported failure. The last attempt
+      # has no continue-on-error, so a genuine, persistent failure still
+      # fails the job. Two retries rather than one because v0.12.0 flaked
+      # twice within a single run.
       - name: Create GitHub Release
+        id: release
+        continue-on-error: true
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
@@ -118,8 +129,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Retry the release upload once
-        if: failure()
+      - name: Retry the release upload (1)
+        id: release_retry_1
+        if: steps.release.outcome == 'failure'
+        continue-on-error: true
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry the release upload (2)
+        if: steps.release_retry_1.outcome == 'failure'
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
