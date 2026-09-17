@@ -18,6 +18,14 @@ struct SettingsView: View {
                     LabeledContent("ZK Circuit Hosting", value: viewModel.zkCircuitUrls.joined(separator: ", "))
                     LabeledContent("Credentials", value: "\(viewModel.credentials.count)")
                     LabeledContent("Transport", value: viewModel.useWmpProtocol ? "WMP (JSON-RPC 2.0)" : "Legacy")
+                    // Which DIIP release this wallet's wire behaviour follows
+                    // - holder identifiers, proof shape, client_id spelling.
+                    // A build-time choice (`WalletConfig.diipProfile`), so it
+                    // is shown rather than offered.
+                    LabeledContent(
+                        L10n.string("settings.diipProfile"),
+                        value: viewModel.diipProfile.version.uppercased()
+                    )
                 }
 
                 // Credential consumption policy section

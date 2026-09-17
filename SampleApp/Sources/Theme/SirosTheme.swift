@@ -24,5 +24,10 @@ enum SirosTheme {
 
     // Semantic
     static let error = Color(red: 0.933, green: 0.267, blue: 0.267)           // #EE4444
+    // For outcomes that may resolve on their own - a suspended credential can
+    // be reinstated, one that is not yet valid simply becomes valid - which
+    // should not read as the same finality as `error`.
+    static let warning = Color(red: 0.918, green: 0.588, blue: 0.129)         // #EA9621
+    static let success = Color(red: 0.133, green: 0.694, blue: 0.298)         // #22B14C
     static let border = Color("SirosBorder", bundle: nil)
 }

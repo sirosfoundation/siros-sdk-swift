@@ -8,6 +8,12 @@ struct CredentialDetailView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     let credential: StoredCredential
 
+    /// Why this credential cannot currently be used, from the SDK's run of
+    /// DIIP's Validity and Revocation Algorithm.
+    private var credentialStatus: CredentialStatus? {
+        viewModel.credentialStatuses[credential.id]
+    }
+
     @State private var selectedTab = 0
     @State private var showDeleteConfirmation = false
 
@@ -72,7 +78,26 @@ struct CredentialDetailView: View {
     private var infoTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                CredentialCardView(credential: credential)
+                CredentialCardView(credential: credential, credentialStatus: credentialStatus)
+
+                // Why the credential cannot be used, spelled out - the card's
+                // one-word ribbon says which outcome, this says what it means.
+                if let credentialStatus, !credentialStatus.isUsable {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(credentialStatus.ribbonColor)
+                        Text(credentialStatus.detailMessage)
+                            .font(.footnote)
+                            .foregroundStyle(SirosTheme.onSurface)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(credentialStatus.ribbonColor.opacity(0.12))
+                    )
+                }
 
                 infoRow(L10n.string("credentials.fieldFormat"), credential.format)
 

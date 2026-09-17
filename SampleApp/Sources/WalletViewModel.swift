@@ -140,6 +140,16 @@ final class WalletViewModel: ObservableObject {
 
     @Published var walletState: WalletViewState = .disconnected
     @Published var credentials: [StoredCredential] = []
+
+    /// Why each held credential cannot currently be used, by credential id -
+    /// the outcome of DIIP's Validity and Revocation Algorithm, which the SDK
+    /// runs (see `SirosWallet.refreshCredentialStatuses`). Credentials absent
+    /// from the map are usable.
+    ///
+    /// Held here rather than computed per card: evaluating it can fetch the
+    /// issuer's Token Status List, which is not something a SwiftUI body
+    /// should do.
+    @Published var credentialStatuses: [Int64: CredentialStatus] = [:]
     @Published var displayName: String?
     @Published var userId: String?
 
@@ -403,6 +413,21 @@ final class WalletViewModel: ObservableObject {
 
     func listPasskeysForUI() {
         passkeys = wallet?.listPasskeys() ?? []
+    }
+
+    /// The DIIP release this wallet's wire behaviour follows - see
+    /// `WalletConfig.diipProfile`.
+    var diipProfile: DiipProfile { wallet?.diipProfile ?? .latest }
+
+    /// Re-run DIIP's Validity and Revocation Algorithm over every held
+    /// credential. Only the unusable ones are kept, so a card reads the map by
+    /// id and finds nothing for a credential that is fine.
+    func refreshCredentialStatuses() {
+        guard let wallet else { return }
+        Task { @MainActor in
+            let statuses = await wallet.refreshCredentialStatuses()
+            credentialStatuses = statuses.filter { $0.value != .valid }
+        }
     }
 
     func renamePasskey(credentialId: String, nickname: String) {
@@ -1357,6 +1382,7 @@ final class WalletViewModel: ObservableObject {
         case .disconnected(let accounts):
             walletState = .disconnected
             credentials = []
+            credentialStatuses = [:]
             displayName = nil
             userId = nil
             cachedAccounts = accounts
@@ -1370,6 +1396,7 @@ final class WalletViewModel: ObservableObject {
             cachedAccounts = accounts
             listPasskeysForUI()
             maybeOfferWscdAutoEnroll()
+            refreshCredentialStatuses()
         case .keystoreLocked(_, let name):
             walletState = .connecting
             displayName = name

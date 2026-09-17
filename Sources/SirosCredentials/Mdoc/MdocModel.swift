@@ -162,6 +162,17 @@ public enum MdocCbor {
         return docType
     }
 
+    /// Decode the MSO (MobileSecurityObject) map from a document's
+    /// `issuerAuth` COSE_Sign1 - the full map rather than just `docType`, for
+    /// callers that need real MSO fields (`validityInfo`, `status`). Mirrors
+    /// the Kotlin SDK's `MdocCbor.decodeMso`.
+    public static func decodeMso(issuerAuth: CBOR) throws -> CBOR {
+        guard case .array(let coseSign1) = issuerAuth, coseSign1.count >= 3 else {
+            throw MdocError.malformed("issuerAuth is not a COSE_Sign1 array")
+        }
+        return try decodeMso(fromPayload: coseSign1[2])
+    }
+
     /// Decode the MSO from a COSE_Sign1 `issuerAuth`'s payload slot.
     ///
     /// Per ISO 18013-5 §9.1.2.4, this slot is itself a `bstr` (COSE_Sign1's

@@ -375,6 +375,23 @@ public final class SirosWallet: @unchecked Sendable {
     // `keystore` itself had to stay internal (not private).
 
     let credentialStore: CredentialStore
+
+    /// Resolves the DID methods the active `config.diipProfile` requires, for
+    /// Issuer and Verifier identities. `did:jwk` resolves offline; `did:web`
+    /// goes over HTTPS with no wallet credentials attached, since it targets
+    /// arbitrary third-party domains.
+    /// Not `private`: `SirosWallet+CredentialStatus.swift` needs it - same
+    /// cross-file-extension-access reason as `keystore` above.
+    let didResolver: DidResolver
+
+    /// Runs DIIP's Validity and Revocation Algorithm. One per wallet
+    /// instance, so the Token Status List it fetches is fetched once and
+    /// shared by every credential pointing into it.
+    let credentialStatusEvaluator: CredentialStatusEvaluator
+
+    /// Statuses evaluated so far, so a UI can read one without re-running the
+    /// algorithm per frame.
+    let credentialStatusCache = CredentialStatusCache()
     // Not `private`: `SirosWallet+Issuance.swift` needs it too - same
     // cross-file-extension-access reason as `keystore` above.
     // `var`, not `let`: the type-metadata tests replace it with one backed by
@@ -716,6 +733,22 @@ public final class SirosWallet: @unchecked Sendable {
         #endif
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
+
+        let resolver = DidResolver(profile: config.diipProfile) { url in
+            await SirosWallet.fetchPublicUrl(url, headers: [:])
+        }
+        self.didResolver = resolver
+        self.credentialStatusEvaluator = CredentialStatusEvaluator(
+            statusListClient: TokenStatusListClient(
+                httpGet: { url, headers in
+                    await SirosWallet.fetchPublicUrl(url, headers: headers)
+                },
+                resolveIssuerKey: { issuer, kid in
+                    await SirosWallet.resolveIssuerSigningKey(issuer: issuer, kid: kid, resolver: resolver)
+                }
+            ),
+            clockTolerance: config.clockTolerance
+        )
 
         self.accountRegistry = accountRegistry ?? AccountRegistry()
 

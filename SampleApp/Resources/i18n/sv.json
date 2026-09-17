@@ -57,7 +57,15 @@
     "payloadLabel": "Payload",
     "disclosureLabel": "Friläggning %1$d",
     "rowActionAdd": "Lägg till",
-    "rowActionClose": "Stäng"
+    "rowActionClose": "Stäng",
+    "statusExpired": "Utgånget",
+    "statusNotYetValid": "Inte giltigt än",
+    "statusRevoked": "Återkallat",
+    "statusSuspended": "Spärrat",
+    "statusExpiredDetail": "Det här intyget har gått ut",
+    "statusNotYetValidDetail": "Det här intyget är inte giltigt än",
+    "statusRevokedDetail": "Det här intyget har återkallats av utfärdaren",
+    "statusSuspendedDetail": "Det här intyget har spärrats tillfälligt av utfärdaren"
   },
   "presentation": {
     "title": "Intygsbegäran",
@@ -109,7 +117,8 @@
     "credentialDetailsToggle": "Intygsdetaljer",
     "credentialDetailsDescription": "Om det öppnar detaljvyn (rådata, anspråk, friläggningar) att trycka på ett intyg.",
     "diagnosticMessagesToggle": "Diagnostikmeddelanden",
-    "diagnosticMessagesDescription": "Visa den råa backend-stegtoken tillsammans med den vänliga förloppsetiketten under ett flöde."
+    "diagnosticMessagesDescription": "Visa den råa backend-stegtoken tillsammans med den vänliga förloppsetiketten under ett flöde.",
+    "diipProfile": "DIIP-profil"
   },
   "wscd": {
     "title": "WSCA Utvecklare",

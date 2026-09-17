@@ -252,6 +252,60 @@ public enum CredentialUtils {
     /// the advertised type, so an issuer that advertises one type and issues
     /// another would have every one of those decisions made about the wrong
     /// credential.
+    /// The claims DIIP's Validity and Revocation Algorithm reads - the
+    /// validity window and the Token Status List reference - normalised to one
+    /// JSON shape across credential formats.
+    ///
+    /// For the JWT-based formats these are simply the credential's own claims.
+    /// An mdoc keeps them somewhere else entirely: the validity window lives
+    /// in the MSO's `validityInfo`, and the status reference (where an issuer
+    /// publishes one) in the MSO's `status`. Returning them under the same
+    /// names is what lets one evaluator serve every format.
+    public static func validityClaims(_ credential: StoredCredential) -> [String: Any]? {
+        if credential.format == "mso_mdoc" {
+            return mdocValidityClaims(credential)
+        }
+        return parseJwtPayload(credential.raw)
+    }
+
+    private static func mdocValidityClaims(_ credential: StoredCredential) -> [String: Any]? {
+        guard let document = parseMdocDocument(credential.raw),
+              let mso = try? MdocCbor.decodeMso(issuerAuth: document.issuerSigned.issuerAuth)
+        else { return nil }
+
+        var claims: [String: Any] = [:]
+        if let validity = mso[CBOR.utf8String("validityInfo")] {
+            // ISO 18013-5 encodes these as tdate (a tag-0 RFC 3339 string),
+            // which is the same lexical form the VCDM uses for
+            // validFrom/validUntil - so no conversion is needed, only untagging.
+            for key in ["validFrom", "validUntil"] {
+                if let text = untaggedString(validity[CBOR.utf8String(key)]) {
+                    claims[key] = text
+                }
+            }
+        }
+        if let status = mso[CBOR.utf8String("status")],
+           let statusList = status[CBOR.utf8String("status_list")] {
+            var reference: [String: Any] = [:]
+            if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")] {
+                reference["idx"] = Int(idx)
+            }
+            if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
+                reference["uri"] = uri
+            }
+            if !reference.isEmpty { claims["status"] = ["status_list": reference] }
+        }
+        return claims.isEmpty ? nil : claims
+    }
+
+    private static func untaggedString(_ value: CBOR?) -> String? {
+        switch value {
+        case .utf8String(let text): return text
+        case .tagged(_, let inner): return untaggedString(inner)
+        default: return nil
+        }
+    }
+
     public static func declaredType(format: String, raw: String) -> String? {
         if format == "mso_mdoc" {
             return parseMdocDocument(raw)?.docType

@@ -54,7 +54,8 @@ struct CredentialsView: View {
                     credential: entry.credential,
                     instances: entry.instances,
                     onClick: { viewModel.openCredentialDetail(entry.credential) },
-                    onRenewClick: { viewModel.renewCredential(entry.credential) }
+                    onRenewClick: { viewModel.renewCredential(entry.credential) },
+                    credentialStatus: viewModel.credentialStatuses[entry.credential.id]
                 )
                 .padding(.horizontal, 16)
                 .credentialContextMenu(entry.credential, viewModel: viewModel)
@@ -74,7 +75,8 @@ struct CredentialsView: View {
                                 credential: entry.credential,
                                 instances: entry.instances,
                                 onClick: { viewModel.openCredentialDetail(entry.credential) },
-                                onRenewClick: { viewModel.renewCredential(entry.credential) }
+                                onRenewClick: { viewModel.renewCredential(entry.credential) },
+                                credentialStatus: viewModel.credentialStatuses[entry.credential.id]
                             )
                             .padding(.horizontal, 16)
                             .credentialContextMenu(entry.credential, viewModel: viewModel)
