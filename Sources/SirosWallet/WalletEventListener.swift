@@ -81,6 +81,19 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// screen rather than surfacing a generic error message.
     func onReauthenticationRequired()
 
+    /// The backend refuses this installation because of its wallet instance's
+    /// lifecycle (SID-AUTH-06): the instance was suspended, or the wallet was
+    /// deactivated and its data erased. Fired when `SirosWallet` enters
+    /// `WalletState.lifecycleBlocked` - from a login, a keystore unlock, a
+    /// session resume, or the SDK's own single re-login after a token cut-off.
+    ///
+    /// Unlike `onReauthenticationRequired()` this is not "prompt again":
+    /// another login attempt with the same passkey is refused the same way
+    /// until someone else reactivates the instance (`.suspended`) and never
+    /// succeeds at all (`.revoked`). Apps that already render
+    /// `WalletState.lifecycleBlocked` need not implement this.
+    func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
+
     /// A credential batch was renewed (credential re-issuance/renewal plan,
     /// Phase 2, `AttributeDiffService`-equivalent, ISSU_59) and at least one
     /// claim differs from the batch it replaced. The renewal's own network
@@ -116,6 +129,9 @@ public extension WalletEventListener {
     func onReauthenticationRequired() {
         // No-op by default: implementers only need to override this if they
         // want to route the user to a login screen on forced logout.
+    }
+    func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?) {
+        // No-op by default: the state change is the primary signal.
     }
     func onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
     func onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}

@@ -48,6 +48,29 @@ public enum SirosError: Error, Sendable {
         return WalletLifecycleRefusal(rawValue: error)
     }
 
+    /// The backend's stable `error` code from this error's JSON body (e.g.
+    /// `ERASURE_INCOMPLETE`, `CREDENTIAL_NOT_OWNED`), or nil when this is not
+    /// a `.backendApi` error or its body carries none. Lets callers branch on
+    /// the protocol's error codes without each re-parsing the body.
+    public var apiErrorCode: String? {
+        errorBody?["error"] as? String
+    }
+
+    /// The server's own user-facing explanation (`message` in the error body),
+    /// when it sent one - e.g. the text a SID-AUTH-06 `WALLET_SUSPENDED` /
+    /// `WALLET_REVOKED` refusal carries to tell the two cases apart for the
+    /// user. `localizedDescription` stays the developer-facing diagnostic.
+    public var serverMessage: String? {
+        errorBody?["message"] as? String
+    }
+
+    private var errorBody: [String: Any]? {
+        guard case let .backendApi(_, _, body) = self, let body,
+              let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json
+    }
+
     /// Machine-readable error code for i18n mapping.
     public var errorCode: String {
         switch self {

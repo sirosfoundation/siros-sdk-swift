@@ -279,7 +279,10 @@ extension SirosWallet {
     /// configured for WIA, etc.) rather than throwing - a missing/unavailable
     /// client attestation must never block issuance, since not every backend
     /// deployment enables this feature.
-    private func ensureWalletInstanceAttestation() async -> String? {
+    // Not `private`: `SirosWallet.swift`'s `listWalletInstances()` needs it to
+    // fill in `isThisDevice` - same cross-file-extension-access reason as
+    // `cachedWia` itself.
+    func ensureWalletInstanceAttestation() async -> String? {
         let now = Int(Date().timeIntervalSince1970)
         lock.lock(); let cached = cachedWia; let expiresAt = cachedWiaExpiresAt; lock.unlock()
         if let wia = cached, expiresAt - now > 60 {
@@ -341,20 +344,43 @@ extension SirosWallet {
             #else
             let nativeAttestation: [String: Any]? = nil
             #endif
-            let wia = try await client.generateWIA(
-                pop: pop,
-                challenge: challenge,
-                // draft-ietf-oauth-attestation-based-client-auth-10: "the sub
-                // claim MUST specify client_id value of the OAuth Client" -
-                // confirmed via a real geneva2026.mdoc.online conformance run
-                // that flagged sub=<instance jkt> as a FAIL.
-                clientId: clientAttestationClientId(),
-                nativeAttestation: nativeAttestation,
-                // Links this instance to the passkey it logs in with, so
-                // suspending or revoking the instance also refuses login
-                // with that passkey (SID-AUTH-06, go-wallet-backend#319).
-                credentialId: sessionStore.credentialId
-            )
+            // draft-ietf-oauth-attestation-based-client-auth-10: "the sub
+            // claim MUST specify client_id value of the OAuth Client" -
+            // confirmed via a real geneva2026.mdoc.online conformance run
+            // that flagged sub=<instance jkt> as a FAIL.
+            let clientId = clientAttestationClientId()
+            // Links this instance to the passkey it logs in with, so
+            // suspending or revoking the instance also refuses login with
+            // that passkey (SID-AUTH-06, go-wallet-backend#319).
+            let linkedCredentialId = sessionStore.credentialId
+            let wia: String
+            do {
+                wia = try await client.generateWIA(
+                    pop: pop,
+                    challenge: challenge,
+                    clientId: clientId,
+                    nativeAttestation: nativeAttestation,
+                    credentialId: linkedCredentialId
+                )
+            } catch let error as SirosError
+                where error.apiErrorCode == errorCredentialNotOwned && linkedCredentialId != nil {
+                // The passkey this session recorded is not one of the caller's
+                // own (a session store carried over from another account, a
+                // passkey deleted server-side). The first link recorded for an
+                // instance wins, so never guess a different id - drop the
+                // stale one and let the instance be attested without a passkey
+                // link rather than losing the attestation.
+                guard case let .backendApi(code, _, _) = error, code == 403 else { throw error }
+                print("[SirosWallet] Backend refused the recorded passkey link (CREDENTIAL_NOT_OWNED) — clearing it and retrying the attestation without it")
+                sessionStore.credentialId = nil
+                wia = try await client.generateWIA(
+                    pop: pop,
+                    challenge: challenge,
+                    clientId: clientId,
+                    nativeAttestation: nativeAttestation,
+                    credentialId: nil
+                )
+            }
             let expiresAt = (CredentialUtils.parseJwtPayload(wia)?["exp"] as? Int) ?? (now + 300)
             lock.lock(); cachedWia = wia; cachedWiaExpiresAt = expiresAt; lock.unlock()
             return wia
@@ -388,7 +414,21 @@ extension SirosWallet {
         guard let wia = cached, expiresAt - now > 60,
               let payload = CredentialUtils.parseJwtPayload(wia),
               let source = payload["attestation_source"] as? String,
-              nativeAttestationSources.contains(source),
+              nativeAttestationSources.contains(source) else { return nil }
+        return instanceKeyThumbprint()
+    }
+
+    /// The JWK thumbprint of this installation's instance key - the id the
+    /// backend registers this wallet instance under, and the value
+    /// `currentWalletInstanceId()` sends as `wallet_instance_id`. Read from
+    /// the `cnf.jkt` of the WIA this session already holds rather than
+    /// recomputed, so it is exactly the id the backend knows. Nil when no
+    /// unexpired WIA has been obtained yet. Exposed as `thisInstanceId`.
+    func instanceKeyThumbprint() -> String? {
+        let now = Int(Date().timeIntervalSince1970)
+        lock.lock(); let cached = cachedWia; let expiresAt = cachedWiaExpiresAt; lock.unlock()
+        guard let wia = cached, expiresAt - now > 60,
+              let payload = CredentialUtils.parseJwtPayload(wia),
               let cnf = payload["cnf"] as? [String: Any],
               let jkt = cnf["jkt"] as? String else { return nil }
         return jkt

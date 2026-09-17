@@ -27,6 +27,14 @@ public struct WalletInstance: Sendable, Equatable {
     public var attestationSource: String = ""
     public var lastAttestedAt: String?
     public var statusReason: String?
+    /// True when this entry is the installation running this SDK: its `id`
+    /// equals this wallet's own instance-key JWK thumbprint (the value the SDK
+    /// sends as `wallet_instance_id`). Not part of the backend's payload - the
+    /// facade fills it in on the way out (see
+    /// `SirosWallet.listWalletInstances()`), so UI can mark "this device" and
+    /// warn before suspending it. Always false on an instance decoded directly
+    /// from JSON.
+    public var isThisDevice: Bool = false
 
     /// The two members every instance has; the rest are filled in from the
     /// backend's JSON by `init?(json:)` or set by the caller.

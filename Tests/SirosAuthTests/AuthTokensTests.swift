@@ -172,4 +172,17 @@ final class AuthTokensTests: XCTestCase {
 
         XCTAssertEqual(rejectedCount, 0)
     }
+
+    /// Pins the backend token's Token Access Control string against what the
+    /// wallet instance lifecycle endpoints require (SID-AUTH-06,
+    /// go-wallet-backend#319): `l` to list instances, `w` to suspend or
+    /// reactivate one, `d` to revoke one or to deactivate the wallet. The SDK
+    /// mints `rwlid` and so needs no new token kind - this test is what keeps
+    /// a future narrowing of the TAC from silently breaking the Devices screen.
+    func testBackendTokenTacCoversTheWalletInstanceLifecycleEndpoints() throws {
+        let tac = try XCTUnwrap(AuthTokens.manifest["backend"]).tac
+        XCTAssertTrue(tac.contains("l"), "list instances needs 'l' in \(tac)")
+        XCTAssertTrue(tac.contains("w"), "suspend/reactivate needs 'w' in \(tac)")
+        XCTAssertTrue(tac.contains("d"), "revoke and revoke-all need 'd' in \(tac)")
+    }
 }
