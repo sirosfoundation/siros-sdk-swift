@@ -38,6 +38,12 @@ extension SirosWallet {
         lock.lock()
         let offer = activeOffer
         let vctm = activeVctm
+        // The document too, not just the parse: the `vct#integrity` check needs
+        // the exact bytes, and taking it here - with everything else this
+        // completion is about - keeps that check on the flow that produced
+        // these credentials rather than on whatever ambient issuance state
+        // happens to be current by the time each credential is stored.
+        let vctmDocument = activeVctmDocument
         let attestedKeyIds = activeAttestedKeyIds
         // A completed flow has no further sign_presentation coming - drop
         // its cached DCQL match results (if any; a no-op for an issuance
@@ -68,6 +74,7 @@ extension SirosWallet {
             for (index, cred) in credentials.enumerated() {
                 let outcome = await storeIssuedCredential(
                     cred, index: index, flowId: msg.flowId, offer: offer, vctm: vctm,
+                    vctmDocument: vctmDocument,
                     attestedKeyIds: attestedKeyIds, batchId: batchId
                 )
                 if outcome.stored { storedCount += 1 }
@@ -230,17 +237,14 @@ extension SirosWallet {
     ///   which is the only thing it was ever about.
     func verifyVctIntegrity(
         format: String,
-        payload: [String: Any]
+        payload: [String: Any],
+        offer: CredentialOffer?,
+        document: VctmDocument?
     ) async -> (reason: String?, refreshed: VctmDocument?) {
         guard format != "mso_mdoc",
               let expected = payload["vct#integrity"] as? String else {
             return (nil, nil)
         }
-
-        lock.lock()
-        let document = activeVctmDocument
-        let offer = activeOffer
-        lock.unlock()
 
         if let document,
            let raw = document.raw.data(using: String.Encoding.utf8),
@@ -287,12 +291,16 @@ extension SirosWallet {
         await removeCredentialRefreshToken(batchId: oldBatchId)
     }
 
-    private func storeIssuedCredential(
+    // Not `private`: the type-metadata tests drive it directly, because the
+    // behaviour that matters - which document the stored credential is
+    // described by - is only observable in what it saves.
+    func storeIssuedCredential(
         _ cred: CredentialResult,
         index: Int,
         flowId: String,
         offer: CredentialOffer?,
         vctm: Vctm?,
+        vctmDocument: VctmDocument?,
         attestedKeyIds: [String]?,
         batchId: Int64
     ) async -> (stored: Bool, failureReason: String?) {
@@ -367,7 +375,9 @@ extension SirosWallet {
         ) {
             return (false, reason)
         }
-        let integrity = await verifyVctIntegrity(format: cred.format, payload: payload)
+        let integrity = await verifyVctIntegrity(
+            format: cred.format, payload: payload, offer: offer, document: vctmDocument
+        )
         if let reason = integrity.reason {
             return (false, reason)
         }
