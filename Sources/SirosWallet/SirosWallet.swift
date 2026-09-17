@@ -305,10 +305,10 @@ public final class SirosWallet: @unchecked Sendable {
     func beginSelfDrivenRelogin() -> Int? {
         lock.lock(); defer { lock.unlock() }
         if reloginInProgress { return nil }
-        if reloginHandledGeneration == sessionGeneration { return nil }
+        if reloginDoneForGeneration { return nil }
         // `_state` directly: `state` takes the same non-recursive lock.
         guard Self.isReplaceableSession(_state) else { return nil }
-        reloginHandledGeneration = sessionGeneration
+        reloginDoneForGeneration = true
         reloginInProgress = true
         return sessionGeneration
     }
@@ -329,6 +329,7 @@ public final class SirosWallet: @unchecked Sendable {
     func bumpSessionGeneration() -> Int {
         lock.lock(); defer { lock.unlock() }
         sessionGeneration += 1
+        reloginDoneForGeneration = false
         return sessionGeneration
     }
 
@@ -361,8 +362,11 @@ public final class SirosWallet: @unchecked Sendable {
         logger.warning("Wallet lifecycle refusal: \(reason.rawValue) — \(message ?? "(no message from the backend)")")
         #endif
         // End the session either way - nothing this installation holds can be
-        // used until someone else acts - but keep the account.
-        logout()
+        // used until someone else acts - but keep the account, and do not
+        // schedule the remote DELETE: a retry after the instance is
+        // reactivated reuses the same AS session cookie, and the DELETE could
+        // land after its loginFinish. See `endSessionLocally()`.
+        endSessionLocally()
         setState(.lifecycleBlocked(
             reason: reason,
             message: message,
@@ -687,8 +691,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// Always read and written under `lock`.
     var sessionGeneration: Int = 0
 
-    /// The session generation a self-driven re-login has already been run for.
-    var reloginHandledGeneration: Int = -1
+    /// Whether a self-driven re-login has already been run for the current
+    /// ``sessionGeneration``. Cleared by `bumpSessionGeneration()`.
+    var reloginDoneForGeneration: Bool = false
 
     // Not `private`: `SirosWallet+Engine.swift`'s `connectViaWmp` needs it
     // too - same cross-file-extension-access reason as `keystore` above.
@@ -809,48 +814,6 @@ public final class SirosWallet: @unchecked Sendable {
 
     static let hkdfInfo = "eDiplomas PRF"
 
-    /// Default HTTP POST function using URLSession.
-    private static let defaultHttpPost: @Sendable (URL, Data) async throws -> Data = { url, body in
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return data
-    }
-
-    /// Default HTTP function for BackendApiClient.
-    // Not `private`: `SirosWallet+Lifecycle.swift` needs it too - same
-    // cross-file-extension-access reason as `keystore` above.
-    /// The transport every client the wallet builds runs over.
-    ///
-    /// It MUST turn a non-2xx into `SirosError.backendApi(code:message:body:)`,
-    /// exactly as `AuthServerClient`'s and `BackendApiClient`'s own convenience
-    /// initialisers do. This used to discard the response (`let (data, _)`), so
-    /// every error status reached the caller as a successful body: a `403`
-    /// carrying `WALLET_SUSPENDED` was parsed as a login response and became a
-    /// generic decoding failure, and a `409 ERASURE_INCOMPLETE` never reached
-    /// the retry. The status and the body both have to survive, because the
-    /// lifecycle protocol is expressed in them.
-    static let defaultHttpFn: @Sendable (String, URL, [String: String], Data?) async throws -> Data = { method, url, headers, body in
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.httpBody = body
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SirosError.network(message: "Invalid response")
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SirosError.backendApi(
-                code: httpResponse.statusCode,
-                message: "Request failed: \(httpResponse.statusCode)",
-                body: String(data: data, encoding: .utf8) ?? ""
-            )
-        }
-        return data
-    }
-
     // MARK: - Init
 
     /// Create a new wallet instance.
@@ -930,69 +893,6 @@ public final class SirosWallet: @unchecked Sendable {
 
         tokens.onSessionRejected = { [weak self] in
             self?.handleReauthenticationRequired()
-        }
-    }
-
-    /// Builds the HTTP GET closure shared by `vctmFetcher`/`mddlSchemaFetcher`.
-    ///
-    /// Both fetchers' registry-service strategy (Strategy 1: `<registryUrl
-    /// >/type-metadata?vct=...`) hits go-wallet-backend's own registry
-    /// service, which - like every other backend REST call
-    /// (`BackendApiClient.request(_:path:body:)`) - may require an
-    /// `Authorization: Bearer` token and always wants the tenant-routing
-    /// `X-Tenant-ID` header. Their OTHER two strategies (issuer-direct
-    /// `<issuerUrl>/type-metadata/<scope>` and the SD-JWT well-known
-    /// `.well-known/vct/...`) hit arbitrary third-party issuer domains -
-    /// attaching the wallet's own bearer token/tenant ID there would leak
-    /// them to an external party. So headers are attached if and only if the
-    /// URL being fetched starts with the resolved registry URL for this
-    /// wallet instance - the same prefix `VctmFetcher`/`MddlSchemaFetcher`
-    /// construct their registry lookup URL from.
-    ///
-    /// - Parameter performRequest: the actual network call, isolated behind
-    ///   this parameter (default: a real `URLSession.shared.data(for:)` call
-    ///   that returns the body only on a 200 response) so
-    ///   `SirosWalletRegistryUrlTests` can inject a stub that captures the
-    ///   built `URLRequest` - in particular its headers - and assert on
-    ///   them directly, without a real network round trip (and without
-    ///   needing to construct an `HTTPURLResponse`, which
-    ///   swift-corelibs-foundation on Linux has no public initializer for).
-    ///   Not `private` for the same `@testable import` access reason.
-    static func makeTypeMetadataHttpGet(
-        registryUrl: String,
-        tenantId: String,
-        authTokens: AuthTokens,
-        sessionStore: SessionStoreProtocol,
-        performRequest: @escaping @Sendable (URLRequest) async -> Data? = { request in
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                return nil
-            }
-            return data
-        }
-    ) -> @Sendable (String) async -> String? {
-        { url in
-            guard let requestUrl = URL(string: url) else { return nil }
-            var request = URLRequest(url: requestUrl)
-            request.httpMethod = "GET"
-
-            if url.hasPrefix(registryUrl) {
-                request.setValue(tenantId, forHTTPHeaderField: "X-Tenant-ID")
-                // Mirrors `BackendApiClient.request(_:path:body:)`'s own
-                // auth-token precedence: prefer a live AS-issued backend
-                // token, falling back to the legacy plain app-token string
-                // (read fresh each call - unlike `authTokens`, this DOES
-                // change over the wallet's lifetime, e.g. across
-                // login/logout) when no AS session is available.
-                if let token = try? await authTokens.ensureBackendToken() {
-                    request.setValue("Bearer \(token.raw)", forHTTPHeaderField: "Authorization")
-                } else if let appToken = sessionStore.appToken {
-                    request.setValue("Bearer \(appToken)", forHTTPHeaderField: "Authorization")
-                }
-            }
-
-            guard let data = await performRequest(request) else { return nil }
-            return String(data: data, encoding: .utf8)
         }
     }
 
@@ -1315,6 +1215,31 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Disconnect, lock keystore, clear session.
     public func logout() {
+        endSessionLocally()
+        // Ending the server session too is what makes this a logout rather
+        // than a local teardown. Fire-and-forget is safe *here* because the
+        // wallet then sits on the login screen: any login that follows is a
+        // deliberate user action far removed from this DELETE. It is NOT safe
+        // on the lifecycle-blocked path, where the app may retry within
+        // milliseconds - see `endSessionLocally()`'s doc comment.
+        Task {
+            try? await authServerClient?.logout()
+        }
+        setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
+    }
+
+    /// Everything `logout()` does except ending the server session: drop the
+    /// engine, the WMP peer, the API client, the cached tokens, the keystore
+    /// and the account-scoped session, and end this session's generation.
+    ///
+    /// The lifecycle-blocked path uses this rather than `logout()`. A
+    /// suspended instance is reactivated from another device and the app then
+    /// retries `login()`, which reuses the same AS session cookie - an
+    /// unawaited `DELETE /auth/session` from the block could land *after* that
+    /// `loginFinish` and invalidate the session the retry had just
+    /// established. There is also nothing to end: the backend has already
+    /// refused this installation.
+    func endSessionLocally() {
         lock.lock()
         let engine = engineSession
         let peer = wmpPeer
@@ -1340,10 +1265,6 @@ public final class SirosWallet: @unchecked Sendable {
         // re-login awaiting the old session's teardown must abandon rather
         // than resurrect what the user just ended.
         bumpSessionGeneration()
-        Task {
-            try? await authServerClient?.logout()
-        }
-        setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
     }
 
     // MARK: - Session resume

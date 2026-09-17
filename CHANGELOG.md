@@ -60,17 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     suspending it.
   - Optional `WalletEventListener.onWalletLifecycleBlocked(reason:message:)`,
     with a no-op default.
-  - The instance key now survives a logout. `SessionStore.clearAccount()` used
-    to delete `instanceKeyId`, so the next login minted a new key and therefore
-    registered a **new backend wallet instance** - letting a suspended or
-    revoked installation walk away from its block by logging out and back in.
-    Only `clearAll()` (a factory reset) drops it now.
+  - **Security: the instance key now survives a logout.**
+    `SessionStore.clearAccount()` deleted `instanceKeyId`, so the next login
+    minted a new key and registered a **new, active** backend wallet instance.
+    A *suspended* installation could therefore walk away from its own
+    suspension simply by logging out and back in. Only `clearAll()` (a factory
+    reset) drops it now.
   - A session generation makes the self-driven re-login happen once per
     *session* rather than once per call, aborts it when the caller logged out
     or destroyed the wallet while it was tearing the old session down, and
     keeps a token minted before a cut-off from being cached by either
     `AuthTokens` or `AuthServerClient` after the clear that the cut-off
     triggered.
+  - A lifecycle block tears the session down locally instead of calling
+    `logout()`: the unawaited `DELETE /auth/session` could otherwise land
+    after the retry the app makes once a suspended instance is reactivated,
+    invalidating the session that retry had just established.
   - `SirosError.apiErrorCode` and `SirosError.serverMessage`: the backend's
     stable error code and its user-facing explanation, without every call site
     re-parsing the body.

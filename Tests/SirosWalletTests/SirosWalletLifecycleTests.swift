@@ -206,6 +206,52 @@ final class SirosWalletLifecycleTests: XCTestCase {
         )
     }
 
+    /// A suspended instance is reactivated from another device and the app
+    /// retries `login()`, which reuses the same AS session cookie. An
+    /// unawaited `DELETE /auth/session` scheduled by the block could land
+    /// after that retry's `loginFinish` and invalidate the session it had just
+    /// established - so the blocked path tears down locally and never asks the
+    /// AS to end a session the backend has already refused.
+    func testALifecycleBlockDoesNotEndTheServerSession() async throws {
+        let wallet = makeWallet(registry: seededRegistry())
+        let server = RecordingAuthServer()
+        wallet.authServerClient = server.client
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        _ = wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_SUSPENDED"}"#
+        ))
+        // Whatever the blocked path scheduled has had every chance to run.
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(
+            server.deletedSessions, 0,
+            "no DELETE /auth/session may race the retry the user is about to make"
+        )
+
+        // The contrast: an explicit logout does end the server session.
+        wallet.logout()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(server.deletedSessions, 1)
+    }
+
+    /// Counts `DELETE /auth/session` calls.
+    private final class RecordingAuthServer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var deletes = 0
+        var deletedSessions: Int { lock.lock(); defer { lock.unlock() }; return deletes }
+
+        lazy var client: AuthServerClient = AuthServerClient(
+            baseUrl: "https://wallet.example.invalid",
+            tenantId: "default"
+        ) { [self] method, url, _, _ in
+            if method == "DELETE", url.path.hasSuffix("/auth/session") {
+                self.lock.lock(); self.deletes += 1; self.lock.unlock()
+            }
+            return Data("{}".utf8)
+        }
+    }
+
     /// Everything that is not one of the two lifecycle codes keeps the
     /// existing error path, untouched.
     func testOtherFailuresAreNotLifecycleRefusals() {
