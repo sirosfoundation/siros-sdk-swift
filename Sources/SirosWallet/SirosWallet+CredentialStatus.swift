@@ -55,13 +55,28 @@ extension SirosWallet {
             .value
     }
 
+    /// The port a URL actually addresses: the explicit one, else the
+    /// scheme's default.
+    static func effectivePort(of url: URL) -> Int? {
+        if let port = url.port { return port }
+        switch url.scheme?.lowercased() {
+        case "https": return 443
+        case "http": return 80
+        default: return nil
+        }
+    }
+
     static func sameIssuer(_ candidate: URL, _ configured: String) -> Bool {
         guard let base = URL(string: configured),
               candidate.user == nil, candidate.password == nil,
               base.user == nil, base.password == nil,
               candidate.scheme?.lowercased() == base.scheme?.lowercased(),
               candidate.host?.lowercased() == base.host?.lowercased(),
-              candidate.port == base.port
+              // Effective ports, not the literal ones: `URL.port` is nil when
+              // the port is implicit, so comparing directly makes
+              // `https://issuer.example` and `https://issuer.example:443`
+              // look like different issuers and silently drops the override.
+              Self.effectivePort(of: candidate) == Self.effectivePort(of: base)
         else { return false }
 
         func trimmed(_ path: String) -> String {
