@@ -140,10 +140,12 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
     }
 
     /// A document whose bytes - and therefore whose digest - differ by `name`,
-    /// so a test can hold one version and pin another.
+    /// so a test can hold one version and pin another. The parsed form carries
+    /// the name too, so a test can tell which of the two a wallet ended up
+    /// applying and not merely which bytes it kept.
     private func document(_ vct: String, name: String) -> VctmDocument {
         let raw = "{\"vct\":\"\(vct)\",\"name\":\"\(name)\"}"
-        return VctmDocument(raw: raw, vctm: Vctm(vct: vct))
+        return VctmDocument(raw: raw, vctm: Vctm(vct: vct, name: name))
     }
 
     private func offer(vct: String) -> CredentialOffer {
@@ -215,6 +217,14 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         XCTAssertEqual(
             w.activeVctmDocument?.raw, issuers.raw,
             "and the wallet keeps the document the issuer pinned, not the stale one"
+        )
+        // The parsed form too, not just the raw bytes: it is what the stored
+        // credential's display and claim metadata is built from, so a heal that
+        // left this behind would accept the credential and then describe it
+        // with the document the issuer did not sign over.
+        XCTAssertEqual(
+            w.activeVctm?.name, "PID",
+            "the refreshed parse replaces the stale one the metadata would be built from"
         )
     }
 

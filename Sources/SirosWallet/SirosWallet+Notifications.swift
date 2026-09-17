@@ -362,7 +362,18 @@ extension SirosWallet {
             return (false, reason)
         }
 
-        let metadata = offer.flatMap { CredentialUtils.buildMetadata(offer: $0, vctm: vctm, rawCredential: cred.credential) }
+        // `verifyVctIntegrity` may have re-resolved the type metadata against
+        // this credential's own `vct#integrity`. The `vctm` snapshot taken
+        // before it ran then describes the document the issuer did NOT sign
+        // over, and persisting its display and claim metadata would store the
+        // very thing the pin exists to prevent - accepted, but described by the
+        // wrong document. Read what the check settled on instead.
+        lock.lock()
+        let effectiveVctm = activeVctm ?? vctm
+        lock.unlock()
+        let metadata = offer.flatMap {
+            CredentialUtils.buildMetadata(offer: $0, vctm: effectiveVctm, rawCredential: cred.credential)
+        }
 
         let stored = StoredCredential(
             id: randomUint32Id(),
