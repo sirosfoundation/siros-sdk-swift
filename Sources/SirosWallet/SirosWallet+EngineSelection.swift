@@ -22,6 +22,13 @@ extension SirosWallet {
         /// False if the listener returned an id the active policy/keystore
         /// no longer considers usable.
         let allSelectedEligible: Bool
+        /// Whether the user was actually shown a choice - true only when an
+        /// `eventListener` was registered AND there was something to offer it.
+        /// An empty `selectedIds` means "the user said no" only in that case;
+        /// otherwise it means the wallet had nothing to present, which is a
+        /// different answer and owed a different one to the engine (see
+        /// `noMatchReason` and `handleCredentialSelection`).
+        let userWasConsulted: Bool
         /// Whether presenting ANY of `selectedIds` is a ZK proof - the
         /// recorded `PresentationRecord.zkProof`.
         var zkProof: Bool { selectedIds.contains(where: { zkRequestedIds.contains($0) }) }
@@ -69,6 +76,7 @@ extension SirosWallet {
 
         lock.lock(); let listener = eventListener; lock.unlock()
         let selectedIds: [Int64]
+        let userWasConsulted = listener != nil && !candidates.isEmpty
         if let listener, !candidates.isEmpty {
             selectedIds = await listener.onCredentialSelectionRequired(
                 request: PresentationRequest(
@@ -92,8 +100,110 @@ extension SirosWallet {
             candidates: candidates,
             selectedIds: selectedIds,
             zkRequestedIds: zkRequestedIds,
-            allSelectedEligible: selectedIds.allSatisfy { eligibleIds.contains($0) }
+            allSelectedEligible: selectedIds.allSatisfy { eligibleIds.contains($0) },
+            userWasConsulted: userWasConsulted
         )
+    }
+
+    /// Why a selection came back empty - the distinction the engine's
+    /// `credential_selection` step needs, and the one this SDK used to lose by
+    /// reporting every empty selection as a decline.
+    enum NoSelectionAnswer: Equatable {
+        /// The user was shown the matching credentials and chose none.
+        case declined
+        /// There was nothing to show: no credential matched, or none of the
+        /// matches has a copy left to spend. Nobody refused anything.
+        case noMatch(reason: String)
+
+        /// Wording for the `no_match_reason` the client sends with an empty
+        /// match set, in either case.
+        var reason: String {
+            switch self {
+            case .declined: return "user selected none of the matching credentials"
+            case .noMatch(let reason): return reason
+            }
+        }
+    }
+
+    /// Which of the two an empty `selectedIds` is.
+    ///
+    /// The distinction matters on the wire: `decline` is forwarded to the
+    /// verifier as `access_denied` / "User declined the request", which is
+    /// untrue when the user was never asked, and saying nothing instead leaves
+    /// the flow to die on the engine's five-minute user-interaction timeout as
+    /// a generic `FLOW_TIMEOUT`. `credentials_matched` with an empty match set
+    /// is the honest third answer: the engine ends the flow at once with
+    /// `NO_MATCHING_CREDENTIAL`, naming the credential types the query asked
+    /// for, and tells the verifier (go-wallet-backend #335 / #336).
+    ///
+    /// Static and pure so the rule every engine handler applies is testable
+    /// without a live session.
+    static func answerForEmptySelection(
+        dcqlQuery: [String: Any]?,
+        selection: EngineSelection
+    ) -> NoSelectionAnswer {
+        guard !selection.userWasConsulted else { return .declined }
+        return .noMatch(reason: noMatchReason(dcqlQuery: dcqlQuery, candidateCount: selection.candidates.count))
+    }
+
+    /// The credential types a DCQL query asks for, in query order and without
+    /// duplicates: each credential query's `meta.vct_values` (SD-JWT VC) and
+    /// `meta.doctype_value` (mdoc), falling back to the query `id` for a query
+    /// that names neither. Mirrors go-wallet-backend's `requestedCredentialTypes`
+    /// so the reason this wallet reports and the `requested_types` the engine
+    /// derives independently describe the same request.
+    ///
+    /// Best-effort by design: an exotic or malformed query simply yields no
+    /// names, and the caller says "no matching credential" without naming one.
+    static func requestedCredentialTypes(dcqlQuery: [String: Any]?) -> [String] {
+        guard let queries = dcqlQuery?["credentials"] as? [[String: Any]] else { return [] }
+        var types: [String] = []
+        var seen = Set<String>()
+        func add(_ value: String?) {
+            guard let value, !value.isEmpty, seen.insert(value).inserted else { return }
+            types.append(value)
+        }
+        for query in queries {
+            let meta = query["meta"] as? [String: Any]
+            let vctValues = meta?["vct_values"] as? [String] ?? []
+            let doctypeValue = meta?["doctype_value"] as? String
+            vctValues.forEach { add($0) }
+            add(doctypeValue)
+            if vctValues.isEmpty && (doctypeValue?.isEmpty ?? true) {
+                add(query["id"] as? String)
+            }
+        }
+        return types
+    }
+
+    /// Why this wallet has nothing to present, for the `no_match_reason` the
+    /// engine forwards to the app (and logs) when a match set comes back
+    /// empty. Distinguishes the two cases that look identical on the wire but
+    /// need different words from an app: the wallet holds nothing of the
+    /// requested type at all, and it holds one but has no usable copy left.
+    ///
+    /// - Parameter candidateCount: credentials the DCQL query did match, none
+    ///   of which turned out to be presentable.
+    static func noMatchReason(dcqlQuery: [String: Any]?, candidateCount: Int) -> String {
+        if candidateCount > 0 {
+            return "\(candidateCount) matching credential(s) have no eligible copies remaining"
+        }
+        let requested = requestedCredentialTypes(dcqlQuery: dcqlQuery)
+        guard !requested.isEmpty else {
+            return "no stored credential matches the request"
+        }
+        return "no stored credential matches the requested type(s): " + requested.joined(separator: ", ")
+    }
+
+    /// The structured half of a `NO_MATCHING_CREDENTIAL` flow error, for
+    /// `onNoMatchingCredential`: the engine's `requested_types` (the credential
+    /// types the verifier's DCQL query named) and the `no_match_reason` this
+    /// wallet sent with its empty match set. Tolerates either detail being
+    /// absent - the engine omits `requested_types` for a query that names no
+    /// type, and `no_match_reason` for a client that sends none.
+    static func noMatchingCredentialDetails(error: FlowError) -> (requestedTypes: [String], reason: String?) {
+        let requestedTypes = error.details?["requested_types"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        return (requestedTypes, error.details?["no_match_reason"]?.stringValue)
     }
 
     /// Builds the `"selected_credentials"` flow-action payload the engine's

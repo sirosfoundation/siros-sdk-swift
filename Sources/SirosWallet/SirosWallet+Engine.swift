@@ -548,7 +548,10 @@ extension SirosWallet {
                 availableClaims: nil
             )
         }
-        return MatchResult(matches: matches)
+        // An empty match set with no reason tells the other end nothing at all
+        // - see `noMatchReason`.
+        let reason = matches.isEmpty ? Self.noMatchReason(dcqlQuery: dcqlQuery, candidateCount: candidates.count) : nil
+        return MatchResult(matches: matches, noMatchReason: reason)
     }
 
     private func handleWmpTrustEvaluation(flowId: String, payload: AnyCodable?) async -> SirosTransport.TrustResult {
@@ -1011,8 +1014,14 @@ extension SirosWallet {
             lock.lock(); pendingMatchResultsByFlow[flowId] = matchResults; lock.unlock()
 
             if selectedIds.isEmpty {
-                // User declined.
-                engine.sendFlowAction(flowId: flowId, action: "decline", payload: ["reason": .string("user_declined")])
+                switch Self.answerForEmptySelection(dcqlQuery: dcqlQuery, selection: selection) {
+                case .noMatch(let reason):
+                    // Nothing to present, and nobody was asked - see
+                    // `answerForEmptySelection` for why this is not a decline.
+                    engine.sendCredentialsMatched(flowId: flowId, matches: [], noMatchReason: reason)
+                case .declined:
+                    engine.sendFlowAction(flowId: flowId, action: "decline", payload: ["reason": .string("user_declined")])
+                }
                 return
             }
 
@@ -1095,6 +1104,10 @@ extension SirosWallet {
             #if canImport(os)
             logger.error("Selected credential has no eligible copies remaining")
             #endif
+            // Still answer: the engine's RequestMatch blocks on a match
+            // response, so returning silently left it waiting for one that was
+            // never coming.
+            engine.sendMatchResponse(flowId: msg.flowId, matches: [], noMatchReason: "selected credential has no eligible copies remaining")
             return
         }
 
@@ -1126,7 +1139,8 @@ extension SirosWallet {
                 vct: cred.metadata?.vct
             )
         }
-        engine.sendMatchResponse(flowId: msg.flowId, matches: matches)
+        let noMatchReason = matches.isEmpty ? Self.answerForEmptySelection(dcqlQuery: dcqlQuery, selection: selection).reason : nil
+        engine.sendMatchResponse(flowId: msg.flowId, matches: matches, noMatchReason: noMatchReason)
     }
 
     private func handleFlowProgress(engine: WalletEngineSession, msg: FlowProgressMessage) async {
@@ -1378,6 +1392,14 @@ extension SirosWallet {
         pendingMatchResultsByFlow.removeValue(forKey: fid)
         lock.unlock()
         let redirectUri = msg.error.details?["redirect_uri"]?.stringValue
+        // This one error's details name the credential the user is missing, so
+        // they reach the app structured rather than only inside `message`.
+        // `onNoMatchingCredential` fires alongside, not instead of,
+        // `onFlowError` - see its doc comment.
+        if msg.error.code == EngineErrorCodes.noMatchingCredential {
+            let details = Self.noMatchingCredentialDetails(error: msg.error)
+            listener?.onNoMatchingCredential(flowId: fid, requestedTypes: details.requestedTypes, reason: details.reason, redirectUri: redirectUri)
+        }
         listener?.onFlowError(flowId: fid, errorMessage: msg.error.message, redirectUri: redirectUri)
 
         // Terminal path for whatever issuance may have been in flight -

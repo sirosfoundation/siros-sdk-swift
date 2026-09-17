@@ -351,4 +351,187 @@ final class SirosWalletCredentialSelectionDcqlIntegrationTests: XCTestCase {
         XCTAssertEqual(SirosWallet.zkRequestedIds(matchResultByCredentialId: byId), [1], "case-insensitive, and only the pid")
         XCTAssertEqual(byId[2]?.queryId, "mdl_plain")
     }
+
+}
+
+/// What this wallet says when it has nothing to present, and what it makes of
+/// the engine's answer (go-wallet-backend #335/#336). An empty match set ends
+/// the flow with `NO_MATCHING_CREDENTIAL` instead of parking it until the
+/// user-interaction timeout - the reason travelling with it, and the
+/// `requested_types` coming back, are what let an app name the credential the
+/// user is missing rather than show "something went wrong".
+final class SirosWalletNoMatchingCredentialTests: XCTestCase {
+
+    /// SD-JWT VC `vct_values` and mdoc `doctype_value`, in query order.
+    /// Mirrors go-wallet-backend's `requestedCredentialTypes`, so the reason
+    /// this wallet reports and the `requested_types` the engine derives on its
+    /// own describe the same request.
+    func testRequestedCredentialTypes_readsVctValuesAndDoctype() {
+        let query: [String: Any] = [
+            "credentials": [
+                ["id": "pid", "format": "dc+sd-jwt", "meta": ["vct_values": ["urn:eudi:pid:arf-1.8:1", "urn:eudi:pid:1"]]],
+                ["id": "mdl", "format": "mso_mdoc", "meta": ["doctype_value": "org.iso.18013.5.1.mDL"]],
+            ],
+        ]
+
+        XCTAssertEqual(
+            SirosWallet.requestedCredentialTypes(dcqlQuery: query),
+            ["urn:eudi:pid:arf-1.8:1", "urn:eudi:pid:1", "org.iso.18013.5.1.mDL"]
+        )
+    }
+
+    /// A query naming no type at all still identifies itself by its id -
+    /// better than saying nothing about what was asked for.
+    func testRequestedCredentialTypes_fallsBackToQueryId() {
+        let query: [String: Any] = ["credentials": [["id": "anything", "format": "dc+sd-jwt"]]]
+
+        XCTAssertEqual(SirosWallet.requestedCredentialTypes(dcqlQuery: query), ["anything"])
+    }
+
+    func testRequestedCredentialTypes_deduplicatesAcrossQueries() {
+        let query: [String: Any] = [
+            "credentials": [
+                ["id": "pid-a", "meta": ["vct_values": ["urn:eudi:pid:1"]]],
+                ["id": "pid-b", "meta": ["vct_values": ["urn:eudi:pid:1"]]],
+            ],
+        ]
+
+        XCTAssertEqual(SirosWallet.requestedCredentialTypes(dcqlQuery: query), ["urn:eudi:pid:1"])
+    }
+
+    /// Best-effort by design: no query, or one shaped in a way this doesn't
+    /// understand, yields no names rather than a wrong one.
+    func testRequestedCredentialTypes_missingOrUnparseableQueryYieldsNothing() {
+        XCTAssertEqual(SirosWallet.requestedCredentialTypes(dcqlQuery: nil), [])
+        XCTAssertEqual(SirosWallet.requestedCredentialTypes(dcqlQuery: ["credential_sets": []]), [])
+    }
+
+    /// Nothing matched: the reason names what the verifier asked for, which
+    /// is what lets an app say "you need a PID first".
+    func testNoMatchReason_namesTheRequestedTypes() {
+        let query: [String: Any] = [
+            "credentials": [["id": "pid", "meta": ["vct_values": ["urn:eudi:pid:1"]]]],
+        ]
+
+        XCTAssertEqual(
+            SirosWallet.noMatchReason(dcqlQuery: query, candidateCount: 0),
+            "no stored credential matches the requested type(s): urn:eudi:pid:1"
+        )
+    }
+
+    func testNoMatchReason_noRequestedTypesStillExplains() {
+        XCTAssertEqual(
+            SirosWallet.noMatchReason(dcqlQuery: nil, candidateCount: 0),
+            "no stored credential matches the request"
+        )
+    }
+
+    /// The other way to have nothing to present: the query did match, but
+    /// every copy is spent. A different sentence, because it needs a different
+    /// answer from the user (renew, not "get a PID").
+    func testNoMatchReason_matchedButExhaustedSaysSo() {
+        let query: [String: Any] = [
+            "credentials": [["id": "pid", "meta": ["vct_values": ["urn:eudi:pid:1"]]]],
+        ]
+
+        XCTAssertEqual(
+            SirosWallet.noMatchReason(dcqlQuery: query, candidateCount: 2),
+            "2 matching credential(s) have no eligible copies remaining"
+        )
+    }
+
+    // MARK: - decline vs. nothing to present
+
+    private func makeSelection(candidates: [StoredCredential], userWasConsulted: Bool) -> SirosWallet.EngineSelection {
+        SirosWallet.EngineSelection(
+            matchResults: [],
+            candidates: candidates,
+            selectedIds: [],
+            zkRequestedIds: [],
+            allSelectedEligible: true,
+            userWasConsulted: userWasConsulted
+        )
+    }
+
+    private func makeCredential(id: Int64) -> StoredCredential {
+        StoredCredential(id: id, format: "mso_mdoc", raw: "raw-\(id)", batchId: id, instanceId: 0)
+    }
+
+    /// The bug this fixes: with nothing to offer, the SDK told the engine the
+    /// user had declined - which the engine forwards to the verifier as
+    /// `access_denied` / "User declined the request", a refusal nobody made.
+    func testAnswerForEmptySelection_nothingMatched_isNotADecline() {
+        let query: [String: Any] = [
+            "credentials": [["id": "pid", "meta": ["vct_values": ["urn:eudi:pid:1"]]]],
+        ]
+
+        let answer = SirosWallet.answerForEmptySelection(
+            dcqlQuery: query,
+            selection: makeSelection(candidates: [], userWasConsulted: false)
+        )
+
+        XCTAssertEqual(
+            answer,
+            .noMatch(reason: "no stored credential matches the requested type(s): urn:eudi:pid:1")
+        )
+    }
+
+    /// Matched, but every copy is spent, and the user was never asked: still
+    /// not a decline - and the reason says which of the two it was.
+    func testAnswerForEmptySelection_matchedButNothingEligible_isNoMatch() {
+        let answer = SirosWallet.answerForEmptySelection(
+            dcqlQuery: nil,
+            selection: makeSelection(candidates: [makeCredential(id: 1)], userWasConsulted: false)
+        )
+
+        XCTAssertEqual(answer, .noMatch(reason: "1 matching credential(s) have no eligible copies remaining"))
+    }
+
+    /// The user really was shown the candidates and picked none - the one case
+    /// that is a decline, and must stay one.
+    func testAnswerForEmptySelection_userChoseNone_isADecline() {
+        let answer = SirosWallet.answerForEmptySelection(
+            dcqlQuery: nil,
+            selection: makeSelection(candidates: [makeCredential(id: 1)], userWasConsulted: true)
+        )
+
+        XCTAssertEqual(answer, .declined)
+        XCTAssertEqual(answer.reason, "user selected none of the matching credentials")
+    }
+
+    /// `NO_MATCHING_CREDENTIAL`'s details, which the SDK used to decode only
+    /// far enough to find `redirect_uri`.
+    func testNoMatchingCredentialDetails_readsRequestedTypesAndReason() throws {
+        let error = try Self.decodeFlowError("""
+        {"type":"flow_error","flow_id":"flow-1","step":"credential_selection","error":{\
+        "code":"NO_MATCHING_CREDENTIAL","message":"This request needs a credential you do not have: urn:eudi:pid:1",\
+        "details":{"requested_types":["urn:eudi:pid:1"],"no_match_reason":"wallet holds no PID",\
+        "redirect_uri":"https://verifier.example/done"}}}
+        """)
+
+        XCTAssertEqual(error.code, EngineErrorCodes.noMatchingCredential)
+        let details = SirosWallet.noMatchingCredentialDetails(error: error)
+
+        XCTAssertEqual(details.requestedTypes, ["urn:eudi:pid:1"])
+        XCTAssertEqual(details.reason, "wallet holds no PID")
+    }
+
+    /// The engine omits `requested_types` for a query that names no type, and
+    /// `no_match_reason` for a client that sends none - neither is an error.
+    func testNoMatchingCredentialDetails_toleratesAbsentDetails() throws {
+        let error = try Self.decodeFlowError("""
+        {"type":"flow_error","flow_id":"flow-1","error":{"code":"NO_MATCHING_CREDENTIAL","message":"nothing matched"}}
+        """)
+
+        let details = SirosWallet.noMatchingCredentialDetails(error: error)
+
+        XCTAssertEqual(details.requestedTypes, [])
+        XCTAssertNil(details.reason)
+    }
+
+    /// `FlowError`'s memberwise initializer is internal to `SirosTransport`,
+    /// so build one the way the session does: off the wire.
+    private static func decodeFlowError(_ json: String) throws -> FlowError {
+        try JSONDecoder().decode(FlowErrorMessage.self, from: Data(json.utf8)).error
+    }
 }

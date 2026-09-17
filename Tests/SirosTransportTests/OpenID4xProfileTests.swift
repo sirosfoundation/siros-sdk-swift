@@ -173,6 +173,44 @@ final class OpenID4xProfileTests: XCTestCase {
         }
     }
 
+    /// A wallet with nothing to present answers with an empty match set; the
+    /// reason travelling with it is the only explanation of *why*, and this
+    /// transport used to drop it on the floor.
+    func testMatchResponseCarriesNoMatchReason() async throws {
+        let ctx = MockPeerContext()
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onMatchRequest: { _, _ in
+                MatchResult(matches: [], noMatchReason: "no stored credential matches the requested type(s): urn:eudi:pid:1")
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        await profile.handleProgress(params: FlowProgressParams(flowId: "flow-4", step: "match_request", payload: nil))
+
+        XCTAssertEqual(ctx.notifications.count, 1)
+        let params = ctx.notifications[0].params
+        XCTAssertEqual(params?["action"], .string("match_response"))
+        XCTAssertEqual(params?["matches"], .array([]))
+        XCTAssertEqual(
+            params?["no_match_reason"],
+            .string("no stored credential matches the requested type(s): urn:eudi:pid:1")
+        )
+    }
+
+    func testMatchResponseOmitsNoMatchReasonWhenMatched() async throws {
+        let ctx = MockPeerContext()
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onMatchRequest: { _, _ in
+                MatchResult(matches: [CredentialMatch(credentialId: "cred-1", format: "dc+sd-jwt")])
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        await profile.handleProgress(params: FlowProgressParams(flowId: "flow-5", step: "match_request", payload: nil))
+
+        XCTAssertNil(ctx.notifications.first?.params?["no_match_reason"])
+    }
+
     func testHandleProgressTrustEvaluationCallsOnTrustEvaluation() async throws {
         let ctx = MockPeerContext()
         var receivedFlowId: String?

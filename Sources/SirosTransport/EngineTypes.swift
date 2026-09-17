@@ -27,6 +27,17 @@ public enum MessageTypes {
     public static let notificationAck = "notification_ack"
 }
 
+/// Error codes carried in a `flow_error` message's `error.code`. Only the ones
+/// this SDK reacts to are named here; every other code is surfaced to the app
+/// verbatim.
+public enum EngineErrorCodes {
+    /// The wallet reported an empty match set for the verifier's query, so the
+    /// engine ended the flow rather than waiting for a consent that could
+    /// never come. `error.details` carries `requested_types` (the credential
+    /// types the DCQL query asked for) and the wallet's own `no_match_reason`.
+    public static let noMatchingCredential = "NO_MATCHING_CREDENTIAL"
+}
+
 /// Base envelope — every engine message carries at least a type.
 public struct EngineMessage: Codable, Sendable, Equatable {
     public var type: String

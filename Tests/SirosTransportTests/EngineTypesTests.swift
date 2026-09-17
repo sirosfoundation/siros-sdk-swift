@@ -202,6 +202,88 @@ final class EngineTypesTests: XCTestCase {
         XCTAssertTrue(text.contains("\"credential_id\":\"cred-1\""))
     }
 
+    /// An empty match set is only half the answer - the reason is what says
+    /// *which* credential the user is missing. It rides on the same message
+    /// and must reach the wire under the backend's `no_match_reason` name.
+    func testMatchResponseEncodesNoMatchReason() throws {
+        let msg = MatchResponseMessage(
+            flowId: "flow-89",
+            matches: [],
+            noMatchReason: "no stored credential matches the requested type(s): urn:eudi:pid:1"
+        )
+        let text = String(data: try encoder.encode(msg), encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"matches\":[]"))
+        XCTAssertTrue(text.contains("\"no_match_reason\":\"no stored credential matches the requested type(s): urn:eudi:pid:1\""))
+    }
+
+    func testMatchResponseOmitsAbsentNoMatchReason() throws {
+        let msg = MatchResponseMessage(
+            flowId: "flow-90",
+            matches: [CredentialMatch(credentialId: "cred-1", format: "dc+sd-jwt")]
+        )
+        let text = String(data: try encoder.encode(msg), encoding: .utf8)!
+
+        XCTAssertFalse(text.contains("no_match_reason"))
+    }
+
+    /// The `credentials_matched` payload the engine parses as
+    /// `CredentialsMatchedPayload` (go-wallet-backend #336). An empty
+    /// `matches` is what ends a flow the wallet cannot satisfy, so the key
+    /// must be present and empty - not omitted.
+    func testCredentialsMatchedPayloadForEmptyMatchSet() throws {
+        let payload = WalletEngineSession.credentialsMatchedPayload(
+            matches: [],
+            noMatchReason: "nothing to present"
+        )
+
+        XCTAssertEqual(payload["matches"], .array([]))
+        XCTAssertEqual(payload["no_match_reason"], .string("nothing to present"))
+    }
+
+    func testCredentialsMatchedPayloadEncodesEachMatch() throws {
+        let payload = WalletEngineSession.credentialsMatchedPayload(
+            matches: [
+                CredentialMatch(
+                    credentialQueryId: "query-1",
+                    credentialId: "7",
+                    format: "mso_mdoc",
+                    vct: "urn:eu:pid:1",
+                    availableClaims: ["given_name"]
+                ),
+            ],
+            noMatchReason: nil
+        )
+
+        XCTAssertNil(payload["no_match_reason"])
+        guard case .array(let matches)? = payload["matches"], case .object_(let match)? = matches.first else {
+            return XCTFail("Expected one encoded match")
+        }
+        XCTAssertEqual(match["credential_query_id"], .string("query-1"))
+        XCTAssertEqual(match["credential_id"], .string("7"))
+        XCTAssertEqual(match["format"], .string("mso_mdoc"))
+        XCTAssertEqual(match["vct"], .string("urn:eu:pid:1"))
+        XCTAssertEqual(match["available_claims"], .array([.string("given_name")]))
+    }
+
+    /// The engine's `NO_MATCHING_CREDENTIAL` error carries the two things an
+    /// app needs to explain the failure; both live in `details`, which the
+    /// SDK used to decode only far enough to find `redirect_uri`.
+    func testFlowErrorDecodesNoMatchingCredentialDetails() throws {
+        let json = """
+        {"type":"flow_error","flow_id":"flow-1","step":"credential_selection","error":{\
+        "code":"NO_MATCHING_CREDENTIAL","message":"This request needs a credential you do not have: urn:eudi:pid:1",\
+        "details":{"requested_types":["urn:eudi:pid:1"],"no_match_reason":"wallet holds no PID",\
+        "redirect_uri":"https://verifier.example/done"}}}
+        """
+        let msg = try decoder.decode(FlowErrorMessage.self, from: json.data(using: .utf8)!)
+
+        XCTAssertEqual(msg.error.code, EngineErrorCodes.noMatchingCredential)
+        XCTAssertEqual(msg.error.details?["requested_types"], .array([.string("urn:eudi:pid:1")]))
+        XCTAssertEqual(msg.error.details?["no_match_reason"]?.stringValue, "wallet holds no PID")
+        XCTAssertEqual(msg.error.details?["redirect_uri"]?.stringValue, "https://verifier.example/done")
+    }
+
     func testFlowActionEncoding() throws {
         let msg = FlowActionMessage(
             flowId: "flow-77",
