@@ -258,6 +258,11 @@ extension SirosWallet {
         guard let headerPart = jwt.split(separator: ".", maxSplits: 1).first else { return nil }
         guard let headerData = CredentialUtils.base64UrlDecode(String(headerPart)) else { return nil }
         guard let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any] else { return nil }
+        // A DIIP proof names the key with a `kid` header and carries no `jwk`
+        // at all; a HAIP one embeds the key, with its id inside. Reading only
+        // the latter silently loses the binding for every DIIP-issued
+        // credential.
+        if let kid = header["kid"] as? String { return kid }
         guard let jwk = header["jwk"] as? [String: Any] else { return nil }
         return jwk["kid"] as? String
     }
