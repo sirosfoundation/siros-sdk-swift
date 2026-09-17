@@ -229,7 +229,15 @@ extension SirosWallet {
         }
         var proofs: [GeneratedProofData] = []
         for _ in 0..<count {
-            let jwt = try await keystore.generateProof(audience: audience, nonce: nonce, freshKey: count > 1)
+            // `audience` is the credential issuer, which is what decides
+            // whether this proof names the holder key by did:jwk (DIIP) or
+            // carries it (HAIP) - negotiated from that issuer's own metadata.
+            let jwt = try await keystore.generateProof(
+                audience: audience,
+                nonce: nonce,
+                freshKey: count > 1,
+                holderBinding: holderBinding(for: audience)
+            )
             let keyId = Self.extractProofKeyId(jwt: jwt)
             proofs.append(GeneratedProofData(proofType: "jwt", jwt: jwt, attestedKeyIds: keyId.map { [$0] }))
         }

@@ -18,13 +18,16 @@ struct SettingsView: View {
                     LabeledContent("ZK Circuit Hosting", value: viewModel.zkCircuitUrls.joined(separator: ", "))
                     LabeledContent("Credentials", value: "\(viewModel.credentials.count)")
                     LabeledContent("Transport", value: viewModel.useWmpProtocol ? "WMP (JSON-RPC 2.0)" : "Legacy")
-                    // Which DIIP release this wallet's wire behaviour follows
-                    // - holder identifiers, proof shape, client_id spelling.
-                    // A build-time choice (`WalletConfig.diipProfile`), so it
-                    // is shown rather than offered.
+                    // Which interoperability profiles this wallet can speak.
+                    // Deliberately a fact, not a control: which one is used is
+                    // negotiated per issuer from its advertised
+                    // `cryptographic_binding_methods_supported`, so there is
+                    // nothing here for a user to choose (and no way they could
+                    // reasonably know the answer for an issuer they just
+                    // scanned).
                     LabeledContent(
-                        L10n.string("settings.diipProfile"),
-                        value: viewModel.diipProfile.version.uppercased()
+                        L10n.string("settings.interopProfiles"),
+                        value: "HAIP \u{00b7} DIIP \(viewModel.diipProfile.version.uppercased())"
                     )
                 }
 

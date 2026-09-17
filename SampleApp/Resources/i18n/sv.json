@@ -118,7 +118,7 @@
     "credentialDetailsDescription": "Om det öppnar detaljvyn (rådata, anspråk, friläggningar) att trycka på ett intyg.",
     "diagnosticMessagesToggle": "Diagnostikmeddelanden",
     "diagnosticMessagesDescription": "Visa den råa backend-stegtoken tillsammans med den vänliga förloppsetiketten under ett flöde.",
-    "diipProfile": "DIIP-profil"
+    "interopProfiles": "Interop-profiler"
   },
   "wscd": {
     "title": "WSCA Utvecklare",

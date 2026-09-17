@@ -109,7 +109,8 @@ extension SirosWallet {
             logoUri: credDisplay?.logo?.uri,
             issuerLogoUri: issuerDisplay?.logo?.uri,
             vct: config.vct,
-            doctype: config.doctype
+            doctype: config.doctype,
+            cryptographicBindingMethodsSupported: config.cryptographicBindingMethodsSupported ?? []
         )
     }
 

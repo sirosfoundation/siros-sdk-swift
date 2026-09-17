@@ -128,16 +128,22 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // credentials are already bound to.
     private var keyDids: [String: String] = [:]
 
+    /// The interoperability profile this keystore signs for - see
+    /// ``InteropProfile``. It decides how a new key pair is named and, unless
+    /// a caller overrides it per issuance, how the Holder's key is named in an
+    /// OID4VCI proof. Defaults to HAIP, which is what this SDK has always
+    /// sent.
+    private let profile: InteropProfile
+
     /// How a newly generated key pair is named - see ``DidKeyVersion``.
-    /// Defaults to `did:jwk`, which is what DIIP requires of a Holder; the
-    /// `did:key` versions stay selectable for a wallet whose existing
-    /// credentials are bound to one. Keys already in the container keep
-    /// whatever id they were stored with regardless of this setting, so
-    /// changing it never orphans a credential.
+    /// Follows `profile` unless a wallet needs something else. Keys already in
+    /// the container keep whatever id they were stored with regardless of this
+    /// setting, so changing it never orphans a credential.
     private let didKeyVersion: DidKeyVersion
 
-    public init(didKeyVersion: DidKeyVersion = .jwk) {
-        self.didKeyVersion = didKeyVersion
+    public init(profile: InteropProfile = .default, didKeyVersion: DidKeyVersion? = nil) {
+        self.profile = profile
+        self.didKeyVersion = didKeyVersion ?? DidKeyVersion.forProfile(profile)
     }
 
     /// Generate a key pair, name it per ``didKeyVersion``, and add it to the
@@ -318,7 +324,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         return Data(jws.utf8)
     }
 
-    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+    public func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
@@ -332,11 +343,24 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         }
 
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
-        // `iss` and to name the key with a `kid` from the DID document, rather
-        // than embedding the key in the header. Without a DID there is nothing
-        // to name, so the key travels in the header as before - which is also
-        // what a non-DIIP issuer expects.
-        let did = didKeyVersion.namesKeysByDidUrl ? keyDids[keyId] : nil
+        // `iss` and to name the key with a `kid` from the DID document; HAIP
+        // carries the key in the header instead. The caller may know which
+        // this issuer speaks; when it does not, this keystore's own profile
+        // decides.
+        //
+        // Only a `did:jwk` can be named this way: it resolves offline, and
+        // this key's own id is its verification method. A key carrying a
+        // `did:key` (the pre-DIIP identifier) has a DID but no `kid` an Issuer
+        // could resolve, so it takes the embedded form even when the DID form
+        // was asked for.
+        let binding = holderBinding ?? profile.holderBinding
+        let did = keyDids[keyId].flatMap { candidate -> String? in
+            guard binding == .didJwk,
+                  candidate.hasPrefix("did:jwk:"),
+                  keyId == Did.didJwkKeyId(candidate)
+            else { return nil }
+            return candidate
+        }
         var headerFields: [String: Any] = ["alg": "ES256", "typ": "openid4vci-proof+jwt"]
         if did != nil {
             headerFields["kid"] = keyId
@@ -1377,7 +1401,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     public func sign(keyId: String, payload: Data, algorithm: String = "ES256") async throws -> Data {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
-    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+    public func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {

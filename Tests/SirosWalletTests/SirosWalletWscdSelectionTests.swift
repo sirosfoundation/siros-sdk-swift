@@ -35,6 +35,9 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     /// of the default placeholder string.
     var proofJwtOverrides: [String] = []
     private var proofCallCount = 0
+    /// The binding the wallet asked for on the last proof - lets a test assert
+    /// that an issuer's advertised methods reached the keystore.
+    private(set) var lastHolderBinding: HolderBinding?
 
     init(label: String) { self.label = label }
 
@@ -43,7 +46,10 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     func lock() {}
     func generateKey(algorithm: String) async throws -> String { "\(label)-key" }
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { Data() }
-    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+    func generateProof(
+        audience: String, nonce: String, freshKey: Bool, holderBinding: HolderBinding?
+    ) async throws -> String {
+        lastHolderBinding = holderBinding
         defer { proofCallCount += 1 }
         return proofCallCount < proofJwtOverrides.count ? proofJwtOverrides[proofCallCount] : "\(label)-proof"
     }

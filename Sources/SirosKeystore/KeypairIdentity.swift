@@ -31,9 +31,24 @@ public enum DidKeyVersion: String, Sendable, CaseIterable {
     /// DID URL can be resolved by a relying party, a thumbprint cannot.
     public var namesKeysByDidUrl: Bool { self == .jwk }
 
+    /// How a wallet speaking `profile` names its keys.
+    ///
+    /// DIIP identifies a Holder by `did:jwk`, so its keys are named by the DID
+    /// URL. HAIP identifies the Holder by the key itself, so there is no DID
+    /// to name one with and the JWK thumbprint - what this SDK has always used
+    /// on the Kotlin side, and an improvement on the random ids it used here -
+    /// stands.
+    public static func forProfile(_ profile: InteropProfile) -> DidKeyVersion {
+        switch profile {
+        case .diip: return .jwk
+        case .haip: return .p256Pub
+        }
+    }
+
     /// Parse the value as written in configuration. Unknown or absent values
-    /// fall back to ``jwk``, so a wallet is DIIP-compliant out of the box
-    /// rather than silently dropping to a legacy identifier.
+    /// fall back to ``jwk``, the DIIP identifier, rather than silently
+    /// dropping to a legacy one - a caller that wants the HAIP naming asks for
+    /// it through ``forProfile(_:)``.
     public static func from(_ value: String?) -> DidKeyVersion {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               let match = DidKeyVersion(rawValue: value)

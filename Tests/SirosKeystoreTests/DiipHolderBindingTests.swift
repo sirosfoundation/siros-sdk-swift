@@ -16,8 +16,8 @@ final class DiipHolderBindingTests: XCTestCase {
     private let hkdfSalt = Data((0..<32).map { UInt8($0 + 0x10) })
     private let hkdfInfo = Data("SIROS Wallet PRF".utf8)
 
-    private func unlocked(_ version: DidKeyVersion = .jwk) async throws -> JweKeystore {
-        let keystore = JweKeystore(didKeyVersion: version)
+    private func unlocked(_ profile: InteropProfile = .diip) async throws -> JweKeystore {
+        let keystore = JweKeystore(profile: profile)
         try await keystore.unlock(
             prfOutput: prfOutput, encryptedContainer: Data(), hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo
         )
@@ -26,11 +26,20 @@ final class DiipHolderBindingTests: XCTestCase {
 
     // MARK: - key naming
 
-    func testAWalletIsDidJwkOutOfTheBox() {
+    func testEachProfileNamesKeysTheWayItsHolderBindingNeeds() {
+        XCTAssertEqual(DidKeyVersion.forProfile(.diip), .jwk)
+        XCTAssertEqual(DidKeyVersion.forProfile(.haip), .p256Pub)
         XCTAssertEqual(DidKeyVersion.from(nil), .jwk)
-        XCTAssertEqual(DidKeyVersion.from("something-unknown"), .jwk)
         XCTAssertEqual(DidKeyVersion.from("p256-pub"), .p256Pub)
         XCTAssertEqual(DidKeyVersion.from("jwk_jcs-pub"), .jwkJcsPub)
+    }
+
+    func testAWalletSpeaksHaipUnlessToldOtherwise() {
+        // Adding DIIP support must not change the proof shape every existing
+        // SIROS ID issuer already accepts.
+        XCTAssertEqual(InteropProfile.default, .haip)
+        XCTAssertEqual(InteropProfile.haip.holderBinding, .embeddedJwk)
+        XCTAssertEqual(InteropProfile.diip.holderBinding, .didJwk)
     }
 
     func testANewKeyIsNamedByItsDidJwkVerificationMethod() async throws {
@@ -45,8 +54,8 @@ final class DiipHolderBindingTests: XCTestCase {
         XCTAssertNotNil(document?.findPublicKey(kid: kid, relationship: .authentication))
     }
 
-    func testTheLegacyDidKeyVersionsKeepNamingKeysByThumbprint() async throws {
-        let keystore = try await unlocked(.p256Pub)
+    func testAHaipWalletKeepsNamingKeysByThumbprint() async throws {
+        let keystore = try await unlocked(.haip)
         let kid = try await keystore.generateKey()
         XCTAssertFalse(kid.hasPrefix("did:"))
     }
@@ -56,9 +65,9 @@ final class DiipHolderBindingTests: XCTestCase {
         let kid = try await keystore.generateKey()
         let container = try await keystore.exportEncryptedContainer()
 
-        // A wallet reconfigured for a legacy version must not re-identify a
+        // A wallet reconfigured for the other profile must not re-identify a
         // key that credentials are already bound to.
-        let reloaded = JweKeystore(didKeyVersion: .p256Pub)
+        let reloaded = JweKeystore(profile: .haip)
         try await reloaded.unlock(
             prfOutput: prfOutput, encryptedContainer: container, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo
         )
@@ -104,16 +113,88 @@ final class DiipHolderBindingTests: XCTestCase {
         XCTAssertTrue(verify(proof, with: jwk))
     }
 
-    func testWithoutADidTheProofStillCarriesTheKeyInTheHeader() async throws {
-        // A non-DIIP issuer has nothing to resolve, so the legacy form is the
+    func testAHaipProofCarriesTheKeyInTheHeader() async throws {
+        // A HAIP issuer does not resolve DIDs, so the embedded form is the
         // only one it can verify.
-        let keystore = try await unlocked(.p256Pub)
+        let keystore = try await unlocked(.haip)
         _ = try await keystore.generateKey()
         let proof = try await keystore.generateProof(
             audience: "https://issuer.example", nonce: "nonce", freshKey: false
         )
         XCTAssertNotNil(JwtHelpers.parseJwtHeader(proof)?["jwk"])
         XCTAssertNil(JwtHelpers.parseJwtPayload(proof)?["iss"])
+    }
+
+    func testOneWalletSendsEachIssuerTheProofShapeItCanVerify() async throws {
+        // The whole point of the per-issuance choice: a DIIP-configured wallet
+        // must still be able to talk to a HAIP issuer, and the reverse.
+        let wallet = try await unlocked(.diip)
+        let kid = try await wallet.generateKey()
+
+        let toHaip = try await wallet.generateProof(
+            audience: "https://haip.example", nonce: "nonce",
+            freshKey: false, holderBinding: .embeddedJwk
+        )
+        XCTAssertNotNil(JwtHelpers.parseJwtHeader(toHaip)?["jwk"], "a HAIP issuer gets the key it can verify")
+        XCTAssertNil(JwtHelpers.parseJwtHeader(toHaip)?["kid"])
+
+        let toDiip = try await wallet.generateProof(
+            audience: "https://diip.example", nonce: "nonce",
+            freshKey: false, holderBinding: .didJwk
+        )
+        XCTAssertEqual(JwtHelpers.parseJwtHeader(toDiip)?["kid"] as? String, kid)
+        XCTAssertNil(JwtHelpers.parseJwtHeader(toDiip)?["jwk"])
+    }
+
+    func testAHaipWalletCannotBeForcedIntoADidProofItHasNoDidFor() async throws {
+        // Asking for the DID form when the key was never named by one must not
+        // emit a `kid` that resolves to nothing - it falls back to the form
+        // that is actually verifiable.
+        let keystore = try await unlocked(.haip)
+        _ = try await keystore.generateKey()
+        let proof = try await keystore.generateProof(
+            audience: "https://issuer.example", nonce: "nonce",
+            freshKey: false, holderBinding: .didJwk
+        )
+        XCTAssertNotNil(JwtHelpers.parseJwtHeader(proof)?["jwk"])
+        XCTAssertNil(JwtHelpers.parseJwtPayload(proof)?["iss"])
+    }
+
+    func testOneWalletPresentsAHaipCredentialAndADiipCredentialCorrectly() async throws {
+        // Presentation is where the two profiles have to coexist without any
+        // configuration at all: the credential's own `cnf` says how its key is
+        // named, so the same wallet answers both without being told which is
+        // which.
+        let keystore = try await unlocked(.diip)
+        let diipKid = try await keystore.generateKey()
+        let haipKid = try await keystore.generateKey()
+        let haipJwk = try XCTUnwrap(publicJwk(of: keystore, kid: haipKid))
+
+        let jwkJson = String(
+            data: try JSONSerialization.data(withJSONObject: haipJwk, options: .sortedKeys),
+            encoding: .utf8
+        )!
+        let diipCredential = sdJwt(#"{"vct":"urn:example:diip","cnf":{"kid":"\#(diipKid)"}}"#)
+        let haipCredential = sdJwt(#"{"vct":"urn:example:haip","cnf":{"jwk":\#(jwkJson)}}"#)
+
+        let diipVp = try await keystore.signVpToken(
+            credential: diipCredential, disclosedClaims: nil, nonce: "nonce",
+            audience: "https://verifier.example", kid: nil
+        )
+        let diipKb = try XCTUnwrap(diipVp.split(separator: "~").last.map(String.init))
+        XCTAssertEqual(JwtHelpers.parseJwtHeader(diipKb)?["kid"] as? String, diipKid)
+        XCTAssertNil(JwtHelpers.parseJwtHeader(diipKb)?["jwk"])
+
+        let haipVp = try await keystore.signVpToken(
+            credential: haipCredential, disclosedClaims: nil, nonce: "nonce",
+            audience: "https://verifier.example", kid: nil
+        )
+        let haipKb = try XCTUnwrap(haipVp.split(separator: "~").last.map(String.init))
+        XCTAssertNotNil(JwtHelpers.parseJwtHeader(haipKb)?["jwk"])
+        XCTAssertTrue(
+            verify(haipKb, with: haipJwk),
+            "the HAIP credential is signed by the key it is bound to, not the DIIP one"
+        )
     }
 
     // MARK: - presenting what the wallet already holds

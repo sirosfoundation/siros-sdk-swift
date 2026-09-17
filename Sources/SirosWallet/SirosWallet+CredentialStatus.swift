@@ -15,9 +15,56 @@ import SirosCredentials
 /// something a UI layer should be doing.
 extension SirosWallet {
 
-    /// The DIIP release this wallet's wire behaviour follows - see
-    /// ``DiipProfile``.
+    /// The DIIP release this wallet follows when it speaks
+    /// ``InteropProfile/diip`` - see ``DiipProfile``.
     public var diipProfile: DiipProfile { config.diipProfile }
+
+    /// The interoperability profile this wallet speaks with `issuer` when
+    /// nothing else decides - see ``InteropProfile``.
+    ///
+    /// A per-Issuer override wins over the wallet-wide default. The match is
+    /// by prefix so that a `credential_issuer` with a path under a configured
+    /// base counts, and the longest configured prefix wins so a specific entry
+    /// is not shadowed by a broader one. This is an escape hatch for an Issuer
+    /// whose metadata is wrong, not the normal path: see
+    /// ``holderBinding(for:)``.
+    public func interopProfile(for issuer: String?) -> InteropProfile {
+        guard let issuer else { return config.interopProfile }
+        return config.issuerInteropProfiles
+            .filter { issuer.hasPrefix($0.key) }
+            .max { $0.key.count < $1.key.count }?
+            .value ?? config.interopProfile
+    }
+
+    /// How the Holder's key should be named in an OID4VCI proof to `issuer` -
+    /// the one thing HAIP and DIIP genuinely disagree about, and something
+    /// OID4VCI makes a per-issuance choice.
+    ///
+    /// **Negotiated, not configured.** The Issuer's own
+    /// `cryptographic_binding_methods_supported` for the configuration being
+    /// issued says which identifier it can verify, so a wallet holding
+    /// credentials from a HAIP ecosystem and a DIIP ecosystem shapes each
+    /// proof to its Issuer without anyone choosing a profile. A user cannot
+    /// reasonably be asked which of two interoperability profiles an issuer
+    /// they just scanned belongs to, and does not have to be.
+    ///
+    /// The configured profile is only the fallback, for an Issuer that
+    /// advertises nothing usable - and the per-Issuer override the escape
+    /// hatch above that, for one that advertises the wrong thing.
+    ///
+    /// Handed to `KeystoreManager.generateProof` so the keystore never has to
+    /// know about issuers.
+    public func holderBinding(for issuer: String?) -> HolderBinding {
+        let advertised = activeOffer
+            .flatMap { offer -> [String]? in
+                guard issuer == nil || offer.credentialIssuerIdentifier == issuer else { return nil }
+                return offer.cryptographicBindingMethodsSupported
+            }
+        if let negotiated = HolderBinding.negotiate(advertised) {
+            return negotiated
+        }
+        return interopProfile(for: issuer).holderBinding
+    }
 
     /// Evaluate one credential's status.
     ///

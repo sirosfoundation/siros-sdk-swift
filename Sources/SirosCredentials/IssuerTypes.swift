@@ -102,23 +102,35 @@ public struct CredentialConfiguration: Codable, Sendable, Equatable {
     public let scope: String?
     public let credentialMetadata: CredentialDisplayMetadata?
 
+    /// How this Issuer will accept the Holder's key being identified -
+    /// OID4VCI's `cryptographic_binding_methods_supported`, e.g. `["jwk"]`
+    /// (HAIP) or `["did:jwk"]` (DIIP).
+    ///
+    /// This is the field that lets one wallet serve both ecosystems without a
+    /// setting: the Issuer declares what it can verify, and the wallet shapes
+    /// its proof to match. See ``HolderBinding/negotiate(_:)``.
+    public let cryptographicBindingMethodsSupported: [String]?
+
     public init(
         format: String,
         vct: String? = nil,
         doctype: String? = nil,
         scope: String? = nil,
-        credentialMetadata: CredentialDisplayMetadata? = nil
+        credentialMetadata: CredentialDisplayMetadata? = nil,
+        cryptographicBindingMethodsSupported: [String]? = nil
     ) {
         self.format = format
         self.vct = vct
         self.doctype = doctype
         self.scope = scope
         self.credentialMetadata = credentialMetadata
+        self.cryptographicBindingMethodsSupported = cryptographicBindingMethodsSupported
     }
 
     enum CodingKeys: String, CodingKey {
         case format, vct, doctype, scope
         case credentialMetadata = "credential_metadata"
+        case cryptographicBindingMethodsSupported = "cryptographic_binding_methods_supported"
     }
 }
 
@@ -199,6 +211,12 @@ public struct CredentialOffer: Sendable, Equatable {
     /// `MddlSchemaFetcher.fetch`.
     public let doctype: String?
 
+    /// The Issuer's advertised `cryptographic_binding_methods_supported` for
+    /// this configuration, carried from its metadata so the wallet can shape
+    /// the OID4VCI proof to what this Issuer can verify - see
+    /// ``HolderBinding/negotiate(_:)``. Empty when the Issuer said nothing.
+    public let cryptographicBindingMethodsSupported: [String]
+
     public init(
         credentialConfigurationId: String,
         credentialIssuerIdentifier: String,
@@ -212,8 +230,10 @@ public struct CredentialOffer: Sendable, Equatable {
         preAuthorizedCode: String? = nil,
         txCode: String? = nil,
         vct: String? = nil,
-        doctype: String? = nil
+        doctype: String? = nil,
+        cryptographicBindingMethodsSupported: [String] = []
     ) {
+        self.cryptographicBindingMethodsSupported = cryptographicBindingMethodsSupported
         self.credentialConfigurationId = credentialConfigurationId
         self.credentialIssuerIdentifier = credentialIssuerIdentifier
         self.credentialName = credentialName
