@@ -2,6 +2,30 @@
 
 import Foundation
 
+/// One OID4VCI `authorization_details` entry (1.0 §5.1.1).
+///
+/// Only the `credential_configuration_id` form is carried: DIIP requires that
+/// one, and it is what the `format`-based alternative was replaced by.
+///
+/// Declared here rather than in `SirosCredentials/Interop`, where the rest of
+/// the interop types live, because `FlowStartMessage` carries it and this
+/// module deliberately has no dependencies of its own. The *policy* for when
+/// to send it is still in `Interop`, as `AuthorizationDetails.build`.
+public struct AuthorizationDetail: Codable, Sendable, Equatable {
+    public let type: String
+    public let credentialConfigurationID: String
+
+    public init(type: String = "openid_credential", credentialConfigurationID: String) {
+        self.type = type
+        self.credentialConfigurationID = credentialConfigurationID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case credentialConfigurationID = "credential_configuration_id"
+    }
+}
+
 /// Message types used in the wallet backend engine WebSocket protocol.
 public enum MessageTypes {
     // Client → Server
@@ -126,6 +150,18 @@ public struct FlowStartMessage: Codable, Sendable {
     /// `sign_client_auth` of the renewal so this wallet signs with that same
     /// key. Takes precedence over `dpopJwk`.
     public var dpopKeyId: String?
+    /// OID4VCI `authorization_details` for the Authorization Request. DIIP
+    /// requires a Wallet to be able to ask for a credential configuration this
+    /// way as well as by `scope`.
+    ///
+    /// The engine builds the Authorization Request, so the wallet cannot add
+    /// the parameter itself - it states the intent here and the engine
+    /// forwards it. Nil omits the field entirely, which the engine reads as
+    /// "do not ask this way", leaving the `scope` path unchanged. Wire name
+    /// and shape match go-wallet-backend's
+    /// `FlowStartMessage.AuthorizationDetails` and wallet-frontend's
+    /// `flow_start` exactly.
+    public var authorizationDetails: [AuthorizationDetail]?
     public var timestamp: String?
 
     public init(
@@ -147,6 +183,7 @@ public struct FlowStartMessage: Codable, Sendable {
         reissuanceKid: String? = nil,
         dpopJwk: String? = nil,
         dpopKeyId: String? = nil,
+        authorizationDetails: [AuthorizationDetail]? = nil,
         timestamp: String? = nil
     ) {
         self.type = type
@@ -167,6 +204,7 @@ public struct FlowStartMessage: Codable, Sendable {
         self.reissuanceKid = reissuanceKid
         self.dpopJwk = dpopJwk
         self.dpopKeyId = dpopKeyId
+        self.authorizationDetails = authorizationDetails
         self.timestamp = timestamp
     }
 
@@ -184,6 +222,7 @@ public struct FlowStartMessage: Codable, Sendable {
         case credentialIssuer = "credential_issuer"
         case selectedCredentialConfigurationId = "selected_credential_configuration_id"
         case reissuanceKid = "reissuance_kid"
+        case authorizationDetails = "authorization_details"
         case dpopJwk = "dpop_jwk"
         case dpopKeyId = "dpop_key_id"
     }

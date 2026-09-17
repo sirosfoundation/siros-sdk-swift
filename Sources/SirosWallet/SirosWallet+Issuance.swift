@@ -794,7 +794,8 @@ extension SirosWallet {
             // resolve or attach up front.
             engine.startIssuance(
                 offer: offerJson,
-                redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri
+                redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
+                authorizationDetails: authorizationDetailsForActiveOffer()
             )
         } catch {
             // A synchronous start failure here means the flow was never
@@ -807,6 +808,23 @@ extension SirosWallet {
     }
 
     /// Start issuance with a raw offer URI or JSON.
+    /// The OID4VCI `authorization_details` to start this issuance with, from
+    /// the offer already resolved into `activeOffer`.
+    ///
+    /// DIIP requires a Wallet to be able to ask for a credential configuration
+    /// this way as well as by `scope`. This SDK never builds the Authorization
+    /// Request - the engine does, for every transport - so the wallet states
+    /// the intent and the engine forwards it (see
+    /// ``FlowStartMessage/authorizationDetails``). wallet-frontend makes the
+    /// same split for the same reason, and the two have to agree: same engine,
+    /// same issuers.
+    ///
+    /// Nil when the offer could not be resolved, which leaves the `scope` path
+    /// exactly as it was.
+    func authorizationDetailsForActiveOffer() -> [AuthorizationDetail]? {
+        AuthorizationDetails.build(credentialConfigurationID: activeOffer?.credentialConfigurationId)
+    }
+
     public func startIssuance(offerUri: String) async throws {
         guard let engine = engineSession else {
             throw SirosError.wallet(message: "Not connected")
@@ -848,9 +866,15 @@ extension SirosWallet {
             // second client-side fetch of the offer or metadata for it here.
             switch IssuanceStart.resolve(offerUri: offerUri) {
             case .offer(let offer):
-                engine.startIssuance(offer: offer)
+                engine.startIssuance(
+                    offer: offer,
+                    authorizationDetails: authorizationDetailsForActiveOffer()
+                )
             case .credentialOfferUri(let uri):
-                engine.startIssuance(credentialOfferUri: uri)
+                engine.startIssuance(
+                    credentialOfferUri: uri,
+                    authorizationDetails: authorizationDetailsForActiveOffer()
+                )
             }
         } catch {
             // A synchronous start failure here means the flow was never

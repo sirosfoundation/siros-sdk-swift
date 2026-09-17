@@ -389,16 +389,22 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// sign request (go-wallet-backend#304), answered from `signRequests()`
     /// via `sendSignResponse(clientAttestation:clientAttestationPoP:)` with a
     /// PoP bound to exactly the `audience`/`issuer` the engine asks for.
+    ///
+    /// - Parameter authorizationDetails: the OID4VCI `authorization_details`
+    ///   to ask with - see ``FlowStartMessage/authorizationDetails``. Nil or
+    ///   empty omits the field, leaving the `scope` path unchanged.
     public func startIssuance(
         offer: String? = nil,
         credentialOfferUri: String? = nil,
-        redirectUri: String? = nil
+        redirectUri: String? = nil,
+        authorizationDetails: [AuthorizationDetail]? = nil
     ) {
         send(FlowStartMessage(
             protocol: "oid4vci",
             offer: offer,
             credentialOfferUri: credentialOfferUri,
-            redirectUri: redirectUri
+            redirectUri: redirectUri,
+            authorizationDetails: (authorizationDetails?.isEmpty ?? true) ? nil : authorizationDetails
         ))
     }
 
