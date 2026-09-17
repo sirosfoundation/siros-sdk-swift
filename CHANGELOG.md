@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The wallet's own HTTP transport now reports error statuses.**
+  `SirosWallet` built every client over a function that discarded the
+  response, so a non-2xx arrived as a successful body: a `403` carrying
+  `WALLET_SUSPENDED` / `WALLET_REVOKED` was parsed as a login response and
+  surfaced as a generic decoding failure, and `409 ERASURE_INCOMPLETE` never
+  reached its retry. Both had been unreachable in a real app since the
+  refusal helper landed, while unit tests - which inject their own transport -
+  stayed green. It now throws `SirosError.backendApi(code:message:body:)`
+  like the two clients' own convenience initialisers.
+
 ### Added
 - **Wallet instance lifecycle: the SDK now speaks the whole protocol**
   (SID-AUTH-06, go-wallet-backend#319). The backend grew a token cut-off, an

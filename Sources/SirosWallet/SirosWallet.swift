@@ -763,12 +763,32 @@ public final class SirosWallet: @unchecked Sendable {
     /// Default HTTP function for BackendApiClient.
     // Not `private`: `SirosWallet+Lifecycle.swift` needs it too - same
     // cross-file-extension-access reason as `keystore` above.
+    /// The transport every client the wallet builds runs over.
+    ///
+    /// It MUST turn a non-2xx into `SirosError.backendApi(code:message:body:)`,
+    /// exactly as `AuthServerClient`'s and `BackendApiClient`'s own convenience
+    /// initialisers do. This used to discard the response (`let (data, _)`), so
+    /// every error status reached the caller as a successful body: a `403`
+    /// carrying `WALLET_SUSPENDED` was parsed as a login response and became a
+    /// generic decoding failure, and a `409 ERASURE_INCOMPLETE` never reached
+    /// the retry. The status and the body both have to survive, because the
+    /// lifecycle protocol is expressed in them.
     static let defaultHttpFn: @Sendable (String, URL, [String: String], Data?) async throws -> Data = { method, url, headers, body in
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SirosError.network(message: "Invalid response")
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw SirosError.backendApi(
+                code: httpResponse.statusCode,
+                message: "Request failed: \(httpResponse.statusCode)",
+                body: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
         return data
     }
 
