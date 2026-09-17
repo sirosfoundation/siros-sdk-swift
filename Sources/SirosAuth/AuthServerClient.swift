@@ -266,6 +266,18 @@ public final class AuthServerClient: @unchecked Sendable {
 
     // MARK: - Logout
 
+    /// Drop every cached access token without touching the server session.
+    ///
+    /// `logout()` also clears the cache, but it ends the session first, so it
+    /// is the wrong tool when the session must survive - after a wallet
+    /// lifecycle cut-off the SDK re-logs in, and a token minted before the
+    /// cut-off is refused with `401` even though it has not expired. Clearing
+    /// here keeps the next `requestAccessToken` from serving that stale token
+    /// out of cache.
+    public func clearTokenCache() async {
+        await cache.clear()
+    }
+
     /// End the current session.
     public func logout() async throws {
         guard let url = URL(string: "\(baseUrl)\(Self.pathSession)") else {

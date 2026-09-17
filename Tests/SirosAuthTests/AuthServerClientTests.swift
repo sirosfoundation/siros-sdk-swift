@@ -165,3 +165,36 @@ private extension Data {
             .replacingOccurrences(of: "=", with: "")
     }
 }
+
+extension AuthServerClientTests {
+    /// A token minted before a lifecycle cut-off is refused with 401 however
+    /// fresh it looks, so the SDK's re-login must not be served one out of
+    /// cache. `clearTokenCache()` drops them without ending the session the
+    /// way `logout()` would.
+    func testClearTokenCacheForcesTheNextRequestToMintAgain() async throws {
+        var mintCount = 0
+        let client = AuthServerClient(baseUrl: "https://as.example.invalid", tenantId: "default") { _, url, _, _ in
+            guard url.path == "/auth/token" else {
+                XCTFail("unexpected \(url.path)")
+                return Data("{}".utf8)
+            }
+            mintCount += 1
+            // exp far in the future, so the cache would happily serve it again
+            let claims = #"{"sub":"u","aud":"wallet-backend","tenant_id":"default","tac":"rwlid","exp":4102444800}"#
+            let b64 = Data(claims.utf8).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+            let jwt = "e30.\(b64).sig"
+            return Data(#"{"access_token":"\#(jwt)","token_type":"Bearer","expires_in":3600}"#.utf8)
+        }
+
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(mintCount, 1, "the second call is served from cache")
+
+        await client.clearTokenCache()
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(mintCount, 2, "after clearTokenCache the token is minted again")
+    }
+}

@@ -253,6 +253,11 @@ public final class SirosWallet: @unchecked Sendable {
         if let peer { try? await peer.close() }
         cancelEngineTasks()
         authTokens?.clear()
+        // AuthServerClient keeps its own token cache, and a token minted
+        // before the cut-off is refused with 401 however fresh it looks. Clear
+        // it explicitly - logout() would clear it too but ends the session
+        // first, which is the opposite of what a re-login needs.
+        await authServerClient?.clearTokenCache()
         // Lock the key material too, the way logout() does. The session is
         // already gone server-side; if the replacement login then fails (a
         // cancelled passkey ceremony, no network, or a lifecycle refusal) the

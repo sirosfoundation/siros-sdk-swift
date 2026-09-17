@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal helper landed, while unit tests - which inject their own transport -
   stayed green. It now throws `SirosError.backendApi(code:message:body:)`
   like the two clients' own convenience initialisers.
+- **The self-driven re-login no longer reuses a cut-off token.**
+  `AuthServerClient` caches access tokens itself, so clearing `AuthTokens`
+  left the pre-cut-off token to be served from that cache and refused with
+  `401` on first use. The re-login now calls the new
+  `AuthServerClient.clearTokenCache()`, which drops cached tokens without
+  ending the session the way `logout()` would.
 
 ### Added
 - **Wallet instance lifecycle: the SDK now speaks the whole protocol**
