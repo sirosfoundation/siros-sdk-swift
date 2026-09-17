@@ -377,7 +377,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// `deactivateWallet()` is the one place that still forgets the account -
     /// there the caller asked for it and the outcome is unambiguous.
     @discardableResult
-    func handleLifecycleRefusal(_ error: Error) -> Bool {
+    func handleLifecycleRefusal(_ error: Error) async -> Bool {
         guard let sirosError = error as? SirosError,
               let reason = sirosError.walletLifecycleRefusal else { return false }
         let message = sirosError.serverMessage
@@ -390,6 +390,13 @@ public final class SirosWallet: @unchecked Sendable {
         // reactivated reuses the same AS session cookie, and the DELETE could
         // land after its loginFinish. See `endSessionLocally()`.
         endSessionLocally()
+        // `endSessionLocally()` clears `AuthTokens`, but `AuthServerClient`
+        // keeps its own cache: a backend token minted just before the 403
+        // arrived (during the private-data fetch or the engine connect) would
+        // otherwise be served straight back to the retry without the AS ever
+        // being asked, and it is already cut off. Awaited here, so it cannot
+        // race the retry the app may make the moment this state is published.
+        await authServerClient?.clearTokenCache()
         setState(.lifecycleBlocked(
             reason: reason,
             message: message,
@@ -728,6 +735,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// so that concurrent first uses cannot mint two different keys. See
     /// `ensureInstanceKeyId()`.
     var instanceKeyTask: Task<String, Error>?
+    /// The account `instanceKeyTask` is generating for; a different account
+    /// must not share it. See `ensureInstanceKeyId()`.
+    var instanceKeyTaskAccount: String?
     /// Identifies which `instanceKeyTask` is current - `Task` is a struct, so
     /// there is no identity to compare.
     var instanceKeyTaskToken: Int = 0
@@ -1233,13 +1243,13 @@ public final class SirosWallet: @unchecked Sendable {
             // A SID-AUTH-06 refusal is a state, not an error: this passkey's
             // wallet instance is suspended or the wallet was deactivated, and
             // retrying the same login changes nothing until someone else acts.
-            if handleLifecycleRefusal(e) { return }
+            if await handleLifecycleRefusal(e) { return }
             #if canImport(os)
             logger.error("Login failed: \(e.localizedDescription)")
             #endif
             setState(.error(message: e.localizedDescription))
         } catch {
-            if handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error) { return }
             #if canImport(os)
             logger.error("Login failed: \(error.localizedDescription)")
             #endif
@@ -1323,7 +1333,7 @@ public final class SirosWallet: @unchecked Sendable {
             do {
                 _ = try await tokens.ensureBackendToken()
             } catch {
-                if handleLifecycleRefusal(error) { return }
+                if await handleLifecycleRefusal(error) { return }
                 sessionStore.clear()
                 lock.lock(); apiClient = nil; lock.unlock()
                 setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
@@ -1342,7 +1352,7 @@ public final class SirosWallet: @unchecked Sendable {
                 setState(.ready(userId: userId, displayName: displayName, credentials: []))
             }
         } catch {
-            if handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error) { return }
             setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
     }
@@ -1394,7 +1404,7 @@ public final class SirosWallet: @unchecked Sendable {
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
             await reloadPresentationHistory()
         } catch {
-            if handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error) { return }
             setState(.error(message: error.localizedDescription))
         }
     }

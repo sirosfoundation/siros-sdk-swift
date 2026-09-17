@@ -272,8 +272,16 @@ extension SirosWallet {
         // with the one this wallet proves, breaking later PoPs and
         // `isThisDevice`. Sharing one in-flight task gives every caller the
         // same key.
+        //
+        // Scoped to the account it is for: `instanceKeyId` is account-scoped
+        // while this task is wallet-wide, so a logout/login that switches
+        // accounts mid-generation must not hand the new account the old one's
+        // task - nor let that task persist its key into the new account's
+        // scope, which would attest the new account under the wrong lifecycle
+        // identity.
+        let account = sessionStore.activeAccountId
         lock.lock()
-        if let inFlight = instanceKeyTask {
+        if let inFlight = instanceKeyTask, instanceKeyTaskAccount == account {
             lock.unlock()
             return try await inFlight.value
         }
@@ -283,18 +291,27 @@ extension SirosWallet {
             // have persisted one already.
             if let existing = self.sessionStore.instanceKeyId { return existing }
             let keyId = try await self.keystore.generateKey(algorithm: "ES256")
+            guard self.sessionStore.activeAccountId == account else {
+                throw SirosError.wallet(
+                    message: "Account changed while generating the wallet instance key"
+                )
+            }
             self.sessionStore.instanceKeyId = keyId
             return keyId
         }
         instanceKeyTaskToken &+= 1
         let token = instanceKeyTaskToken
         instanceKeyTask = task
+        instanceKeyTaskAccount = account
         lock.unlock()
         defer {
             lock.lock()
             // Only clear it if it is still ours, so a failed generation can be
             // retried by the next caller rather than cached forever.
-            if instanceKeyTaskToken == token { instanceKeyTask = nil }
+            if instanceKeyTaskToken == token {
+                instanceKeyTask = nil
+                instanceKeyTaskAccount = nil
+            }
             lock.unlock()
         }
         return try await task.value
