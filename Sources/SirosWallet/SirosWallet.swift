@@ -296,7 +296,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// never log in to this tenant again - leaving it on the login screen
     /// would only offer the user a door that is bricked shut.
     @discardableResult
-    func handleLifecycleRefusal(_ error: Error) -> Bool {
+    func handleLifecycleRefusal(_ error: Error, accountId attemptedAccountId: String? = nil) -> Bool {
         guard let sirosError = error as? SirosError,
               let reason = sirosError.walletLifecycleRefusal else { return false }
         let message = sirosError.serverMessage
@@ -305,7 +305,16 @@ public final class SirosWallet: @unchecked Sendable {
         #endif
         switch reason {
         case .revoked:
-            if let accountId = accountRegistry.activeAccountId ?? sessionStore.activeAccountId {
+            // Which account to forget, in order of authority: the one the
+            // refused ceremony actually resolved to (login passes it - after a
+            // logout the registry has no active account and the session store
+            // still names the PREVIOUS one, so trusting the scope there would
+            // forget the wrong account and leave the revoked one on the login
+            // screen); then the registry's active account; then the session
+            // scope, which is the right answer for resume and unlock.
+            if let accountId = attemptedAccountId
+                ?? accountRegistry.activeAccountId
+                ?? sessionStore.activeAccountId {
                 forgetAccount(accountId: accountId)
             } else {
                 logout()
@@ -1133,9 +1142,15 @@ public final class SirosWallet: @unchecked Sendable {
         // account (or from before a re-enrollment) must not be what identifies
         // this device once this login resolves.
         lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
+        // The account the ceremony resolved to, as soon as it is known - the
+        // only authority on which account a lifecycle refusal is about (see
+        // handleLifecycleRefusal). Nil while the refusal could still come from
+        // a step before any passkey was chosen.
+        var attemptedAccountId: String?
         do {
             // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
             let assertion = try await performPasskeyAssertion(asClient: asClient)
+            attemptedAccountId = assertion.cachedAccount?.accountId
             let prfOutput = assertion.prfOutput
 
             // Step 3: Complete login with AS
@@ -1202,13 +1217,13 @@ public final class SirosWallet: @unchecked Sendable {
             // A SID-AUTH-06 refusal is a state, not an error: this passkey's
             // wallet instance is suspended or the wallet was deactivated, and
             // retrying the same login changes nothing until someone else acts.
-            if handleLifecycleRefusal(e) { return }
+            if handleLifecycleRefusal(e, accountId: attemptedAccountId) { return }
             #if canImport(os)
             logger.error("Login failed: \(e.localizedDescription)")
             #endif
             setState(.error(message: e.localizedDescription))
         } catch {
-            if handleLifecycleRefusal(error) { return }
+            if handleLifecycleRefusal(error, accountId: attemptedAccountId) { return }
             #if canImport(os)
             logger.error("Login failed: \(error.localizedDescription)")
             #endif
@@ -1309,6 +1324,14 @@ public final class SirosWallet: @unchecked Sendable {
                 challengeId: assertion.challengeId,
                 credential: assertion.credential
             )
+            // Same reason as login()/register(): this is also a completed
+            // passkey ceremony, and a session resumed from an older SDK (or
+            // one whose stored id went stale) would otherwise reach WIA
+            // generation with no `credential_id` to bind the instance to.
+            // The store is already scoped to the resumed account here.
+            if let credentialId = assertion.credential["id"] as? String {
+                sessionStore.credentialId = credentialId
+            }
 
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")

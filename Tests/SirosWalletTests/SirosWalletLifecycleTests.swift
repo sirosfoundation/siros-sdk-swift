@@ -198,6 +198,37 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertTrue(registry.listLoginableAccounts().isEmpty, "a revoked wallet's account is forgotten")
     }
 
+    /// After a logout the registry has no active account and the session store
+    /// still names the previous one, so the account a refused login is about
+    /// can only come from the ceremony that was refused. Passing it must win
+    /// over both fallbacks.
+    func testRevokedRefusalForgetsTheAccountTheCeremonyResolvedTo() {
+        let registry = seededRegistry()
+        let other = CachedAccount(
+            userId: "user-2",
+            tenantId: "default",
+            displayName: "Bob",
+            backendUrl: "https://wallet.example.invalid",
+            passkeys: [CachedPasskey(credentialId: "cred-2", prfSalt: "c2FsdA==")]
+        )
+        registry.upsertAccount(other)
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = "default:user-1"   // the previous session's account
+        let wallet = makeWallet(registry: registry, sessionStore: sessionStore)
+        registry.activeAccountId = nil                    // as after a logout
+
+        let handled = wallet.handleLifecycleRefusal(
+            SirosError.backendApi(code: 403, message: "", body: #"{"error":"WALLET_REVOKED"}"#),
+            accountId: other.accountId
+        )
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(
+            registry.listLoginableAccounts().map(\.accountId), ["default:user-1"],
+            "the account the ceremony resolved to is forgotten, not the one the stale session scope names"
+        )
+    }
+
     /// Everything that is not one of the two lifecycle codes keeps the
     /// existing error path, untouched.
     func testOtherFailuresAreNotLifecycleRefusals() {
