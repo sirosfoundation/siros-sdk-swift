@@ -75,10 +75,19 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// The current session could not be silently refreshed and is no longer
     /// valid - e.g. the engine WebSocket's token refresh failed before a
     /// reconnect, or repeated REST calls were rejected as unauthenticated.
-    /// `SirosWallet` has already logged out by the time this fires. Unlike
-    /// `onFlowError` (a specific flow's failure, session otherwise fine),
-    /// this means the whole session is gone - route the user to the login
-    /// screen rather than surfacing a generic error message.
+    /// Unlike `onFlowError` (a specific flow's failure, session otherwise
+    /// fine), this means the whole session is gone - route the user to the
+    /// login screen rather than surfacing a generic error message.
+    ///
+    /// Since SID-AUTH-06 the SDK attempts exactly one login itself right after
+    /// this fires: a lifecycle cut-off is indistinguishable from an expired
+    /// session until that login is refused with `WALLET_SUSPENDED` /
+    /// `WALLET_REVOKED`, which is what turns it into
+    /// `WalletState.lifecycleBlocked` rather than an endless reauth loop. So
+    /// an implementation should show its login/progress screen and wait for
+    /// the state to change - it must NOT call `login()` itself, or two
+    /// WebAuthn ceremonies race on the session store, the wallet state and the
+    /// engine session.
     func onReauthenticationRequired()
 
     /// The backend refuses this installation because of its wallet instance's

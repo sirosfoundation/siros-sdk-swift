@@ -238,10 +238,19 @@ public final class SirosWallet: @unchecked Sendable {
     func reloginAfterCutOff() async {
         lock.lock()
         let engine = engineSession
+        // The WMP transport holds its own live WebSocket, and the backend
+        // re-checks the cut-off at every flow start - leaving it connected
+        // would keep a socket authenticated by a token the backend has already
+        // stopped accepting, and `connectViaWmp` would overwrite the reference
+        // on a successful re-login without ever closing it.
+        let peer = wmpPeer
         engineSession = nil
+        wmpPeer = nil
+        credentialNotifier = nil
         apiClient = nil
         lock.unlock()
         engine?.disconnect()
+        if let peer { try? await peer.close() }
         cancelEngineTasks()
         authTokens?.clear()
         // login() puts every outcome in the state itself; its `throw` is only
@@ -908,9 +917,15 @@ public final class SirosWallet: @unchecked Sendable {
     /// .reauthRequired`, observed via the engine's `stateStream` in
     /// `connectEngine`). Notifies the host app via
     /// `WalletEventListener.onReauthenticationRequired` - distinct from
-    /// `onFlowError` - so it can route straight to a login screen instead of
-    /// surfacing a generic error message, then logs out to put the SDK's own
-    /// state in sync with that.
+    /// `onFlowError` - and then attempts one login itself (SID-AUTH-06: a
+    /// lifecycle cut-off is indistinguishable from an expired session until
+    /// that login is refused with `WALLET_SUSPENDED` / `WALLET_REVOKED`).
+    ///
+    /// The listener is therefore told, not asked: it should route its UI to a
+    /// login/progress screen and wait for the state to change, and must NOT
+    /// start a login of its own - two concurrent ceremonies would race on the
+    /// session store, the wallet state and the engine session. See
+    /// `WalletEventListener.onReauthenticationRequired()`.
     // Not `private`: `SirosWallet+Engine.swift` needs it too - same
     // cross-file-extension-access reason as `keystore` above.
     func handleReauthenticationRequired() {
@@ -1065,6 +1080,12 @@ public final class SirosWallet: @unchecked Sendable {
             sessionStore.prfSalt = Self.b64Encode(prfSalt)
             sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
             sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
+            // The passkey this installation logs in with. `generateWIA` sends
+            // it as `credential_id` so the backend can bind this wallet
+            // instance to it and refuse the same passkey at login once the
+            // instance is suspended or revoked (SID-AUTH-06). Nothing else
+            // writes it, so without this the link is never recorded at all.
+            sessionStore.credentialId = credIdStr
             sessionStore.privateDataJwe = String(data: encryptedContainer, encoding: .utf8)
 
             setupApiClientWithTokens(tokens)
@@ -1145,6 +1166,14 @@ public final class SirosWallet: @unchecked Sendable {
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
+            // See register()'s identical assignment: this is the only thing
+            // that records which passkey this installation logs in with, and
+            // `generateWIA` needs it to bind the instance to that passkey
+            // (SID-AUTH-06). It is the credential the ceremony actually
+            // resolved to, not a stored guess.
+            if let credentialId = assertion.credential["id"] as? String {
+                sessionStore.credentialId = credentialId
+            }
             sessionStore.prfSalt = Self.b64Encode(prfSaltBytes)
             sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
             sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)

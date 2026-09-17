@@ -43,6 +43,13 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     func getAllPresentationRecords() async throws -> [Int64: String] { [:] }
     func clearPresentationRecords() async throws {}
     func generateKeypairs(count: Int) async throws -> [KeypairInfo] { [] }
+    // The WIA-generation path signs a PoP with the instance key; the protocol's
+    // default implementation throws, which would make
+    // `ensureWalletInstanceAttestation()` bail before ever reaching the
+    // request under test.
+    func generateKeyProof(
+        keyId: String, typ: String, issuer: String, audience: String, extraClaims: [String: String]
+    ) async throws -> String { "pop.jwt" }
 }
 
 /// Minimal queued-response HTTP stub (the `SirosAuthTests` MockHttpServer
@@ -51,6 +58,8 @@ private final class StubHttpServer: @unchecked Sendable {
     private let lock = NSLock()
     private var responses: [Result<Data, Error>] = []
     private(set) var requestCount = 0
+    /// Parsed JSON body of each request, in order.
+    private(set) var bodies: [[String: Any]?] = []
 
     func enqueue(_ json: String) {
         lock.lock(); responses.append(.success(Data(json.utf8))); lock.unlock()
@@ -65,10 +74,11 @@ private final class StubHttpServer: @unchecked Sendable {
     struct Exhausted: Error {}
 
     var httpFunction: @Sendable (String, URL, [String: String], Data?) async throws -> Data {
-        { [weak self] _, _, _, _ in
+        { [weak self] _, _, _, body in
             guard let self else { throw Exhausted() }
             self.lock.lock()
             self.requestCount += 1
+            self.bodies.append(body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
             guard !self.responses.isEmpty else { self.lock.unlock(); throw Exhausted() }
             let next = self.responses.removeFirst()
             self.lock.unlock()
@@ -348,6 +358,61 @@ final class SirosWalletLifecycleTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTFail("condition not met within \(timeout)s")
+    }
+
+    // MARK: - The passkey link at WIA generation
+
+    /// A `credential_id` the backend refuses as not the caller's own would, if
+    /// the SDK gave up, leave this instance with no attestation at all - and
+    /// the first link recorded for an instance wins, so guessing another id
+    /// could lock the real passkey out of the per-device gate for good. Retry
+    /// once without the link and drop the stale id.
+    func testWiaGenerationRetriesWithoutThePasskeyLinkWhenTheBackendRefusesIt() async throws {
+        let sessionStore = InMemorySessionStore()
+        // The store is account-scoped: nothing can be written to it before an
+        // account is active (the same reason `login()` scopes it before it
+        // records the passkey link).
+        sessionStore.activeAccountId = "default:user-1"
+        sessionStore.credentialId = "stale-passkey"
+        let wallet = makeWallet(sessionStore: sessionStore)
+        let server = StubHttpServer()
+        server.enqueue(#"{"challenge":"chal-1"}"#)                                       // WIA challenge
+        server.enqueueFailure(code: 403, body: #"{"error":"CREDENTIAL_NOT_OWNED"}"#)     // with the stale link
+        server.enqueue(#"{"wallet_instance_attestation":"wia.jwt"}"#)                    // retry without it
+        let client = BackendApiClient(baseUrl: "https://wallet.example.invalid", httpFn: server.httpFunction)
+        client.setAppToken("t")
+        wallet.apiClient = client
+
+        let wia = await wallet.ensureWalletInstanceAttestation()
+
+        XCTAssertEqual(wia, "wia.jwt")
+        XCTAssertNil(sessionStore.credentialId, "the stale link is dropped, never replaced with a guess")
+        XCTAssertEqual(server.requestCount, 3)
+        XCTAssertEqual(server.bodies[1]?["credential_id"] as? String, "stale-passkey")
+        XCTAssertNil(server.bodies[2]?["credential_id"], "the retry must not carry the refused link")
+    }
+
+    /// The happy path, and the reason the link exists at all: the passkey this
+    /// installation logs in with is what the backend binds the instance to, so
+    /// suspending the instance also refuses that passkey at login.
+    func testWiaGenerationSendsTheRecordedPasskeyLink() async throws {
+        let sessionStore = InMemorySessionStore()
+        sessionStore.activeAccountId = "default:user-1"
+        sessionStore.credentialId = "pk-1"
+        let wallet = makeWallet(sessionStore: sessionStore)
+        let server = StubHttpServer()
+        server.enqueue(#"{"challenge":"chal-1"}"#)
+        server.enqueue(#"{"wallet_instance_attestation":"wia.jwt"}"#)
+        let client = BackendApiClient(baseUrl: "https://wallet.example.invalid", httpFn: server.httpFunction)
+        client.setAppToken("t")
+        wallet.apiClient = client
+
+        let wia = await wallet.ensureWalletInstanceAttestation()
+
+        XCTAssertEqual(wia, "wia.jwt")
+        XCTAssertEqual(sessionStore.credentialId, "pk-1", "a link the backend accepted is kept")
+        XCTAssertEqual(server.requestCount, 2)
+        XCTAssertEqual(server.bodies[1]?["credential_id"] as? String, "pk-1")
     }
 
     // MARK: - Deactivation
