@@ -18,6 +18,12 @@ private let logger = Logger(subsystem: "org.siros.sdk", category: "VctmFetcher")
 /// not-yet-registered credential type never gets stuck negative for the
 /// TTL window - every call with no cached entry retries all strategies
 /// fresh.
+///
+/// A caller that knows which document it needs - because a credential pinned
+/// `vct#integrity` over it - passes `expectedIntegrity`, and the cache then
+/// answers only with a document that hashes to it. Otherwise a document cached
+/// before the issuer changed what it publishes keeps being handed out, and no
+/// server-side fix can reach the wallet until the TTL expires.
 public final class VctmFetcher: @unchecked Sendable {
     private let httpGet: (@Sendable (String) async -> String?)?
     private let decoder = JSONDecoder()
@@ -67,14 +73,32 @@ public final class VctmFetcher: @unchecked Sendable {
     /// caller checking `vct#integrity` needs it rather than a re-serialisation
     /// of the parsed form — which would differ in key order and whitespace and
     /// hash to something else entirely.
+    ///
+    /// - Parameter expectedIntegrity: the `vct#integrity` an issued credential
+    ///   pinned, when there is one. Resolution is then *directed* by it rather
+    ///   than merely checked against it afterwards: a cached document that does
+    ///   not hash to it is not a hit however fresh it is, and each source is
+    ///   tried until one produces the document the issuer actually signed over.
+    ///   Without it, behaviour is exactly as before.
     public func fetchDocument(
         issuerUrl: String,
         scope: String,
         vct: String? = nil,
-        registryUrl: String? = nil
+        registryUrl: String? = nil,
+        expectedIntegrity: String? = nil
     ) async -> VctmDocument? {
+        // With an expectation, a source that answers with the wrong document is
+        // no better than one that does not answer: keep going rather than
+        // settle for the first parseable body. Reuses `Integrity.matches`, the
+        // same check the wallet applies to `vct#integrity` itself.
+        func satisfiesExpectation(_ document: VctmDocument) -> Bool {
+            guard let expectedIntegrity else { return true }
+            guard let raw = document.raw.data(using: .utf8) else { return false }
+            return Integrity.matches(raw, expectedIntegrity)
+        }
+
         let cacheKey = CacheKey(issuerUrl: issuerUrl, scope: scope, vct: vct, registryUrl: registryUrl)
-        if let cached = cachedResult(for: cacheKey) {
+        if let cached = cachedResult(for: cacheKey), satisfiesExpectation(cached) {
             return cached
         }
 
@@ -88,7 +112,7 @@ public final class VctmFetcher: @unchecked Sendable {
         // the well-known strategy already does when `vct` is nil.
         if let registryUrl, let vct {
             if let registryLookupUrl = resolveRegistryUrl(registryUrl, vct: vct) {
-                if let result = await fetchFromUrl(registryLookupUrl) {
+                if let result = await fetchFromUrl(registryLookupUrl), satisfiesExpectation(result) {
                     store(result, for: cacheKey)
                     return result
                 }
@@ -100,14 +124,14 @@ public final class VctmFetcher: @unchecked Sendable {
             : issuerUrl
         let typeMetadataUrl = "\(baseUrl)/type-metadata/\(scope)"
 
-        if let result = await fetchFromUrl(typeMetadataUrl) {
+        if let result = await fetchFromUrl(typeMetadataUrl), satisfiesExpectation(result) {
             store(result, for: cacheKey)
             return result
         }
 
         if let vct {
             if let wellKnownUrl = resolveWellKnownUrl(vct) {
-                if let result = await fetchFromUrl(wellKnownUrl) {
+                if let result = await fetchFromUrl(wellKnownUrl), satisfiesExpectation(result) {
                     store(result, for: cacheKey)
                     return result
                 }
@@ -115,7 +139,8 @@ public final class VctmFetcher: @unchecked Sendable {
         }
 
         #if canImport(os)
-        logger.debug("No VCTM found for scope=\(scope) vct=\(vct ?? "nil")")
+        let qualifier = expectedIntegrity == nil ? "" : " matching the issuer's vct#integrity"
+        logger.debug("No VCTM found for scope=\(scope) vct=\(vct ?? "nil")\(qualifier)")
         #endif
         return nil
     }

@@ -5,14 +5,14 @@ import SirosAuth
 import SirosCredentials
 @testable import SirosWallet
 
+import SirosKeystore
+import SirosTransport
+
 #if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
 #endif
-
-// `SirosWallet.init` requires a real `JweKeystore`, only available where
-// CryptoKit is — matching this target's existing convention. The digest half of
-// this feature is covered on every platform by SirosCredentialsTests.
-#if canImport(CryptoKit)
 
 private final class StubAuthProvider: AuthProvider, @unchecked Sendable {
     struct NotImplemented: Error {}
@@ -29,9 +29,17 @@ private final class StubAuthProvider: AuthProvider, @unchecked Sendable {
 /// what actually turned up. Mirrors the Kotlin SDK's IssuedTypeVerificationTest.
 final class SirosWalletIssuedTypeTests: XCTestCase {
 
+    /// A stub `KeystoreManager` rather than the default `JweKeystore`, so these
+    /// tests run on Linux as well as on Apple platforms: nothing here signs or
+    /// unwraps anything, and the Kotlin original they mirror runs on the JVM.
     private func makeWallet() -> SirosWallet {
         let config = WalletConfig(backendUrl: "https://example.invalid")
-        let wallet = SirosWallet(config: config, authProvider: StubAuthProvider())
+        let wallet = SirosWallet(
+            config: config,
+            authProvider: StubAuthProvider(),
+            keystore: StubKeystoreManager(),
+            accountRegistry: .inMemory()
+        )
         XCTAssertNotNil(wallet)
         return wallet!
     }
@@ -132,47 +140,221 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         VctmDocument(raw: "{\"vct\":\"\(vct)\"}", vctm: Vctm(vct: vct))
     }
 
+    /// A document whose bytes - and therefore whose digest - differ by `name`,
+    /// so a test can hold one version and pin another. The parsed form carries
+    /// the name too, so a test can tell which of the two a wallet ended up
+    /// applying and not merely which bytes it kept.
+    private func document(_ vct: String, name: String) -> VctmDocument {
+        let raw = "{\"vct\":\"\(vct)\",\"name\":\"\(name)\"}"
+        return VctmDocument(raw: raw, vctm: Vctm(vct: vct, name: name))
+    }
+
+    private func offer(vct: String) -> CredentialOffer {
+        CredentialOffer(
+            credentialConfigurationId: "pid_1",
+            credentialIssuerIdentifier: "https://issuer.example.invalid",
+            credentialName: "PID",
+            issuerName: "Issuer",
+            vct: vct
+        )
+    }
+
     private func digest(of raw: String) -> String {
         "sha256-" + Data(SHA256.hash(data: Data(raw.utf8))).base64EncodedString()
     }
 
-    func testAcceptsTypeMetadataMatchingTheIssuersDigest() {
+    func testAcceptsTypeMetadataMatchingTheIssuersDigest() async {
         let w = makeWallet()
         let doc = document("urn:eudi:pid:1")
         w.activeVctmDocument = doc
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: doc.raw))
-        XCTAssertNil(w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument).reason
+        XCTAssertNil(reason)
     }
 
-    func testRefusesTypeMetadataTheIssuerDidNotPin() {
+    func testRefusesTypeMetadataTheIssuerDidNotPin() async {
         // A registry serving altered metadata for a type the issuer is
         // legitimately entitled to issue.
         let w = makeWallet()
         w.activeVctmDocument = document("urn:eudi:pid:1")
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1","claims":[]}"#))
-        XCTAssertNotNil(w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument).reason
+        XCTAssertNotNil(reason)
     }
 
-    func testAcceptsACredentialThatPinsNothing() {
+    func testAcceptsACredentialThatPinsNothing() async {
         let w = makeWallet()
         w.activeVctmDocument = document("urn:eudi:pid:1")
-        XCTAssertNil(w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(sdJwt(vct: "urn:eudi:pid:1"))))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(sdJwt(vct: "urn:eudi:pid:1")), offer: w.activeOffer, document: w.activeVctmDocument).reason
+        XCTAssertNil(reason)
     }
 
-    func testAcceptsWhenNoMetadataWasResolvedToCheck() {
+    func testAcceptsWhenNoMetadataWasResolvedToCheck() async {
         // Nothing was applied, so nothing was tampered with.
         let w = makeWallet()
         w.activeVctmDocument = nil
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1"}"#))
-        XCTAssertNil(w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument).reason
+        XCTAssertNil(reason)
     }
 
-    func testMdocCarriesNoVctIntegrity() {
+    // MARK: - re-resolution against the pin
+
+    /// The heal: the wallet holds a document cached before the issuer changed
+    /// what it publishes, so the pin disagrees with it. That is ordinary, not
+    /// hostile - resolve again directed by the pin, and accept the credential
+    /// when the issuer's own document is found. Ports siros-sdk-kotlin#191.
+    func testAStaleResolvedDocumentIsReResolvedAndTheCredentialAccepted() async {
+        let w = makeWallet()
+        let issuers = document("urn:eudi:pid:1", name: "PID")
+        let staleDocument = document("urn:eudi:pid:1", name: "PID (old)")
+        w.activeVctmDocument = staleDocument
+        w.activeOffer = offer(vct: "urn:eudi:pid:1")
+        w.vctmFetcher = VctmFetcher(httpGet: { @Sendable _ in issuers.raw })
+
+        let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: issuers.raw))
+        let outcome = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument)
+
+        XCTAssertNil(outcome.reason, "the issuer's own document was found, so the credential stands")
+        XCTAssertEqual(
+            outcome.refreshed?.raw, issuers.raw,
+            "and the document the issuer pinned is handed back, not the stale one"
+        )
+        // The parsed form too, not just the raw bytes: it is what the stored
+        // credential's display and claim metadata is built from, so a heal that
+        // handed back only bytes would accept the credential and then describe
+        // it with the document the issuer did not sign over.
+        XCTAssertEqual(
+            outcome.refreshed?.vctm.name, "PID",
+            "the refreshed parse is what the metadata will be built from"
+        )
+        // Deliberately NOT written into the wallet's shared issuance state: a
+        // cancel or logout may have replaced it while the re-resolution was in
+        // flight, and this result belongs to one credential.
+        XCTAssertEqual(
+            w.activeVctmDocument?.raw, staleDocument.raw,
+            "the shared issuance state is left to whichever flow owns it"
+        )
+    }
+
+    /// The security property is unchanged: a document that does not hash to the
+    /// pin is never accepted, wherever it came from. A wallet that cannot find
+    /// the pinned document anywhere still refuses.
+    func testACredentialWhosePinnedDocumentNoSourceHasIsStillRefused() async {
+        let w = makeWallet()
+        w.activeVctmDocument = document("urn:eudi:pid:1", name: "PID (old)")
+        w.activeOffer = offer(vct: "urn:eudi:pid:1")
+        // Every source serves something, but none of it is what was pinned.
+        w.vctmFetcher = VctmFetcher(httpGet: { @Sendable _ in #"{"vct":"urn:eudi:pid:1","name":"also wrong"}"# })
+
+        let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1","name":"PID"}"#))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument).reason
+
+        XCTAssertNotNil(reason)
+    }
+
+    /// The behaviour that actually matters, end to end: a credential accepted
+    /// *because* the heal found the issuer's document must be **stored
+    /// described by that document**, not by the stale one. Checking only what
+    /// `verifyVctIntegrity` returns would pass even if `storeIssuedCredential`
+    /// ignored it and built the metadata from the snapshot, which is precisely
+    /// the regression this guards.
+    func testTheHealedDocumentIsWhatTheStoredCredentialIsDescribedBy() async {
+        let store = InMemoryCredentialStore()
+        let config = WalletConfig(backendUrl: "https://example.invalid", credentialStore: store)
+        let w = SirosWallet(
+            config: config,
+            authProvider: StubAuthProvider(),
+            keystore: StubKeystoreManager(),
+            accountRegistry: .inMemory()
+        )!
+        // The display name is what `buildMetadata` puts on the stored
+        // credential, so it is what makes the two documents tell apart there.
+        let issuers = displayDocument("urn:eudi:pid:1", displayName: "PID")
+        let staleDocument = displayDocument("urn:eudi:pid:1", displayName: "PID (old)")
+        w.vctmFetcher = VctmFetcher(httpGet: { @Sendable _ in issuers.raw })
+
+        let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: issuers.raw))
+        let outcome = await w.storeIssuedCredential(
+            credentialResult(format: "dc+sd-jwt", credential: raw),
+            index: 0,
+            flowId: "flow-1",
+            offer: offer(vct: "urn:eudi:pid:1"),
+            // What the flow resolved before issuance: the stale document and
+            // its parse, exactly as `handleFlowComplete` would have snapshotted.
+            vctm: staleDocument.vctm,
+            vctmDocument: staleDocument,
+            attestedKeyIds: nil,
+            batchId: 1
+        )
+
+        XCTAssertTrue(outcome.stored, "the credential is accepted: the pinned document was found")
+        XCTAssertNil(outcome.failureReason)
+        let saved = await store.getAll()
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(
+            saved.first?.metadata?.name, "PID",
+            "stored with the document the issuer pinned, not the stale one it would have been named by"
+        )
+    }
+
+    /// A document carrying a `display` entry, since that is where
+    /// `CredentialUtils.buildMetadata` takes the stored name from.
+    private func displayDocument(_ vct: String, displayName: String) -> VctmDocument {
+        let raw = "{\"vct\":\"\(vct)\",\"display\":[{\"locale\":\"en-US\",\"name\":\"\(displayName)\"}]}"
+        return VctmDocument(
+            raw: raw,
+            vctm: Vctm(vct: vct, display: [VctmDisplay(locale: "en-US", name: displayName)])
+        )
+    }
+
+    /// `CredentialResult`'s memberwise init is internal to `SirosTransport`;
+    /// it is `Codable`, so build it the way the engine does.
+    private func credentialResult(format: String, credential: String) -> CredentialResult {
+        let json = ["format": format, "credential": credential]
+        let data = try! JSONSerialization.data(withJSONObject: json)
+        return try! JSONDecoder().decode(CredentialResult.self, from: data)
+    }
+
+    /// Re-resolution needs an offer to resolve against; without one there is
+    /// nowhere to look, and the refusal stands as before.
+    func testWithNoOfferToResolveAgainstTheRefusalStands() async {
+        let w = makeWallet()
+        w.activeVctmDocument = document("urn:eudi:pid:1", name: "PID (old)")
+        w.activeOffer = nil
+
+        let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1","name":"PID"}"#))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument).reason
+        XCTAssertNotNil(reason)
+    }
+
+    func testMdocCarriesNoVctIntegrity() async {
         let w = makeWallet()
         w.activeVctmDocument = document("urn:eudi:pid:1")
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: "wrong"))
-        XCTAssertNil(w.verifyVctIntegrity(format: "mso_mdoc", payload: payload(raw)))
+        let reason = await w.verifyVctIntegrity(format: "mso_mdoc", payload: payload(raw), offer: w.activeOffer, document: w.activeVctmDocument).reason
+        XCTAssertNil(reason)
     }
 }
 
-#endif
+private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
+    var isUnlocked: Bool { true }
+    func unlock(prfOutput: Data, encryptedContainer: Data, hkdfSalt: Data, hkdfInfo: Data) async throws {}
+    func lock() {}
+    func generateKey(algorithm: String) async throws -> String { "key" }
+    func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { Data() }
+    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String { "proof" }
+    func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String { "" }
+    func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String, kid: String?) async throws -> String { "" }
+    func exportEncryptedContainer() async throws -> Data { Data() }
+    func listKeys() -> [KeyInfo] { [] }
+    func saveCredential(id: Int64, json: String) async throws {}
+    func getCredential(id: Int64) async throws -> String? { nil }
+    func getAllCredentials() async throws -> [Int64: String] { [:] }
+    func deleteCredential(id: Int64) async throws {}
+    func clearCredentials() async throws {}
+    func savePresentationRecord(id: Int64, json: String) async throws {}
+    func getAllPresentationRecords() async throws -> [Int64: String] { [:] }
+    func clearPresentationRecords() async throws {}
+    func generateKeypairs(count: Int) async throws -> [KeypairInfo] { [] }
+}

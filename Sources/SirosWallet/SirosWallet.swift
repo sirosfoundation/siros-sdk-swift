@@ -377,7 +377,11 @@ public final class SirosWallet: @unchecked Sendable {
     let credentialStore: CredentialStore
     // Not `private`: `SirosWallet+Issuance.swift` needs it too - same
     // cross-file-extension-access reason as `keystore` above.
-    let vctmFetcher: VctmFetcher
+    // `var`, not `let`: the type-metadata tests replace it with one backed by
+    // a stub HTTP function, so the wallet's re-resolution against a credential's
+    // `vct#integrity` can be driven without the network. Assigned only in
+    // `init` otherwise.
+    var vctmFetcher: VctmFetcher
     let mddlSchemaFetcher: MddlSchemaFetcher
     // Not `private`: `SirosWallet+Passkey.swift` reads it for the login PRF
     // candidates - same cross-file-extension-access reason as `keystore`.
