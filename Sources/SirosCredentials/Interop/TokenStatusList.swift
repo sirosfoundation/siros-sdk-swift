@@ -100,6 +100,16 @@ public enum TokenStatusList {
         let ttlSeconds: TimeInterval
         let bits: Int
         let list: Data
+        /// The issuer this token was authenticated for. A cached list must not
+        /// be handed to a credential from a different issuer: the `iss` check
+        /// happens on fetch, so reusing the entry across issuers - or reusing
+        /// an entry first fetched with no expected issuer - would bypass it.
+        let issuer: String?
+        /// The token's own `exp`. Enforced on every cache hit: with no `ttl`
+        /// the entry would otherwise be served for the life of the process,
+        /// long past the point where the issuer expected it to be re-fetched,
+        /// and would miss every revocation published since.
+        let expiresAt: Date?
     }
 }
 
@@ -149,9 +159,17 @@ public actor TokenStatusListClient {
         let currentTime = now()
 
         if let entry = cache[reference.uri] {
-            let fresh = entry.ttlSeconds <= 0
+            let withinTtl = entry.ttlSeconds <= 0
                 || currentTime.timeIntervalSince(entry.fetchedAt) < entry.ttlSeconds
-            if fresh {
+            // The `iss` check ran when this entry was fetched, and it only
+            // authenticated the token for THAT issuer. A different one - or an
+            // entry first fetched without an expected issuer - has to go back
+            // to the network rather than inherit that decision.
+            let sameIssuer = entry.issuer == expectedIssuer
+            let unexpired = entry.expiresAt.map {
+                $0.timeIntervalSince1970 + clockTolerance >= currentTime.timeIntervalSince1970
+            } ?? true
+            if withinTtl && sameIssuer && unexpired {
                 guard let status = TokenStatusList.readStatus(in: entry.list, bits: entry.bits, idx: reference.idx) else {
                     return .unavailable("Index \(reference.idx) is outside the cached status list")
                 }
@@ -236,7 +254,12 @@ public actor TokenStatusListClient {
             ?? (claims["ttl"] as? NSNumber)?.doubleValue
             ?? 0
         cache[reference.uri] = TokenStatusList.CacheEntry(
-            fetchedAt: currentTime, ttlSeconds: ttl, bits: bits, list: inflated
+            fetchedAt: currentTime,
+            ttlSeconds: ttl,
+            bits: bits,
+            list: inflated,
+            issuer: expectedIssuer,
+            expiresAt: (claims["exp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
         )
 
         guard let status = TokenStatusList.readStatus(in: inflated, bits: bits, idx: reference.idx) else {
