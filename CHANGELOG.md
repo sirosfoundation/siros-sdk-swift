@@ -69,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tells the user (an incomplete erasure leaves residual server-side data for an
   administrator to clean up).
 
+## [0.11.0] - 2026-09-17
+
 ### Fixed
 - A presentation this wallet cannot satisfy is now answered honestly. The
   `credential_selection` step sent `decline` whenever nothing was selected -
