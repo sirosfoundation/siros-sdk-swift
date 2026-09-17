@@ -157,6 +157,7 @@ final class WalletViewModel: ObservableObject {
     @Published var showHistory = false
     @Published var showQrScanner = false
     @Published var showWscaDeveloper = false
+    @Published var showDevices = false
     @Published var showProximityEngagement = false
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
@@ -271,7 +272,11 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Wallet instance
 
-    private var wallet: SirosWallet?
+    // `private(set)` rather than `private`: the Devices actions live in
+    // `WalletViewModel+Devices.swift` (Swift extensions cannot hold stored
+    // properties, so only the behaviour moved) and need to read it. Still
+    // assigned only here.
+    private(set) var wallet: SirosWallet?
     private var stateTask: Task<Void, Never>?
     private var pendingAuthFlowId: String?
     /// The flow type of the most recent `.flowActive` state, captured in
@@ -413,6 +418,7 @@ final class WalletViewModel: ObservableObject {
         showHistory = false
         showQrScanner = false
         showWscaDeveloper = false
+        resetDevicesNavigation()
     }
 
     func cancelCurrentFlow() {
@@ -544,6 +550,20 @@ final class WalletViewModel: ObservableObject {
         }
         #endif
     }
+
+    // MARK: - Devices (wallet instance lifecycle, SID-AUTH-06)
+
+    @Published var walletInstances: [WalletInstance] = []
+    @Published var devicesLoading = false
+    /// The instance whose status write is in flight, so its row can show a spinner.
+    @Published var devicesBusyInstanceId: String?
+    @Published var devicesError: String?
+    @Published var deactivating = false
+    /// What the last `deactivateWallet` call reported. Kept so the screen can
+    /// say whether the backend confirmed the erasure - an incomplete one still
+    /// deactivated the wallet, but leaves residual server-side data for an
+    /// administrator, and the user should be told which of the two happened.
+    @Published var deactivationOutcome: DeactivationOutcome?
 
     func openWscaDeveloper() {
         showWscaDeveloper = true
@@ -1358,14 +1378,12 @@ final class WalletViewModel: ObservableObject {
             credentials = creds
             lastFlowType = flowType
         case .lifecycleBlocked(let reason, let message, let accounts):
-            // Minimal handling until the Devices/blocked-login UI lands: the
-            // wallet is signed out and cannot sign back in, so show the
-            // backend's explanation rather than a bare login screen.
-            walletState = .error(message: message ?? "This wallet instance is \(reason.rawValue).")
+            walletState = .lifecycleBlocked(reason: reason, message: message)
             credentials = []
             displayName = nil
             userId = nil
             cachedAccounts = accounts
+            showDevices = false
         case .error(let message):
             walletState = .error(message: message)
         }
@@ -1463,6 +1481,10 @@ enum WalletViewState: Equatable {
     case disconnected
     case connecting
     case ready
+    /// The wallet instance this installation logs in with is suspended, or the
+    /// wallet was deactivated and its data erased (SID-AUTH-06). Not an error
+    /// to retry - only someone else can lift it - so it gets its own screen.
+    case lifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
     case flowActive(flowType: String, status: String)
     case error(message: String)
 }
