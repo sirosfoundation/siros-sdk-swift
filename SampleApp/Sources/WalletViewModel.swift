@@ -646,6 +646,9 @@ final class WalletViewModel: ObservableObject {
                 // still has cleanup to do.
                 if outcome.complete {
                     infoMessage = L10n.string("devices.deactivateComplete", outcome.revoked)
+                    // `infoMessage` alone does not raise the banner - see
+                    // `syncBanner()`, which is driven by these flags.
+                    showInfo = true
                 } else {
                     setError(L10n.string("devices.deactivateIncomplete", outcome.revoked))
                 }
