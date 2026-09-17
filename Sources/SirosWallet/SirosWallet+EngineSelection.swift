@@ -22,13 +22,13 @@ extension SirosWallet {
         /// False if the listener returned an id the active policy/keystore
         /// no longer considers usable.
         let allSelectedEligible: Bool
-        /// Whether the user was actually shown a choice - true only when an
-        /// `eventListener` was registered AND there was something to offer it.
-        /// An empty `selectedIds` means "the user said no" only in that case;
-        /// otherwise it means the wallet had nothing to present, which is a
-        /// different answer and owed a different one to the engine (see
-        /// `noMatchReason` and `handleCredentialSelection`).
-        let userWasConsulted: Bool
+        /// Whether the user could have consented at all - true only when an
+        /// `eventListener` was registered AND at least one matched credential
+        /// was still presentable. An empty `selectedIds` means "the user said
+        /// no" only in that case; otherwise the wallet had nothing to present,
+        /// which is a different answer and owes the engine a different one
+        /// (see `answerForEmptySelection`).
+        let couldHaveConsented: Bool
         /// Whether presenting ANY of `selectedIds` is a ZK proof - the
         /// recorded `PresentationRecord.zkProof`.
         var zkProof: Bool { selectedIds.contains(where: { zkRequestedIds.contains($0) }) }
@@ -76,7 +76,11 @@ extension SirosWallet {
 
         lock.lock(); let listener = eventListener; lock.unlock()
         let selectedIds: [Int64]
-        let userWasConsulted = listener != nil && !candidates.isEmpty
+        // Note `eligible`, not `candidates`: the listener is deliberately
+        // shown exhausted copies too (so an app can offer a renewal), but a
+        // request it was never possible to satisfy is not one the user
+        // refused, whatever they then tapped.
+        let couldHaveConsented = listener != nil && !eligible.isEmpty
         if let listener, !candidates.isEmpty {
             selectedIds = await listener.onCredentialSelectionRequired(
                 request: PresentationRequest(
@@ -101,7 +105,7 @@ extension SirosWallet {
             selectedIds: selectedIds,
             zkRequestedIds: zkRequestedIds,
             allSelectedEligible: selectedIds.allSatisfy { eligibleIds.contains($0) },
-            userWasConsulted: userWasConsulted
+            couldHaveConsented: couldHaveConsented
         )
     }
 
@@ -142,7 +146,7 @@ extension SirosWallet {
         dcqlQuery: [String: Any]?,
         selection: EngineSelection
     ) -> NoSelectionAnswer {
-        guard !selection.userWasConsulted else { return .declined }
+        guard !selection.couldHaveConsented else { return .declined }
         return .noMatch(reason: noMatchReason(dcqlQuery: dcqlQuery, candidateCount: selection.candidates.count))
     }
 

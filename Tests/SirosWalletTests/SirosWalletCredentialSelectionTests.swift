@@ -442,14 +442,14 @@ final class SirosWalletNoMatchingCredentialTests: XCTestCase {
 
     // MARK: - decline vs. nothing to present
 
-    private func makeSelection(candidates: [StoredCredential], userWasConsulted: Bool) -> SirosWallet.EngineSelection {
+    private func makeSelection(candidates: [StoredCredential], couldHaveConsented: Bool) -> SirosWallet.EngineSelection {
         SirosWallet.EngineSelection(
             matchResults: [],
             candidates: candidates,
             selectedIds: [],
             zkRequestedIds: [],
             allSelectedEligible: true,
-            userWasConsulted: userWasConsulted
+            couldHaveConsented: couldHaveConsented
         )
     }
 
@@ -467,7 +467,7 @@ final class SirosWalletNoMatchingCredentialTests: XCTestCase {
 
         let answer = SirosWallet.answerForEmptySelection(
             dcqlQuery: query,
-            selection: makeSelection(candidates: [], userWasConsulted: false)
+            selection: makeSelection(candidates: [], couldHaveConsented: false)
         )
 
         XCTAssertEqual(
@@ -476,23 +476,25 @@ final class SirosWalletNoMatchingCredentialTests: XCTestCase {
         )
     }
 
-    /// Matched, but every copy is spent, and the user was never asked: still
-    /// not a decline - and the reason says which of the two it was.
+    /// Matched, but every copy is spent. The listener is still shown those
+    /// candidates (so an app can offer a renewal), yet there was never a
+    /// consent it could have given - so an empty answer is not a refusal, and
+    /// the reason says which of the two cases it was.
     func testAnswerForEmptySelection_matchedButNothingEligible_isNoMatch() {
         let answer = SirosWallet.answerForEmptySelection(
             dcqlQuery: nil,
-            selection: makeSelection(candidates: [makeCredential(id: 1)], userWasConsulted: false)
+            selection: makeSelection(candidates: [makeCredential(id: 1)], couldHaveConsented: false)
         )
 
         XCTAssertEqual(answer, .noMatch(reason: "1 matching credential(s) have no eligible copies remaining"))
     }
 
-    /// The user really was shown the candidates and picked none - the one case
-    /// that is a decline, and must stay one.
+    /// The user was shown a credential they could actually have presented and
+    /// picked none - the one case that is a decline, and must stay one.
     func testAnswerForEmptySelection_userChoseNone_isADecline() {
         let answer = SirosWallet.answerForEmptySelection(
             dcqlQuery: nil,
-            selection: makeSelection(candidates: [makeCredential(id: 1)], userWasConsulted: true)
+            selection: makeSelection(candidates: [makeCredential(id: 1)], couldHaveConsented: true)
         )
 
         XCTAssertEqual(answer, .declined)
