@@ -163,7 +163,13 @@ private struct DeviceRow: View {
                         // Terminal: nothing to offer but the record itself.
                         EmptyView()
                     }
-                    if instance.status != .revoked {
+                    // Only for a status this SDK understands. `Status` is a
+                    // closed enum today, so `.active`/`.suspended` is the same
+                    // set as "not revoked" - written this way so a status a
+                    // newer backend introduces is not silently treated as
+                    // removable (the Kotlin port, whose status enum is
+                    // nullable, had exactly that gap).
+                    if instance.status == .active || instance.status == .suspended {
                         Button(L10n.string("devices.remove"), role: .destructive, action: onRemove)
                             .buttonStyle(.bordered)
                             .disabled(!actionsEnabled)
@@ -301,6 +307,7 @@ struct WalletBlockedView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button {
+                guard !viewModel.isLoading else { return }
                 if suspended {
                     viewModel.login()
                 } else {
@@ -314,6 +321,9 @@ struct WalletBlockedView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            // A login is already in flight; the single action here must not
+            // start a second - two WebAuthn ceremonies would race.
+            .disabled(viewModel.isLoading)
             .padding(.top, 8)
         }
         .padding(32)

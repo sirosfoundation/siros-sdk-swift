@@ -406,6 +406,13 @@ final class WalletViewModel: ObservableObject {
         listPasskeysForUI()
     }
 
+    /// Leaving the session must leave the Devices sub-screen: left set, it
+    /// would be what the next login renders instead of the wallet tabs.
+    private func resetDevicesNavigation() {
+        showDevices = false
+        walletInstances = []
+    }
+
     func disconnect() {
         wallet?.logout()
         showAddCredential = false
@@ -414,6 +421,7 @@ final class WalletViewModel: ObservableObject {
         showHistory = false
         showQrScanner = false
         showWscaDeveloper = false
+        resetDevicesNavigation()
     }
 
     func cancelCurrentFlow() {
@@ -571,17 +579,25 @@ final class WalletViewModel: ObservableObject {
     }
 
     func refreshDevices() {
-        Task { @MainActor in
-            guard let wallet else { return }
-            devicesLoading = true
-            devicesError = nil
-            do {
-                walletInstances = try await wallet.listWalletInstances()
-            } catch {
-                devicesError = error.localizedDescription
-            }
-            devicesLoading = false
+        Task { @MainActor in await loadDevices() }
+    }
+
+    /// The listing itself. `async` rather than fire-and-forget, so a caller
+    /// that must not re-enable its buttons until the list is current (see
+    /// `setWalletInstanceStatus`) can await it - otherwise a second status
+    /// write could start against a list still showing the pre-write state, and
+    /// the two refreshes could land out of order.
+    @MainActor
+    private func loadDevices() async {
+        guard let wallet else { return }
+        devicesLoading = true
+        devicesError = nil
+        do {
+            walletInstances = try await wallet.listWalletInstances()
+        } catch {
+            devicesError = error.localizedDescription
         }
+        devicesLoading = false
     }
 
     /// Suspend, reactivate or revoke one instance. The SDK re-logs in after
@@ -598,8 +614,8 @@ final class WalletViewModel: ObservableObject {
                 _ = try await wallet.setWalletInstanceStatus(
                     instanceId: instanceId, status: status, reason: reason
                 )
+                await loadDevices()
                 devicesBusyInstanceId = nil
-                refreshDevices()
             } catch {
                 devicesError = error.localizedDescription
                 devicesBusyInstanceId = nil
@@ -622,6 +638,17 @@ final class WalletViewModel: ObservableObject {
                 walletInstances = []
                 showAddCredential = false
                 showDevices = false
+                // deactivateWallet also forgets the account and logs out, so
+                // this screen is gone by the next render. Report the outcome
+                // through the app-wide banner instead, which the login screen
+                // shows too - otherwise a user who deactivated with an
+                // unfinished erasure would never learn that their provider
+                // still has cleanup to do.
+                if outcome.complete {
+                    infoMessage = L10n.string("devices.deactivateComplete", outcome.revoked)
+                } else {
+                    setError(L10n.string("devices.deactivateIncomplete", outcome.revoked))
+                }
             } catch {
                 devicesError = error.localizedDescription
             }
