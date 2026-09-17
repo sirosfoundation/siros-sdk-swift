@@ -24,7 +24,13 @@ private final class LoopbackServer: @unchecked Sendable {
     let port: UInt16
 
     init(status: Int, body: String) throws {
-        listenFd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        // SOCK_STREAM is an enum on Glibc and a plain Int32 on Darwin.
+        #if canImport(Glibc)
+        let streamType = Int32(SOCK_STREAM.rawValue)
+        #else
+        let streamType = SOCK_STREAM
+        #endif
+        listenFd = socket(AF_INET, streamType, 0)
         guard listenFd >= 0 else { throw Failure.socket }
         var yes: Int32 = 1
         setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
