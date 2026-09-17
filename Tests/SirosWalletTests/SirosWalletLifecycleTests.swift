@@ -151,14 +151,14 @@ final class SirosWalletLifecycleTests: XCTestCase {
     /// A login refused with `403 WALLET_SUSPENDED` is a state, not an error:
     /// the instance can be reactivated from another device, so the cached
     /// account stays on the login screen and nothing local is lost.
-    func testSuspendedRefusalKeepsTheCachedAccount() {
+    func testSuspendedRefusalKeepsTheCachedAccount()async {
         let registry = seededRegistry()
         let wallet = makeWallet(registry: registry)
         let listener = RecordingListener()
         wallet.setEventListener(listener)
         wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
-        let handled = wallet.handleLifecycleRefusal(SirosError.backendApi(
+        let handled = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_SUSPENDED","message":"This device is suspended"}"#
@@ -182,12 +182,12 @@ final class SirosWalletLifecycleTests: XCTestCase {
     /// tells the two apart, so the SDK keeps the cached account - forgetting it
     /// on a per-instance revocation would destroy the other passkeys that
     /// still work.
-    func testRevokedRefusalKeepsTheCachedAccount() {
+    func testRevokedRefusalKeepsTheCachedAccount()async {
         let registry = seededRegistry()
         let wallet = makeWallet(registry: registry)
         wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
-        let handled = wallet.handleLifecycleRefusal(SirosError.backendApi(
+        let handled = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_REVOKED","message":"This device was removed"}"#
@@ -218,7 +218,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         wallet.authServerClient = server.client
         wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
-        _ = wallet.handleLifecycleRefusal(SirosError.backendApi(
+        _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403, message: "", body: #"{"error":"WALLET_SUSPENDED"}"#
         ))
         // Whatever the blocked path scheduled has had every chance to run.
@@ -254,13 +254,15 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
     /// Everything that is not one of the two lifecycle codes keeps the
     /// existing error path, untouched.
-    func testOtherFailuresAreNotLifecycleRefusals() {
+    func testOtherFailuresAreNotLifecycleRefusals()async {
         let wallet = makeWallet(registry: seededRegistry())
 
-        XCTAssertFalse(wallet.handleLifecycleRefusal(SirosError.backendApi(
+        let plain401 = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 401, message: "AS request failed: 401", body: #"{"error":"auth_failed"}"#
-        )))
-        XCTAssertFalse(wallet.handleLifecycleRefusal(SirosError.network(message: "offline")))
+        ))
+        XCTAssertFalse(plain401)
+        let offline = await wallet.handleLifecycleRefusal(SirosError.network(message: "offline"))
+        XCTAssertFalse(offline)
         if case .lifecycleBlocked = wallet.state {
             XCTFail("a non-lifecycle failure must not enter the blocked state")
         }
