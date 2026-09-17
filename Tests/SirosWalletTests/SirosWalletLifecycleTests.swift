@@ -156,6 +156,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         let wallet = makeWallet(registry: registry)
         let listener = RecordingListener()
         wallet.setEventListener(listener)
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
         let handled = wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403,
@@ -175,58 +176,80 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertEqual(listener.blocked?.message, "This device is suspended")
     }
 
-    /// `WALLET_REVOKED` means the wallet was deactivated and its server-side
-    /// data erased - that passkey can never log in to this tenant again, so
-    /// the cached account is forgotten rather than left on the login screen as
-    /// a door that is bricked shut.
-    func testRevokedRefusalForgetsTheCachedAccount() {
+    /// `WALLET_REVOKED` does **not** mean the wallet was erased: the backend
+    /// returns it for the login gate of a single revoked instance too, and the
+    /// user's other devices keep working. Only the human-readable message
+    /// tells the two apart, so the SDK keeps the cached account - forgetting it
+    /// on a per-instance revocation would destroy the other passkeys that
+    /// still work.
+    func testRevokedRefusalKeepsTheCachedAccount() {
         let registry = seededRegistry()
         let wallet = makeWallet(registry: registry)
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
         let handled = wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403,
             message: "AS request failed: 403",
-            body: #"{"error":"WALLET_REVOKED","message":"This wallet was deactivated"}"#
+            body: #"{"error":"WALLET_REVOKED","message":"This device was removed"}"#
         ))
 
         XCTAssertTrue(handled)
-        guard case let .lifecycleBlocked(reason, _, accounts) = wallet.state else {
+        guard case let .lifecycleBlocked(reason, message, accounts) = wallet.state else {
             return XCTFail("expected .lifecycleBlocked, got \(wallet.state)")
         }
         XCTAssertEqual(reason, .revoked)
-        XCTAssertTrue(accounts.isEmpty)
-        XCTAssertTrue(registry.listLoginableAccounts().isEmpty, "a revoked wallet's account is forgotten")
+        XCTAssertEqual(message, "This device was removed")
+        XCTAssertEqual(accounts.count, 1)
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 1,
+            "the account survives: a revoked instance is not necessarily a deactivated wallet"
+        )
     }
 
-    /// After a logout the registry has no active account and the session store
-    /// still names the previous one, so the account a refused login is about
-    /// can only come from the ceremony that was refused. Passing it must win
-    /// over both fallbacks.
-    func testRevokedRefusalForgetsTheAccountTheCeremonyResolvedTo() {
-        let registry = seededRegistry()
-        let other = CachedAccount(
-            userId: "user-2",
-            tenantId: "default",
-            displayName: "Bob",
-            backendUrl: "https://wallet.example.invalid",
-            passkeys: [CachedPasskey(credentialId: "cred-2", prfSalt: "c2FsdA==")]
-        )
-        registry.upsertAccount(other)
-        let sessionStore = InMemorySessionStore()
-        sessionStore.activeAccountId = "default:user-1"   // the previous session's account
-        let wallet = makeWallet(registry: registry, sessionStore: sessionStore)
-        registry.activeAccountId = nil                    // as after a logout
+    /// A suspended instance is reactivated from another device and the app
+    /// retries `login()`, which reuses the same AS session cookie. An
+    /// unawaited `DELETE /auth/session` scheduled by the block could land
+    /// after that retry's `loginFinish` and invalidate the session it had just
+    /// established - so the blocked path tears down locally and never asks the
+    /// AS to end a session the backend has already refused.
+    func testALifecycleBlockDoesNotEndTheServerSession() async throws {
+        let wallet = makeWallet(registry: seededRegistry())
+        let server = RecordingAuthServer()
+        wallet.authServerClient = server.client
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
-        let handled = wallet.handleLifecycleRefusal(
-            SirosError.backendApi(code: 403, message: "", body: #"{"error":"WALLET_REVOKED"}"#),
-            accountId: other.accountId
-        )
+        _ = wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_SUSPENDED"}"#
+        ))
+        // Whatever the blocked path scheduled has had every chance to run.
+        try await Task.sleep(nanoseconds: 100_000_000)
 
-        XCTAssertTrue(handled)
         XCTAssertEqual(
-            registry.listLoginableAccounts().map(\.accountId), ["default:user-1"],
-            "the account the ceremony resolved to is forgotten, not the one the stale session scope names"
+            server.deletedSessions, 0,
+            "no DELETE /auth/session may race the retry the user is about to make"
         )
+
+        // The contrast: an explicit logout does end the server session.
+        wallet.logout()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(server.deletedSessions, 1)
+    }
+
+    /// Counts `DELETE /auth/session` calls.
+    private final class RecordingAuthServer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var deletes = 0
+        var deletedSessions: Int { lock.lock(); defer { lock.unlock() }; return deletes }
+
+        lazy var client: AuthServerClient = AuthServerClient(
+            baseUrl: "https://wallet.example.invalid",
+            tenantId: "default"
+        ) { [self] method, url, _, _ in
+            if method == "DELETE", url.path.hasSuffix("/auth/session") {
+                self.lock.lock(); self.deletes += 1; self.lock.unlock()
+            }
+            return Data("{}".utf8)
+        }
     }
 
     /// Everything that is not one of the two lifecycle codes keeps the
@@ -245,15 +268,60 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
     // MARK: - One re-login, never a loop
 
-    /// The guard behind the single self-driven re-login: while one is running,
-    /// the 401s it may itself provoke cannot start another.
-    func testSelfDrivenReloginHappensOnlyOnceAtATime() {
+    /// Once per session, not once per call. Requests issued before a cut-off
+    /// complete long after it and each of their 401s re-enters the signal, so
+    /// releasing the in-progress flag must not re-open the door for the same
+    /// session - only a new session may be cut off again.
+    func testSelfDrivenReloginHappensOncePerSession() {
+        let wallet = makeWallet()
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        XCTAssertNotNil(wallet.beginSelfDrivenRelogin())
+        XCTAssertNil(wallet.beginSelfDrivenRelogin(), "a second signal must not start another re-login")
+        wallet.endSelfDrivenRelogin()
+        XCTAssertNil(
+            wallet.beginSelfDrivenRelogin(),
+            "a late 401 from the session already handled must not start a second re-login"
+        )
+
+        // A new session - a successful login bumps the generation - may be cut
+        // off in its own right.
+        wallet.bumpSessionGeneration()
+        XCTAssertNotNil(wallet.beginSelfDrivenRelogin(), "a cut-off on the new session is handled")
+    }
+
+    /// There is nothing to replace once the session is gone, and a silent
+    /// WebAuthn prompt after an explicit logout would be the wrong answer.
+    func testNoSelfDrivenReloginWithoutASessionToReplace() {
         let wallet = makeWallet()
 
-        XCTAssertTrue(wallet.beginSelfDrivenRelogin())
-        XCTAssertFalse(wallet.beginSelfDrivenRelogin(), "a second signal must not start another re-login")
+        wallet.setState(.disconnected())
+        XCTAssertNil(wallet.beginSelfDrivenRelogin())
+        wallet.bumpSessionGeneration()
+        wallet.setState(.error(message: "boom"))
+        XCTAssertNil(wallet.beginSelfDrivenRelogin())
+        wallet.bumpSessionGeneration()
+        wallet.setState(.lifecycleBlocked(reason: .suspended, message: nil))
+        XCTAssertNil(wallet.beginSelfDrivenRelogin())
+    }
+
+    /// The teardown a re-login performs awaits the old session's WMP peer and
+    /// token caches; a logout landing in that window must abandon the attempt
+    /// rather than resurrect the session the user just ended.
+    func testReloginAbandonsWhenTheSessionItReplacedIsAlreadyGone() async throws {
+        let wallet = makeWallet(registry: seededRegistry())
+        let (asClient, loginAttempts) = refusingAuthServer("WALLET_SUSPENDED", message: "suspended")
+        wallet.authServerClient = asClient
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+        let generation = try XCTUnwrap(wallet.beginSelfDrivenRelogin())
+
+        // What logout()/destroy() do to the generation, landing while the
+        // re-login is between claiming the signal and reaching login().
+        wallet.bumpSessionGeneration()
+        await wallet.reloginAfterCutOff(replacing: generation)
         wallet.endSelfDrivenRelogin()
-        XCTAssertTrue(wallet.beginSelfDrivenRelogin(), "a later cut-off may be handled again")
+
+        XCTAssertEqual(loginAttempts(), 0, "no login is attempted for a session that is already gone")
     }
 
     // MARK: - This device
@@ -324,6 +392,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         let client = BackendApiClient(baseUrl: "https://wallet.example.invalid", httpFn: server.httpFunction)
         client.setAppToken("t")
         wallet.apiClient = client
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
         let updated = try await wallet.setWalletInstanceStatus(
             instanceId: "jkt-self", status: .suspended, reason: "lost phone"
@@ -351,6 +420,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         wallet.setEventListener(listener)
         let (asClient, loginAttempts) = refusingAuthServer("WALLET_REVOKED", message: "This wallet was deactivated")
         wallet.authServerClient = asClient
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
         wallet.handleReauthenticationRequired()
         // The attempt runs in a detached Task; wait for it to settle.
@@ -362,7 +432,10 @@ final class SirosWalletLifecycleTests: XCTestCase {
         guard case .lifecycleBlocked(.revoked, _, _) = wallet.state else {
             return XCTFail("expected .lifecycleBlocked(.revoked), got \(wallet.state)")
         }
-        XCTAssertTrue(registry.listLoginableAccounts().isEmpty, "a revoked wallet's account is forgotten")
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 1,
+            "the account survives a WALLET_REVOKED: it may be one instance, not the whole wallet"
+        )
     }
 
     /// Exactly once, never a loop: the 401s the re-login's own requests may
@@ -371,6 +444,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         let wallet = makeWallet(registry: seededRegistry())
         let (asClient, loginAttempts) = refusingAuthServer("WALLET_SUSPENDED", message: "suspended")
         wallet.authServerClient = asClient
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
         wallet.handleReauthenticationRequired()
         wallet.handleReauthenticationRequired()

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The wallet's own HTTP transport now reports error statuses.**
+  `SirosWallet` built every client over a function that discarded the
+  response, so a non-2xx arrived as a successful body: a `403` carrying
+  `WALLET_SUSPENDED` / `WALLET_REVOKED` was parsed as a login response and
+  surfaced as a generic decoding failure, and `409 ERASURE_INCOMPLETE` never
+  reached its retry. Both had been unreachable in a real app since the
+  refusal helper landed, while unit tests - which inject their own transport -
+  stayed green. It now throws `SirosError.backendApi(code:message:body:)`
+  like the two clients' own convenience initialisers.
+- **The self-driven re-login no longer reuses a cut-off token.**
+  `AuthServerClient` caches access tokens itself, so clearing `AuthTokens`
+  left the pre-cut-off token to be served from that cache and refused with
+  `401` on first use. The re-login now calls the new
+  `AuthServerClient.clearTokenCache()`, which drops cached tokens without
+  ending the session the way `logout()` would.
+
 ### Added
 - **Wallet instance lifecycle: the SDK now speaks the whole protocol**
   (SID-AUTH-06, go-wallet-backend#319). The backend grew a token cut-off, an
@@ -43,6 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     suspending it.
   - Optional `WalletEventListener.onWalletLifecycleBlocked(reason:message:)`,
     with a no-op default.
+  - **Security: the instance key now survives a logout.**
+    `SessionStore.clearAccount()` deleted `instanceKeyId`, so the next login
+    minted a new key and registered a **new, active** backend wallet instance.
+    A *suspended* installation could therefore walk away from its own
+    suspension simply by logging out and back in. Only `clearAll()` (a factory
+    reset) drops it now.
+  - A session generation makes the self-driven re-login happen once per
+    *session* rather than once per call, aborts it when the caller logged out
+    or destroyed the wallet while it was tearing the old session down, and
+    keeps a token minted before a cut-off from being cached by either
+    `AuthTokens` or `AuthServerClient` after the clear that the cut-off
+    triggered.
+  - A lifecycle block tears the session down locally instead of calling
+    `logout()`: the unawaited `DELETE /auth/session` could otherwise land
+    after the retry the app makes once a suspended instance is reactivated,
+    invalidating the session that retry had just established.
   - `SirosError.apiErrorCode` and `SirosError.serverMessage`: the backend's
     stable error code and its user-facing explanation, without every call site
     re-parsing the body.
@@ -57,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a generic error. Strings in `SampleApp/Resources/i18n/`.
 
 ### Changed
+- **Correction: `WALLET_REVOKED` no longer forgets the cached account.** The
+  design assumed that code meant the wallet had been deactivated and erased.
+  It does not: the backend returns it for the login gate of a *single* revoked
+  instance too, and only deactivates the wallet when the **last** non-revoked
+  instance is revoked - the user's other devices keep logging in either way,
+  and only the human-readable `message` distinguishes the two. Forgetting the
+  account on a per-instance revocation destroyed the other passkeys that still
+  worked. Both refusal reasons now end the session, keep the cached account,
+  and show the backend's own message; re-enrollment is the user's call.
+  `deactivateWallet(reason:)` is the one place that still forgets the account,
+  where the caller asked for it and the outcome is unambiguous.
 - **Source-breaking: `WalletState` has a new case.** `.lifecycleBlocked` means
   an exhaustive `switch` over `WalletState` no longer compiles without an arm
   for it (the SampleApp needed one). Add a case, or a `default`, when
