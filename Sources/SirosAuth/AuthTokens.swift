@@ -47,6 +47,13 @@ public final class AuthTokens: @unchecked Sendable {
     private let lock = NSLock()
     private var tokens: [String: AccessToken] = [:]
     private var rejections: [String: [Date]] = [:]
+    /// Bumped by every ``clear()``. A token minted before a clear belongs to
+    /// the session that clear ended: `ensureToken` releases the lock while it
+    /// awaits the AS, so without this an in-flight request could put a
+    /// pre-cut-off token back in the cache after the clear, and the session
+    /// that replaced it would then send a token the backend has already
+    /// refused (SID-AUTH-06's cut-off).
+    private var generation = 0
 
     // Internal (not private) so `@testable import` can verify
     // `registerTokenRejection`'s rejection-window pruning without a real
@@ -91,6 +98,7 @@ public final class AuthTokens: @unchecked Sendable {
             return cached
         }
         tokens.removeValue(forKey: name)
+        let generation = self.generation
         lock.unlock()
 
         guard let kind = Self.manifest[name] else {
@@ -100,7 +108,9 @@ public final class AuthTokens: @unchecked Sendable {
         let token = try await requestToken(for: kind)
 
         lock.lock()
-        tokens[name] = token
+        // Dropped rather than cached when the session was cleared while this
+        // request was in flight - see `generation`.
+        if generation == self.generation { tokens[name] = token }
         lock.unlock()
 
         return token
@@ -125,6 +135,7 @@ public final class AuthTokens: @unchecked Sendable {
     public func forceRefreshToken(_ name: String) async throws -> AccessToken {
         lock.lock()
         tokens.removeValue(forKey: name)
+        let generation = self.generation
         lock.unlock()
 
         guard let kind = Self.manifest[name] else {
@@ -134,7 +145,9 @@ public final class AuthTokens: @unchecked Sendable {
         let token = try await requestToken(for: kind)
 
         lock.lock()
-        tokens[name] = token
+        // See `ensureToken`: a token minted for a session that has since been
+        // cleared must not be cached for the one that replaced it.
+        if generation == self.generation { tokens[name] = token }
         lock.unlock()
 
         return token
@@ -206,6 +219,7 @@ public final class AuthTokens: @unchecked Sendable {
         lock.lock()
         tokens.removeAll()
         rejections.removeAll()
+        generation += 1
         lock.unlock()
     }
 }

@@ -165,3 +165,81 @@ private extension Data {
             .replacingOccurrences(of: "=", with: "")
     }
 }
+
+extension AuthServerClientTests {
+    /// A token minted before a lifecycle cut-off is refused with 401 however
+    /// fresh it looks, so the SDK's re-login must not be served one out of
+    /// cache. `clearTokenCache()` drops them without ending the session the
+    /// way `logout()` would.
+    func testClearTokenCacheForcesTheNextRequestToMintAgain() async throws {
+        var mintCount = 0
+        let client = AuthServerClient(baseUrl: "https://as.example.invalid", tenantId: "default") { _, url, _, _ in
+            guard url.path == "/auth/token" else {
+                XCTFail("unexpected \(url.path)")
+                return Data("{}".utf8)
+            }
+            mintCount += 1
+            // exp far in the future, so the cache would happily serve it again
+            let claims = #"{"sub":"u","aud":"wallet-backend","tenant_id":"default","tac":"rwlid","exp":4102444800}"#
+            let b64 = Data(claims.utf8).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+            let jwt = "e30.\(b64).sig"
+            return Data(#"{"access_token":"\#(jwt)","token_type":"Bearer","expires_in":3600}"#.utf8)
+        }
+
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(mintCount, 1, "the second call is served from cache")
+
+        await client.clearTokenCache()
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(mintCount, 2, "after clearTokenCache the token is minted again")
+    }
+
+    /// `clearTokenCache()` is called to drop a pre-cut-off token, but the
+    /// request that minted it may still be in flight - `requestAccessToken`
+    /// caches after its network call returns. Storing it then would put the
+    /// refused token straight back for the session that replaced it.
+    func testATokenMintedBeforeClearTokenCacheIsNotCachedAfterIt() async throws {
+        var mintCount = 0
+        var clearDuringRequest: (() async -> Void)?
+        let client = AuthServerClient(
+            baseUrl: "https://as.example.invalid",
+            tenantId: "default"
+        ) { _, _, _, _ in
+            mintCount += 1
+            await clearDuringRequest?()
+            return try Self.tokenResponse()
+        }
+        clearDuringRequest = { await client.clearTokenCache() }
+
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(mintCount, 1)
+
+        clearDuringRequest = nil
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(
+            mintCount, 2,
+            "the token minted before the clear was not cached, so a fresh one is minted"
+        )
+    }
+
+    /// An unexpired `access_token` response body.
+    private static func tokenResponse() throws -> Data {
+        let exp = Int(Date().timeIntervalSince1970) + 3600
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "exp": exp, "aud": "wallet-backend", "tenant_id": "default", "tac": "rwlid",
+        ])
+        let b64 = payload.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return try JSONSerialization.data(withJSONObject: [
+            "access_token": "eyJhbGciOiJub25lIn0.\(b64).sig",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        ])
+    }
+}

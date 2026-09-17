@@ -201,6 +201,13 @@ extension SirosWallet {
         engine?.disconnect()
         cancelEngineTasks()
         keystore.lock()
+        // Same reason as logout()'s: a self-driven re-login still awaiting the
+        // old session's teardown must not log back in after the host has torn
+        // this wallet down. The flag is what stops a *later* signal - the
+        // state is deliberately left as it was (a destroyed wallet is not a
+        // logged-out one), so it would otherwise still look replaceable.
+        lock.lock(); isDestroyed = true; lock.unlock()
+        bumpSessionGeneration()
     }
 
     /// Roll back a locally-stored credential after a failed registration.

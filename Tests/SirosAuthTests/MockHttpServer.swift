@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+import SirosCredentials
 @testable import SirosAuth
 
 /// A minimal mock HTTP server for testing BackendApiClient and WebAuthnAuthClient.
@@ -14,21 +15,35 @@ final class MockHttpServer: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var responses: [Data] = []
+    private var responses: [Result<Data, Error>] = []
     private(set) var requests: [RecordedRequest] = []
 
     /// Queue a response to return for the next request.
     func enqueue(_ json: String) {
         lock.lock()
         defer { lock.unlock() }
-        responses.append(Data(json.utf8))
+        responses.append(.success(Data(json.utf8)))
     }
 
     /// Queue raw response data.
     func enqueueData(_ data: Data) {
         lock.lock()
         defer { lock.unlock() }
-        responses.append(data)
+        responses.append(.success(data))
+    }
+
+    /// Queue an HTTP error response, shaped exactly as the real URLSession
+    /// http function surfaces one (`SirosError.backendApi` with the status
+    /// code and the raw body), so retry/branching logic that reads the
+    /// backend's `error` code can be exercised.
+    func enqueueFailure(code: Int, body: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        responses.append(.failure(SirosError.backendApi(
+            code: code,
+            message: "API request failed: \(code)",
+            body: body
+        )))
     }
 
     /// The HTTP function to inject into clients.
@@ -44,7 +59,7 @@ final class MockHttpServer: @unchecked Sendable {
             }
             let response = self.responses.removeFirst()
             self.lock.unlock()
-            return response
+            return try response.get()
         }
     }
 
@@ -61,7 +76,7 @@ final class MockHttpServer: @unchecked Sendable {
             }
             let response = self.responses.removeFirst()
             self.lock.unlock()
-            return response
+            return try response.get()
         }
     }
 

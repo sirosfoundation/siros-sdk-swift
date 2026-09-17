@@ -144,8 +144,27 @@ public final class SirosWallet: @unchecked Sendable {
     /// 404, surfaced as `SirosError.backendApi`.
     public func listWalletInstances() async throws -> [WalletInstance] {
         guard let client = apiClient else { throw SirosError.auth(message: "Not logged in") }
-        return try await client.listWalletInstances()
+        // Best-effort: `thisInstanceId` reads the WIA this session already
+        // holds, so fetch one when there is none yet rather than returning a
+        // list in which no row can be marked "this device". A failure here
+        // must not fail the listing - ensureWalletInstanceAttestation()
+        // already swallows its own errors and returns nil.
+        if thisInstanceId == nil { _ = await ensureWalletInstanceAttestation() }
+        let selfId = thisInstanceId
+        return try await client.listWalletInstances().map { instance in
+            var marked = instance
+            marked.isThisDevice = selfId != nil && instance.id == selfId
+            return marked
+        }
     }
+
+    /// This installation's wallet instance id: the JWK thumbprint of its
+    /// instance key, which is what the backend registers an instance under and
+    /// what this SDK already sends as `wallet_instance_id`. Nil until this
+    /// session has obtained a Wallet Instance Attestation (the value is read
+    /// from its `cnf.jkt`); `listWalletInstances()` fetches one if needed, so
+    /// reading this right after it is the reliable order.
+    public var thisInstanceId: String? { instanceKeyThumbprint() }
 
     /// Suspend, reactivate or revoke one of this user's wallet instances
     /// (`PUT /user/session/instances/{id}/status`). Suspension is reversible
@@ -153,9 +172,24 @@ public final class SirosWallet: @unchecked Sendable {
     /// revocation is terminal. Revoking the last non-revoked instance
     /// deactivates the wallet - prefer `deactivateWallet(reason:)` for that,
     /// which also clears local state.
+    ///
+    /// Any change away from `active` cuts off every bearer token issued before
+    /// it, including this session's (the acting token survives only for the
+    /// request that made the change, and may not mint new ones), so this
+    /// re-logs in once afterwards - see `WalletState.lifecycleBlocked`.
+    /// Suspending *this* device's own instance therefore ends in
+    /// `.lifecycleBlocked(reason: .suspended, ...)`, which is the truthful
+    /// state; confirm with the user before calling it for an instance whose
+    /// `isThisDevice` is true.
     public func setWalletInstanceStatus(instanceId: String, status: WalletInstance.Status, reason: String? = nil) async throws -> WalletInstance {
         guard let client = apiClient else { throw SirosError.auth(message: "Not logged in") }
-        return try await client.setWalletInstanceStatus(instanceId: instanceId, status: status, reason: reason)
+        let updated = try await client.setWalletInstanceStatus(instanceId: instanceId, status: status, reason: reason)
+        // Every status write records a cut-off, and the acting token's
+        // exemption from it does not reach POST /auth/token or an engine flow
+        // start - so this session is done either way. Re-login once instead of
+        // letting the next issuance or presentation discover it as a 401.
+        await reloginAfterLifecycleChange()
+        return updated
     }
 
     /// Deactivate this wallet: revoke every wallet instance of the user
@@ -164,17 +198,30 @@ public final class SirosWallet: @unchecked Sendable {
     /// passkey of the user at login with `WALLET_REVOKED`; a new enrollment
     /// is required afterwards. The local cached account is forgotten and the
     /// wallet logged out, since the vault it decrypts no longer exists.
-    /// - Returns: how many instances the backend revoked.
+    /// The local account is forgotten in both outcomes, since the revocations
+    /// stand even when the backend's erasure cascade did not finish.
+    ///
+    /// Unlike `setWalletInstanceStatus` this does not re-login: there is
+    /// nothing left to log in to.
+    ///
+    /// - Returns: how many instances the backend revoked and whether it
+    ///   confirmed the erasure (`DeactivationOutcome.complete`); an incomplete
+    ///   erasure leaves residual server-side data for an administrator.
     @discardableResult
-    public func deactivateWallet(reason: String? = nil) async throws -> Int {
+    public func deactivateWallet(reason: String? = nil) async throws -> DeactivationOutcome {
         guard let client = apiClient else { throw SirosError.auth(message: "Not logged in") }
-        let revoked = try await client.revokeAllWalletInstances(reason: reason)
+        let outcome = try await client.revokeAllWalletInstances(reason: reason)
+        if !outcome.complete {
+            #if canImport(os)
+            logger.warning("Wallet deactivated with an unfinished erasure: \(outcome.revoked) instance(s) revoked, residual server-side data must be cleaned up by an administrator; forgetting local account anyway")
+            #endif
+        }
         if let active = accountRegistry.activeAccountId {
             forgetAccount(accountId: active)
         } else {
             logout()
         }
-        return revoked
+        return outcome
     }
 
     // MARK: - Configuration & dependencies
@@ -450,8 +497,12 @@ public final class SirosWallet: @unchecked Sendable {
     // above.
     let trustCache = TrustCache()
 
-    // New AS-based auth
-    private var authServerClient: AuthServerClient?
+    // New AS-based auth.
+    // Not `private`: the wallet instance lifecycle tests replace it with one
+    // backed by a stub HTTP function, so the SDK's own re-login after a
+    // lifecycle cut-off can be driven to its `403 WALLET_SUSPENDED` /
+    // `WALLET_REVOKED` outcome without reaching the network at all.
+    var authServerClient: AuthServerClient?
     // Not `private`: `SirosWallet+Lifecycle.swift` and
     // `SirosWallet+Engine.swift` need it too - same cross-file-extension-
     // access reason as `keystore` above.
@@ -468,6 +519,45 @@ public final class SirosWallet: @unchecked Sendable {
     // trip through a real keystore.
     var cachedWia: String?
     var cachedWiaExpiresAt: Int = 0
+    /// Guard behind `beginSelfDrivenRelogin()`; always read and written under
+    /// `lock`.
+    var reloginInProgress: Bool = false
+
+    /// Which session this wallet currently holds. Bumped whenever one ends
+    /// (`logout()`, `destroy()`) or a new one is established (a successful
+    /// `login()`/`register()`).
+    ///
+    /// It is what makes the self-driven re-login *once per session* rather
+    /// than once per call: requests issued before a cut-off complete long
+    /// after it, and each of their 401s re-enters
+    /// `handleReauthenticationRequired()`. Without a generation, every one of
+    /// those arriving after `endSelfDrivenRelogin()` would start another
+    /// re-login. It also lets `reloginAfterCutOff()` notice that the caller
+    /// logged out or destroyed the wallet while it was awaiting the old
+    /// session's teardown, instead of resurrecting a session the user ended.
+    /// Always read and written under `lock`.
+    var sessionGeneration: Int = 0
+
+    /// Whether a self-driven re-login has already been run for the current
+    /// ``sessionGeneration``. Cleared by `bumpSessionGeneration()`.
+    var reloginDoneForGeneration: Bool = false
+
+    /// Set by `destroy()`. The state is left untouched there (a destroyed
+    /// wallet is not a logged-out one), so without this a reauthentication
+    /// signal from a task still unwinding could pass the guard and log back in
+    /// after the host tore the wallet down.
+    var isDestroyed: Bool = false
+
+    /// The in-flight first-use instance-key generation, shared by every caller
+    /// so that concurrent first uses cannot mint two different keys. See
+    /// `ensureInstanceKeyId()`.
+    var instanceKeyTask: Task<String, Error>?
+    /// The account `instanceKeyTask` is generating for; a different account
+    /// must not share it. See `ensureInstanceKeyId()`.
+    var instanceKeyTaskAccount: String?
+    /// Identifies which `instanceKeyTask` is current - `Task` is a struct, so
+    /// there is no identity to compare.
+    var instanceKeyTaskToken: Int = 0
 
     // Not `private`: `SirosWallet+Engine.swift`'s `connectViaWmp` needs it
     // too - same cross-file-extension-access reason as `keystore` above.
@@ -588,28 +678,6 @@ public final class SirosWallet: @unchecked Sendable {
 
     static let hkdfInfo = "eDiplomas PRF"
 
-    /// Default HTTP POST function using URLSession.
-    private static let defaultHttpPost: @Sendable (URL, Data) async throws -> Data = { url, body in
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return data
-    }
-
-    /// Default HTTP function for BackendApiClient.
-    // Not `private`: `SirosWallet+Lifecycle.swift` needs it too - same
-    // cross-file-extension-access reason as `keystore` above.
-    static let defaultHttpFn: @Sendable (String, URL, [String: String], Data?) async throws -> Data = { method, url, headers, body in
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.httpBody = body
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return data
-    }
-
     // MARK: - Init
 
     /// Create a new wallet instance.
@@ -692,69 +760,6 @@ public final class SirosWallet: @unchecked Sendable {
         }
     }
 
-    /// Builds the HTTP GET closure shared by `vctmFetcher`/`mddlSchemaFetcher`.
-    ///
-    /// Both fetchers' registry-service strategy (Strategy 1: `<registryUrl
-    /// >/type-metadata?vct=...`) hits go-wallet-backend's own registry
-    /// service, which - like every other backend REST call
-    /// (`BackendApiClient.request(_:path:body:)`) - may require an
-    /// `Authorization: Bearer` token and always wants the tenant-routing
-    /// `X-Tenant-ID` header. Their OTHER two strategies (issuer-direct
-    /// `<issuerUrl>/type-metadata/<scope>` and the SD-JWT well-known
-    /// `.well-known/vct/...`) hit arbitrary third-party issuer domains -
-    /// attaching the wallet's own bearer token/tenant ID there would leak
-    /// them to an external party. So headers are attached if and only if the
-    /// URL being fetched starts with the resolved registry URL for this
-    /// wallet instance - the same prefix `VctmFetcher`/`MddlSchemaFetcher`
-    /// construct their registry lookup URL from.
-    ///
-    /// - Parameter performRequest: the actual network call, isolated behind
-    ///   this parameter (default: a real `URLSession.shared.data(for:)` call
-    ///   that returns the body only on a 200 response) so
-    ///   `SirosWalletRegistryUrlTests` can inject a stub that captures the
-    ///   built `URLRequest` - in particular its headers - and assert on
-    ///   them directly, without a real network round trip (and without
-    ///   needing to construct an `HTTPURLResponse`, which
-    ///   swift-corelibs-foundation on Linux has no public initializer for).
-    ///   Not `private` for the same `@testable import` access reason.
-    static func makeTypeMetadataHttpGet(
-        registryUrl: String,
-        tenantId: String,
-        authTokens: AuthTokens,
-        sessionStore: SessionStoreProtocol,
-        performRequest: @escaping @Sendable (URLRequest) async -> Data? = { request in
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                return nil
-            }
-            return data
-        }
-    ) -> @Sendable (String) async -> String? {
-        { url in
-            guard let requestUrl = URL(string: url) else { return nil }
-            var request = URLRequest(url: requestUrl)
-            request.httpMethod = "GET"
-
-            if url.hasPrefix(registryUrl) {
-                request.setValue(tenantId, forHTTPHeaderField: "X-Tenant-ID")
-                // Mirrors `BackendApiClient.request(_:path:body:)`'s own
-                // auth-token precedence: prefer a live AS-issued backend
-                // token, falling back to the legacy plain app-token string
-                // (read fresh each call - unlike `authTokens`, this DOES
-                // change over the wallet's lifetime, e.g. across
-                // login/logout) when no AS session is available.
-                if let token = try? await authTokens.ensureBackendToken() {
-                    request.setValue("Bearer \(token.raw)", forHTTPHeaderField: "Authorization")
-                } else if let appToken = sessionStore.appToken {
-                    request.setValue("Bearer \(appToken)", forHTTPHeaderField: "Authorization")
-                }
-            }
-
-            guard let data = await performRequest(request) else { return nil }
-            return String(data: data, encoding: .utf8)
-        }
-    }
-
     /// Same derivation as the `resolvedRegistryUrl` instance property below,
     /// factored out as a `static` so it can be computed in `init` before
     /// `self` is fully initialized (see `makeTypeMetadataHttpGet` call site).
@@ -771,17 +776,36 @@ public final class SirosWallet: @unchecked Sendable {
     /// .reauthRequired`, observed via the engine's `stateStream` in
     /// `connectEngine`). Notifies the host app via
     /// `WalletEventListener.onReauthenticationRequired` - distinct from
-    /// `onFlowError` - so it can route straight to a login screen instead of
-    /// surfacing a generic error message, then logs out to put the SDK's own
-    /// state in sync with that.
+    /// `onFlowError` - and then attempts one login itself (SID-AUTH-06: a
+    /// lifecycle cut-off is indistinguishable from an expired session until
+    /// that login is refused with `WALLET_SUSPENDED` / `WALLET_REVOKED`).
+    ///
+    /// The listener is therefore told, not asked: it should route its UI to a
+    /// login/progress screen and wait for the state to change, and must NOT
+    /// start a login of its own - two concurrent ceremonies would race on the
+    /// session store, the wallet state and the engine session. See
+    /// `WalletEventListener.onReauthenticationRequired()`.
     // Not `private`: `SirosWallet+Engine.swift` needs it too - same
     // cross-file-extension-access reason as `keystore` above.
     func handleReauthenticationRequired() {
+        guard let generation = beginSelfDrivenRelogin() else { return }
         lock.lock()
         let listener = eventListener
         lock.unlock()
+        // The host hook stays: apps that drive their own prompt still get
+        // told, and it fires before the SDK's attempt so a host that routes to
+        // its login screen sees the same ordering as before this change.
         listener?.onReauthenticationRequired()
-        logout()
+        Task { [weak self] in
+            guard let self else { return }
+            // A cut-off (SID-AUTH-06) looks exactly like an expired session
+            // from here; the difference only shows in the login that follows,
+            // which is refused with WALLET_SUSPENDED / WALLET_REVOKED. Attempt
+            // it once - never in a loop - so the state machine converges
+            // without host code.
+            await self.reloginAfterCutOff(replacing: generation)
+            self.endSelfDrivenRelogin()
+        }
     }
 
     // MARK: - Event listener
@@ -816,6 +840,10 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "AuthServerClient not initialized")
         }
         setState(.connecting)
+        // See logout()'s identical reset: this enrollment gets its own
+        // instance key, so any WIA still cached from an earlier account must
+        // not be what identifies this device afterwards.
+        lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
         do {
             let prfSalt = Self.randomBytes(32)
             let hkdfSalt = Self.randomBytes(32)
@@ -915,12 +943,20 @@ public final class SirosWallet: @unchecked Sendable {
             sessionStore.prfSalt = Self.b64Encode(prfSalt)
             sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
             sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
+            // The passkey this installation logs in with. `generateWIA` sends
+            // it as `credential_id` so the backend can bind this wallet
+            // instance to it and refuse the same passkey at login once the
+            // instance is suspended or revoked (SID-AUTH-06). Nothing else
+            // writes it, so without this the link is never recorded at all.
+            sessionStore.credentialId = credIdStr
             sessionStore.privateDataJwe = String(data: encryptedContainer, encoding: .utf8)
 
             setupApiClientWithTokens(tokens)
             try await syncPrivateDataToBackend()
             try await connectEngineWithToken(tokens)
 
+            // See login()'s identical bump: a new session.
+            bumpSessionGeneration()
             let creds = await credentialStore.getAll()
             setState(.ready(userId: session.uuid, displayName: session.displayName, credentials: creds))
         } catch let e as SirosError {
@@ -947,6 +983,10 @@ public final class SirosWallet: @unchecked Sendable {
             throw SirosError.wallet(message: "AuthServerClient not initialized")
         }
         setState(.connecting)
+        // See logout()'s identical reset: a WIA still cached from another
+        // account (or from before a re-enrollment) must not be what identifies
+        // this device once this login resolves.
+        lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
         do {
             // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
             let assertion = try await performPasskeyAssertion(asClient: asClient)
@@ -995,21 +1035,38 @@ public final class SirosWallet: @unchecked Sendable {
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
+            // See register()'s identical assignment: this is the only thing
+            // that records which passkey this installation logs in with, and
+            // `generateWIA` needs it to bind the instance to that passkey
+            // (SID-AUTH-06). It is the credential the ceremony actually
+            // resolved to, not a stored guess.
+            if let credentialId = assertion.credential["id"] as? String {
+                sessionStore.credentialId = credentialId
+            }
             sessionStore.prfSalt = Self.b64Encode(prfSaltBytes)
             sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
             sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
 
             try await connectEngineWithToken(tokens)
 
+            // A new session: a cut-off met on THIS one deserves its own
+            // self-driven re-login, and the 401s of the session it replaced
+            // no longer do.
+            bumpSessionGeneration()
             let creds = await credentialStore.getAll()
             setState(.ready(userId: session.uuid, displayName: session.displayName, credentials: creds))
             await reloadPresentationHistory()
         } catch let e as SirosError {
+            // A SID-AUTH-06 refusal is a state, not an error: this passkey's
+            // wallet instance is suspended or the wallet was deactivated, and
+            // retrying the same login changes nothing until someone else acts.
+            if await handleLifecycleRefusal(e) { return }
             #if canImport(os)
             logger.error("Login failed: \(e.localizedDescription)")
             #endif
             setState(.error(message: e.localizedDescription))
         } catch {
+            if await handleLifecycleRefusal(error) { return }
             #if canImport(os)
             logger.error("Login failed: \(error.localizedDescription)")
             #endif
@@ -1022,6 +1079,31 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Disconnect, lock keystore, clear session.
     public func logout() {
+        endSessionLocally()
+        // Ending the server session too is what makes this a logout rather
+        // than a local teardown. Fire-and-forget is safe *here* because the
+        // wallet then sits on the login screen: any login that follows is a
+        // deliberate user action far removed from this DELETE. It is NOT safe
+        // on the lifecycle-blocked path, where the app may retry within
+        // milliseconds - see `endSessionLocally()`'s doc comment.
+        Task {
+            try? await authServerClient?.logout()
+        }
+        setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
+    }
+
+    /// Everything `logout()` does except ending the server session: drop the
+    /// engine, the WMP peer, the API client, the cached tokens, the keystore
+    /// and the account-scoped session, and end this session's generation.
+    ///
+    /// The lifecycle-blocked path uses this rather than `logout()`. A
+    /// suspended instance is reactivated from another device and the app then
+    /// retries `login()`, which reuses the same AS session cookie - an
+    /// unawaited `DELETE /auth/session` from the block could land *after* that
+    /// `loginFinish` and invalidate the session the retry had just
+    /// established. There is also nothing to end: the backend has already
+    /// refused this installation.
+    func endSessionLocally() {
         lock.lock()
         let engine = engineSession
         let peer = wmpPeer
@@ -1037,10 +1119,16 @@ public final class SirosWallet: @unchecked Sendable {
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()
-        Task {
-            try? await authServerClient?.logout()
-        }
-        setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
+        // The WIA cache is wallet-wide but the instance key it attests is
+        // account-scoped, so a WIA kept across a logout would answer
+        // `thisInstanceId` (and `wallet_instance_id`) with the PREVIOUS
+        // account's thumbprint for the next one. It is cheap to reissue.
+        lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
+        // This session is over: a 401 still in flight from it must not be
+        // taken for a cut-off worth re-logging in from, and a self-driven
+        // re-login awaiting the old session's teardown must abandon rather
+        // than resurrect what the user just ended.
+        bumpSessionGeneration()
     }
 
     // MARK: - Session resume
@@ -1062,6 +1150,7 @@ public final class SirosWallet: @unchecked Sendable {
             do {
                 _ = try await tokens.ensureBackendToken()
             } catch {
+                if await handleLifecycleRefusal(error) { return }
                 sessionStore.clear()
                 lock.lock(); apiClient = nil; lock.unlock()
                 setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
@@ -1080,6 +1169,7 @@ public final class SirosWallet: @unchecked Sendable {
                 setState(.ready(userId: userId, displayName: displayName, credentials: []))
             }
         } catch {
+            if await handleLifecycleRefusal(error) { return }
             setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
     }
@@ -1103,6 +1193,14 @@ public final class SirosWallet: @unchecked Sendable {
                 challengeId: assertion.challengeId,
                 credential: assertion.credential
             )
+            // Same reason as login()/register(): this is also a completed
+            // passkey ceremony, and a session resumed from an older SDK (or
+            // one whose stored id went stale) would otherwise reach WIA
+            // generation with no `credential_id` to bind the instance to.
+            // The store is already scoped to the resumed account here.
+            if let credentialId = assertion.credential["id"] as? String {
+                sessionStore.credentialId = credentialId
+            }
 
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")
@@ -1123,6 +1221,7 @@ public final class SirosWallet: @unchecked Sendable {
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
             await reloadPresentationHistory()
         } catch {
+            if await handleLifecycleRefusal(error) { return }
             setState(.error(message: error.localizedDescription))
         }
     }

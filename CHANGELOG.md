@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The wallet's own HTTP transport now reports error statuses.**
+  `SirosWallet` built every client over a function that discarded the
+  response, so a non-2xx arrived as a successful body: a `403` carrying
+  `WALLET_SUSPENDED` / `WALLET_REVOKED` was parsed as a login response and
+  surfaced as a generic decoding failure, and `409 ERASURE_INCOMPLETE` never
+  reached its retry. Both had been unreachable in a real app since the
+  refusal helper landed, while unit tests - which inject their own transport -
+  stayed green. It now throws `SirosError.backendApi(code:message:body:)`
+  like the two clients' own convenience initialisers.
+- **The self-driven re-login no longer reuses a cut-off token.**
+  `AuthServerClient` caches access tokens itself, so clearing `AuthTokens`
+  left the pre-cut-off token to be served from that cache and refused with
+  `401` on first use. The re-login now calls the new
+  `AuthServerClient.clearTokenCache()`, which drops cached tokens without
+  ending the session the way `logout()` would.
+
+### Added
+- **Wallet instance lifecycle: the SDK now speaks the whole protocol**
+  (SID-AUTH-06, go-wallet-backend#319). The backend grew a token cut-off, an
+  erasure retry and a passkey-ownership check on top of the instance API the
+  SDK already called; the client side of each of those is here. Ports
+  siros-sdk-kotlin's equivalent change.
+  - `WalletState.lifecycleBlocked(reason:message:cachedAccounts:)` - a blocked
+    wallet is a state, not an error. Entered from `login()`,
+    `unlockKeystore()`, `resumeSession()` and from the SDK's own re-login
+    whenever the authorization server answers `403` with `WALLET_SUSPENDED` or
+    `WALLET_REVOKED`. Neither reason discards anything local - see the
+    correction under **Changed** for why `WALLET_REVOKED` is not proof the
+    wallet was erased - and the state carries the backend's own message so the
+    app can tell the user which case it is.
+  - **One self-driven re-login after a token cut-off.** Any lifecycle change
+    refuses every token issued before it, so the reauthentication signal now
+    drops the tokens, API client and engine session and attempts `login()`
+    exactly once - never in a loop. A lifecycle `403` there goes straight to
+    `.lifecycleBlocked`, a success continues as a normal login, anything else
+    is the existing error path. `WalletEventListener.onReauthenticationRequired()`
+    still fires first for hosts that drive their own prompt.
+  - A successful `setWalletInstanceStatus` write re-logs in the same way, so
+    suspending *this* device's own instance lands in
+    `.lifecycleBlocked(reason: .suspended, ...)` rather than surfacing later as
+    a stray 401.
+  - `409 ERASURE_INCOMPLETE` is retried per the protocol: five attempts, 1 s →
+    8 s, identical body. A `401` after such a `409` is the acting token being
+    dropped with the erased key material and counts as complete.
+  - `403 CREDENTIAL_NOT_OWNED` at WIA generation retries the request once
+    without `credential_id` and clears the stale id, with a warning. The first
+    link recorded for an instance wins, so the SDK never guesses another one.
+  - `WalletInstance.isThisDevice` and `SirosWallet.thisInstanceId` - the
+    instance-key JWK thumbprint the SDK already sends as `wallet_instance_id`
+    - so a Devices screen can mark this installation and warn before
+    suspending it.
+  - Optional `WalletEventListener.onWalletLifecycleBlocked(reason:message:)`,
+    with a no-op default.
+  - **Security: the instance key now survives a logout.**
+    `SessionStore.clearAccount()` deleted `instanceKeyId`, so the next login
+    minted a new key and registered a **new, active** backend wallet instance.
+    A *suspended* installation could therefore walk away from its own
+    suspension simply by logging out and back in. Only `clearAll()` (a factory
+    reset) drops it now.
+  - A session generation makes the self-driven re-login happen once per
+    *session* rather than once per call, aborts it when the caller logged out
+    or destroyed the wallet while it was tearing the old session down, and
+    keeps a token minted before a cut-off from being cached by either
+    `AuthTokens` or `AuthServerClient` after the clear that the cut-off
+    triggered.
+  - A lifecycle block tears the session down locally instead of calling
+    `logout()`: the unawaited `DELETE /auth/session` could otherwise land
+    after the retry the app makes once a suspended instance is reactivated,
+    invalidating the session that retry had just established.
+  - `SirosError.apiErrorCode` and `SirosError.serverMessage`: the backend's
+    stable error code and its user-facing explanation, without every call site
+    re-parsing the body.
+
+### Changed
+- **Correction: `WALLET_REVOKED` no longer forgets the cached account.** The
+  design assumed that code meant the wallet had been deactivated and erased.
+  It does not: the backend returns it for the login gate of a *single* revoked
+  instance too, and only deactivates the wallet when the **last** non-revoked
+  instance is revoked - the user's other devices keep logging in either way,
+  and only the human-readable `message` distinguishes the two. Forgetting the
+  account on a per-instance revocation destroyed the other passkeys that still
+  worked. Both refusal reasons now end the session, keep the cached account,
+  and show the backend's own message; re-enrollment is the user's call.
+  `deactivateWallet(reason:)` is the one place that still forgets the account,
+  where the caller asked for it and the outcome is unambiguous.
+- **Source-breaking: `WalletState` has a new case.** `.lifecycleBlocked` means
+  an exhaustive `switch` over `WalletState` no longer compiles without an arm
+  for it (the SampleApp needed one). Add a case, or a `default`, when
+  upgrading.
+- **`SirosWallet.deactivateWallet(reason:)` and
+  `BackendApiClient.revokeAllWalletInstances(reason:)` return
+  `DeactivationOutcome(revoked:complete:)`** instead of a bare count. The
+  revocations stand even when the backend's erasure cascade did not finish, so
+  the local account is forgotten either way and `complete` is what the app
+  tells the user (an incomplete erasure leaves residual server-side data for an
+  administrator to clean up).
+
 ## [0.11.0] - 2026-09-17
 
 ### Fixed

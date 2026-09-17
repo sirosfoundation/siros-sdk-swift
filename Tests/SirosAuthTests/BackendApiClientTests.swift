@@ -120,12 +120,126 @@ final class BackendApiClientTests: XCTestCase {
         let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
         client.setAppToken("t")
 
-        let revoked = try await client.revokeAllWalletInstances(reason: "device stolen")
+        let outcome = try await client.revokeAllWalletInstances(reason: "device stolen")
 
         XCTAssertEqual(server.requests[0].method, "POST")
         XCTAssertEqual(server.requests[0].path, "/user/session/instances/revoke-all")
         XCTAssertEqual(try bodyJSON(server.requests[0])["reason"] as? String, "device stolen")
-        XCTAssertEqual(revoked, 2)
+        XCTAssertEqual(outcome, DeactivationOutcome(revoked: 2, complete: true))
+    }
+
+    // MARK: - 409 ERASURE_INCOMPLETE retry protocol (SID-AUTH-06)
+
+    /// No waiting between erasure retries in tests; the production default is
+    /// 1 s → 8 s (see `BackendApiClient.erasureRetryDelays`).
+    private func retryingClient(_ server: MockHttpServer) -> BackendApiClient {
+        let client = BackendApiClient(
+            baseUrl: "https://api.example.com",
+            tenantId: "default",
+            erasureRetryDelays: [0, 0, 0, 0],
+            httpFn: server.httpFunction
+        )
+        client.setAppToken("t")
+        return client
+    }
+
+    /// The backend records the revocations before it erases, so a 409 means
+    /// "the status stands, re-run the erasure" - the client repeats the
+    /// identical request until it gets a 200. The repeat answers
+    /// `{"revoked": 0}` (nothing left to revoke), so the count reported to the
+    /// caller must be the one from the first answer, not the last.
+    func testRevokeAllRepeatsTheRequestUntilTheErasureCompletes() async throws {
+        let server = MockHttpServer()
+        server.enqueueFailure(code: 409, body: #"{"error":"ERASURE_INCOMPLETE","revoked":2}"#)
+        server.enqueue(#"{"revoked":0}"#)
+        let client = retryingClient(server)
+
+        let outcome = try await client.revokeAllWalletInstances(reason: "device stolen")
+
+        XCTAssertEqual(server.requests.count, 2)
+        // "repeating the identical request re-runs the erasure" - same body.
+        XCTAssertEqual(server.requests[0].path, server.requests[1].path)
+        XCTAssertEqual(server.requests[0].body, server.requests[1].body)
+        XCTAssertEqual(outcome, DeactivationOutcome(revoked: 2, complete: true))
+    }
+
+    /// Five attempts, then stop: the wallet is deactivated either way, so the
+    /// caller is told the erasure is unfinished (residual data for an
+    /// administrator) rather than being handed an error for a change that did
+    /// take effect.
+    func testRevokeAllReportsIncompleteAfterTheRetryBudget() async throws {
+        let server = MockHttpServer()
+        for _ in 0..<5 {
+            server.enqueueFailure(code: 409, body: #"{"error":"ERASURE_INCOMPLETE","revoked":2}"#)
+        }
+        let client = retryingClient(server)
+
+        let outcome = try await client.revokeAllWalletInstances()
+
+        XCTAssertEqual(server.requests.count, 5)
+        XCTAssertEqual(outcome, DeactivationOutcome(revoked: 2, complete: false))
+    }
+
+    /// The acting token's exemption from the lifecycle cut-off ends with the
+    /// key material. A 401 after a 409 is therefore the erasure having reached
+    /// the keys - the wallet is deactivated, which is exactly "complete".
+    func testRevokeAllTreatsA401AfterThe409AsACompletedErasure() async throws {
+        let server = MockHttpServer()
+        server.enqueueFailure(code: 409, body: #"{"error":"ERASURE_INCOMPLETE","revoked":3}"#)
+        server.enqueueFailure(code: 401, body: #"{"error":"unauthorized"}"#)
+        let client = retryingClient(server)
+
+        let outcome = try await client.revokeAllWalletInstances()
+
+        XCTAssertEqual(server.requests.count, 2)
+        XCTAssertEqual(outcome, DeactivationOutcome(revoked: 3, complete: true))
+    }
+
+    /// A 401 that was never preceded by a 409 is an ordinary auth failure.
+    func testRevokeAllStillFailsOnAPlain401() async throws {
+        let server = MockHttpServer()
+        server.enqueueFailure(code: 401, body: #"{"error":"unauthorized"}"#)
+        let client = retryingClient(server)
+
+        do {
+            _ = try await client.revokeAllWalletInstances()
+            XCTFail("a 401 with no preceding ERASURE_INCOMPLETE must not read as a completed erasure")
+        } catch SirosError.backendApi(let code, _, _) {
+            XCTAssertEqual(code, 401)
+        }
+        XCTAssertEqual(server.requests.count, 1)
+    }
+
+    /// A 409 that is not ERASURE_INCOMPLETE (invalid transition) is not retried.
+    func testSetWalletInstanceStatusDoesNotRetryAnInvalidTransition() async throws {
+        let server = MockHttpServer()
+        server.enqueueFailure(code: 409, body: #"{"error":"invalid status transition"}"#)
+        let client = retryingClient(server)
+
+        do {
+            _ = try await client.setWalletInstanceStatus(instanceId: "jkt-1", status: .active)
+            XCTFail("an invalid transition must surface, not be retried")
+        } catch SirosError.backendApi(let code, _, _) {
+            XCTAssertEqual(code, 409)
+        }
+        XCTAssertEqual(server.requests.count, 1)
+    }
+
+    /// Revoking the last instance runs the same erasure cascade, so the status
+    /// write retries on the same budget and reports the status that was
+    /// recorded even when the cascade never finished.
+    func testSetWalletInstanceStatusRetriesTheErasureAndKeepsTheRecordedStatus() async throws {
+        let server = MockHttpServer()
+        for _ in 0..<5 {
+            server.enqueueFailure(code: 409, body: #"{"error":"ERASURE_INCOMPLETE","id":"jkt-1","status":"revoked"}"#)
+        }
+        let client = retryingClient(server)
+
+        let result = try await client.setWalletInstanceStatus(instanceId: "jkt-1", status: .revoked, reason: "stolen")
+
+        XCTAssertEqual(server.requests.count, 5)
+        XCTAssertEqual(result.id, "jkt-1")
+        XCTAssertEqual(result.status, .revoked)
     }
 
     func testUnauthenticatedRequestOmitsAuthorizationHeader() async throws {

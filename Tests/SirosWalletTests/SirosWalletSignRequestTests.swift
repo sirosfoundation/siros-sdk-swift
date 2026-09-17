@@ -367,16 +367,23 @@ final class SirosWalletLifecycleFacadeTests: XCTestCase {
         return SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: RecordingKeystoreManager())!
     }
 
-    /// Minimal recording HTTP function: captures method/path/body and answers with the queued JSON.
+    /// Minimal recording HTTP function: captures method/path/body and answers
+    /// per path (not from one queue) - `listWalletInstances()` fetches a
+    /// Wallet Instance Attestation first when this session has none, to know
+    /// which row is this device, so a positional queue would hand the
+    /// attestation's challenge request the listing's answer.
     private final class Recorder: @unchecked Sendable {
         var calls: [(method: String, path: String, body: [String: Any]?)] = []
-        var responses: [String]
-        init(_ responses: [String]) { self.responses = responses }
+        var responses: [String: String]
+        init(_ responses: [String: String]) { self.responses = responses }
+        func calls(to path: String) -> [(method: String, path: String, body: [String: Any]?)] {
+            calls.filter { $0.path == path }
+        }
         var httpFn: @Sendable (String, URL, [String: String], Data?) async throws -> Data {
             { [self] method, url, _, body in
                 let parsed = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
                 self.calls.append((method, url.path, parsed))
-                return Data(self.responses.removeFirst().utf8)
+                return Data((self.responses[url.path] ?? "{}").utf8)
             }
         }
     }
@@ -399,23 +406,34 @@ final class SirosWalletLifecycleFacadeTests: XCTestCase {
     func testFacadeForwardsToTheBackendClient() async throws {
         let wallet = makeWallet()
         let recorder = Recorder([
-            #"{"instances":[{"id":"jkt-1","status":"active","credential_id":"pk-1"}]}"#,
-            #"{"id":"jkt-1","status":"suspended"}"#,
+            "/user/session/instances": #"{"instances":[{"id":"jkt-1","status":"active","credential_id":"pk-1"}]}"#,
+            "/user/session/instances/jkt-1/status": #"{"id":"jkt-1","status":"suspended"}"#,
         ])
         let client = BackendApiClient(baseUrl: "https://backend.example.invalid", tenantId: "default", httpFn: recorder.httpFn)
         client.setAppToken("t")
         wallet.apiClient = client
+        // A status write re-logs in (SID-AUTH-06: the change cuts this
+        // session's tokens off), so give the AS a stub that fails locally
+        // instead of letting the re-login reach for a real network.
+        wallet.authServerClient = AuthServerClient(
+            baseUrl: "https://backend.example.invalid", tenantId: "default"
+        ) { _, _, _, _ in throw SirosError.network(message: "offline in tests") }
 
         let instances = try await wallet.listWalletInstances()
         XCTAssertEqual(instances.map(\.id), ["jkt-1"])
-        XCTAssertEqual(recorder.calls[0].method, "GET")
-        XCTAssertEqual(recorder.calls[0].path, "/user/session/instances")
+        let listCalls = recorder.calls(to: "/user/session/instances")
+        XCTAssertEqual(listCalls.count, 1)
+        XCTAssertEqual(listCalls[0].method, "GET")
+        // No WIA was obtainable here (the stubbed challenge answers `{}`), so
+        // no row can be marked as this device - and the listing still works.
+        XCTAssertFalse(instances[0].isThisDevice)
 
         let updated = try await wallet.setWalletInstanceStatus(instanceId: "jkt-1", status: .suspended, reason: "lost")
         XCTAssertEqual(updated.status, .suspended)
-        XCTAssertEqual(recorder.calls[1].method, "PUT")
-        XCTAssertEqual(recorder.calls[1].path, "/user/session/instances/jkt-1/status")
-        XCTAssertEqual(recorder.calls[1].body?["status"] as? String, "suspended")
-        XCTAssertEqual(recorder.calls[1].body?["reason"] as? String, "lost")
+        let statusCalls = recorder.calls(to: "/user/session/instances/jkt-1/status")
+        XCTAssertEqual(statusCalls.count, 1)
+        XCTAssertEqual(statusCalls[0].method, "PUT")
+        XCTAssertEqual(statusCalls[0].body?["status"] as? String, "suspended")
+        XCTAssertEqual(statusCalls[0].body?["reason"] as? String, "lost")
     }
 }

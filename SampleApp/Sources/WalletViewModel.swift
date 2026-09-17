@@ -1357,6 +1357,15 @@ final class WalletViewModel: ObservableObject {
             walletState = .flowActive(flowType: flowType, status: status)
             credentials = creds
             lastFlowType = flowType
+        case .lifecycleBlocked(let reason, let message, let accounts):
+            // Minimal handling until the Devices/blocked-login UI lands: the
+            // wallet is signed out and cannot sign back in, so show the
+            // backend's explanation rather than a bare login screen.
+            walletState = .error(message: message ?? "This wallet instance is \(reason.rawValue).")
+            credentials = []
+            displayName = nil
+            userId = nil
+            cachedAccounts = accounts
         case .error(let message):
             walletState = .error(message: message)
         }

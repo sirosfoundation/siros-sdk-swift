@@ -75,11 +75,41 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// The current session could not be silently refreshed and is no longer
     /// valid - e.g. the engine WebSocket's token refresh failed before a
     /// reconnect, or repeated REST calls were rejected as unauthenticated.
-    /// `SirosWallet` has already logged out by the time this fires. Unlike
-    /// `onFlowError` (a specific flow's failure, session otherwise fine),
-    /// this means the whole session is gone - route the user to the login
-    /// screen rather than surfacing a generic error message.
+    /// Unlike `onFlowError` (a specific flow's failure, session otherwise
+    /// fine), this means the whole session is gone - route the user to the
+    /// login screen rather than surfacing a generic error message.
+    ///
+    /// Since SID-AUTH-06 the SDK attempts exactly one login itself right after
+    /// this fires: a lifecycle cut-off is indistinguishable from an expired
+    /// session until that login is refused with `WALLET_SUSPENDED` /
+    /// `WALLET_REVOKED`, which is what turns it into
+    /// `WalletState.lifecycleBlocked` rather than an endless reauth loop. So
+    /// an implementation should show its login/progress screen and wait for
+    /// the state to change - it must NOT call `login()` itself, or two
+    /// WebAuthn ceremonies race on the session store, the wallet state and the
+    /// engine session.
     func onReauthenticationRequired()
+
+    /// The backend refuses this installation because of its wallet instance's
+    /// lifecycle (SID-AUTH-06): the instance was suspended, or the wallet was
+    /// deactivated and its data erased. Fired when `SirosWallet` enters
+    /// `WalletState.lifecycleBlocked` - from a login, a keystore unlock, a
+    /// session resume, or the SDK's own single re-login after a token cut-off.
+    ///
+    /// Unlike `onReauthenticationRequired()` this is not "prompt again":
+    /// another login attempt with the same passkey is refused the same way
+    /// until someone else acts. `.suspended` is lifted by reactivating the
+    /// instance from another device; `.revoked` is terminal *for this
+    /// installation's instance* and needs a fresh enrollment.
+    ///
+    /// `.revoked` does **not** imply the wallet was deactivated and erased:
+    /// the backend answers with it for a single revoked instance too, while
+    /// the account's other passkeys and devices keep working. Nothing local is
+    /// discarded on either reason - `message` is the only thing that
+    /// distinguishes the cases, and it is written for the user - so do not
+    /// treat this callback as licence to drop account state. Apps that already
+    /// render `WalletState.lifecycleBlocked` need not implement this.
+    func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
 
     /// A credential batch was renewed (credential re-issuance/renewal plan,
     /// Phase 2, `AttributeDiffService`-equivalent, ISSU_59) and at least one
@@ -116,6 +146,9 @@ public extension WalletEventListener {
     func onReauthenticationRequired() {
         // No-op by default: implementers only need to override this if they
         // want to route the user to a login screen on forced logout.
+    }
+    func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?) {
+        // No-op by default: the state change is the primary signal.
     }
     func onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
     func onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}
