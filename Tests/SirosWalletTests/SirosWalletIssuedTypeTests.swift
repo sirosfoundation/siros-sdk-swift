@@ -167,7 +167,7 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         let doc = document("urn:eudi:pid:1")
         w.activeVctmDocument = doc
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: doc.raw))
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)).reason
         XCTAssertNil(reason)
     }
 
@@ -177,14 +177,14 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         let w = makeWallet()
         w.activeVctmDocument = document("urn:eudi:pid:1")
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1","claims":[]}"#))
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)).reason
         XCTAssertNotNil(reason)
     }
 
     func testAcceptsACredentialThatPinsNothing() async {
         let w = makeWallet()
         w.activeVctmDocument = document("urn:eudi:pid:1")
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(sdJwt(vct: "urn:eudi:pid:1")))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(sdJwt(vct: "urn:eudi:pid:1"))).reason
         XCTAssertNil(reason)
     }
 
@@ -193,7 +193,7 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         let w = makeWallet()
         w.activeVctmDocument = nil
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1"}"#))
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)).reason
         XCTAssertNil(reason)
     }
 
@@ -206,25 +206,33 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
     func testAStaleResolvedDocumentIsReResolvedAndTheCredentialAccepted() async {
         let w = makeWallet()
         let issuers = document("urn:eudi:pid:1", name: "PID")
-        w.activeVctmDocument = document("urn:eudi:pid:1", name: "PID (old)")
+        let staleDocument = document("urn:eudi:pid:1", name: "PID (old)")
+        w.activeVctmDocument = staleDocument
         w.activeOffer = offer(vct: "urn:eudi:pid:1")
         w.vctmFetcher = VctmFetcher(httpGet: { @Sendable _ in issuers.raw })
 
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: issuers.raw))
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
+        let outcome = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
 
-        XCTAssertNil(reason, "the issuer's own document was found, so the credential stands")
+        XCTAssertNil(outcome.reason, "the issuer's own document was found, so the credential stands")
         XCTAssertEqual(
-            w.activeVctmDocument?.raw, issuers.raw,
-            "and the wallet keeps the document the issuer pinned, not the stale one"
+            outcome.refreshed?.raw, issuers.raw,
+            "and the document the issuer pinned is handed back, not the stale one"
         )
         // The parsed form too, not just the raw bytes: it is what the stored
         // credential's display and claim metadata is built from, so a heal that
-        // left this behind would accept the credential and then describe it
-        // with the document the issuer did not sign over.
+        // handed back only bytes would accept the credential and then describe
+        // it with the document the issuer did not sign over.
         XCTAssertEqual(
-            w.activeVctm?.name, "PID",
-            "the refreshed parse replaces the stale one the metadata would be built from"
+            outcome.refreshed?.vctm.name, "PID",
+            "the refreshed parse is what the metadata will be built from"
+        )
+        // Deliberately NOT written into the wallet's shared issuance state: a
+        // cancel or logout may have replaced it while the re-resolution was in
+        // flight, and this result belongs to one credential.
+        XCTAssertEqual(
+            w.activeVctmDocument?.raw, staleDocument.raw,
+            "the shared issuance state is left to whichever flow owns it"
         )
     }
 
@@ -239,7 +247,7 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         w.vctmFetcher = VctmFetcher(httpGet: { @Sendable _ in #"{"vct":"urn:eudi:pid:1","name":"also wrong"}"# })
 
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1","name":"PID"}"#))
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)).reason
 
         XCTAssertNotNil(reason)
     }
@@ -252,7 +260,7 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         w.activeOffer = nil
 
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: #"{"vct":"urn:eudi:pid:1","name":"PID"}"#))
-        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw))
+        let reason = await w.verifyVctIntegrity(format: "dc+sd-jwt", payload: payload(raw)).reason
         XCTAssertNotNil(reason)
     }
 
@@ -260,7 +268,7 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         let w = makeWallet()
         w.activeVctmDocument = document("urn:eudi:pid:1")
         let raw = sdJwt(vct: "urn:eudi:pid:1", integrity: digest(of: "wrong"))
-        let reason = await w.verifyVctIntegrity(format: "mso_mdoc", payload: payload(raw))
+        let reason = await w.verifyVctIntegrity(format: "mso_mdoc", payload: payload(raw)).reason
         XCTAssertNil(reason)
     }
 }

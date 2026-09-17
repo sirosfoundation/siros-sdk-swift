@@ -218,10 +218,23 @@ extension SirosWallet {
     /// Only checked when the credential asks for it: a credential with no
     /// `vct#integrity` is making no claim about its metadata, so there is
     /// nothing to disagree with.
-    func verifyVctIntegrity(format: String, payload: [String: Any]) async -> String? {
+    ///
+    /// - Returns: the refusal reason, or nil to accept; and the document a
+    ///   re-resolution settled on, when one happened. The refreshed document is
+    ///   handed back rather than written into `activeVctm`/`activeVctmDocument`
+    ///   on the way past: this function awaits the network, and
+    ///   `resetIssuanceGuards()` - which a cancel or a logout calls - may clear
+    ///   those fields and let a new issuance populate them in the meantime. A
+    ///   write here would then be the *old* flow overwriting the new flow's
+    ///   metadata. The caller applies it to the one credential it is storing,
+    ///   which is the only thing it was ever about.
+    func verifyVctIntegrity(
+        format: String,
+        payload: [String: Any]
+    ) async -> (reason: String?, refreshed: VctmDocument?) {
         guard format != "mso_mdoc",
               let expected = payload["vct#integrity"] as? String else {
-            return nil
+            return (nil, nil)
         }
 
         lock.lock()
@@ -232,7 +245,7 @@ extension SirosWallet {
         if let document,
            let raw = document.raw.data(using: String.Encoding.utf8),
            Integrity.matches(raw, expected) {
-            return nil
+            return (nil, nil)
         }
 
         var rediscovered: VctmDocument?
@@ -250,11 +263,7 @@ extension SirosWallet {
             #if canImport(os)
             logger.info("Type metadata re-resolved to the document the issuer pinned")
             #endif
-            lock.lock()
-            activeVctmDocument = rediscovered
-            activeVctm = rediscovered.vctm
-            lock.unlock()
-            return nil
+            return (nil, rediscovered)
         }
 
         if document == nil {
@@ -264,10 +273,10 @@ extension SirosWallet {
             #if canImport(os)
             logger.warning("Credential pinned vct#integrity but no type metadata could be resolved to check it against")
             #endif
-            return nil
+            return (nil, nil)
         }
 
-        return "The issuer's type metadata does not match what it published"
+        return ("The issuer's type metadata does not match what it published", nil)
     }
 
     private func deleteRenewalSourceBatch(_ oldBatchId: Int64) async {
@@ -358,7 +367,8 @@ extension SirosWallet {
         ) {
             return (false, reason)
         }
-        if let reason = await verifyVctIntegrity(format: cred.format, payload: payload) {
+        let integrity = await verifyVctIntegrity(format: cred.format, payload: payload)
+        if let reason = integrity.reason {
             return (false, reason)
         }
 
@@ -367,10 +377,10 @@ extension SirosWallet {
         // before it ran then describes the document the issuer did NOT sign
         // over, and persisting its display and claim metadata would store the
         // very thing the pin exists to prevent - accepted, but described by the
-        // wrong document. Read what the check settled on instead.
-        lock.lock()
-        let effectiveVctm = activeVctm ?? vctm
-        lock.unlock()
+        // wrong document. Scoped to this credential rather than read back from
+        // shared issuance state, which a cancelled or superseded flow may have
+        // replaced while the re-resolution was in flight.
+        let effectiveVctm = integrity.refreshed?.vctm ?? vctm
         let metadata = offer.flatMap {
             CredentialUtils.buildMetadata(offer: $0, vctm: effectiveVctm, rawCredential: cred.credential)
         }
