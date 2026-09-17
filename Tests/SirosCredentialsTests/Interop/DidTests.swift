@@ -78,70 +78,82 @@ final class DidTests: XCTestCase {
         XCTAssertNil(Did.resolveDidJwk("did:web:example.com").document)
     }
 
-    // MARK: - did:web
+    // MARK: - delegated resolution
+    //
+    // Everything that is not did:jwk is a trust decision - which document is
+    // authoritative for an identifier - and belongs to go-trust, reached
+    // through the backend. These tests pin that the SDK delegates rather than
+    // fetching, because fetching is exactly the bug.
 
-    func testABareDidWebResolvesToTheWellKnownPath() {
-        XCTAssertEqual(
-            Did.didWebToUrl("did:web:example.com"),
-            "https://example.com/.well-known/did.json"
-        )
-    }
-
-    func testPathSegmentsOfADidWebBecomeUrlPathSegments() {
-        XCTAssertEqual(
-            Did.didWebToUrl("did:web:example.com:issuers:1"),
-            "https://example.com/issuers/1/did.json"
-        )
-    }
-
-    func testAPercentEncodedPortIsDecodedBackIntoTheHost() {
-        XCTAssertEqual(
-            Did.didWebToUrl("did:web:example.com%3A8443"),
-            "https://example.com:8443/.well-known/did.json"
-        )
-    }
-
-    func testADocumentServedForADifferentSubjectIsRejected() async {
-        // Otherwise any domain could serve a document for any DID.
-        let resolver = DidResolver { _ in Data(#"{"id":"did:web:evil.example"}"#.utf8) }
-        let result = await resolver.resolve("did:web:example.com")
-        XCTAssertNil(result.document)
-    }
-
-    func testADidWebDocumentResolvesItsAssertionMethodKey() async {
-        let body = """
-        {
-          "id": "did:web:issuer.example",
-          "verificationMethod": [{
-            "id": "did:web:issuer.example#key-1",
-            "type": "JsonWebKey2020",
-            "controller": "did:web:issuer.example",
-            "publicKeyJwk": {"kty":"EC","crv":"P-256","x":"aa","y":"bb"}
-          }],
-          "assertionMethod": ["did:web:issuer.example#key-1"]
+    func testADidWebIsResolvedThroughTheDelegateNotFetched() async {
+        let asked = AskedRecorder()
+        let resolver = DidResolver { did in
+            await asked.record(did)
+            return [
+                "id": "did:web:issuer.example",
+                "verificationMethod": [[
+                    "id": "did:web:issuer.example#key-1",
+                    "type": "JsonWebKey2020",
+                    "controller": "did:web:issuer.example",
+                    "publicKeyJwk": ["kty": "EC", "crv": "P-256", "x": "aa", "y": "bb"],
+                ]],
+                "assertionMethod": ["did:web:issuer.example#key-1"],
+            ]
         }
-        """
-        let resolver = DidResolver { _ in Data(body.utf8) }
         let document = await resolver.resolve("did:web:issuer.example").document
+        let value = await asked.value
+        XCTAssertEqual(value, "did:web:issuer.example")
         let key = document?.findPublicKey(kid: "did:web:issuer.example#key-1", relationship: .assertionMethod)
         XCTAssertEqual(key?["x"], "aa")
     }
 
-    func testAnUnreachableDidWebIsAFailureNotAnEmptyDocument() async {
+    func testAWalletWithNoResolutionAuthorityDoesNotResolveADidWebItself() async {
+        // Failing is the point: the alternative is the SDK deciding which host
+        // to believe, which is go-trust's decision, not the wallet's.
+        let resolver = DidResolver(delegate: nil)
+        let result = await resolver.resolve("did:web:example.com")
+        XCTAssertNil(result.document)
+    }
+
+    func testADocumentNamingADifferentSubjectIsRejected() async {
+        // Whoever returned it, it is not this DID's document.
+        let resolver = DidResolver { _ in ["id": "did:web:evil.example"] }
+        let result = await resolver.resolve("did:web:example.com")
+        XCTAssertNil(result.document)
+    }
+
+    func testADelegateThatCannotResolveIsAFailureNotAnEmptyDocument() async {
         let resolver = DidResolver { _ in nil }
         let result = await resolver.resolve("did:web:example.com")
         XCTAssertNil(result.document)
     }
 
-    // MARK: - did:webvh
+    func testDidJwkNeverReachesTheDelegate() async {
+        // It resolves offline: the key is the identifier, so a round trip
+        // would add a dependency and a failure mode for a known answer.
+        let asked = AskedRecorder()
+        let resolver = DidResolver { did in
+            await asked.record(did)
+            return nil
+        }
+        let did = Did.createDidJwk(p256Jwk)
+        let resolved = await resolver.resolve(did).document
+        XCTAssertNotNil(resolved)
+        let value = await asked.value
+        XCTAssertNil(value, "did:jwk must not be delegated")
+    }
 
-    func testDidWebvhFailsClosedRatherThanServingAnUnverifiedDocument() async {
-        // Its whole value over did:web is the verifiable log; a resolver that
-        // skipped the proof chain would offer did:web trust while looking
-        // like more.
-        let resolver = DidResolver(profile: .v6) { _ in Data("{}".utf8) }
-        let result = await resolver.resolve("did:webvh:scid:example.com")
-        XCTAssertNil(result.document)
+    func testDidWebvhIsDelegatedLikeAnyOtherNetworkMethod() async {
+        // A DIIP v6 Future Direction. The SDK does not special-case it:
+        // go-trust either resolves it or does not.
+        let asked = AskedRecorder()
+        let resolver = DidResolver(profile: .v6) { did in
+            await asked.record(did)
+            return nil
+        }
+        _ = await resolver.resolve("did:webvh:scid:example.com")
+        let value = await asked.value
+        XCTAssertEqual(value, "did:webvh:scid:example.com")
         let required = await resolver.requiredMethods
         XCTAssertTrue(required.contains(.webvh))
     }
@@ -189,4 +201,10 @@ final class DidTests: XCTestCase {
         XCTAssertNil(DidMethod.of("https://example.com"))
         XCTAssertNil(DidMethod.of("did:unknown:x"))
     }
+}
+
+/// Records the DID a delegate was asked for, across actor boundaries.
+private actor AskedRecorder {
+    private(set) var value: String?
+    func record(_ did: String) { value = did }
 }

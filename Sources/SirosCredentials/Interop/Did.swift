@@ -96,10 +96,14 @@ public struct DidDocument: Sendable, Equatable {
         case .assertionMethod: ids = assertionMethod
         case .any: ids = Array(verificationMethods.keys)
         }
-        // A document that lists no relationship at all still resolves: DID
-        // Core lets a method's verification methods be used for any purpose
-        // unless the document narrows it.
-        let candidates = ids.isEmpty && relationship != .any ? Array(verificationMethods.keys) : ids
+        // No fallback to "every verification method" for a NAMED relationship.
+        // A key the controller did not place in `assertionMethod` is not
+        // authorized to assert, and treating an empty relationship as "all
+        // keys" would let an Issuer's DID document sign credentials with a key
+        // it only published for, say, key agreement. Fail closed; `.any` is
+        // the one caller that legitimately means "whichever key this document
+        // has" (resolving a did:jwk back to its own key).
+        let candidates = ids
 
         let match: String?
         if let kid {
@@ -130,78 +134,80 @@ public enum DidResolution: Sendable {
     }
 }
 
-/// Resolves the DID methods DIIP requires.
+/// How a DID that needs resolving is resolved.
 ///
-/// `did:jwk` resolves offline - the key *is* the identifier - so it needs no
-/// network and cannot fail for connectivity reasons. `did:web` is an HTTPS
-/// fetch. `did:webvh` is recognised but deliberately not resolved: see
-/// ``DidResolver/resolve(_:)``.
+/// Deliberately a protocol this SDK does not implement for the network
+/// methods. DID method resolution is a trust decision - which document is
+/// authoritative for an identifier - and in SIROS that lives in go-trust,
+/// reached through go-wallet-backend's engine. A wallet that fetched
+/// `did:web` documents itself would be making that decision locally, with its
+/// own idea of which hosts to believe, and silently diverging from whatever
+/// the deployment's trust registry says.
+///
+/// `SirosWallet` supplies an implementation backed by the backend's
+/// `/v1/resolve`; a host composing the lower-level modules supplies its own.
+///
+/// Returns the resolved DID document as JSON, or nil if it could not be
+/// resolved. Nil is a failure, never an empty success - see ``DidResolution``.
+public typealias DidResolutionDelegate = @Sendable (String) async -> [String: Any]?
+
+/// Resolves the DIDs a wallet encounters.
+///
+/// `did:jwk` is resolved here, locally and offline: the key *is* the
+/// identifier, so there is no document to fetch, nobody to ask, and no trust
+/// decision to delegate - the same reason wallet-frontend resolves it locally
+/// too. Every other method is handed to the delegate, which routes it to
+/// go-trust. This split is the whole design: the SDK answers only the question
+/// that has an arithmetic answer, and never the one that needs a trust
+/// registry.
 public actor DidResolver {
     private let profile: DiipProfile
-    private let httpGet: @Sendable (String) async -> Data?
+    private let delegate: DidResolutionDelegate?
 
     /// - Parameters:
-    ///   - profile: decides which methods are in scope; a method outside the
-    ///     profile still resolves if this SDK can, since DIIP explicitly does
-    ///     not forbid identifiers it does not require.
-    ///   - httpGet: fetches a URL, returning the body or nil. Injected so a
-    ///     host can supply its own client, pinning and caching.
-    public init(
-        profile: DiipProfile = .latest,
-        httpGet: @escaping @Sendable (String) async -> Data?
-    ) {
+    ///   - profile: decides which methods a compliant wallet must be able to
+    ///     resolve; a method outside it is still delegated, since DIIP
+    ///     explicitly does not forbid identifiers it does not require.
+    ///   - delegate: resolves everything except `did:jwk`. Nil means a wallet
+    ///     with no resolution authority configured: `did:jwk` still works, and
+    ///     anything else fails rather than being fetched directly.
+    public init(profile: DiipProfile = .latest, delegate: DidResolutionDelegate? = nil) {
         self.profile = profile
-        self.httpGet = httpGet
+        self.delegate = delegate
     }
 
     /// The methods `profile` requires a compliant wallet to resolve.
     public var requiredMethods: Set<DidMethod> { profile.resolvableDidMethods }
 
-    /// Resolve any DID this SDK supports.
+    /// Resolve any DID this wallet can.
     public func resolve(_ did: String) async -> DidResolution {
-        switch DidMethod.of(did) {
-        case .jwk:
-            return Did.resolveDidJwk(did)
-        case .web:
-            return await resolveWeb(did)
-        case .webvh:
-            // `did:webvh` is not resolved. Its whole value over `did:web` is
-            // that the document's history is verifiable: every log entry
-            // carries a Data Integrity proof and a hash linking it to its
-            // predecessor, and a resolver that skips those checks offers
-            // exactly the trust of `did:web` while looking like more. Failing
-            // here is the safe default - a caller sees an unresolved DID
-            // rather than an unverified document. The method is listed in
-            // v6's `resolvableDidMethods` so the gap is visible, not silent.
-            return .failed(
-                did: did,
-                reason: "did:webvh resolution requires verifying the DID log's proof chain, which is not yet implemented"
-            )
-        case .key:
-            return .failed(did: did, reason: "did:key resolution is not implemented")
-        case nil:
+        guard let method = DidMethod.of(did) else {
             return .failed(did: did, reason: "Not a DID, or an unsupported DID method: \(did)")
         }
-    }
 
-    private func resolveWeb(_ did: String) async -> DidResolution {
-        guard let url = Did.didWebToUrl(did) else {
-            return .failed(did: did, reason: "Malformed did:web identifier")
+        // did:jwk carries its own key. Sending it to a resolution service
+        // would add a network round trip, a dependency, and a failure mode,
+        // for an answer that is already in the identifier.
+        if method == .jwk { return Did.resolveDidJwk(did) }
+
+        guard let delegate else {
+            return .failed(
+                did: did,
+                reason: "No DID resolution delegate configured; \(method.rawValue) resolution is the backend's to perform"
+            )
         }
-        guard let body = await httpGet(url) else {
-            return .failed(did: did, reason: "Could not fetch DID document from \(url)")
+        guard let document = await delegate(did) else {
+            return .failed(did: did, reason: "Could not resolve \(did)")
         }
-        guard let root = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-              let document = Did.parseDidDocument(root)
-        else {
-            return .failed(did: did, reason: "DID document at \(url) is not a DID document")
+        guard let parsed = Did.parseDidDocument(document) else {
+            return .failed(did: did, reason: "Resolution of \(did) did not return a DID document")
         }
-        guard document.id == did else {
-            // A document that names a different subject would let any domain
-            // serve a document for any DID.
-            return .failed(did: did, reason: "DID document at \(url) declares id '\(document.id)'")
+        guard parsed.id == did else {
+            // A document naming a different subject is not this DID's
+            // document, whoever returned it.
+            return .failed(did: did, reason: "Resolved document declares id '\(parsed.id)'")
         }
-        return .resolved(document)
+        return .resolved(parsed)
     }
 }
 
@@ -258,25 +264,6 @@ public enum Did {
                 assertionMethod: [vmId]
             )
         )
-    }
-
-    /// Map a `did:web` identifier to the URL its document is served from.
-    ///
-    /// `did:web:example.com` -> `https://example.com/.well-known/did.json`;
-    /// `did:web:example.com:a:b` -> `https://example.com/a/b/did.json`. A port
-    /// is percent-encoded in the DID (`example.com%3A8443`).
-    public static func didWebToUrl(_ did: String) -> String? {
-        guard did.hasPrefix("did:web:") else { return nil }
-        let idPart = did.dropFirst("did:web:".count).prefix { $0 != "#" && $0 != "?" }
-        guard !idPart.isEmpty else { return nil }
-        let segments = idPart.split(separator: ":", omittingEmptySubsequences: false)
-            .map { $0.removingPercentEncoding ?? String($0) }
-        guard let host = segments.first, !host.isEmpty else { return nil }
-        let path = segments.dropFirst()
-        if path.isEmpty {
-            return "https://\(host)/.well-known/did.json"
-        }
-        return "https://\(host)/\(path.joined(separator: "/"))/did.json"
     }
 
     /// Parse a DID document JSON object into the subset this SDK reads.

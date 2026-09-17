@@ -724,7 +724,11 @@ public final class SirosWallet: @unchecked Sendable {
         self.sessionStore = sessionStore
 
         #if canImport(CryptoKit)
-        self.keystore = keystore ?? JweKeystore()
+        // The profile has to reach the default keystore, or a wallet
+        // configured for DIIP generates keys with no did:jwk identity and then
+        // silently falls back to a HAIP-shaped proof - the configuration would
+        // look applied and do nothing. A host-supplied keystore carries its own.
+        self.keystore = keystore ?? JweKeystore(profile: config.interopProfile)
         #else
         guard let ks = keystore else {
             return nil
@@ -734,8 +738,19 @@ public final class SirosWallet: @unchecked Sendable {
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
 
-        let resolver = DidResolver(profile: config.diipProfile) { url in
-            await SirosWallet.fetchPublicUrl(url, headers: [:])
+        // `did:jwk` resolves offline inside the resolver; everything else is
+        // handed to the backend, which delegates to go-trust. Which document
+        // is authoritative for an identifier is a trust decision, and it is
+        // not this wallet's to make by fetching whatever a domain serves.
+        let backendUrl = config.backendUrl
+        let tenantId = config.tenantId
+        let resolver = DidResolver(profile: config.diipProfile) { did in
+            let client = BackendApiClient(
+                baseUrl: backendUrl,
+                tenantId: tenantId,
+                httpFn: SirosWallet.defaultHttpFn
+            )
+            return try? await client.resolveDid(did)
         }
         self.didResolver = resolver
         self.credentialStatusEvaluator = CredentialStatusEvaluator(

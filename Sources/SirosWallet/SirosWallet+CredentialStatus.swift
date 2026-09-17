@@ -29,11 +29,24 @@ extension SirosWallet {
     /// whose metadata is wrong, not the normal path: see
     /// ``holderBinding(for:)``.
     public func interopProfile(for issuer: String?) -> InteropProfile {
-        guard let issuer else { return config.interopProfile }
+        issuerOverride(for: issuer) ?? config.interopProfile
+    }
+
+    /// The configured override for `issuer`, if a specific one was set.
+    ///
+    /// A bare `hasPrefix` would also match `https://issuer.example.evil`
+    /// against an override for `https://issuer.example` - a different domain
+    /// entirely, handed another issuer's configuration. The boundary has to be
+    /// a path separator.
+    func issuerOverride(for issuer: String?) -> InteropProfile? {
+        guard let issuer else { return nil }
         return config.issuerInteropProfiles
-            .filter { issuer.hasPrefix($0.key) }
+            .filter { entry in
+                let base = entry.key.hasSuffix("/") ? String(entry.key.dropLast()) : entry.key
+                return issuer == base || issuer == entry.key || issuer.hasPrefix(base + "/")
+            }
             .max { $0.key.count < $1.key.count }?
-            .value ?? config.interopProfile
+            .value
     }
 
     /// How the Holder's key should be named in an OID4VCI proof to `issuer` -
@@ -55,6 +68,13 @@ extension SirosWallet {
     /// Handed to `KeystoreManager.generateProof` so the keystore never has to
     /// know about issuers.
     public func holderBinding(for issuer: String?) -> HolderBinding {
+        // An explicit per-Issuer override comes first. It exists precisely for
+        // an Issuer whose metadata advertises the wrong thing, so letting the
+        // metadata win would leave it with nothing to override.
+        if let override = issuerOverride(for: issuer) {
+            return override.holderBinding
+        }
+
         let advertised = activeOffer
             .flatMap { offer -> [String]? in
                 guard issuer == nil || offer.credentialIssuerIdentifier == issuer else { return nil }
@@ -63,7 +83,7 @@ extension SirosWallet {
         if let negotiated = HolderBinding.negotiate(advertised) {
             return negotiated
         }
-        return interopProfile(for: issuer).holderBinding
+        return config.interopProfile.holderBinding
     }
 
     /// Evaluate one credential's status.
@@ -108,10 +128,10 @@ extension SirosWallet {
     /// The signing key an issuer publishes, for verifying a Status List Token
     /// it signed.
     ///
-    /// Only DID-identified issuers are answered here - DIIP identifies Issuers
-    /// by `did:jwk` or `did:web`, and a status list signed by anything else
-    /// goes unverified, which the reader reports as an unavailable status,
-    /// never as a valid one.
+    /// Resolved through ``DidResolver``, so `did:web` and anything else that
+    /// needs resolving goes to go-trust rather than being fetched here. A
+    /// status list whose key cannot be resolved goes unverified, which the
+    /// reader reports as an unavailable status, never as a valid one.
     static func resolveIssuerSigningKey(
         issuer: String,
         kid: String?,
@@ -121,8 +141,14 @@ extension SirosWallet {
             .findPublicKey(kid: kid, relationship: .assertionMethod)
     }
 
-    /// Fetch a URL that belongs to a third party - an issuer's status list, a
-    /// `did:web` document.
+    /// Fetch a URL that belongs to a third party - an issuer's Status List
+    /// Token, named by a URI inside the credential itself.
+    ///
+    /// Only documents whose location the credential already states, never DID
+    /// resolution: which document is authoritative for an identifier is
+    /// go-trust's decision (see ``DidResolver``). The Status List Token's own
+    /// signing key is still resolved through that path, so fetching the list
+    /// is not a trust decision.
     ///
     /// These carry NO wallet credentials: attaching this wallet's bearer token
     /// or tenant id to a request at an arbitrary domain would leak them.
