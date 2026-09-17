@@ -185,4 +185,61 @@ final class AuthTokensTests: XCTestCase {
         XCTAssertTrue(tac.contains("w"), "suspend/reactivate needs 'w' in \(tac)")
         XCTAssertTrue(tac.contains("d"), "revoke and revoke-all need 'd' in \(tac)")
     }
+
+    /// `ensureToken` releases its lock while it awaits the AS, so a request
+    /// issued before a lifecycle cut-off can land after the clear the cut-off
+    /// triggered. Caching it then would hand the replacement session a token
+    /// the backend has already refused - the very thing the clear was for.
+    ///
+    /// The token is still returned to its own caller; it just is not kept. If
+    /// `AuthTokens` kept it, the second `ensureBackendToken()` below would be
+    /// served from its cache and never reach the AS at all.
+    func testATokenMintedBeforeAClearIsNotCachedForTheSessionThatReplacedIt() async throws {
+        let server = StubTokenServer()
+        let client = server.asClient
+        let tokens = AuthTokens(authServerClient: client, tenantId: "default")
+        // Both caches cleared while the request is in flight - exactly what
+        // `SirosWallet.reloginAfterCutOff` does on a concurrent re-login.
+        server.onRequest = { tokens.clear(); await client.clearTokenCache() }
+
+        _ = try await tokens.ensureBackendToken()
+        XCTAssertEqual(server.requestCount, 1, "the in-flight request itself completes normally")
+
+        server.onRequest = nil
+        _ = try await tokens.ensureBackendToken()
+        XCTAssertEqual(
+            server.requestCount, 2,
+            "the superseded token was cached by neither layer, so the next caller mints a fresh one"
+        )
+    }
+}
+
+/// A minimal `AuthServerClient` that answers `/auth/token` with a freshly
+/// minted, unexpired token and can run a hook while the "request" is in
+/// flight.
+private final class StubTokenServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var onRequest: (@Sendable () async -> Void)?
+    var requestCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+
+    lazy var asClient: AuthServerClient = AuthServerClient(
+        baseUrl: "https://as.example.invalid",
+        tenantId: "default"
+    ) { [self] _, _, _, _ in
+        self.lock.lock(); self.count += 1; self.lock.unlock()
+        await self.onRequest?()
+        let exp = Int(Date().timeIntervalSince1970) + 3600
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "exp": exp, "aud": "wallet-backend", "tenant_id": "default", "tac": "rwlid",
+        ])
+        let b64 = payload.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let jwt = "eyJhbGciOiJub25lIn0.\(b64).sig"
+        return try JSONSerialization.data(withJSONObject: [
+            "access_token": jwt, "token_type": "Bearer", "expires_in": 3600,
+        ])
+    }
 }

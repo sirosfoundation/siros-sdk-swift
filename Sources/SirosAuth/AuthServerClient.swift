@@ -207,6 +207,8 @@ public final class AuthServerClient: @unchecked Sendable {
         if let cached = await cache.getIfValid(key) {
             return cached
         }
+        // The session this request belongs to; see `TokenCache.generation`.
+        let generation = await cache.generation
 
         var body: [String: Any] = [
             "aud": aud,
@@ -224,7 +226,7 @@ public final class AuthServerClient: @unchecked Sendable {
         let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
         let token = try AccessToken(jwt: tokenResponse.accessToken)
 
-        await cache.set(key, token)
+        await cache.set(key, token, generation: generation)
 
         return token
     }
@@ -241,6 +243,8 @@ public final class AuthServerClient: @unchecked Sendable {
         if let cached = await cache.getIfValid(key) {
             return cached
         }
+        // The session this request belongs to; see `TokenCache.generation`.
+        let generation = await cache.generation
 
         var body: [String: Any] = [
             "aud": aud,
@@ -259,7 +263,7 @@ public final class AuthServerClient: @unchecked Sendable {
         let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
         let token = try AccessToken(jwt: tokenResponse.accessToken)
 
-        await cache.set(key, token)
+        await cache.set(key, token, generation: generation)
 
         return token
     }
@@ -321,6 +325,14 @@ public final class AuthServerClient: @unchecked Sendable {
 private actor TokenCache {
     private var tokens: [String: AccessToken] = [:]
 
+    /// Bumped by every ``clear()``. A token minted before a clear belongs to
+    /// the session that clear ended, so storing it afterwards would put a
+    /// pre-cut-off token back in the cache for the session that replaced it -
+    /// which is exactly what a lifecycle cut-off means to invalidate.
+    /// Requesters capture this before their network call and hand it back to
+    /// ``set(_:_:generation:)``.
+    private(set) var generation = 0
+
     func get(_ key: String) -> AccessToken? { tokens[key] }
 
     /// Returns cached token if valid (not expired), otherwise nil.
@@ -332,6 +344,17 @@ private actor TokenCache {
         return token
     }
 
-    func set(_ key: String, _ token: AccessToken) { tokens[key] = token }
-    func clear() { tokens.removeAll() }
+    /// Stores [token] only if the cache has not been cleared since
+    /// [generation] was read. Returns false when the token was dropped.
+    @discardableResult
+    func set(_ key: String, _ token: AccessToken, generation: Int) -> Bool {
+        guard generation == self.generation else { return false }
+        tokens[key] = token
+        return true
+    }
+
+    func clear() {
+        tokens.removeAll()
+        generation += 1
+    }
 }

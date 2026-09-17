@@ -60,11 +60,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     suspending it.
   - Optional `WalletEventListener.onWalletLifecycleBlocked(reason:message:)`,
     with a no-op default.
+  - The instance key now survives a logout. `SessionStore.clearAccount()` used
+    to delete `instanceKeyId`, so the next login minted a new key and therefore
+    registered a **new backend wallet instance** - letting a suspended or
+    revoked installation walk away from its block by logging out and back in.
+    Only `clearAll()` (a factory reset) drops it now.
+  - A session generation makes the self-driven re-login happen once per
+    *session* rather than once per call, aborts it when the caller logged out
+    or destroyed the wallet while it was tearing the old session down, and
+    keeps a token minted before a cut-off from being cached by either
+    `AuthTokens` or `AuthServerClient` after the clear that the cut-off
+    triggered.
   - `SirosError.apiErrorCode` and `SirosError.serverMessage`: the backend's
     stable error code and its user-facing explanation, without every call site
     re-parsing the body.
 
 ### Changed
+- **Correction: `WALLET_REVOKED` no longer forgets the cached account.** The
+  design assumed that code meant the wallet had been deactivated and erased.
+  It does not: the backend returns it for the login gate of a *single* revoked
+  instance too, and only deactivates the wallet when the **last** non-revoked
+  instance is revoked - the user's other devices keep logging in either way,
+  and only the human-readable `message` distinguishes the two. Forgetting the
+  account on a per-instance revocation destroyed the other passkeys that still
+  worked. Both refusal reasons now end the session, keep the cached account,
+  and show the backend's own message; re-enrollment is the user's call.
+  `deactivateWallet(reason:)` is the one place that still forgets the account,
+  where the caller asked for it and the outcome is unambiguous.
 - **Source-breaking: `WalletState` has a new case.** `.lifecycleBlocked` means
   an exhaustive `switch` over `WalletState` no longer compiles without an arm
   for it (the SampleApp needed one). Add a case, or a `default`, when

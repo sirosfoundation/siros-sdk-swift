@@ -57,6 +57,13 @@ public protocol SessionStoreProtocol: AnyObject, Sendable {
     /// backend's Wallet Instance Attestation tracks/revokes instances by this
     /// key's JWK thumbprint, so a different key each time would silently
     /// register a new "instance" on every flow.
+    ///
+    /// Account-scoped, but deliberately **survives ``clearAccount()``**: a
+    /// logout must not change which wallet instance this installation is.
+    /// Clearing it would mint a new key, and therefore a new backend instance,
+    /// at the next login - which would silently hand a suspended or revoked
+    /// installation a fresh, unblocked identity just by logging out and back
+    /// in (SID-AUTH-06). Only ``clearAll()`` (a factory reset) removes it.
     var instanceKeyId: String? { get set }
 
     /// This install's persisted Apple App Attest key ID (see
@@ -137,8 +144,12 @@ public final class InMemorySessionStore: SessionStoreProtocol, @unchecked Sendab
     public func clearAccount() {
         guard let id = activeAccountId else { return }
         let prefix = "\(id)/"
+        // The instance key is the exception: see `instanceKeyId`'s doc comment
+        // - it identifies this installation to the backend's wallet instance
+        // lifecycle, and a logout must not change that identity.
+        let keep = "\(id)/instanceKeyId"
         lock.lock(); defer { lock.unlock() }
-        store = store.filter { !$0.key.hasPrefix(prefix) }
+        store = store.filter { !$0.key.hasPrefix(prefix) || $0.key == keep }
     }
 
     public func clearAll() {

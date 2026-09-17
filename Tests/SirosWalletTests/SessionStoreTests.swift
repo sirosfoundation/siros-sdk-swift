@@ -163,4 +163,48 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.wscdUserOverrideMappingJson, "clearAccount() must clear the per-issuer override mapping")
         XCTAssertNil(store.wscdGlobalOverridePluginId, "clearAccount() must clear the global override")
     }
+
+    /// The instance key is what identifies this installation to the backend's
+    /// wallet instance lifecycle (SID-AUTH-06). Clearing it on logout would
+    /// mint a new key - and therefore a new, unblocked backend instance - at
+    /// the next login, letting a suspended or revoked installation walk away
+    /// from its block by logging out and back in.
+    func testClearAccountKeepsTheInstanceKey() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "default:user-1"
+        store.instanceKeyId = "instance-key-1"
+        store.userId = "user-1"
+
+        store.clearAccount()
+
+        XCTAssertNil(store.userId, "the session itself is cleared")
+        XCTAssertEqual(store.instanceKeyId, "instance-key-1", "the instance key survives a logout")
+    }
+
+    /// A factory reset is the one thing that does drop it.
+    func testClearAllRemovesTheInstanceKey() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "default:user-1"
+        store.instanceKeyId = "instance-key-1"
+
+        store.clearAll()
+
+        store.activeAccountId = "default:user-1"
+        XCTAssertNil(store.instanceKeyId)
+    }
+
+    /// Each account keeps its own instance key across the other's logout.
+    func testInstanceKeysAreScopedPerAccount() {
+        let store = InMemorySessionStore()
+        store.activeAccountId = "default:user-1"
+        store.instanceKeyId = "key-1"
+        store.activeAccountId = "default:user-2"
+        store.instanceKeyId = "key-2"
+
+        store.clearAccount()
+
+        XCTAssertEqual(store.instanceKeyId, "key-2")
+        store.activeAccountId = "default:user-1"
+        XCTAssertEqual(store.instanceKeyId, "key-1")
+    }
 }

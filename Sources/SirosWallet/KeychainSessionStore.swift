@@ -117,7 +117,14 @@ public final class KeychainSessionStore: SessionStoreProtocol, @unchecked Sendab
         let keys = ["appToken", "refreshToken", "userId", "displayName",
                     "tenantId", "mainKey", "hkdfSalt", "hkdfInfo",
                     "prfSalt", "credentialId", "privateDataJwe", "privateDataEtag",
-                    "instanceKeyId", "wscdTofuMappingJson",
+                    // NOT "instanceKeyId": see its doc comment in
+                    // `SessionStore.swift`. It identifies this installation to
+                    // the backend's wallet instance lifecycle, so deleting it
+                    // here would mint a new instance at the next login and let
+                    // a suspended or revoked installation walk away from its
+                    // block by logging out (SID-AUTH-06). `clearAll()` still
+                    // removes it.
+                    "wscdTofuMappingJson",
                     "wscdUserOverrideMappingJson", "wscdGlobalOverridePluginId",
                     // Legacy key, no longer written (the per-instance-key
                     // FIDO2 registration dedupe it backed was removed in

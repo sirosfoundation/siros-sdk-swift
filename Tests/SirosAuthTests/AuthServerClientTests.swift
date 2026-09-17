@@ -197,4 +197,49 @@ extension AuthServerClientTests {
         _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
         XCTAssertEqual(mintCount, 2, "after clearTokenCache the token is minted again")
     }
+
+    /// `clearTokenCache()` is called to drop a pre-cut-off token, but the
+    /// request that minted it may still be in flight - `requestAccessToken`
+    /// caches after its network call returns. Storing it then would put the
+    /// refused token straight back for the session that replaced it.
+    func testATokenMintedBeforeClearTokenCacheIsNotCachedAfterIt() async throws {
+        var mintCount = 0
+        var clearDuringRequest: (() async -> Void)?
+        let client = AuthServerClient(
+            baseUrl: "https://as.example.invalid",
+            tenantId: "default"
+        ) { _, _, _, _ in
+            mintCount += 1
+            await clearDuringRequest?()
+            return try Self.tokenResponse()
+        }
+        clearDuringRequest = { await client.clearTokenCache() }
+
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(mintCount, 1)
+
+        clearDuringRequest = nil
+        _ = try await client.requestAccessToken(aud: "wallet-backend", tac: "rwlid")
+        XCTAssertEqual(
+            mintCount, 2,
+            "the token minted before the clear was not cached, so a fresh one is minted"
+        )
+    }
+
+    /// An unexpired `access_token` response body.
+    private static func tokenResponse() throws -> Data {
+        let exp = Int(Date().timeIntervalSince1970) + 3600
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "exp": exp, "aud": "wallet-backend", "tenant_id": "default", "tac": "rwlid",
+        ])
+        let b64 = payload.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return try JSONSerialization.data(withJSONObject: [
+            "access_token": "eyJhbGciOiJub25lIn0.\(b64).sig",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        ])
+    }
 }
