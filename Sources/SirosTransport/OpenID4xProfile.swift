@@ -296,9 +296,16 @@ public struct SignSubFlowResult: Sendable {
 
 public struct MatchResult: Sendable {
     public var matches: [CredentialMatch]
+    /// Why nothing matched, when `matches` is empty - forwarded as the
+    /// `no_match_reason` member of the `match_response` flow action. The
+    /// engine reports it back as the `no_match_reason` detail of the error
+    /// that ends the flow, so it is the only explanation the app (or a log)
+    /// ever gets of why the wallet came up empty.
+    public var noMatchReason: String?
 
-    public init(matches: [CredentialMatch]) {
+    public init(matches: [CredentialMatch], noMatchReason: String? = nil) {
         self.matches = matches
+        self.noMatchReason = noMatchReason
     }
 }
 
@@ -508,11 +515,15 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
             if let claims = match.availableClaims { dict["available_claims"] = .array(claims.map { .string($0) }) }
             return dict
         }
-        let params: [String: AnyCodable] = [
+        var params: [String: AnyCodable] = [
             "flow_id": .string(flowId),
             "action": .string("match_response"),
             "matches": .array(matchArray.map { AnyCodable.object_($0) }),
         ]
+        // Without this an empty match set arrives as a bare "nothing matched"
+        // and the reason - the only thing that can tell the user *which*
+        // credential they are missing - is lost on this transport.
+        if let reason = result.noMatchReason { params["no_match_reason"] = .string(reason) }
         try? await peer.notify(method: WmpMethods.flowAction, params: params)
     }
 

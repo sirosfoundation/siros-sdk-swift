@@ -49,6 +49,22 @@ public protocol WalletEventListener: AnyObject, Sendable {
     ///   Nil unless the verifier provided one.
     func onFlowError(flowId: String, errorMessage: String, redirectUri: String?)
 
+    /// The verifier asked for a credential this wallet cannot present, and the
+    /// flow ended there (engine error code `NO_MATCHING_CREDENTIAL`). Fires
+    /// immediately before `onFlowError` for the same failure - implement this
+    /// one to say *which* credential is missing ("you need a PID first")
+    /// instead of showing the generic message, and leave the generic path to
+    /// apps that don't.
+    ///
+    /// - Parameters:
+    ///   - requestedTypes: the credential types the verifier's DCQL query
+    ///     asked for (SD-JWT VC `vct` values, mdoc doctypes), as the engine
+    ///     derived them. Empty for a query naming none.
+    ///   - reason: this wallet's own explanation of why nothing matched, as
+    ///     sent with the empty match set - e.g. which types it looked for, or
+    ///     that the matching credentials have no unused copies left.
+    func onNoMatchingCredential(flowId: String, requestedTypes: [String], reason: String?, redirectUri: String?)
+
     /// An issuer requires user authorization (OAuth consent).
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String)
 
@@ -94,6 +110,7 @@ public extension WalletEventListener {
     func onCredentialReceived(credential: StoredCredential) {}
     func onFlowComplete(flowId: String, redirectUri: String?) {}
     func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {}
+    func onNoMatchingCredential(flowId: String, requestedTypes: [String], reason: String?, redirectUri: String?) {}
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}
     func onTxCodeRequired(flowId: String, description: String?) -> String? { nil }
     func onReauthenticationRequired() {

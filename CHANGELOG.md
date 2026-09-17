@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A presentation this wallet cannot satisfy is now answered honestly. The
+  `credential_selection` step sent `decline` whenever nothing was selected -
+  including when nothing matched and the user was never asked - which the
+  engine reports to the verifier as `access_denied` / "User declined the
+  request", a refusal nobody made. With nothing to present the SDK now sends
+  `credentials_matched` with an empty match set and a reason;
+  go-wallet-backend (#335/#336) ends the flow at once with
+  `NO_MATCHING_CREDENTIAL`, naming the credential types the query asked for,
+  and tells the verifier so its session ends rather than expiring. A user
+  who was offered a credential they could actually present, and chose none,
+  still declines, as before.
+- A selection the wallet cannot present - the app may show exhausted copies
+  so it can offer a renewal, and the user may pick one - took the same wrong
+  path one step later: it threw, and the handler's catch reported a decline.
+  It now reports the same empty match set, with a reason saying the copies
+  are spent.
+- `no_match_reason` is no longer dropped on either transport:
+  `WalletEngineSession.sendMatchResponse` and the WMP profile's
+  `match_response` both carry it (`MatchResult` gained `noMatchReason`).
+- The legacy `match_request` handler answered nothing at all when the
+  selected credential had no eligible copies left, leaving the engine's
+  `RequestMatch` waiting for a response that never came; it now replies with
+  an empty match set and that reason.
+
+### Added
+- `WalletEventListener.onNoMatchingCredential(flowId:requestedTypes:reason:redirectUri:)`
+  - fires alongside `onFlowError` for a `NO_MATCHING_CREDENTIAL` failure,
+  carrying the credential types the verifier asked for, so an app can say
+  "you need a PID first" instead of showing a generic error. Optional: it has
+  a default no-op implementation, and `onFlowError` still fires.
+- `WalletEngineSession.sendCredentialsMatched(flowId:matches:noMatchReason:)`
+  and `EngineErrorCodes.noMatchingCredential`.
+
 ## [0.10.0] - 2026-09-17
 
 ### Changed

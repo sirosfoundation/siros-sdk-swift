@@ -524,11 +524,75 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     }
 
     /// Send a credential matching response back to the server.
-    public func sendMatchResponse(flowId: String, matches: [CredentialMatch]) {
+    ///
+    /// - Parameter noMatchReason: why nothing matched, for an empty `matches`.
+    ///   The engine logs it and puts it in the `no_match_reason` detail of the
+    ///   error it reports, so dropping it costs the only explanation anyone
+    ///   downstream gets of *why* the wallet came up empty.
+    public func sendMatchResponse(
+        flowId: String,
+        matches: [CredentialMatch],
+        noMatchReason: String? = nil
+    ) {
         send(MatchResponseMessage(
             flowId: flowId,
-            matches: matches
+            matches: matches,
+            noMatchReason: noMatchReason
         ))
+    }
+
+    /// Report the outcome of local DCQL matching for the engine's
+    /// `credential_selection` step.
+    ///
+    /// An **empty** `matches` ends the flow at once: the engine answers with a
+    /// `NO_MATCHING_CREDENTIAL` flow error naming the credential types the
+    /// query asked for (`requested_types`), carrying `noMatchReason` through as
+    /// `no_match_reason`, and tells the verifier so its session ends rather
+    /// than expiring (go-wallet-backend #335/#336). It is the honest answer to
+    /// a request this wallet cannot satisfy - `decline` would report a refusal
+    /// the user was never asked to make, and saying nothing leaves the flow to
+    /// die on the engine's five-minute user-interaction timeout.
+    ///
+    /// A **non-empty** `matches` is purely informational: the engine goes on
+    /// waiting for `consent`/`decline` exactly as if it had never arrived.
+    public func sendCredentialsMatched(
+        flowId: String,
+        matches: [CredentialMatch],
+        noMatchReason: String? = nil
+    ) {
+        sendFlowAction(
+            flowId: flowId,
+            action: "credentials_matched",
+            payload: Self.credentialsMatchedPayload(matches: matches, noMatchReason: noMatchReason)
+        )
+    }
+
+    /// The `credentials_matched` flow-action payload - go-wallet-backend's
+    /// `CredentialsMatchedPayload` wire shape. Internal and static so the wire
+    /// contract is unit-testable without a live socket.
+    static func credentialsMatchedPayload(
+        matches: [CredentialMatch],
+        noMatchReason: String?
+    ) -> [String: AnyCodable] {
+        var payload: [String: AnyCodable] = [
+            "matches": .array(matches.map { encode(match: $0) }),
+        ]
+        if let noMatchReason { payload["no_match_reason"] = .string(noMatchReason) }
+        return payload
+    }
+
+    /// `CredentialMatch` as the flow-action payload's JSON object - the same
+    /// wire shape its `Codable` conformance produces, hand-built because
+    /// `FlowActionMessage.payload` is `[String: AnyCodable]`.
+    private static func encode(match: CredentialMatch) -> AnyCodable {
+        var obj: [String: AnyCodable] = [
+            "credential_id": .string(match.credentialId),
+            "format": .string(match.format),
+        ]
+        if let queryId = match.credentialQueryId { obj["credential_query_id"] = .string(queryId) }
+        if let vct = match.vct { obj["vct"] = .string(vct) }
+        if let claims = match.availableClaims { obj["available_claims"] = .array(claims.map { .string($0) }) }
+        return .object_(obj)
     }
 
     /// Send a trust evaluation result back to the server.
