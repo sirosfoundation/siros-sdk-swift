@@ -121,7 +121,7 @@
     "diagnosticMessagesDescription": "Show the raw backend step token alongside the friendly progress label during a flow.",
     "photoIdOnboardingToggle": "PhotoID Onboarding",
     "photoIdOnboardingDescription": "Show a \"Get your PhotoID\" shortcut on Home when this tenant offers identity-verified PhotoID issuance",
-    "diipProfile": "DIIP profile"
+    "interopProfiles": "Interop profiles"
   },
   "wscd": {
     "title": "WSCA Developer",

@@ -32,7 +32,9 @@ private final class RecordingKeystoreManager: KeystoreManager, @unchecked Sendab
     func lock() {}
     func generateKey(algorithm: String) async throws -> String { "instance-key-1" }
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { throw NotImplemented() }
-    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String { throw NotImplemented() }
+    func generateProof(
+        audience: String, nonce: String, freshKey: Bool, holderBinding: HolderBinding?
+    ) async throws -> String { throw NotImplemented() }
     func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {
         throw NotImplemented()
     }

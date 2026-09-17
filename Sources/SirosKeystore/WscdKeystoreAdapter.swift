@@ -75,18 +75,18 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return manager
     }
 
-    /// How this wallet names its holder keys - see ``DidKeyVersion``. Unlike
-    /// ``JweKeystore``, the key ids themselves come from the WSCD (which
-    /// assigns RFC 7638 thumbprints) and are not changed by this setting; what
-    /// it controls is the identifier presented to Issuers and Verifiers. A
-    /// `did:jwk` carries the public key inside the identifier, so a `cnf.kid`
-    /// naming one can always be mapped back to the WSCD key that signs for it
-    /// - see `resolveSignerKey`.
-    private let didKeyVersion: DidKeyVersion
+    /// The interoperability profile this keystore signs for - see
+    /// ``InteropProfile``. Unlike ``JweKeystore``, the key ids themselves come
+    /// from the WSCD (which assigns RFC 7638 thumbprints) and are not changed
+    /// by this setting; what it controls is the identifier presented to
+    /// Issuers. A `did:jwk` carries the public key inside the identifier, so a
+    /// `cnf.kid` naming one can always be mapped back to the WSCD key that
+    /// signs for it - see `resolveSigningKey`.
+    private let profile: InteropProfile
 
-    public init(signer: Signer, didKeyVersion: DidKeyVersion = .jwk) {
+    public init(signer: Signer, profile: InteropProfile = .default) {
         self.signer = signer
-        self.didKeyVersion = didKeyVersion
+        self.profile = profile
     }
 
     // MARK: - WscdManager conformance
@@ -223,7 +223,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return try await signer.sign(keyId: keyId, data: payload)
     }
 
-    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+    public func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
         try checkUnlocked()
         var keys = try await signer.listKeys()
         if keys.isEmpty || freshKey {
@@ -241,11 +246,13 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         let pubKeyJwk = try jsonDict(from: pubKeyData)
 
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
-        // `iss` and to name the key with a `kid` from that DID document,
-        // instead of embedding the key in the header. The DID is derived from
-        // the public key rather than stored: a did:jwk *is* its key, so it
-        // needs no bookkeeping and cannot drift out of sync with the WSCD.
-        let did = holderDid(forPublicKey: pubKeyJwk)
+        // `iss` and to name the key with a `kid` from that DID document; HAIP
+        // carries the key in the header instead. The caller may know which
+        // this issuer speaks; when it does not, this keystore's own profile
+        // decides. The DID is derived from the public key rather than stored:
+        // a did:jwk *is* its key, so it needs no bookkeeping and cannot drift
+        // out of sync with the WSCD.
+        let did = holderDid(forPublicKey: pubKeyJwk, binding: holderBinding ?? profile.holderBinding)
 
         var headerFields: [String: Any] = [
             "alg": algorithmJoseId(key.algorithm),
@@ -781,11 +788,11 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return JwtHelpers.jwkThumbprint(jwk)
     }
 
-    /// The `did:jwk` for a public key, when this wallet identifies its holder
-    /// keys that way. Nil under the legacy `did:key` versions, where the proof
-    /// embeds the key instead of naming it.
-    private func holderDid(forPublicKey jwk: [String: Any]) -> String? {
-        guard didKeyVersion.namesKeysByDidUrl else { return nil }
+    /// The `did:jwk` for a public key, when this issuance identifies the
+    /// holder that way. Nil for ``HolderBinding/embeddedJwk``, where the proof
+    /// carries the key instead of naming it.
+    private func holderDid(forPublicKey jwk: [String: Any], binding: HolderBinding) -> String? {
+        guard binding == .didJwk else { return nil }
         let stringMembers = jwk.compactMapValues { $0 as? String }
         guard stringMembers["kty"] != nil else { return nil }
         return Did.createDidJwk(stringMembers)
