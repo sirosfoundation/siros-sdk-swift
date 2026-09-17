@@ -305,6 +305,29 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertNil(wallet.beginSelfDrivenRelogin())
     }
 
+    /// `destroy()` leaves the state alone - a destroyed wallet is not a
+    /// logged-out one - so the generation bump on its own would still let a
+    /// reauthentication signal from a task still unwinding pass the guard and
+    /// log back in after the host tore the wallet down.
+    func testNoSelfDrivenReloginAfterDestroy() {
+        let wallet = makeWallet()
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+        wallet.destroy()
+
+        XCTAssertNil(wallet.beginSelfDrivenRelogin())
+    }
+
+    /// `.connecting` is also where the initial `login()` and `resumeSession()`
+    /// sit before their own setup finishes, and a 401 from `/auth/token` fires
+    /// the signal immediately - a second ceremony started underneath the first
+    /// would race its state, its API client and its keystore.
+    func testConnectingIsNotAReplaceableSession() {
+        let wallet = makeWallet()
+        wallet.setState(.connecting)
+
+        XCTAssertNil(wallet.beginSelfDrivenRelogin())
+    }
+
     /// The teardown a re-login performs awaits the old session's WMP peer and
     /// token caches; a logout landing in that window must abandon the attempt
     /// rather than resurrect the session the user just ended.

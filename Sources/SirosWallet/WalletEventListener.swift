@@ -98,9 +98,17 @@ public protocol WalletEventListener: AnyObject, Sendable {
     ///
     /// Unlike `onReauthenticationRequired()` this is not "prompt again":
     /// another login attempt with the same passkey is refused the same way
-    /// until someone else reactivates the instance (`.suspended`) and never
-    /// succeeds at all (`.revoked`). Apps that already render
-    /// `WalletState.lifecycleBlocked` need not implement this.
+    /// until someone else acts. `.suspended` is lifted by reactivating the
+    /// instance from another device; `.revoked` is terminal *for this
+    /// installation's instance* and needs a fresh enrollment.
+    ///
+    /// `.revoked` does **not** imply the wallet was deactivated and erased:
+    /// the backend answers with it for a single revoked instance too, while
+    /// the account's other passkeys and devices keep working. Nothing local is
+    /// discarded on either reason - `message` is the only thing that
+    /// distinguishes the cases, and it is written for the user - so do not
+    /// treat this callback as licence to drop account state. Apps that already
+    /// render `WalletState.lifecycleBlocked` need not implement this.
     func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
 
     /// A credential batch was renewed (credential re-issuance/renewal plan,

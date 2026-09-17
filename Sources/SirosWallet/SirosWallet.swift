@@ -285,6 +285,21 @@ public final class SirosWallet: @unchecked Sendable {
         // login() puts every outcome in the state itself; its `throw` is only
         // for the unexpected branch and must not escape a self-driven attempt.
         try? await login()
+        // The check above cannot be atomic with the call - login() is a long
+        // async operation and logout()/destroy() are synchronous and can land
+        // anywhere inside it. So undo rather than prevent: a session
+        // established after the user ended the one it was replacing is torn
+        // down again here, which is the outcome they asked for.
+        lock.lock()
+        let endedUnderneath = sessionGeneration != generation + 1 || isDestroyed
+        lock.unlock()
+        if endedUnderneath, case .ready = state {
+            #if canImport(os)
+            logger.info("Self-driven re-login undone: the session it replaced was ended while it ran")
+            #endif
+            endSessionLocally()
+            setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
+        }
     }
 
     /// `reloginAfterCutOff(replacing:)` under the once-only guard.
@@ -304,6 +319,7 @@ public final class SirosWallet: @unchecked Sendable {
     ///   when it must not run.
     func beginSelfDrivenRelogin() -> Int? {
         lock.lock(); defer { lock.unlock() }
+        if isDestroyed { return nil }
         if reloginInProgress { return nil }
         if reloginDoneForGeneration { return nil }
         // `_state` directly: `state` takes the same non-recursive lock.
@@ -318,8 +334,15 @@ public final class SirosWallet: @unchecked Sendable {
     /// WebAuthn prompt would be the wrong answer.
     private static func isReplaceableSession(_ state: WalletState) -> Bool {
         switch state {
-        case .ready, .flowActive, .keystoreLocked, .connecting: return true
-        case .disconnected, .error, .lifecycleBlocked: return false
+        // Deliberately NOT `.connecting`: that is also where the initial
+        // `login()` and `resumeSession()` sit before their own session setup
+        // finishes, and a 401 from `/auth/token` fires `onSessionRejected`
+        // immediately. Treating it as replaceable would let a second WebAuthn
+        // ceremony start underneath the first and race its state, its API
+        // client and its keystore. There is no session to replace until one
+        // has been established.
+        case .ready, .flowActive, .keystoreLocked: return true
+        case .connecting, .disconnected, .error, .lifecycleBlocked: return false
         }
     }
 
@@ -694,6 +717,20 @@ public final class SirosWallet: @unchecked Sendable {
     /// Whether a self-driven re-login has already been run for the current
     /// ``sessionGeneration``. Cleared by `bumpSessionGeneration()`.
     var reloginDoneForGeneration: Bool = false
+
+    /// Set by `destroy()`. The state is left untouched there (a destroyed
+    /// wallet is not a logged-out one), so without this a reauthentication
+    /// signal from a task still unwinding could pass the guard and log back in
+    /// after the host tore the wallet down.
+    var isDestroyed: Bool = false
+
+    /// The in-flight first-use instance-key generation, shared by every caller
+    /// so that concurrent first uses cannot mint two different keys. See
+    /// `ensureInstanceKeyId()`.
+    var instanceKeyTask: Task<String, Error>?
+    /// Identifies which `instanceKeyTask` is current - `Task` is a struct, so
+    /// there is no identity to compare.
+    var instanceKeyTaskToken: Int = 0
 
     // Not `private`: `SirosWallet+Engine.swift`'s `connectViaWmp` needs it
     // too - same cross-file-extension-access reason as `keystore` above.
