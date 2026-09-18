@@ -312,6 +312,58 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertEqual(server.deletedSessions, 1)
     }
 
+    /// `login()` is refused by `loginFinish`, before it moves the registry's
+    /// active account (that only happens once the keystore unlock succeeds), so
+    /// on a login from the picker after a logout there is no active id to
+    /// forget. It passes the account the passkey resolved to instead, and that
+    /// wins over the registry - which on a login into a *second* account would
+    /// otherwise name the first one and forget the wrong wallet.
+    func testADeactivationDuringLoginForgetsTheAccountTheLoginWasFor() async {
+        let registry = seededRegistry()
+        // What a logged-out login looks like: the account is cached and
+        // loginable, but nothing is active.
+        registry.activeAccountId = nil
+        let wallet = makeWallet(registry: registry)
+
+        let handled = await wallet.handleLifecycleRefusal(
+            SirosError.backendApi(
+                code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
+            ),
+            candidateAccountId: "default:user-1"
+        )
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 0,
+            "the account the refused login was for is forgotten even with no active account"
+        )
+    }
+
+    /// The candidate must win outright: forgetting whatever happened to be
+    /// active instead would drop the wrong user's passkeys.
+    func testADeactivationDuringLoginNeverForgetsTheOtherActiveAccount() async {
+        let registry = seededRegistry()  // active: default:user-1
+        let other = CachedAccount(
+            userId: "user-2",
+            tenantId: "default",
+            displayName: "Bob",
+            backendUrl: "https://wallet.example.invalid",
+            passkeys: [CachedPasskey(credentialId: "cred-2", prfSalt: "c2FsdA==")]
+        )
+        registry.upsertAccount(other)
+        let wallet = makeWallet(registry: registry)
+
+        _ = await wallet.handleLifecycleRefusal(
+            SirosError.backendApi(
+                code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
+            ),
+            candidateAccountId: other.accountId
+        )
+
+        let left = registry.listLoginableAccounts().map(\.userId)
+        XCTAssertEqual(left, ["user-1"], "only the account the refusal was about is forgotten")
+    }
+
     /// Forgetting the account on a deactivation must not drag in `logout()`'s
     /// `DELETE /auth/session`: the blocked path deliberately never ends the
     /// server session, and the account-forgetting path only avoids `logout()`

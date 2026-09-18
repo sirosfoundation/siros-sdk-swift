@@ -81,11 +81,13 @@ public enum SirosError: Error, Sendable {
         /// work. An unrecognised `scope` falls back the same way. The
         /// human-readable `message` is never consulted; guessing from prose
         /// would be worse than not knowing.
+        ///
+        /// The `scope` match is exact, not case-folded: the backend emits the
+        /// literal `"wallet"`, and the one value that costs the user their
+        /// cached account should be recognised only as the protocol spells it.
         public static func resolve(errorCode: String, scope: String?) -> WalletLifecycleRefusal? {
             guard let base = WalletLifecycleRefusal(rawValue: errorCode) else { return nil }
-            guard base == .revoked,
-                  let scope, scope.caseInsensitiveCompare(walletLifecycleScopeWallet) == .orderedSame
-            else { return base }
+            guard base == .revoked, scope == walletLifecycleScopeWallet else { return base }
             return .deactivated
         }
     }

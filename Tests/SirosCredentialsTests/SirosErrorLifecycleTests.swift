@@ -68,6 +68,25 @@ final class SirosErrorLifecycleTests: XCTestCase {
         XCTAssertEqual(suspendedAtWalletScope.walletLifecycleRefusal, .suspended)
     }
 
+    /// The one value that costs the user their cached account is matched
+    /// exactly as the protocol spells it. A case variant is not the wire
+    /// value, so it takes the conservative path like any other unknown.
+    func testTheWalletScopeIsMatchedExactly() {
+        for variant in ["Wallet", "WALLET", " wallet", "wallet "] {
+            let error = SirosError.backendApi(
+                code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"\#(variant)"}"#
+            )
+            XCTAssertEqual(
+                error.walletLifecycleRefusal, .revoked,
+                "\(variant) is not the wire value \"wallet\" and must not reach .deactivated"
+            )
+        }
+        XCTAssertEqual(
+            SirosError.WalletLifecycleRefusal.resolve(errorCode: "WALLET_REVOKED", scope: "WALLET"),
+            .revoked
+        )
+    }
+
     /// `resolve` is the only supported way to build a refusal from the wire,
     /// and the code alone deliberately cannot reach `.deactivated`.
     func testResolveAndErrorCodesRoundTripTheWireContract() {

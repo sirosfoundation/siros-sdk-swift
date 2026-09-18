@@ -995,9 +995,16 @@ public final class SirosWallet: @unchecked Sendable {
         // account (or from before a re-enrollment) must not be what identifies
         // this device once this login resolves.
         lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
+        // Which account this login is for, as soon as the passkey resolves to
+        // one. `accountRegistry.activeAccountId` is deliberately not moved
+        // until the unlock below has succeeded, so it cannot answer that for a
+        // login refused by `loginFinish` - see `handleLifecycleRefusal`, whose
+        // `.deactivated` case needs to know which account to forget.
+        var loggingInAs: String?
         do {
             // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
             let assertion = try await performPasskeyAssertion(asClient: asClient)
+            loggingInAs = assertion.cachedAccount?.accountId
             let prfOutput = assertion.prfOutput
 
             // Step 3: Complete login with AS
@@ -1014,6 +1021,9 @@ public final class SirosWallet: @unchecked Sendable {
             // moved once the unlock has succeeded.
             let accountId = "\(config.tenantId):\(session.uuid)"
             sessionStore.activeAccountId = accountId
+            // Now the server has named the account, so a refusal from anything
+            // below this line is unambiguously about it.
+            loggingInAs = accountId
 
             setupApiClientWithTokens(tokens)
             let privateData = await fetchPrivateData()
@@ -1068,13 +1078,13 @@ public final class SirosWallet: @unchecked Sendable {
             // A SID-AUTH-06 refusal is a state, not an error: this passkey's
             // wallet instance is suspended or the wallet was deactivated, and
             // retrying the same login changes nothing until someone else acts.
-            if await handleLifecycleRefusal(e) { return }
+            if await handleLifecycleRefusal(e, candidateAccountId: loggingInAs) { return }
             #if canImport(os)
             logger.error("Login failed: \(e.localizedDescription)")
             #endif
             setState(.error(message: e.localizedDescription))
         } catch {
-            if await handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error, candidateAccountId: loggingInAs) { return }
             #if canImport(os)
             logger.error("Login failed: \(error.localizedDescription)")
             #endif
