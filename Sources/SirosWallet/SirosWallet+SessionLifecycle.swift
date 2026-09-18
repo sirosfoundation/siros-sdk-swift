@@ -252,13 +252,17 @@ extension SirosWallet {
         // race the retry the app may make the moment this state is published.
         await authServerClient?.clearTokenCache()
         if let accountToForget {
-            // The same path `deactivateWallet()` takes. The active id is
-            // already nil by now, so this removes the entry and publishes
-            // `.disconnected` rather than running a second `logout()` (and its
-            // `DELETE /auth/session`, which must not race anything here); the
-            // `.lifecycleBlocked` set immediately below is the state that
-            // stands, now without this account in `cachedAccounts`.
-            forgetAccount(accountId: accountToForget)
+            // The removal `forgetAccount()`/`deactivateWallet()` perform, and
+            // deliberately not the session teardown `forgetAccount()` decides
+            // on afterwards: the session is already over (`endSessionLocally()`
+            // above), and reaching `logout()` would send the
+            // `DELETE /auth/session` this whole path exists to avoid. It is not
+            // enough that the active id is nil right now - `clearTokenCache()`
+            // was awaited, and a login started concurrently can have put it
+            // back by the time `forgetAccount` looks. The `.lifecycleBlocked`
+            // set immediately below is the state that stands, now without this
+            // account in `cachedAccounts`.
+            forgetAccountLocally(accountId: accountToForget)
         }
         setState(.lifecycleBlocked(
             reason: reason,

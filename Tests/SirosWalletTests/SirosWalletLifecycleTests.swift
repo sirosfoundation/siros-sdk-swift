@@ -88,6 +88,27 @@ private final class StubHttpServer: @unchecked Sendable {
     }
 }
 
+/// Registry storage that puts the active-account id straight back whenever it
+/// is deleted, once `restoring` is on - the deterministic stand-in for a login
+/// started concurrently while the blocked path awaits `clearTokenCache()`.
+private final class ActiveIdRestoringStorage: AccountRegistryStorage, @unchecked Sendable {
+    /// `AccountRegistry.Keys.active`, which is private to it.
+    private static let activeKey = "siros_active_account_id"
+    private let inner = InMemoryAccountRegistryStorage()
+    private let restoreTo: String
+    var restoring = false
+
+    init(restoreTo: String) { self.restoreTo = restoreTo }
+
+    func readData(_ key: String) -> Data? { inner.readData(key) }
+    func writeData(_ key: String, _ data: Data) { inner.writeData(key, data) }
+    func deleteAll() { inner.deleteAll() }
+    func deleteKey(_ key: String) {
+        inner.deleteKey(key)
+        if restoring, key == Self.activeKey { inner.writeData(key, Data(restoreTo.utf8)) }
+    }
+}
+
 /// Records the two lifecycle callbacks under test.
 private final class RecordingListener: WalletEventListener, @unchecked Sendable {
     var reauthenticationRequired = false
@@ -473,6 +494,68 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
         XCTAssertEqual(server.deletedSessions, 0)
         XCTAssertEqual(registry.listLoginableAccounts().count, 0, "the account is still forgotten")
+    }
+
+    /// The blocked path forgets the account *after* awaiting
+    /// `clearTokenCache()`, so it cannot assume the active account id is still
+    /// the nil `endSessionLocally()` left - a login started concurrently can
+    /// have put it back. Removing through `forgetAccount` would then take its
+    /// `logout()` branch and send the `DELETE /auth/session` this path exists
+    /// to avoid, killing the replacement session. Simulated here by restoring
+    /// the active id from the stub AS the moment the token cache is cleared.
+    func testADeactivationDoesNotDeleteTheSessionEvenIfTheActiveIdComesBack() async throws {
+        let storage = ActiveIdRestoringStorage(restoreTo: "default:user-1")
+        let registry = AccountRegistry(storage: storage)
+        registry.upsertAccount(account(userId: "user-1"))
+        registry.activeAccountId = "default:user-1"
+        storage.restoring = true
+        let wallet = makeWallet(registry: registry)
+        let server = RecordingAuthServer()
+        wallet.authServerClient = server.client
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
+        ))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(
+            server.deletedSessions, 0,
+            "a re-appearing active id must not turn the removal into a remote logout"
+        )
+        XCTAssertEqual(registry.listLoginableAccounts().count, 0, "the account is still forgotten")
+    }
+
+    /// `fetchPrivateData()` is the first wallet-API call a login makes, and it
+    /// tolerates every failure so a transient one cannot take down a login that
+    /// can still unlock from the session store. A lifecycle refusal is the
+    /// exception: swallowed, `403 WALLET_REVOKED` became an empty container and
+    /// then a keystore-unlock error, and the wallet never reached
+    /// `.lifecycleBlocked` - nor forgot a deactivated wallet's account.
+    func testFetchPrivateDataRethrowsALifecycleRefusalOnly() async throws {
+        let wallet = makeWallet(registry: seededRegistry())
+
+        let refusing = StubHttpServer()
+        refusing.enqueueFailure(code: 403, body: #"{"error":"WALLET_REVOKED","scope":"wallet","message":"gone"}"#)
+        wallet.apiClient = Self.apiClient(over: refusing)
+        do {
+            _ = try await wallet.fetchPrivateData()
+            XCTFail("the refusal must reach the caller's handleLifecycleRefusal")
+        } catch {
+            XCTAssertEqual((error as? SirosError)?.walletLifecycleRefusal, .deactivated)
+        }
+
+        let broken = StubHttpServer()
+        broken.enqueueFailure(code: 500, body: "upstream is having a day")
+        wallet.apiClient = Self.apiClient(over: broken)
+        let data = try await wallet.fetchPrivateData()
+        XCTAssertEqual(data, Data(), "every other failure stays tolerated")
+    }
+
+    private static func apiClient(over server: StubHttpServer) -> BackendApiClient {
+        let client = BackendApiClient(baseUrl: "https://wallet.example.invalid", httpFn: server.httpFunction)
+        client.setAppToken("t")
+        return client
     }
 
     /// Counts `DELETE /auth/session` calls.

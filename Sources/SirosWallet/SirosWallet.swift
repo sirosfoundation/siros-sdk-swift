@@ -108,13 +108,28 @@ public final class SirosWallet: @unchecked Sendable {
         // never saw a match and the active account was forgotten without a
         // logout, leaving tokens and session state in place.
         let wasActive = accountRegistry.activeAccountId == accountId
-        accountRegistry.removeAccount(accountId: accountId)
+        forgetAccountLocally(accountId: accountId)
         if wasActive {
             logout()
         } else {
             // Re-emit state so UI reflects the removed account
             setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
+    }
+
+    /// The removal `forgetAccount` performs, without the session teardown it
+    /// decides on afterwards.
+    ///
+    /// The lifecycle-blocked path uses this. It has already run
+    /// `endSessionLocally()`, and it must never reach `logout()`: that would
+    /// send `DELETE /auth/session`, which the whole blocked path is built to
+    /// avoid (see `endSessionLocally()`). Asking `forgetAccount` not to would
+    /// mean trusting `activeAccountId` to still be nil after the awaits in
+    /// between - and a login started concurrently can put it back.
+    // Not `private`: `SirosWallet+SessionLifecycle.swift` needs it - same
+    // cross-file-extension-access reason as `keystore` above.
+    func forgetAccountLocally(accountId: String) {
+        accountRegistry.removeAccount(accountId: accountId)
     }
 
     // MARK: - Passkey Management
@@ -1043,7 +1058,7 @@ public final class SirosWallet: @unchecked Sendable {
             loginSubject = .resolved(accountId)
 
             setupApiClientWithTokens(tokens)
-            let privateData = await fetchPrivateData()
+            let privateData = try await fetchPrivateData()
 
             // HKDF parameters: this account's session store first (unlock
             // after resume), then its registry entry (login after logout, when

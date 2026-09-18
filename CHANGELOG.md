@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     passkeys is worse than leaving a stale entry on the login screen.
     `.suspended` and `.revoked` behave exactly as before: session ended
     locally, account and credentials kept.
+  - `fetchPrivateData()` no longer swallows a lifecycle refusal. It is the
+    first wallet-API call a login makes, so a suspended instance or a
+    deactivated wallet is usually met right there; tolerated like any other
+    fetch failure it became an empty container and then a keystore-unlock
+    error, and the wallet never reached `WalletState.lifecycleBlocked` at
+    all. Every other failure stays tolerated as before, and the function is
+    now `throws`.
   - A backend older than #340 sends no `scope`, and `WALLET_REVOKED` then
     resolves to `.revoked` - so against every deployment that exists today the
     behaviour is bit-for-bit what it was. An unrecognised `scope` falls back
