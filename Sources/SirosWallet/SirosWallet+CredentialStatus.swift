@@ -149,8 +149,26 @@ extension SirosWallet {
     /// ``CredentialStatus/valid`` rather than hiding it, which is what keeps
     /// the wallet usable offline.
     public func credentialStatus(of credential: StoredCredential) async -> CredentialStatus {
-        guard let claims = CredentialUtils.validityClaims(credential) else { return .valid }
-        let status = await credentialStatusEvaluator.evaluate(claims: claims)
+        // A credential whose validity data will not parse is not a valid one.
+        // Collapsing the parse failure into "no claims" and then into `.valid`
+        // let malformed - or deliberately malformed - MSO content skip both
+        // the validity window and the revocation check entirely.
+        let parsed: [String: Any]?
+        do {
+            parsed = try CredentialUtils.parseValidityClaims(credential)
+        } catch {
+            credentialStatusCache.set(credential.id, .unknown)
+            return .unknown
+        }
+        guard let claims = parsed else { return .valid }
+
+        // An mdoc's normalised claims carry no `iss`, so the credential's own
+        // stored issuer identifier is what binds its Status List Token to an
+        // issuer. Without it that check is skipped for every mdoc.
+        let status = await credentialStatusEvaluator.evaluate(
+            claims: claims,
+            credentialIssuer: credential.credentialIssuerIdentifier
+        )
         credentialStatusCache.set(credential.id, status)
         return status
     }
@@ -234,7 +252,10 @@ extension SirosWallet {
         kid: String?,
         profile: DiipProfile
     ) async -> [String: String]? {
-        guard issuer.hasPrefix("https://") else { return nil }
+        // Case-insensitively: URI schemes are case-insensitive, so rejecting
+        // `HTTPS://issuer.example` here would leave that issuer's status list
+        // unverifiable and its revocation silently never applied.
+        guard issuer.lowercased().hasPrefix("https://") else { return nil }
         // Trim every trailing slash, not just one: the well-known path
         // carries its own leading slash.
         var base = issuer
@@ -310,7 +331,12 @@ extension SirosWallet {
         // serve a status list that says "valid", or a JWKS holding their own
         // key. An issuer identifier is an HTTPS URL to begin with, so this
         // rejects nothing a well-formed deployment does.
-        guard url.scheme?.lowercased() == "https" else { return nil }
+        // Userinfo means nothing for an issuer's metadata or status list, and
+        // a URL carrying it is the classic way to make a host look like one it
+        // is not (`https://issuer.example@evil.example/`).
+        guard url.scheme?.lowercased() == "https", url.user == nil, url.password == nil,
+              url.host != nil
+        else { return nil }
         var request = URLRequest(url: url)
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
