@@ -138,7 +138,25 @@ enum HolderIdentity {
     /// exactly the regression this guards.
     static func matches(storedKid: String, publicJwk: [String: String], kid: String) -> Bool {
         if storedKid == kid { return true }
-        return JwtHelpers.jwkThumbprint(publicJwk) == kid
+        let thumbprint = JwtHelpers.jwkThumbprint(publicJwk)
+        if thumbprint == kid { return true }
+        // A `did:jwk` embeds the key it names, so comparing the two is an
+        // exact answer rather than a guess: a credential bound to
+        // `did:jwk:...#0` is bound to this key pair exactly when the embedded
+        // key is this one. This is what lets a wallet whose keys are named by
+        // thumbprint still present a credential it was issued under DIIP.
+        return thumbprint != nil && thumbprintOfDidJwk(kid) == thumbprint
+    }
+
+    /// The JWK thumbprint of the key a `did:jwk` - or a verification method of
+    /// one - embeds, or nil when `kid` is not one.
+    static func thumbprintOfDidJwk(_ kid: String) -> String? {
+        guard kid.hasPrefix("did:jwk:") else { return nil }
+        let did = String(kid.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0])
+        guard let jwk = Did.resolveDidJwk(did).document?.findPublicKey(kid: nil, relationship: .any) else {
+            return nil
+        }
+        return JwtHelpers.jwkThumbprint(jwk)
     }
 
     /// The `kid` a credential's `cnf` claim binds it to - `cnf.kid` as written

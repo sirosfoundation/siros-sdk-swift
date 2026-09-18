@@ -146,18 +146,86 @@ final class HolderBindingTests: XCTestCase {
         XCTAssertNil(JwtHelpers.parseJwtHeader(toDiip)?["jwk"])
     }
 
-    func testAHaipWalletCannotBeForcedIntoADidProofItHasNoDidFor() async throws {
-        // Asking for the DID form when the key was never named by one must not
-        // emit a `kid` that resolves to nothing - it falls back to the form
-        // that is actually verifiable.
-        let keystore = try await unlocked(.haip)
+    func testADiipWalletStillEmitsAHaipProofWhenThatIsWhatWasNegotiated() async throws {
+        // The mirror of the case above: the binding the caller asks for wins
+        // over what the keystore's own profile would have chosen, in both
+        // directions. A key named by a DID URL still has to be embeddable,
+        // since a HAIP issuer resolves no DIDs at all.
+        let keystore = try await unlocked(.diip)
         _ = try await keystore.generateKey()
         let proof = try await keystore.generateProof(
             audience: "https://issuer.example", nonce: "nonce",
+            freshKey: false, holderBinding: .embeddedJwk
+        )
+        XCTAssertNotNil(JwtHelpers.parseJwtHeader(proof)?["jwk"], "a HAIP proof carries the key")
+        XCTAssertNil(JwtHelpers.parseJwtHeader(proof)?["kid"], "and names neither a kid")
+        XCTAssertNil(JwtHelpers.parseJwtPayload(proof)?["iss"], "nor an iss")
+    }
+
+    // MARK: - negotiation must work on a HAIP-shaped keystore
+
+    func testAHaipKeystoreCanStillProduceADiipProof() async throws {
+        // The default wallet is HAIP, so its keys are named by thumbprint and
+        // carry a did:key. If that decided the proof shape, negotiating DIIP
+        // with an issuer could never be satisfied and the whole per-issuer
+        // negotiation would be inert for every wallet that ships.
+        let keystore = try await unlocked(.haip)
+        let kid = try await keystore.generateKey()
+        XCTAssertFalse(kid.hasPrefix("did:jwk:"), "a HAIP keystore names keys by thumbprint")
+
+        let proof = try await keystore.generateProof(
+            audience: "https://issuer.example", nonce: "n-1",
             freshKey: false, holderBinding: .didJwk
         )
-        XCTAssertNotNil(JwtHelpers.parseJwtHeader(proof)?["jwk"])
-        XCTAssertNil(JwtHelpers.parseJwtPayload(proof)?["iss"])
+        let did = try XCTUnwrap(
+            JwtHelpers.parseJwtPayload(proof)?["iss"] as? String,
+            "a DIIP proof names the holder with iss"
+        )
+        XCTAssertTrue(did.hasPrefix("did:jwk:"))
+        XCTAssertNil(JwtHelpers.parseJwtHeader(proof)?["jwk"], "a DIIP proof names the key, it does not embed it")
+        XCTAssertEqual(JwtHelpers.parseJwtHeader(proof)?["kid"] as? String, Did.didJwkKeyId(did))
+
+        // And it is this key that the DID names.
+        let named = try XCTUnwrap(
+            Did.resolveDidJwk(did).document?.findPublicKey(kid: nil, relationship: .any)
+        )
+        XCTAssertTrue(verify(proof, with: named.compactMapValues { $0 as? String }))
+    }
+
+    func testACredentialBoundToADidJwkFindsTheThumbprintNamedKeyThatSignsForIt() async throws {
+        // The issuer binds cnf.kid to the did:jwk from the proof above, but
+        // the wallet stored that key under its thumbprint. Without matching
+        // the two, the credential could never be presented.
+        let keystore = try await unlocked(.haip)
+        let storedKid = try await keystore.generateKey()
+        let publicJwk = try XCTUnwrap(publicJwk(of: keystore, kid: storedKid))
+        let did = Did.createDidJwk(publicJwk)
+
+        XCTAssertTrue(HolderIdentity.matches(storedKid: storedKid, publicJwk: publicJwk, kid: Did.didJwkKeyId(did)))
+        XCTAssertTrue(HolderIdentity.matches(storedKid: storedKid, publicJwk: publicJwk, kid: did))
+        XCTAssertEqual(HolderIdentity.thumbprintOfDidJwk(Did.didJwkKeyId(did)), storedKid)
+
+        // And signing for it reaches the key rather than reporting it gone.
+        let jwt = try await keystore.signPresentation(
+            nonce: "nonce", audience: "https://verifier.example",
+            credentialIds: [], kid: Did.didJwkKeyId(did)
+        )
+        XCTAssertTrue(verify(jwt, with: publicJwk))
+    }
+
+    func testADidJwkNamingSomeOtherKeyIsNotAMatch() async throws {
+        let keystore = try await unlocked(.haip)
+        let storedKid = try await keystore.generateKey()
+        let publicJwk = try XCTUnwrap(publicJwk(of: keystore, kid: storedKid))
+
+        let otherKid = try await keystore.generateKey()
+        let otherDid = Did.createDidJwk(try XCTUnwrap(publicJwk(of: keystore, kid: otherKid)))
+
+        XCTAssertFalse(
+            HolderIdentity.matches(storedKid: storedKid, publicJwk: publicJwk, kid: Did.didJwkKeyId(otherDid))
+        )
+        XCTAssertNil(HolderIdentity.thumbprintOfDidJwk("did:web:issuer.example"))
+        XCTAssertNil(HolderIdentity.thumbprintOfDidJwk("not-a-did"))
     }
 
     func testOneWalletPresentsAHaipCredentialAndADiipCredentialCorrectly() async throws {
@@ -319,12 +387,9 @@ final class HolderBindingTests: XCTestCase {
     // MARK: - helpers
 
     private func publicJwk(of keystore: JweKeystore, kid: String) -> [String: String]? {
-        keystore.listKeys().first { $0.keyId == kid }.flatMap { _ in
-            // The public key is recoverable from the DID the key is named by,
-            // which is the point of did:jwk.
-            Did.resolveDidJwk(String(kid.dropLast(2))).document?
-                .findPublicKey(kid: nil, relationship: .any)
-        }
+        // Works whichever way the keystore names its keys: a DID URL under
+        // DIIP, a JWK thumbprint under HAIP.
+        keystore.publicKeyJwk(forKid: kid)
     }
 
     private func verify(_ jwt: String, with jwk: [String: String]) -> Bool {

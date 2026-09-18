@@ -27,9 +27,26 @@ public enum DidMethod: String, Sendable, CaseIterable {
     /// The method of a DID string, or nil if it is not a DID or the method is
     /// unknown.
     public static func of(_ did: String) -> DidMethod? {
+        guard let name = methodName(of: did) else { return nil }
+        return DidMethod(rawValue: name)
+    }
+
+    /// The method name of any syntactically valid DID, named here or not.
+    ///
+    /// Which DID methods actually resolve is go-trust's answer, not this
+    /// SDK's. ``of(_:)`` only says whether this SDK knows a method by name -
+    /// which is what a profile's list of required methods is about - and must
+    /// not be used to decide what may be delegated.
+    public static func methodName(of did: String) -> String? {
         guard did.hasPrefix("did:") else { return nil }
-        let method = did.dropFirst("did:".count).prefix { $0 != ":" }
-        return DidMethod(rawValue: String(method))
+        let rest = did.dropFirst("did:".count)
+        let method = rest.prefix { $0 != ":" }
+        // A DID is `did:<method>:<id>`; a method with no identifier after it
+        // is not one.
+        guard !method.isEmpty, method.endIndex < rest.endIndex else { return nil }
+        let identifier = rest[rest.index(after: method.endIndex)...]
+        guard !identifier.isEmpty else { return nil }
+        return String(method)
     }
 }
 
@@ -166,8 +183,11 @@ public actor DidResolver {
 
     /// - Parameters:
     ///   - profile: decides which methods a compliant wallet must be able to
-    ///     resolve; a method outside it is still delegated, since DIIP
-    ///     explicitly does not forbid identifiers it does not require.
+    ///     resolve, which is what ``requiredMethods`` reports. It does not
+    ///     restrict what gets resolved: a method outside it - or one this SDK
+    ///     does not know by name at all - is still delegated, since DIIP
+    ///     explicitly does not forbid identifiers it does not require, and
+    ///     which methods resolve is go-trust's answer rather than this SDK's.
     ///   - delegate: resolves everything except `did:jwk`. Nil means a wallet
     ///     with no resolution authority configured: `did:jwk` still works, and
     ///     anything else fails rather than being fetched directly.
@@ -181,19 +201,23 @@ public actor DidResolver {
 
     /// Resolve any DID this wallet can.
     public func resolve(_ did: String) async -> DidResolution {
-        guard let method = DidMethod.of(did) else {
-            return .failed(did: did, reason: "Not a DID, or an unsupported DID method: \(did)")
+        // Any syntactically valid DID is resolvable as far as this SDK is
+        // concerned. Enumerating the methods here would make the SDK the
+        // authority on which of them exist, and it is not: go-trust is, and a
+        // method it learns about must not need an SDK release.
+        guard let method = DidMethod.methodName(of: did) else {
+            return .failed(did: did, reason: "Not a DID: \(did)")
         }
 
         // did:jwk carries its own key. Sending it to a resolution service
         // would add a network round trip, a dependency, and a failure mode,
         // for an answer that is already in the identifier.
-        if method == .jwk { return Did.resolveDidJwk(did) }
+        if method == DidMethod.jwk.rawValue { return Did.resolveDidJwk(did) }
 
         guard let delegate else {
             return .failed(
                 did: did,
-                reason: "No DID resolution delegate configured; \(method.rawValue) resolution is the backend's to perform"
+                reason: "No DID resolution delegate configured; \(method) resolution is the backend's to perform"
             )
         }
         guard let document = await delegate(did) else {
