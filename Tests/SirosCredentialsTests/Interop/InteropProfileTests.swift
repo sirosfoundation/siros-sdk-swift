@@ -98,4 +98,19 @@ final class InteropProfileTests: XCTestCase {
         let config = try XCTUnwrap(metadata.credentialConfigurationsSupported["pid"])
         XCTAssertEqual(config.cryptographicBindingMethodsSupported, ["did:jwk", "jwk"])
     }
+    func testARealDiipIssuersAdvertisedMethodsNegotiateTheDidBinding() {
+        // Verbatim from https://nl.gov.issuer.dev.eduwallet.nl's
+        // .well-known/openid-credential-issuer (PID, dc+sd-jwt), reached
+        // through the eduwallet demo launcher. It advertises no `jwk` at all,
+        // so a wallet that defaults to HAIP still has to send this issuer the
+        // DIIP proof shape - which is the whole point of negotiating rather
+        // than configuring.
+        XCTAssertEqual(HolderBinding.negotiate(["did:jwk", "did:key"]), .didJwk)
+        // And the substring trap: "jwk" must be matched as a whole value, not
+        // found inside "did:jwk".
+        XCTAssertEqual(HolderBinding.negotiate(["did:jwk"]), .didJwk)
+        XCTAssertEqual(HolderBinding.negotiate(["jwk", "did:jwk"]), .embeddedJwk)
+        // A DID method that is not did:jwk names nothing this Holder can use.
+        XCTAssertNil(HolderBinding.negotiate(["did:key"]))
+    }
 }
