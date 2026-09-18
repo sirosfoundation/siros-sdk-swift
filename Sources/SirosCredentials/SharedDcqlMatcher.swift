@@ -93,6 +93,38 @@ public enum SharedDcqlMatcher {
         return [String(key[key.startIndex..<dot]), String(key[key.index(after: dot)...])]
     }
 
+    /// The docType a matcher entry carries.
+    ///
+    /// For an mdoc this is read from the credential's own MSO rather than from
+    /// issuer metadata, which is only populated when the issuer happens to
+    /// expose a SIROS-internal schema endpoint. A standards-conformant
+    /// third-party issuer has no reason to, and relying on it leaves every such
+    /// credential unmatchable while looking perfectly valid.
+    ///
+    /// Only an mdoc has an MSO, though. ``toFfi(_:)`` used to attempt the parse
+    /// for every stored credential regardless of format: an SD-JWT's raw value
+    /// is a compact serialization, so ``CredentialUtils/base64UrlDecode(_:)``
+    /// rejects its `.` separators and the parse returns nil. Quietly, here -
+    /// the Kotlin SDK logged a stack trace per credential per registry refresh
+    /// for the same call (siros-sdk-kotlin#204) - but quiet or not, it let the
+    /// *bytes* decide a credential's docType rather than its declared format,
+    /// at the cost of a full base64 decode of every credential on every DCQL
+    /// evaluation.
+    ///
+    /// `"mso_mdoc"` is the whole test: a stored credential's own format is
+    /// never `"mso_mdoc_zk"` (see ``CredentialUtils``'s `isZkpFormat` note) -
+    /// that is a presentation-time transform of an ordinarily-stored mdoc.
+    ///
+    /// Platform-neutral on purpose, like ``splitClaimKey(format:key:)``: its
+    /// only caller is `#if os(iOS)`, so this is the part that can be tested
+    /// where the engine cannot run.
+    static func docType(for credential: StoredCredential) -> String? {
+        guard credential.format.lowercased() == "mso_mdoc" else {
+            return credential.metadata?.doctype
+        }
+        return CredentialUtils.parseMdocDocument(credential.raw)?.docType ?? credential.metadata?.doctype
+    }
+
     /// Report where the two implementations disagree, for one credential query.
     ///
     /// Logged rather than thrown. The built-in matcher decides now, so a
@@ -365,10 +397,7 @@ extension SharedDcqlMatcher {
         FfiCredential(
             id: String(credential.id),
             format: credential.format,
-            // The real docType, from the credential's own MSO - not issuer
-            // metadata, which is only populated when the issuer happens to
-            // expose a SIROS-internal schema endpoint.
-            doctype: CredentialUtils.parseMdocDocument(credential.raw)?.docType ?? credential.metadata?.doctype,
+            doctype: docType(for: credential),
             vct: credential.metadata?.vct,
             title: credential.metadata?.name ?? credential.format,
             subtitle: credential.metadata?.issuer?.name ?? "",
