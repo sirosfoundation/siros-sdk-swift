@@ -243,7 +243,11 @@ public actor TokenStatusListClient {
         guard let statusList = claims["status_list"] as? [String: Any] else {
             return .unavailable("Status List Token has no status_list claim")
         }
-        guard let bits = (statusList["bits"] as? NSNumber)?.intValue else {
+        // Exactly, not `intValue`: that truncates, so a published width of 1.5
+        // would be read as 1 and pass the check below. `bits` decides how the
+        // list is carved up, so a wrong width reads the wrong credential's
+        // status.
+        guard let bits = statusList["bits"] as? Int else {
             return .unavailable("Status List Token declares no entry width")
         }
         // Checked here rather than left to readStatus, which can only report
