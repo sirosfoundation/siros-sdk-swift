@@ -281,16 +281,31 @@ public enum CredentialUtils {
     /// publishes one) in the MSO's `status`. Returning them under the same
     /// names is what lets one evaluator serve every format.
     public static func validityClaims(_ credential: StoredCredential) -> [String: Any]? {
+        try? parseValidityClaims(credential)
+    }
+
+    /// ``validityClaims(_:)`` without swallowing the failure, so a caller can
+    /// tell "this credential says nothing about its validity" (nil) from
+    /// "this credential's validity data would not parse" (throws).
+    ///
+    /// The difference matters: the first is an ordinary credential and the
+    /// second must not be reported as valid, which is what collapsing both to
+    /// nil did.
+    public static func parseValidityClaims(_ credential: StoredCredential) throws -> [String: Any]? {
         if credential.format == "mso_mdoc" {
-            return mdocValidityClaims(credential)
+            return try mdocValidityClaims(credential)
         }
         return parseJwtPayload(credential.raw)
     }
 
-    private static func mdocValidityClaims(_ credential: StoredCredential) -> [String: Any]? {
-        guard let document = parseMdocDocument(credential.raw),
-              let mso = try? MdocCbor.decodeMso(issuerAuth: document.issuerSigned.issuerAuth)
-        else { return nil }
+    /// Raised when a credential's validity data is present but unreadable.
+    public struct UnreadableValidityClaims: Error {}
+
+    private static func mdocValidityClaims(_ credential: StoredCredential) throws -> [String: Any]? {
+        guard let document = parseMdocDocument(credential.raw) else {
+            throw UnreadableValidityClaims()
+        }
+        let mso = try MdocCbor.decodeMso(issuerAuth: document.issuerSigned.issuerAuth)
 
         var claims: [String: Any] = [:]
         if let validity = mso[CBOR.utf8String("validityInfo")] {

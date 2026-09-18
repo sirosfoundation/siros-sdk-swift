@@ -28,8 +28,16 @@ extension WalletViewModel {
     func refreshCredentialStatuses(for credentials: [StoredCredential], force: Bool = false) {
         guard let wallet else { return }
         let ids = credentials.map(\.id).sorted()
-        guard force || ids != statusesEvaluatedFor else { return }
+        let now = Date()
+        // Skipping an unchanged credential set is what keeps a long flow from
+        // re-evaluating on every progress update. It must not mean "never
+        // again", though: a status list that was unreachable becomes
+        // reachable, and a suspension gets lifted, without any credential
+        // being added or removed.
+        let stale = now.timeIntervalSince(statusesEvaluatedAt) >= Self.statusReevaluationInterval
+        guard force || stale || ids != statusesEvaluatedFor else { return }
         statusesEvaluatedFor = ids
+        statusesEvaluatedAt = now
 
         // Evaluating a credential's status parses it (CBOR, for an mdoc) and
         // can fetch and verify the issuer's status list, so the work runs off
@@ -50,6 +58,13 @@ extension WalletViewModel {
     func resetCredentialStatuses() {
         credentialStatusTask?.cancel()
         statusesEvaluatedFor = nil
+        statusesEvaluatedAt = .distantPast
         credentialStatuses = [:]
     }
+
+    /// How long an evaluated set of credential statuses is reused before being
+    /// re-evaluated, even when the credentials themselves have not changed -
+    /// so a status list that was unreachable, or a suspension that has been
+    /// lifted, is picked up without a restart.
+    static let statusReevaluationInterval: TimeInterval = 5 * 60
 }

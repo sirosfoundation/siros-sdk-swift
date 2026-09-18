@@ -257,7 +257,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // decides. The DID is derived from the public key rather than stored:
         // a did:jwk *is* its key, so it needs no bookkeeping and cannot drift
         // out of sync with the WSCD.
-        let did = holderDid(forPublicKey: pubKeyJwk, binding: holderBinding ?? profile.holderBinding)
+        let did = try holderDid(forPublicKey: pubKeyJwk, binding: holderBinding ?? profile.holderBinding)
 
         var headerFields: [String: Any] = [
             "alg": algorithmJoseId(key.algorithm),
@@ -794,10 +794,18 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     /// The `did:jwk` for a public key, when this issuance identifies the
     /// holder that way. Nil for ``HolderBinding/embeddedJwk``, where the proof
     /// carries the key instead of naming it.
-    private func holderDid(forPublicKey jwk: [String: Any], binding: HolderBinding) -> String? {
+    private func holderDid(forPublicKey jwk: [String: Any], binding: HolderBinding) throws -> String? {
         guard binding == .didJwk else { return nil }
         let stringMembers = jwk.compactMapValues { $0 as? String }
-        guard stringMembers["kty"] != nil else { return nil }
+        // No fallback: `.didJwk` is what this issuance negotiated, and the
+        // embedded-jwk shape is a different profile the Issuer did not agree
+        // to. Failing here says so; falling back would send a proof the Issuer
+        // cannot verify and report it as success.
+        guard stringMembers["kty"] != nil else {
+            throw KeystoreError.cryptoError(
+                "Could not derive a did:jwk for the negotiated DIIP holder binding"
+            )
+        }
         return Did.createDidJwk(stringMembers)
     }
 

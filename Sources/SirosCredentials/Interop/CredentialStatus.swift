@@ -27,6 +27,16 @@ public enum CredentialStatus: String, Sendable, CaseIterable {
     /// The issuer's Token Status List marks this credential invalid.
     case revoked
 
+    /// This wallet cannot say. Either the credential's own validity data
+    /// would not parse, or the issuer's Status List published a value this
+    /// wallet does not recognise.
+    ///
+    /// Deliberately not ``valid``: an unreachable status list leaves a
+    /// credential usable - that is what keeps a wallet working offline - but
+    /// data that is present and not understood is a different thing, and
+    /// calling it valid would be a claim this wallet cannot support.
+    case unknown
+
     /// The issuer's Token Status List marks this credential suspended -
     /// temporary, unlike ``revoked``.
     case suspended
@@ -147,7 +157,13 @@ public actor CredentialStatusEvaluator {
     /// refusing to show a credential because the issuer's status endpoint is
     /// down would make the wallet unusable offline. That is a deliberate
     /// choice, and it matches wallet-frontend.
-    public func evaluate(claims: [String: Any]) async -> CredentialStatus {
+    /// - Parameter credentialIssuer: the issuer this credential was stored
+    ///   under, used when the claims themselves name none. An mdoc's
+    ///   normalised claims carry no `iss`, and without this the Status List
+    ///   Token's issuer binding would be skipped for every mdoc - letting a
+    ///   token served from the credential's own status URI claim to be from
+    ///   any issuer at all.
+    public func evaluate(claims: [String: Any], credentialIssuer: String? = nil) async -> CredentialStatus {
         let windowStatus = CredentialValidity.check(
             CredentialValidity.extract(from: claims),
             clockTolerance: clockTolerance,
@@ -159,9 +175,11 @@ public actor CredentialStatusEvaluator {
               let reference = TokenStatusList.extractReference(from: claims)
         else { return .valid }
 
+        // The credential's own `iss` wins - it is signed - and the stored
+        // issuer identifier stands in only when there is none.
         let resolution = await statusListClient.resolve(
             reference,
-            expectedIssuer: Self.issuer(of: claims),
+            expectedIssuer: Self.issuer(of: claims) ?? credentialIssuer,
             clockTolerance: clockTolerance
         )
         switch resolution {
@@ -172,9 +190,18 @@ public actor CredentialStatusEvaluator {
             return .valid
         case .found(let status):
             switch status {
+            case TokenStatusList.Status.valid: return .valid
             case TokenStatusList.Status.invalid: return .revoked
             case TokenStatusList.Status.suspended: return .suspended
-            default: return .valid
+            // The issuer published something this wallet does not know.
+            // Reading that as "valid" would be fail-open: the draft reserves
+            // further values, and an application-specific one means whatever
+            // the issuer's ecosystem says, not "fine".
+            default:
+                #if canImport(os)
+                statusLogger.warning("Status list published an unrecognised status \(status, privacy: .public)")
+                #endif
+                return .unknown
             }
         }
     }

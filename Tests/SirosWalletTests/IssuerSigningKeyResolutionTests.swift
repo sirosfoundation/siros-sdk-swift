@@ -97,4 +97,27 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
             XCTAssertNil(body, "\(url) must not be fetched")
         }
     }
+
+    func testAUrlCarryingUserinfoIsNeverFetched() async {
+        // The classic way to make a host look like one it is not. Userinfo
+        // means nothing for an issuer's metadata or a status list.
+        for url in [
+            "https://issuer.example@evil.example/list",
+            "https://user:pass@evil.example/list",
+        ] {
+            let body = await SirosWallet.fetchPublicUrl(url, headers: [:])
+            XCTAssertNil(body, "\(url) must not be fetched")
+        }
+    }
+
+    func testAnUppercaseSchemeIsStillHttps() async {
+        // URI schemes are case-insensitive. Rejecting this spelling would
+        // leave that issuer's status list unverifiable and its revocation
+        // silently never applied. Nothing is reachable in a test, so this
+        // asserts only that it is not refused before the fetch.
+        let key = await SirosWallet.resolveHttpsIssuerSigningKey(
+            issuer: "HTTPS://issuer.example", kid: nil, profile: .latest
+        )
+        XCTAssertNil(key, "unreachable, but it must have tried rather than refused the spelling")
+    }
 }

@@ -183,6 +183,36 @@ final class DidTests: XCTestCase {
         XCTAssertEqual(key?["x"], "cc")
     }
 
+    func testADocumentWithSeveralKeysAndNoKidIsAmbiguousRatherThanTheFirstOne() {
+        // Taking the first would make verification depend on document order:
+        // a token signed by the issuer's other assertion key would be
+        // rejected, and a key it never signed with could be accepted.
+        let root = try? JSONSerialization.jsonObject(with: Data("""
+        {
+          "id": "did:web:issuer.example",
+          "verificationMethod": [
+            {"id":"did:web:issuer.example#a","type":"JsonWebKey2020","controller":"did:web:issuer.example",
+             "publicKeyJwk":{"kty":"EC","crv":"P-256","x":"aa","y":"bb"}},
+            {"id":"did:web:issuer.example#b","type":"JsonWebKey2020","controller":"did:web:issuer.example",
+             "publicKeyJwk":{"kty":"EC","crv":"P-256","x":"cc","y":"dd"}}
+          ],
+          "assertionMethod": ["did:web:issuer.example#a","did:web:issuer.example#b"]
+        }
+        """.utf8)) as? [String: Any]
+        let document = Did.parseDidDocument(root ?? [:])
+        XCTAssertNil(document?.findPublicKey(kid: nil, relationship: .assertionMethod))
+        // Naming one resolves it.
+        XCTAssertEqual(
+            document?.findPublicKey(kid: "did:web:issuer.example#a", relationship: .assertionMethod)?["x"],
+            "aa"
+        )
+    }
+
+    func testASoleKeyStillResolvesWithoutAKid() {
+        let did = Did.createDidJwk(p256Jwk)
+        XCTAssertNotNil(Did.resolveDidJwk(did).document?.findPublicKey(kid: nil, relationship: .authentication))
+    }
+
     func testAKidIsMatchedByFragmentWhenItIsNotTheFullDidUrl() {
         let did = Did.createDidJwk(p256Jwk)
         let document = Did.resolveDidJwk(did).document

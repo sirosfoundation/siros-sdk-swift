@@ -149,6 +149,7 @@ final class WalletViewModel: ObservableObject {
     /// The credential set `credentialStatuses` describes, and the evaluation
     /// in flight - see `refreshCredentialStatuses(for:force:)`.
     var statusesEvaluatedFor: [Int64]?
+    var statusesEvaluatedAt: Date = .distantPast
     var credentialStatusTask: Task<Void, Never>?
     @Published var displayName: String?
     @Published var userId: String?

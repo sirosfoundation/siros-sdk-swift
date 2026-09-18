@@ -128,7 +128,12 @@ public struct DidDocument: Sendable, Equatable {
             let wantedFragment = kid.firstIndex(of: "#").map { String(kid[kid.index(after: $0)...]) } ?? kid
             match = candidates.first { $0 == kid || $0.hasSuffix("#" + wantedFragment) }
         } else {
-            match = candidates.first
+            // With no `kid` to go on, only one key is unambiguous. Taking the
+            // first would make verification depend on document order: a token
+            // signed by another of the issuer's assertion keys would be
+            // rejected, and an unsigned-for key could be accepted instead.
+            // Same rule as `selectIssuerKey` applies to a published JWKS.
+            match = candidates.count == 1 ? candidates[0] : nil
         }
         guard let match else { return nil }
         return verificationMethods[match]?.publicKeyJwk
