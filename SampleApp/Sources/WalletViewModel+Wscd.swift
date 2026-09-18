@@ -17,10 +17,14 @@ import siros_wscd_managerFFI
 extension WalletViewModel {
 
     func selectPlugin(_ pluginId: String) {
+        // The previous selection has to be read before it is overwritten:
+        // comparing the new value against "r2ps" in the else branch made it
+        // unreachable, so switching away from r2ps left r2psEnabled stuck on.
+        let previous = selectedPluginId
         selectedPluginId = pluginId
         if pluginId == "r2ps" {
             r2psEnabled = true
-        } else if selectedPluginId == "r2ps" {
+        } else if previous == "r2ps" {
             r2psEnabled = false
         }
     }
