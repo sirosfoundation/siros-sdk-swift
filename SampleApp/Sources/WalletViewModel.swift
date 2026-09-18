@@ -141,14 +141,9 @@ final class WalletViewModel: ObservableObject {
     @Published var walletState: WalletViewState = .disconnected
     @Published var credentials: [StoredCredential] = []
 
-    /// Why each held credential cannot currently be used, by credential id -
-    /// the outcome of DIIP's Validity and Revocation Algorithm, which the SDK
-    /// runs (see `SirosWallet.refreshCredentialStatuses`). Credentials absent
-    /// from the map are usable.
-    ///
-    /// Held here rather than computed per card: evaluating it can fetch the
-    /// issuer's Token Status List, which is not something a SwiftUI body
-    /// should do.
+    /// Why each held credential cannot currently be used, by credential id;
+    /// credentials absent from the map are usable. Refreshed - and explained -
+    /// in `WalletViewModel+CredentialStatus.swift`.
     @Published var credentialStatuses: [Int64: CredentialStatus] = [:]
     @Published var displayName: String?
     @Published var userId: String?
@@ -413,27 +408,6 @@ final class WalletViewModel: ObservableObject {
 
     func listPasskeysForUI() {
         passkeys = wallet?.listPasskeys() ?? []
-    }
-
-    /// The DIIP release this wallet's wire behaviour follows - see
-    /// `WalletConfig.diipProfile`.
-    var diipProfile: DiipProfile { wallet?.diipProfile ?? .latest }
-
-    /// Re-run DIIP's Validity and Revocation Algorithm over every held
-    /// credential. Only the unusable ones are kept, so a card reads the map by
-    /// id and finds nothing for a credential that is fine.
-    func refreshCredentialStatuses() {
-        guard let wallet else { return }
-        // Evaluating a credential's status parses it (CBOR, for an mdoc) and
-        // can fetch and verify the issuer's status list, so the work runs off
-        // the main actor; only the result is published back to the UI.
-        Task.detached(priority: .utility) { [weak self] in
-            let statuses = await wallet.refreshCredentialStatuses()
-            let unusable = statuses.filter { $0.value != .valid }
-            await MainActor.run { [weak self] in
-                self?.credentialStatuses = unusable
-            }
-        }
     }
 
     func renamePasskey(credentialId: String, nickname: String) {
