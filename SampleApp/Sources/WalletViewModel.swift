@@ -309,7 +309,9 @@ final class WalletViewModel: ObservableObject {
     /// through `wallet.wscdManager`.
     private var wscdSigner: UniFFISigner?
     #endif
-    private var lifecycleContextId: String?
+    /// Internal, not private: `WalletViewModel+Wscd.swift` is the other half
+    /// of this type and a Swift extension in another file cannot see `private`.
+    var lifecycleContextId: String?
     /// The continuation box backing the CURRENTLY shown `pendingWscdChoice`,
     /// if any - see `requestWscdChoice`'s doc comment.
     private var wscdChoiceContinuationBox: WscdChoiceContinuationBox?
@@ -1014,7 +1016,9 @@ final class WalletViewModel: ObservableObject {
 
     private var presentationContinuation: CheckedContinuation<[Int64], Never>?
 
-    private func setError(_ message: String) {
+    /// Internal, not private: reached from the extensions that hold the rest
+    /// of this type's behaviour, which `private` does not reach across files.
+    func setError(_ message: String) {
         errorMessage = message
         showError = true
     }
