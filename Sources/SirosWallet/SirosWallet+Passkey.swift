@@ -142,6 +142,23 @@ extension SirosWallet {
         return candidates
     }
 
+    /// Which account a `login()` refusal is about, from the passkey the
+    /// ceremony completed with.
+    ///
+    /// `cachedAccount(owning:)` searches the whole registry, which can hold the
+    /// same credential id for an account of another deployment - so the owner
+    /// counts only under the scope `loginPrfCandidates` offered its candidates
+    /// under (this tenant, this backend). Anything else is not an account this
+    /// login could have been for, and must never be the one a `.deactivated`
+    /// refusal forgets. Same answer, `.resolved(nil)`, for a platform passkey
+    /// with no registry entry at all: forget nothing rather than guess.
+    func loginRefusalSubject(for cachedAccount: CachedAccount?) -> LifecycleRefusalSubject {
+        guard let account = cachedAccount,
+              account.tenantId == config.tenantId,
+              account.backendUrl == config.backendUrl else { return .resolved(nil) }
+        return .resolved(account.accountId)
+    }
+
     /// The cached account that registered `credentialId`, if any.
     func cachedAccount(owning credentialId: Data) -> CachedAccount? {
         let credIdB64url = Self.b64UrlEncode(credentialId)

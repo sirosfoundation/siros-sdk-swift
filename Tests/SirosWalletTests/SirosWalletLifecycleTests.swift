@@ -315,9 +315,8 @@ final class SirosWalletLifecycleTests: XCTestCase {
     /// `login()` is refused by `loginFinish`, before it moves the registry's
     /// active account (that only happens once the keystore unlock succeeds), so
     /// on a login from the picker after a logout there is no active id to
-    /// forget. It passes the account the passkey resolved to instead, and that
-    /// wins over the registry - which on a login into a *second* account would
-    /// otherwise name the first one and forget the wrong wallet.
+    /// forget. It names the account the passkey resolved to instead
+    /// (`.resolved`), which the registry can never override.
     func testADeactivationDuringLoginForgetsTheAccountTheLoginWasFor() async {
         let registry = seededRegistry()
         // What a logged-out login looks like: the account is cached and
@@ -329,7 +328,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             SirosError.backendApi(
                 code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
             ),
-            candidateAccountId: "default:user-1"
+            subject: .resolved("default:user-1")
         )
 
         XCTAssertTrue(handled)
@@ -357,11 +356,87 @@ final class SirosWalletLifecycleTests: XCTestCase {
             SirosError.backendApi(
                 code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
             ),
-            candidateAccountId: other.accountId
+            subject: .resolved(other.accountId)
         )
 
         let left = registry.listLoginableAccounts().map(\.userId)
         XCTAssertEqual(left, ["user-1"], "only the account the refusal was about is forgotten")
+    }
+
+    /// `login()` can complete with a platform passkey that has no registry
+    /// entry (or one belonging to another deployment, which it refuses to
+    /// accept as the owner). It then knows nothing, and knowing nothing must
+    /// mean forgetting nothing: falling back to whatever account happens to be
+    /// active would destroy a working wallet that the refusal was not about.
+    /// A stale entry on the login screen is the cheaper mistake.
+    func testADeactivationDuringLoginWithAnUnknownPasskeyForgetsNothing() async {
+        let registry = seededRegistry()  // active: default:user-1
+        let wallet = makeWallet(registry: registry)
+
+        let handled = await wallet.handleLifecycleRefusal(
+            SirosError.backendApi(
+                code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
+            ),
+            subject: .resolved(nil)
+        )
+
+        XCTAssertTrue(handled, "the refusal is still handled - only the forgetting is skipped")
+        guard case .lifecycleBlocked(.deactivated, _, _) = wallet.state else {
+            return XCTFail("expected .lifecycleBlocked(.deactivated), got \(wallet.state)")
+        }
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 1,
+            "an unidentified deactivation must not forget the account that was active"
+        )
+    }
+
+    /// The passkey's owner is looked up across the *whole* registry, which can
+    /// hold the same credential id for an account of another tenant or another
+    /// deployment. Only an owner inside the scope the ceremony offered its
+    /// candidates under (this tenant, this backend) may name the account a
+    /// deactivation forgets - anything else is not an account this login could
+    /// have been for.
+    func testTheLoginRefusalSubjectOnlyAcceptsAnOwnerFromThisDeployment() {
+        let wallet = makeWallet()  // tenant "default", https://wallet.example.invalid
+
+        func account(tenantId: String, backendUrl: String) -> CachedAccount {
+            CachedAccount(
+                userId: "user-1",
+                tenantId: tenantId,
+                displayName: "Alice",
+                backendUrl: backendUrl,
+                passkeys: [CachedPasskey(credentialId: "cred-1", prfSalt: "c2FsdA==")]
+            )
+        }
+
+        XCTAssertEqual(
+            wallet.loginRefusalSubject(for: account(tenantId: "default", backendUrl: "https://wallet.example.invalid")),
+            .resolved("default:user-1")
+        )
+        XCTAssertEqual(
+            wallet.loginRefusalSubject(for: account(tenantId: "other", backendUrl: "https://wallet.example.invalid")),
+            .resolved(nil),
+            "another tenant's account is not what this login was for"
+        )
+        XCTAssertEqual(
+            wallet.loginRefusalSubject(for: account(tenantId: "default", backendUrl: "https://other.example.invalid")),
+            .resolved(nil),
+            "the same credential id on another deployment must not be forgotten here"
+        )
+        XCTAssertEqual(
+            wallet.loginRefusalSubject(for: nil), .resolved(nil),
+            "a platform passkey with no registry entry identifies nothing"
+        )
+    }
+
+    /// `LifecycleRefusalSubject` is the whole decision, so pin both arms:
+    /// `.activeAccount` reads the registry (resume, unlock, cut-off re-login),
+    /// `.resolved` never does.
+    func testTheRefusalSubjectDecidesWhichAccountIsRead() {
+        let registry = seededRegistry()
+        XCTAssertEqual(LifecycleRefusalSubject.activeAccount.accountId(in: registry), "default:user-1")
+        XCTAssertEqual(LifecycleRefusalSubject.resolved("default:user-9").accountId(in: registry), "default:user-9")
+        XCTAssertNil(LifecycleRefusalSubject.resolved(nil).accountId(in: registry))
     }
 
     /// Forgetting the account on a deactivation must not drag in `logout()`'s
@@ -645,6 +720,30 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertEqual(
             registry.listLoginableAccounts().count, 0,
             "a deactivated wallet cannot be logged into again: its cached account goes"
+        )
+    }
+
+    /// The contrast with the cut-off re-login above: a login the *user* started
+    /// is refused before its passkey ceremony ever completes (the AS refuses
+    /// `loginBegin` too). It has identified no account, and the one the
+    /// registry still calls active belongs to the session this login was going
+    /// to replace - possibly another user - so nothing is forgotten.
+    func testAUserDrivenLoginRefusedBeforeTheCeremonyForgetsNothing() async {
+        let registry = seededRegistry()  // active: default:user-1
+        let wallet = makeWallet(registry: registry)
+        let (asClient, _) = refusingAuthServer(
+            "WALLET_REVOKED", message: "This wallet was deactivated", scope: "wallet"
+        )
+        wallet.authServerClient = asClient
+
+        try? await wallet.login()
+
+        guard case .lifecycleBlocked(.deactivated, _, _) = wallet.state else {
+            return XCTFail("expected .lifecycleBlocked(.deactivated), got \(wallet.state)")
+        }
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 1,
+            "a login that never identified an account must not forget the previous session's"
         )
     }
 
