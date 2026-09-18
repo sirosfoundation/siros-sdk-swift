@@ -280,6 +280,14 @@ extension SirosWallet {
     /// or tenant id to a request at an arbitrary domain would leak them.
     static func fetchPublicUrl(_ urlString: String, headers: [String: String]) async -> Data? {
         guard let url = URL(string: urlString) else { return nil }
+        // Everything reached this way - a Status List Token, an issuer's
+        // metadata, the `jwks_uri` it points at - is used to decide whether a
+        // credential is still valid and which key says so. Over plaintext,
+        // anyone on the path can answer those questions instead of the issuer:
+        // serve a status list that says "valid", or a JWKS holding their own
+        // key. An issuer identifier is an HTTPS URL to begin with, so this
+        // rejects nothing a well-formed deployment does.
+        guard url.scheme?.lowercased() == "https" else { return nil }
         var request = URLRequest(url: url)
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)

@@ -198,11 +198,11 @@ final class HolderBindingTests: XCTestCase {
         // the two, the credential could never be presented.
         let keystore = try await unlocked(.haip)
         let storedKid = try await keystore.generateKey()
-        let publicJwk = try XCTUnwrap(publicJwk(of: keystore, kid: storedKid))
-        let did = Did.createDidJwk(publicJwk)
+        let stored = try XCTUnwrap(publicJwk(of: keystore, kid: storedKid))
+        let did = Did.createDidJwk(stored)
 
-        XCTAssertTrue(HolderIdentity.matches(storedKid: storedKid, publicJwk: publicJwk, kid: Did.didJwkKeyId(did)))
-        XCTAssertTrue(HolderIdentity.matches(storedKid: storedKid, publicJwk: publicJwk, kid: did))
+        XCTAssertTrue(HolderIdentity.matches(storedKid: storedKid, publicJwk: stored, kid: Did.didJwkKeyId(did)))
+        XCTAssertTrue(HolderIdentity.matches(storedKid: storedKid, publicJwk: stored, kid: did))
         XCTAssertEqual(HolderIdentity.thumbprintOfDidJwk(Did.didJwkKeyId(did)), storedKid)
 
         // And signing for it reaches the key rather than reporting it gone.
@@ -210,19 +210,19 @@ final class HolderBindingTests: XCTestCase {
             nonce: "nonce", audience: "https://verifier.example",
             credentialIds: [], kid: Did.didJwkKeyId(did)
         )
-        XCTAssertTrue(verify(jwt, with: publicJwk))
+        XCTAssertTrue(verify(jwt, with: stored))
     }
 
     func testADidJwkNamingSomeOtherKeyIsNotAMatch() async throws {
         let keystore = try await unlocked(.haip)
         let storedKid = try await keystore.generateKey()
-        let publicJwk = try XCTUnwrap(publicJwk(of: keystore, kid: storedKid))
+        let stored = try XCTUnwrap(publicJwk(of: keystore, kid: storedKid))
 
         let otherKid = try await keystore.generateKey()
         let otherDid = Did.createDidJwk(try XCTUnwrap(publicJwk(of: keystore, kid: otherKid)))
 
         XCTAssertFalse(
-            HolderIdentity.matches(storedKid: storedKid, publicJwk: publicJwk, kid: Did.didJwkKeyId(otherDid))
+            HolderIdentity.matches(storedKid: storedKid, publicJwk: stored, kid: Did.didJwkKeyId(otherDid))
         )
         XCTAssertNil(HolderIdentity.thumbprintOfDidJwk("did:web:issuer.example"))
         XCTAssertNil(HolderIdentity.thumbprintOfDidJwk("not-a-did"))

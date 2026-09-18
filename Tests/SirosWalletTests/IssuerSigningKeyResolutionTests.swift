@@ -82,4 +82,19 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         )
         XCTAssertNil(key)
     }
+
+    func testAPlaintextUrlIsNeverFetched() async {
+        // Over plaintext anyone on the path can answer "is this credential
+        // still valid" and "which key says so" in the issuer's place.
+        for url in [
+            "http://issuer.example/list",
+            "HTTP://issuer.example/list",
+            "ftp://issuer.example/list",
+            "file:///etc/passwd",
+            "not a url at all",
+        ] {
+            let body = await SirosWallet.fetchPublicUrl(url, headers: [:])
+            XCTAssertNil(body, "\(url) must not be fetched")
+        }
+    }
 }
