@@ -207,6 +207,42 @@ final class DidTests: XCTestCase {
         XCTAssertNil(DidMethod.of("https://example.com"))
         XCTAssertNil(DidMethod.of("did:unknown:x"))
     }
+
+    func testAMethodNameIsReadEvenWhenThisSdkDoesNotKnowIt() {
+        XCTAssertEqual(DidMethod.methodName(of: "did:unknown:x"), "unknown")
+        XCTAssertEqual(DidMethod.methodName(of: "did:ebsi:zABC"), "ebsi")
+        XCTAssertNil(DidMethod.methodName(of: "https://example.com"))
+        // `did:<method>:<id>` - neither half may be missing.
+        XCTAssertNil(DidMethod.methodName(of: "did:web"))
+        XCTAssertNil(DidMethod.methodName(of: "did:web:"))
+        XCTAssertNil(DidMethod.methodName(of: "did::x"))
+    }
+
+    func testAMethodThisSdkDoesNotKnowIsStillGoTrustsToResolve() async {
+        // Enumerating methods here would make the SDK the authority on which
+        // of them exist. It is not: go-trust is, and a method it learns about
+        // must not need an SDK release.
+        let asked = AskedRecorder()
+        let resolver = DidResolver(profile: .latest) { did in
+            await asked.record(did)
+            return nil
+        }
+        _ = await resolver.resolve("did:ebsi:zABC")
+        let value = await asked.value
+        XCTAssertEqual(value, "did:ebsi:zABC")
+    }
+
+    func testSomethingThatIsNotADidIsNotDelegated() async {
+        let asked = AskedRecorder()
+        let resolver = DidResolver(profile: .latest) { did in
+            await asked.record(did)
+            return nil
+        }
+        let result = await resolver.resolve("https://issuer.example")
+        let value = await asked.value
+        XCTAssertNil(value)
+        guard case .failed = result else { return XCTFail("a non-DID must not resolve") }
+    }
 }
 
 /// Records the DID a delegate was asked for, across actor boundaries.

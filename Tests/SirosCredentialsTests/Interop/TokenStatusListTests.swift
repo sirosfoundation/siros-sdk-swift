@@ -174,7 +174,7 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertEqual(TokenStatusList.inflate(compressed!), expected)
     }
 
-    func testDataThatIsNotCompressedAtAllIsReportedAsUndecompressable() {
+    func testDataThatIsNotCompressedAtAllCannotBeInflated() {
         XCTAssertNil(TokenStatusList.inflate(Data([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])))
     }
 

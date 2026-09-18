@@ -11,11 +11,6 @@ import CryptoKit
 // this file compiles and runs identically on Linux.
 import Crypto
 #endif
-#if canImport(os)
-import os
-private let logger = Logger(subsystem: "org.siros.sdk", category: "TokenStatusList")
-#endif
-
 /// IETF Token Status List - the revocation mechanism DIIP requires.
 ///
 /// A credential carries a `status.status_list` reference: an index plus the
@@ -127,10 +122,13 @@ public actor TokenStatusListClient {
     /// - Parameters:
     ///   - httpGet: fetches a URL with the given headers, returning the body
     ///     or nil. Injected so a host's own client, pinning and caching apply.
-    ///   - resolveIssuerKey: resolves an issuer's signing key when the Status
-    ///     List Token's header carries no `x5c`. Given the token's issuer
-    ///     identifier and the header `kid`. A DID-identified issuer is handled
-    ///     by ``DidResolver``; anything else is the host's to answer.
+    ///   - resolveIssuerKey: resolves the Status List Token's signing key,
+    ///     given the token's issuer identifier and its header `kid`. Key
+    ///     resolution is always delegated this way: a certificate chain in the
+    ///     token header is deliberately not honoured, because accepting one
+    ///     would let any certificate stand in for the key the issuer actually
+    ///     publishes. A DID-identified issuer is answered through
+    ///     ``DidResolver``; anything else is the host's to answer.
     ///   - now: time source, overridable for deterministic tests.
     public init(
         httpGet: @escaping @Sendable (String, [String: String]) async -> Data?,

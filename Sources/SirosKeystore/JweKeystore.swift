@@ -178,6 +178,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         return nil
     }
 
+    /// The public JWK of a stored key pair, found by whichever identifier a
+    /// credential names it with - see ``findKeypair(kid:)``.
+    func publicKeyJwk(forKid kid: String) -> [String: String]? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return findKeypair(kid: kid).map { JwtHelpers.publicKeyJwk($0.key) }
+    }
+
     /// The DID a stored key pair is published under, if it has one.
     public func did(forKid kid: String) -> String? {
         mutex.lock()
@@ -349,29 +357,32 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         }
 
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
-        // `iss` and to name the key with a `kid` from the DID document; HAIP
+        // `iss` and to name the key with a `kid` from that DID document; HAIP
         // carries the key in the header instead. The caller may know which
         // this issuer speaks; when it does not, this keystore's own profile
         // decides.
         //
-        // Only a `did:jwk` can be named this way: it resolves offline, and
-        // this key's own id is its verification method. A key carrying a
-        // `did:key` (the pre-DIIP identifier) has a DID but no `kid` an Issuer
-        // could resolve, so it takes the embedded form even when the DID form
-        // was asked for.
+        // The DID is derived from the key rather than read from `keyDids`,
+        // exactly as `WscdKeystoreAdapter` does it. A did:jwk *is* its public
+        // key, so any key pair has one whether or not it was created under
+        // `DidKeyVersion.jwk`. Requiring a stored did:jwk here made the whole
+        // negotiation inert for the default wallet: `didKeyVersion` follows
+        // `interopProfile`, which defaults to HAIP, so a negotiated `.didJwk`
+        // could never be satisfied and every proof fell back to the HAIP shape
+        // that a DIIP-only Issuer rejects. What a key was *created* as is a
+        // storage question; how this issuance names its holder is not.
+        //
+        // For a keystore already on `DidKeyVersion.jwk` this is the same value
+        // it stored - `createDidJwk` is deterministic over the canonical
+        // public JWK - so nothing changes there.
         let binding = holderBinding ?? profile.holderBinding
-        let did = keyDids[keyId].flatMap { candidate -> String? in
-            guard binding == .didJwk,
-                  candidate.hasPrefix("did:jwk:"),
-                  keyId == Did.didJwkKeyId(candidate)
-            else { return nil }
-            return candidate
-        }
+        let publicJwk = JwtHelpers.publicKeyJwk(key)
+        let did = binding == .didJwk ? Did.createDidJwk(publicJwk) : nil
         var headerFields: [String: Any] = ["alg": "ES256", "typ": "openid4vci-proof+jwt"]
-        if did != nil {
-            headerFields["kid"] = keyId
+        if let did {
+            headerFields["kid"] = Did.didJwkKeyId(did)
         } else {
-            headerFields["jwk"] = JwtHelpers.publicKeyJwk(key)
+            headerFields["jwk"] = publicJwk
         }
         let header = JwtHelpers.jsonBase64Url(headerFields)
 
