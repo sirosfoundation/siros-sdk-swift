@@ -39,14 +39,13 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Generate a proof JWT for credential issuance (c_nonce binding).
     /// When `freshKey` is true, a new key is generated for this proof (batch issuance).
     ///
-    /// `holderBinding` decides how the Holder's key is named - see
-    /// ``HolderBinding``. This is the one place HAIP and DIIP genuinely
-    /// disagree, and OID4VCI allows only one of `jwk` and `kid` in a proof
-    /// header, so it has to be decided per issuance: an Issuer that does not
-    /// resolve DIDs cannot verify a DIIP-shaped proof, and a DIIP conformance
-    /// suite will not accept a HAIP-shaped one. Nil uses whatever profile this
-    /// keystore was built for, which is right whenever the caller has nothing
-    /// more specific to go on.
+    /// This names the Holder's key however the keystore itself sees fit - for
+    /// the keystores here, the way their ``InteropProfile`` says. To choose
+    /// per issuance instead, implement
+    /// ``generateProof(audience:nonce:freshKey:holderBinding:)``, which is
+    /// what an Issuer's advertised binding methods are negotiated into; it is
+    /// a defaulted overload rather than a requirement so that a keystore
+    /// written before that existed still conforms.
     func generateProof(
         audience: String,
         nonce: String,
@@ -276,6 +275,13 @@ public extension KeystoreManager {
 
     /// ``generateProof(audience:nonce:freshKey:)`` with the Holder binding
     /// decided per issuance.
+    ///
+    /// `holderBinding` is the one place HAIP and DIIP genuinely disagree, and
+    /// OID4VCI allows only one of `jwk` and `kid` in a proof header, so it has
+    /// to be decided per issuance: an Issuer that does not resolve DIDs cannot
+    /// verify a DIIP-shaped proof, and a DIIP conformance suite will not accept
+    /// a HAIP-shaped one. Nil uses whatever profile the keystore was built for,
+    /// which is right whenever the caller has nothing more specific to go on.
     ///
     /// Defaulted rather than a protocol requirement so that a conformer
     /// written before DIIP - including a host's own `KeystoreManager` - keeps
