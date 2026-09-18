@@ -10,9 +10,10 @@ import SirosCredentials
 import SirosKeystore
 @testable import SirosWallet
 
-/// Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319) at the
-/// facade: the blocked state, forget-on-revoked, the once-only re-login guard,
-/// `isThisDevice`, and the `DeactivationOutcome` a deactivation reports.
+/// Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319/#340) at the
+/// facade: the blocked state and which of its three refusals forgets the
+/// cached account, the once-only re-login guard, `isThisDevice`, and the
+/// `DeactivationOutcome` a deactivation reports.
 ///
 /// Uses a stub `KeystoreManager` (like `SirosWalletRegistryUrlTests`) so it
 /// runs identically on Linux and Apple platforms, without CryptoKit.
@@ -176,13 +177,11 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertEqual(listener.blocked?.message, "This device is suspended")
     }
 
-    /// `WALLET_REVOKED` does **not** mean the wallet was erased: the backend
-    /// returns it for the login gate of a single revoked instance too, and the
-    /// user's other devices keep working. Only the human-readable message
-    /// tells the two apart, so the SDK keeps the cached account - forgetting it
-    /// on a per-instance revocation would destroy the other passkeys that
-    /// still work.
-    func testRevokedRefusalKeepsTheCachedAccount()async {
+    /// `WALLET_REVOKED` at scope `instance` ends this device and nothing else
+    /// (the EUDI wallet-unit lifecycle, which SIROS adopts exactly): the
+    /// user's other devices keep working, so the cached account stays -
+    /// forgetting it here would destroy the other passkeys that still work.
+    func testRevokedInstanceRefusalKeepsTheCachedAccount()async {
         let registry = seededRegistry()
         let wallet = makeWallet(registry: registry)
         wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
@@ -190,7 +189,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         let handled = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403,
             message: "AS request failed: 403",
-            body: #"{"error":"WALLET_REVOKED","message":"This device was removed"}"#
+            body: #"{"error":"WALLET_REVOKED","scope":"instance","message":"This device was removed"}"#
         ))
 
         XCTAssertTrue(handled)
@@ -202,8 +201,86 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertEqual(accounts.count, 1)
         XCTAssertEqual(
             registry.listLoginableAccounts().count, 1,
-            "the account survives: a revoked instance is not necessarily a deactivated wallet"
+            "the account survives: a revoked instance is not a deactivated wallet"
         )
+    }
+
+    /// `WALLET_REVOKED` with no `scope` at all - every deployment until
+    /// go-wallet-backend#340 ships. It MUST resolve to the per-instance case
+    /// and keep the account, which is exactly the behaviour that predates
+    /// `scope`; a `message` that reads like a deactivation changes nothing.
+    func testRevokedRefusalWithoutScopeKeepsTheCachedAccount()async {
+        let registry = seededRegistry()
+        let wallet = makeWallet(registry: registry)
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        let handled = await wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403,
+            message: "AS request failed: 403",
+            body: #"{"error":"WALLET_REVOKED","message":"This wallet was deactivated and its data erased"}"#
+        ))
+
+        XCTAssertTrue(handled)
+        guard case let .lifecycleBlocked(reason, _, accounts) = wallet.state else {
+            return XCTFail("expected .lifecycleBlocked, got \(wallet.state)")
+        }
+        XCTAssertEqual(reason, .revoked, "a scope-less WALLET_REVOKED is per-instance, never guessed from the message")
+        XCTAssertEqual(accounts.count, 1)
+        XCTAssertEqual(registry.listLoginableAccounts().count, 1)
+    }
+
+    /// A `scope` this SDK does not know is a backend newer than it; falling
+    /// back to the per-instance case is the only safe reading.
+    func testRevokedRefusalWithUnrecognisedScopeKeepsTheCachedAccount()async {
+        let registry = seededRegistry()
+        let wallet = makeWallet(registry: registry)
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403,
+            message: "AS request failed: 403",
+            body: #"{"error":"WALLET_REVOKED","scope":"tenant","message":"x"}"#
+        ))
+
+        guard case let .lifecycleBlocked(reason, _, accounts) = wallet.state else {
+            return XCTFail("expected .lifecycleBlocked, got \(wallet.state)")
+        }
+        XCTAssertEqual(reason, .revoked)
+        XCTAssertEqual(accounts.count, 1)
+        XCTAssertEqual(registry.listLoginableAccounts().count, 1)
+    }
+
+    /// `WALLET_REVOKED` at scope `wallet` is the one refusal that is terminal
+    /// for the whole wallet: every instance is revoked and the data erased
+    /// server-side, so the cached account decrypts a vault that no longer
+    /// exists. The SDK forgets it - the same thing `deactivateWallet()` does -
+    /// and the blocked state it publishes no longer lists the account.
+    func testDeactivatedRefusalForgetsTheCachedAccount()async {
+        let registry = seededRegistry()
+        let wallet = makeWallet(registry: registry)
+        let listener = RecordingListener()
+        wallet.setEventListener(listener)
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        let handled = await wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403,
+            message: "AS request failed: 403",
+            body: #"{"error":"WALLET_REVOKED","scope":"wallet","message":"This wallet was deactivated"}"#
+        ))
+
+        XCTAssertTrue(handled)
+        guard case let .lifecycleBlocked(reason, message, accounts) = wallet.state else {
+            return XCTFail("expected .lifecycleBlocked, got \(wallet.state)")
+        }
+        XCTAssertEqual(reason, .deactivated)
+        XCTAssertEqual(message, "This wallet was deactivated")
+        XCTAssertEqual(accounts.count, 0, "a deactivated wallet leaves nothing to log back in to")
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 0,
+            "the cached account is forgotten, exactly as deactivateWallet() forgets it"
+        )
+        XCTAssertNil(registry.activeAccountId)
+        XCTAssertEqual(listener.blocked?.reason, .deactivated)
     }
 
     /// A suspended instance is reactivated from another device and the app
@@ -233,6 +310,27 @@ final class SirosWalletLifecycleTests: XCTestCase {
         wallet.logout()
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(server.deletedSessions, 1)
+    }
+
+    /// Forgetting the account on a deactivation must not drag in `logout()`'s
+    /// `DELETE /auth/session`: the blocked path deliberately never ends the
+    /// server session, and the account-forgetting path only avoids `logout()`
+    /// because `endSessionLocally()` has already cleared the active id. If the
+    /// order ever flips, this fires.
+    func testADeactivationBlockStillDoesNotEndTheServerSession() async throws {
+        let registry = seededRegistry()
+        let wallet = makeWallet(registry: registry)
+        let server = RecordingAuthServer()
+        wallet.authServerClient = server.client
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
+        ))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(server.deletedSessions, 0)
+        XCTAssertEqual(registry.listLoginableAccounts().count, 0, "the account is still forgotten")
     }
 
     /// Counts `DELETE /auth/session` calls.
@@ -381,9 +479,12 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
     /// An authorization server that refuses every login with one lifecycle
     /// code, and counts how many times it was asked.
-    private func refusingAuthServer(_ code: String, message: String) -> (AuthServerClient, () -> Int) {
+    private func refusingAuthServer(
+        _ code: String, message: String, scope: String? = nil
+    ) -> (AuthServerClient, () -> Int) {
         let counter = Counter()
-        let body = "{\"error\":\"\(code)\",\"message\":\"\(message)\"}"
+        let scopeField = scope.map { ",\"scope\":\"\($0)\"" } ?? ""
+        let body = "{\"error\":\"\(code)\"\(scopeField),\"message\":\"\(message)\"}"
         let client = AuthServerClient(baseUrl: "https://wallet.example.invalid", tenantId: "default") { _, url, _, _ in
             // Count only the login attempts: `logout()` posts to this same
             // client on its way through the blocked state, and that is not a
@@ -443,7 +544,9 @@ final class SirosWalletLifecycleTests: XCTestCase {
         let wallet = makeWallet(registry: registry)
         let listener = RecordingListener()
         wallet.setEventListener(listener)
-        let (asClient, loginAttempts) = refusingAuthServer("WALLET_REVOKED", message: "This wallet was deactivated")
+        let (asClient, loginAttempts) = refusingAuthServer(
+            "WALLET_REVOKED", message: "This device was removed", scope: "instance"
+        )
         wallet.authServerClient = asClient
         wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
 
@@ -459,7 +562,37 @@ final class SirosWalletLifecycleTests: XCTestCase {
         }
         XCTAssertEqual(
             registry.listLoginableAccounts().count, 1,
-            "the account survives a WALLET_REVOKED: it may be one instance, not the whole wallet"
+            "the account survives a revoked instance: it is one device, not the whole wallet"
+        )
+    }
+
+    /// The same cut-off path, but the wallet itself was deactivated: the AS
+    /// answers the SDK's one re-login with `WALLET_REVOKED` at scope `wallet`,
+    /// and the account that can no longer be logged into anywhere is dropped
+    /// from the login screen. End to end through `handleReauthenticationRequired`,
+    /// not just the refusal helper, so the whole chain is covered.
+    func testReauthenticationSignalIntoADeactivatedWalletForgetsTheAccount() async throws {
+        let registry = seededRegistry()
+        let wallet = makeWallet(registry: registry)
+        let listener = RecordingListener()
+        wallet.setEventListener(listener)
+        let (asClient, loginAttempts) = refusingAuthServer(
+            "WALLET_REVOKED", message: "This wallet was deactivated", scope: "wallet"
+        )
+        wallet.authServerClient = asClient
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+
+        wallet.handleReauthenticationRequired()
+        try await waitUntil { loginAttempts() == 1 && !wallet.reloginInProgress }
+
+        XCTAssertEqual(listener.blocked?.reason, .deactivated)
+        guard case let .lifecycleBlocked(.deactivated, _, accounts) = wallet.state else {
+            return XCTFail("expected .lifecycleBlocked(.deactivated), got \(wallet.state)")
+        }
+        XCTAssertEqual(accounts.count, 0)
+        XCTAssertEqual(
+            registry.listLoginableAccounts().count, 0,
+            "a deactivated wallet cannot be logged into again: its cached account goes"
         )
     }
 

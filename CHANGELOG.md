@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **A wallet lifecycle refusal now says whether it ends one device or the whole
+  wallet**, and the SDK acts on that rather than on prose. SIROS adopts the
+  EUDI wallet-unit lifecycle semantics exactly: revoking one wallet instance
+  ends that device and nothing else, and only deactivating the wallet - every
+  instance revoked, the data erased server-side - is terminal and needs a new
+  enrollment. Until now the wire could not tell those apart (`WALLET_REVOKED`
+  meant both, and only the human-readable `message` differed), so the SDK
+  deliberately kept the cached account on every refusal - forgetting it on a
+  per-instance revocation would have destroyed passkeys that still work.
+  go-wallet-backend#340 adds a machine-readable `scope` (`instance` / `wallet`)
+  to the refusal body, and this release consumes it.
+  - `SirosError.WalletLifecycleRefusal` gains a third case, `.deactivated`
+    (`WALLET_REVOKED` at scope `wallet`), next to `.suspended` and the now
+    strictly per-instance `.revoked`. Build one from the wire with
+    `resolve(errorCode:scope:)`; `errorCode` is the wire code (`.revoked` and
+    `.deactivated` share `WALLET_REVOKED`, which is the whole point). The type
+    is no longer `String`-backed - `rawValue` and `init?(rawValue:)` remain as
+    source-compatible shims, and the initialiser resolves a scope-less code
+    conservatively.
+  - `SirosError.serverScope` carries the raw `scope` next to `serverMessage`.
+  - `WalletState.lifecycleBlocked` and
+    `WalletEventListener.onWalletLifecycleBlocked` can now report
+    `.deactivated`. Existing `switch`es over the enum must handle it.
+  - Only `.deactivated` forgets the cached account, by the same path
+    `deactivateWallet()` uses. `.suspended` and `.revoked` behave exactly as
+    before: session ended locally, account and credentials kept.
+  - A backend older than #340 sends no `scope`, and `WALLET_REVOKED` then
+    resolves to `.revoked` - so against every deployment that exists today the
+    behaviour is bit-for-bit what it was. An unrecognised `scope` falls back
+    the same way, and the `message` is never consulted.
+
 ## [0.12.0] - 2026-09-17
 
 ### Fixed

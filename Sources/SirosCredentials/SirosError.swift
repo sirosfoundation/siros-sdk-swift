@@ -27,25 +27,89 @@ public enum SirosError: Error, Sendable {
     /// retried as a full re-issuance.
     case renewalUnavailable(batchId: Int64)
 
-    /// Stable codes a SIROS backend returns with `403` when passkey login is
-    /// refused for wallet lifecycle reasons (SID-AUTH-06,
-    /// go-wallet-backend#319). Neither is retryable: a suspended instance is
-    /// reactivated from another device or by the provider; a revoked one
-    /// means the wallet was deactivated and a new enrollment is required.
-    public enum WalletLifecycleRefusal: String, Sendable {
-        case suspended = "WALLET_SUSPENDED"
-        case revoked = "WALLET_REVOKED"
+    /// Why a SIROS backend refused this installation with `403` for wallet
+    /// lifecycle reasons (SID-AUTH-06, go-wallet-backend#319/#340). None is
+    /// retryable with the same passkey; what differs is how much is over.
+    ///
+    /// The wire carries two fields, an `error` code and a `scope`
+    /// (go-wallet-backend#340), and the SDK folds them into one value here -
+    /// see `resolve(errorCode:scope:)`, which is the only supported way to
+    /// build one from a refusal body. SIROS follows the EUDI wallet-unit
+    /// lifecycle exactly: revoking one wallet instance ends that device and
+    /// nothing else, and only deactivating the wallet is terminal for the
+    /// whole wallet.
+    public enum WalletLifecycleRefusal: Sendable, Hashable, CaseIterable {
+        /// `WALLET_SUSPENDED`, scope `instance`. Reversible: another device or
+        /// the provider reactivates this instance and a later `login()`
+        /// succeeds. Nothing local is lost.
+        case suspended
+
+        /// `WALLET_REVOKED`, scope `instance`. Terminal for *this*
+        /// installation's wallet instance only - the user's other devices and
+        /// passkeys keep working, and this one needs a fresh enrollment.
+        /// Nothing local is lost, because the account still exists.
+        case revoked
+
+        /// `WALLET_REVOKED`, scope `wallet`. Terminal for the whole wallet in
+        /// this tenant: every instance is revoked and the wallet's data was
+        /// erased server-side, so nothing the user holds here can be used
+        /// again and a new enrollment is required. This is the one refusal
+        /// that makes the cached account worthless, and the SDK forgets it.
+        ///
+        /// `scope` is per-tenant: this says the wallet cannot be opened in
+        /// this tenant, not that nothing of the user's is left anywhere.
+        case deactivated
+
+        /// The wire `error` code this refusal arrives as. `.revoked` and
+        /// `.deactivated` deliberately share `WALLET_REVOKED`: the code alone
+        /// cannot tell them apart, only the accompanying `scope` can.
+        public var errorCode: String {
+            switch self {
+            case .suspended: return "WALLET_SUSPENDED"
+            case .revoked, .deactivated: return "WALLET_REVOKED"
+            }
+        }
+
+        /// The refusal an `error`/`scope` pair from a refusal body names, or
+        /// nil when `errorCode` is not a lifecycle refusal at all.
+        ///
+        /// Resolution is deliberately conservative. `scope` only arrived with
+        /// go-wallet-backend#340, so a `WALLET_REVOKED` with no `scope` - an
+        /// older backend, which is every deployment until that ships - MUST
+        /// resolve to the per-instance `.revoked`: treating it as
+        /// `.deactivated` would forget an account whose other passkeys still
+        /// work. An unrecognised `scope` falls back the same way. The
+        /// human-readable `message` is never consulted; guessing from prose
+        /// would be worse than not knowing.
+        public static func resolve(errorCode: String, scope: String?) -> WalletLifecycleRefusal? {
+            guard let base = WalletLifecycleRefusal(rawValue: errorCode) else { return nil }
+            guard base == .revoked,
+                  let scope, scope.caseInsensitiveCompare(walletLifecycleScopeWallet) == .orderedSame
+            else { return base }
+            return .deactivated
+        }
     }
 
     /// The lifecycle refusal carried by a `403 .backendApi` error, or nil for
     /// every other error. Kept as a helper rather than a new enum case so
     /// exhaustive `switch`es over `SirosError` keep compiling.
+    ///
+    /// Resolved from both `error` and `scope` in the body - see
+    /// `WalletLifecycleRefusal.resolve(errorCode:scope:)` for why a missing
+    /// `scope` resolves to the per-instance case.
     public var walletLifecycleRefusal: WalletLifecycleRefusal? {
-        guard case let .backendApi(code, _, body) = self, code == 403, let body,
-              let data = body.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let error = json["error"] as? String else { return nil }
-        return WalletLifecycleRefusal(rawValue: error)
+        guard case let .backendApi(code, _, _) = self, code == 403,
+              let body = errorBody, let error = body["error"] as? String else { return nil }
+        return WalletLifecycleRefusal.resolve(errorCode: error, scope: body["scope"] as? String)
+    }
+
+    /// The machine-readable `scope` of a lifecycle refusal (`instance` or
+    /// `wallet`, go-wallet-backend#340), carried raw next to `serverMessage`
+    /// so a host app can see exactly what the backend said. Nil on an older
+    /// backend, which sends no `scope` at all. Prefer
+    /// `walletLifecycleRefusal`, which resolves this into a typed case.
+    public var serverScope: String? {
+        errorBody?["scope"] as? String
     }
 
     /// The backend's stable `error` code from this error's JSON body (e.g.
@@ -58,8 +122,11 @@ public enum SirosError: Error, Sendable {
 
     /// The server's own user-facing explanation (`message` in the error body),
     /// when it sent one - e.g. the text a SID-AUTH-06 `WALLET_SUSPENDED` /
-    /// `WALLET_REVOKED` refusal carries to tell the two cases apart for the
-    /// user. `localizedDescription` stays the developer-facing diagnostic.
+    /// `WALLET_REVOKED` refusal carries for the user, which may say more than
+    /// the app can (who suspended it, why). It is prose meant for display, not
+    /// a signal to branch on: `serverScope` and `walletLifecycleRefusal` are
+    /// what tell the refusals apart. `localizedDescription` stays the
+    /// developer-facing diagnostic.
     public var serverMessage: String? {
         errorBody?["message"] as? String
     }
@@ -80,6 +147,39 @@ public enum SirosError: Error, Sendable {
         case .wallet: return "wallet_error"
         case .backendApi(let code, _, _): return "backend_api_\(code)"
         case .renewalUnavailable: return "renewal_unavailable"
+        }
+    }
+}
+
+/// The `scope` a lifecycle refusal carries (go-wallet-backend#340): the
+/// refusal ends this wallet instance only.
+public let walletLifecycleScopeInstance = "instance"
+
+/// The `scope` a lifecycle refusal carries (go-wallet-backend#340): the
+/// refusal ends the whole wallet in this tenant - every instance revoked, the
+/// data erased server-side, a new enrollment required.
+public let walletLifecycleScopeWallet = "wallet"
+
+public extension SirosError.WalletLifecycleRefusal {
+    /// The wire `error` code, under the name it had when this was a
+    /// `String`-backed enum. Kept so existing call sites keep compiling;
+    /// `errorCode` is the name to use.
+    ///
+    /// Note this is **not** injective any more - `.revoked` and `.deactivated`
+    /// both answer `WALLET_REVOKED` - which is exactly why the type does not
+    /// conform to `RawRepresentable`: reconstructing a refusal needs the
+    /// `scope` too. Use `resolve(errorCode:scope:)`.
+    var rawValue: String { errorCode }
+
+    /// The refusal a bare `error` code names, with no `scope` to go on. Kept
+    /// for source compatibility and resolves conservatively - `WALLET_REVOKED`
+    /// becomes the per-instance `.revoked`, never `.deactivated`. Prefer
+    /// `resolve(errorCode:scope:)`, which can see the difference.
+    init?(rawValue: String) {
+        switch rawValue {
+        case SirosError.WalletLifecycleRefusal.suspended.errorCode: self = .suspended
+        case SirosError.WalletLifecycleRefusal.revoked.errorCode: self = .revoked
+        default: return nil
         }
     }
 }

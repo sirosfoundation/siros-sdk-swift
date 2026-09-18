@@ -3,15 +3,104 @@
 import XCTest
 @testable import SirosCredentials
 
-/// `SirosError.walletLifecycleRefusal` (SID-AUTH-06, go-wallet-backend#319):
-/// the two stable 403 codes a backend returns when passkey login is refused
-/// for lifecycle reasons, exposed without adding a `SirosError` case.
+/// `SirosError.walletLifecycleRefusal` (SID-AUTH-06,
+/// go-wallet-backend#319/#340): the stable 403 `error`/`scope` pairs a backend
+/// returns when passkey login is refused for lifecycle reasons, exposed
+/// without adding a `SirosError` case.
 final class SirosErrorLifecycleTests: XCTestCase {
     func testRefusalIsReadFromA403Body() {
         let suspended = SirosError.backendApi(code: 403, message: "AS request failed: 403", body: #"{"error":"WALLET_SUSPENDED"}"#)
         XCTAssertEqual(suspended.walletLifecycleRefusal, .suspended)
         let revoked = SirosError.backendApi(code: 403, message: "AS request failed: 403", body: #"{"error":"WALLET_REVOKED","message":"deactivated"}"#)
         XCTAssertEqual(revoked.walletLifecycleRefusal, .revoked)
+    }
+
+    /// The wire contract go-wallet-backend#340 added, as
+    /// `service.LifecycleRefusalDetails` emits it from both
+    /// `internal/api/handlers.go` and `internal/as/passkey.go`: `scope` is what
+    /// separates a revoked instance from a deactivated wallet, and the two
+    /// share the `WALLET_REVOKED` code.
+    func testScopeSeparatesARevokedInstanceFromADeactivatedWallet() {
+        let suspendedInstance = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_SUSPENDED","scope":"instance","message":"m"}"#
+        )
+        XCTAssertEqual(suspendedInstance.walletLifecycleRefusal, .suspended)
+
+        let revokedInstance = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"instance","message":"m"}"#
+        )
+        XCTAssertEqual(revokedInstance.walletLifecycleRefusal, .revoked)
+
+        let deactivatedWallet = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet","message":"m"}"#
+        )
+        XCTAssertEqual(deactivatedWallet.walletLifecycleRefusal, .deactivated)
+    }
+
+    /// No `scope` at all is every deployment until #340 ships, and an
+    /// unrecognised one is a backend newer than this SDK. Both MUST resolve
+    /// `WALLET_REVOKED` to the per-instance case: that is what today's
+    /// behaviour already is, and treating it as a deactivation would forget an
+    /// account whose other passkeys still work. The `message` is never
+    /// consulted, however deactivation-shaped its prose is.
+    func testAbsentOrUnrecognisedScopeFallsBackToThePerInstanceCase() {
+        let noScope = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","message":"This wallet was deactivated and erased"}"#
+        )
+        XCTAssertEqual(noScope.walletLifecycleRefusal, .revoked)
+        XCTAssertNil(noScope.serverScope)
+
+        let unknownScope = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"tenant"}"#
+        )
+        XCTAssertEqual(unknownScope.walletLifecycleRefusal, .revoked)
+
+        let nonStringScope = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":7}"#
+        )
+        XCTAssertEqual(nonStringScope.walletLifecycleRefusal, .revoked)
+
+        // A scope the backend never pairs with this code changes nothing
+        // either: only `WALLET_REVOKED` can become a deactivation.
+        let suspendedAtWalletScope = SirosError.backendApi(
+            code: 403, message: "", body: #"{"error":"WALLET_SUSPENDED","scope":"wallet"}"#
+        )
+        XCTAssertEqual(suspendedAtWalletScope.walletLifecycleRefusal, .suspended)
+    }
+
+    /// `resolve` is the only supported way to build a refusal from the wire,
+    /// and the code alone deliberately cannot reach `.deactivated`.
+    func testResolveAndErrorCodesRoundTripTheWireContract() {
+        XCTAssertEqual(SirosError.WalletLifecycleRefusal.suspended.errorCode, "WALLET_SUSPENDED")
+        XCTAssertEqual(SirosError.WalletLifecycleRefusal.revoked.errorCode, "WALLET_REVOKED")
+        XCTAssertEqual(SirosError.WalletLifecycleRefusal.deactivated.errorCode, "WALLET_REVOKED")
+
+        XCTAssertEqual(
+            SirosError.WalletLifecycleRefusal.resolve(errorCode: "WALLET_REVOKED", scope: walletLifecycleScopeWallet),
+            .deactivated
+        )
+        XCTAssertEqual(
+            SirosError.WalletLifecycleRefusal.resolve(errorCode: "WALLET_REVOKED", scope: walletLifecycleScopeInstance),
+            .revoked
+        )
+        XCTAssertEqual(SirosError.WalletLifecycleRefusal.resolve(errorCode: "WALLET_REVOKED", scope: nil), .revoked)
+        XCTAssertNil(SirosError.WalletLifecycleRefusal.resolve(errorCode: "auth_failed", scope: "wallet"))
+
+        // The scope-less initialiser kept for source compatibility resolves
+        // the same conservative way.
+        XCTAssertEqual(SirosError.WalletLifecycleRefusal(rawValue: "WALLET_REVOKED"), .revoked)
+        XCTAssertNil(SirosError.WalletLifecycleRefusal(rawValue: "WALLET_DEACTIVATED"))
+    }
+
+    /// The raw `scope` is carried next to `serverMessage` so a host app can see
+    /// exactly what the backend said.
+    func testServerScopeIsCarriedRaw() {
+        XCTAssertEqual(
+            SirosError.backendApi(code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#).serverScope,
+            "wallet"
+        )
+        XCTAssertNil(SirosError.backendApi(code: 403, message: "", body: #"{"error":"WALLET_REVOKED"}"#).serverScope)
+        XCTAssertNil(SirosError.auth(message: "x").serverScope)
     }
 
     func testOtherErrorsAreNotRefusals() {
@@ -37,9 +126,9 @@ final class SirosErrorLifecycleTests: XCTestCase {
         XCTAssertNil(SirosError.auth(message: "x").apiErrorCode)
     }
 
-    /// The backend's `message` is what tells a suspended wallet from a revoked
-    /// one for the user, so it is carried separately from the developer-facing
-    /// `localizedDescription`.
+    /// The backend's `message` is the explanation written for the user (the
+    /// SDK branches on `scope`, not on it), so it is carried separately from
+    /// the developer-facing `localizedDescription`.
     func testServerMessageIsCarriedSeparatelyFromTheDiagnostic() {
         let error = SirosError.backendApi(
             code: 403,

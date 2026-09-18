@@ -282,8 +282,10 @@ private extension WalletInstance {
 /// The screen for `WalletState.lifecycleBlocked`: the backend refuses this
 /// installation and no amount of retrying the same login changes that until
 /// someone else acts. A suspended instance can be reactivated from another
-/// device, so the offer is to try again later; a revoked wallet is gone, and
-/// the only way forward is a new enrollment.
+/// device, so the offer is to try again later; a revoked instance ends this
+/// device only, and a deactivated wallet ends everything - both need a new
+/// enrollment, but only the second means the user's other devices are gone
+/// too, so they get their own wording.
 struct WalletBlockedView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     let reason: SirosError.WalletLifecycleRefusal
@@ -291,18 +293,27 @@ struct WalletBlockedView: View {
 
     private var suspended: Bool { reason == .suspended }
 
+    /// The `walletBlocked.*` key suffix for this refusal.
+    private var key: String {
+        switch reason {
+        case .suspended: return "suspended"
+        case .revoked: return "revoked"
+        case .deactivated: return "deactivated"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: suspended ? "pause.circle" : "xmark.octagon")
                 .font(.system(size: 48))
                 .foregroundStyle(suspended ? Color.orange : Color.red)
-            Text(L10n.string(suspended ? "walletBlocked.suspendedTitle" : "walletBlocked.revokedTitle"))
+            Text(L10n.string("walletBlocked.\(key)Title"))
                 .font(.title2)
                 .fontWeight(.semibold)
                 .multilineTextAlignment(.center)
             // The backend's own text when it sent one - it is written for the
             // user and may say more than the app can (who suspended it, why).
-            Text(message ?? L10n.string(suspended ? "walletBlocked.suspendedMessage" : "walletBlocked.revokedMessage"))
+            Text(message ?? L10n.string("walletBlocked.\(key)Message"))
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -311,9 +322,11 @@ struct WalletBlockedView: View {
                 if suspended {
                     viewModel.login()
                 } else {
-                    // The account is already forgotten by the time a revoked
-                    // wallet reaches here; disconnecting is what puts the app
-                    // back on the login/register screen where enrollment starts.
+                    // A revoked instance leaves the cached account in place
+                    // (the user's other devices still work) and a deactivated
+                    // wallet has already had it forgotten by the SDK; either
+                    // way, disconnecting is what puts the app back on the
+                    // login/register screen where enrollment starts.
                     viewModel.disconnect()
                 }
             } label: {

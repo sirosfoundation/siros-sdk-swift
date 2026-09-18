@@ -162,31 +162,42 @@ extension SirosWallet {
     /// SID-AUTH-06 refusal. Returns true when it handled the error, so callers
     /// can leave their own error handling untouched for everything else.
     ///
-    /// Neither reason touches the cached account. `WALLET_REVOKED` does **not**
-    /// mean the wallet was erased: the backend returns it for the login gate of
-    /// a single revoked instance too, and only deactivates the wallet when the
-    /// *last* non-revoked instance is revoked - the user's other devices keep
-    /// logging in either way. Only the human-readable `message` tells the two
-    /// apart, and guessing from it would be worse than not knowing: forgetting
-    /// the account on a per-instance revocation destroys the other passkeys
-    /// that still work. So the SDK keeps everything, shows the backend's own
-    /// explanation, and leaves re-enrollment to the user.
+    /// What happens to the cached account follows the EUDI wallet-unit
+    /// lifecycle, which SIROS adopts exactly, and turns on the refusal's
+    /// `scope` (go-wallet-backend#340) - never on the human-readable
+    /// `message`:
     ///
-    /// `deactivateWallet()` is the one place that still forgets the account -
-    /// there the caller asked for it and the outcome is unambiguous.
+    /// - `.suspended` and `.revoked` are scoped to *this* wallet instance. The
+    ///   user's other devices and passkeys keep working, so the cached account
+    ///   and the cached credentials stay: forgetting them on a per-instance
+    ///   revocation would destroy passkeys that are still perfectly valid.
+    /// - `.deactivated` is the whole wallet: every instance revoked and the
+    ///   data erased server-side, so the cached account decrypts a vault that
+    ///   no longer exists and a new enrollment is the only way forward. That
+    ///   one is forgotten here, exactly as `deactivateWallet()` forgets it
+    ///   when the user asks for the same thing from this device.
+    ///
+    /// A backend older than #340 sends no `scope`, and `WALLET_REVOKED` then
+    /// resolves to the per-instance `.revoked` - see
+    /// `SirosError.WalletLifecycleRefusal.resolve(errorCode:scope:)`. Against
+    /// such a backend this path behaves exactly as it did before #340.
     @discardableResult
     func handleLifecycleRefusal(_ error: Error) async -> Bool {
         guard let sirosError = error as? SirosError,
               let reason = sirosError.walletLifecycleRefusal else { return false }
         let message = sirosError.serverMessage
         #if canImport(os)
-        logger.warning("Wallet lifecycle refusal: \(reason.rawValue) — \(message ?? "(no message from the backend)")")
+        logger.warning("Wallet lifecycle refusal: \(reason.errorCode) (\(sirosError.serverScope ?? "no scope")) — \(message ?? "(no message from the backend)")")
         #endif
+        // Read before the teardown: `endSessionLocally()` clears the registry's
+        // active account id, so asking afterwards always answers nil and a
+        // deactivated wallet would keep its now-useless cached account.
+        let accountToForget = reason == .deactivated ? accountRegistry.activeAccountId : nil
         // End the session either way - nothing this installation holds can be
-        // used until someone else acts - but keep the account, and do not
-        // schedule the remote DELETE: a retry after the instance is
-        // reactivated reuses the same AS session cookie, and the DELETE could
-        // land after its loginFinish. See `endSessionLocally()`.
+        // used until someone else acts - and do not schedule the remote
+        // DELETE: a retry after the instance is reactivated reuses the same AS
+        // session cookie, and the DELETE could land after its loginFinish. See
+        // `endSessionLocally()`.
         endSessionLocally()
         // `endSessionLocally()` clears `AuthTokens`, but `AuthServerClient`
         // keeps its own cache: a backend token minted just before the 403
@@ -195,6 +206,15 @@ extension SirosWallet {
         // being asked, and it is already cut off. Awaited here, so it cannot
         // race the retry the app may make the moment this state is published.
         await authServerClient?.clearTokenCache()
+        if let accountToForget {
+            // The same path `deactivateWallet()` takes. The active id is
+            // already nil by now, so this removes the entry and publishes
+            // `.disconnected` rather than running a second `logout()` (and its
+            // `DELETE /auth/session`, which must not race anything here); the
+            // `.lifecycleBlocked` set immediately below is the state that
+            // stands, now without this account in `cachedAccounts`.
+            forgetAccount(accountId: accountToForget)
+        }
         setState(.lifecycleBlocked(
             reason: reason,
             message: message,

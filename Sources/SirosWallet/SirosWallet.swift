@@ -169,7 +169,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// Suspend, reactivate or revoke one of this user's wallet instances
     /// (`PUT /user/session/instances/{id}/status`). Suspension is reversible
     /// and only blocks that installation (login, attestation, sessions);
-    /// revocation is terminal. Revoking the last non-revoked instance
+    /// revocation is terminal, but - per the EUDI wallet-unit lifecycle, which
+    /// SIROS follows exactly - terminal *for that instance only*: the user's
+    /// other devices are untouched. Revoking the last non-revoked instance
     /// deactivates the wallet - prefer `deactivateWallet(reason:)` for that,
     /// which also clears local state.
     ///
@@ -195,8 +197,10 @@ public final class SirosWallet: @unchecked Sendable {
     /// Deactivate this wallet: revoke every wallet instance of the user
     /// (`POST /user/session/instances/revoke-all`). The backend erases the
     /// wallet's private data and server-side credentials and refuses every
-    /// passkey of the user at login with `WALLET_REVOKED`; a new enrollment
-    /// is required afterwards. The local cached account is forgotten and the
+    /// passkey of the user at login with `WALLET_REVOKED` at scope `wallet`
+    /// (which reaches other installations as
+    /// `WalletState.lifecycleBlocked(reason: .deactivated, ...)`); a new
+    /// enrollment is required afterwards. The local cached account is forgotten and the
     /// wallet logged out, since the vault it decrypts no longer exists.
     /// The local account is forgotten in both outcomes, since the revocations
     /// stand even when the backend's erasure cascade did not finish.
