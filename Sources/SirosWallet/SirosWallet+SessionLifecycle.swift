@@ -12,38 +12,6 @@ import os
 private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 #endif
 
-/// Which cached account a lifecycle refusal is about - the question only a
-/// `.deactivated` refusal has to answer, because it is the only one that
-/// forgets anything.
-enum LifecycleRefusalSubject: Sendable, Equatable {
-    /// The account this session is logged in as. Right for `resumeSession()`,
-    /// `unlockKeystore()` and the SDK's own re-login after a token cut-off:
-    /// all three are already scoped to one account, and the registry names it.
-    case activeAccount
-
-    /// Exactly this account, or nothing when the caller could not work out
-    /// which one the refusal was about.
-    ///
-    /// `login()` uses this and must never fall back to the active account.
-    /// Its refusal comes out of `loginFinish`, before the registry's active
-    /// account is moved (that only happens once the keystore unlock has
-    /// succeeded), so the account that *is* active belongs to the previous
-    /// session - possibly a different user entirely. And a login from the
-    /// picker may complete with a platform passkey that has no registry entry
-    /// at all, in which case the honest answer is "unknown": keeping a stale
-    /// entry on the login screen is a blemish, forgetting the wrong account
-    /// destroys a working wallet.
-    case resolved(String?)
-
-    /// The account to forget, if any.
-    func accountId(in registry: AccountRegistry) -> String? {
-        switch self {
-        case .activeAccount: return registry.activeAccountId
-        case .resolved(let id): return id
-        }
-    }
-}
-
 /// The wallet instance lifecycle's effect on *this* session (SID-AUTH-06):
 /// recognising a refusal, the single self-driven re-login after a token
 /// cut-off, and the session generation that keeps both of those from acting on
@@ -70,6 +38,13 @@ extension SirosWallet {
     ///   was accepted rather than when this task happens to start, so a logout
     ///   racing the task is caught however the two are scheduled.
     func reloginAfterCutOff(replacing generation: Int) async {
+        // Captured before any of the teardown and before the replacement
+        // login: this is the account the session being replaced belonged to,
+        // and the only honest answer to "which wallet was refused" if the AS
+        // refuses this re-login. Reading it later would name whatever a
+        // concurrent login had made active in the meantime. See
+        // `handleLifecycleRefusal(_:forAccount:)`.
+        let replacedAccountId = accountRegistry.activeAccountId
         lock.lock()
         let engine = engineSession
         // The WMP transport holds its own live WebSocket, and the backend
@@ -114,11 +89,12 @@ extension SirosWallet {
         }
         // login() puts every outcome in the state itself; its `throw` is only
         // for the unexpected branch and must not escape a self-driven attempt.
-        // This one replaces a session the registry still names, so a refusal
-        // that arrives before the passkey ceremony completes (the AS can refuse
-        // `loginBegin` too) is unambiguously about that account - unlike a
-        // user-driven login, which may be for someone else entirely.
-        try? await login(refusalFallback: .activeAccount)
+        // This one replaces a session whose account was captured above, before
+        // any of the teardown ran, so a refusal that arrives before the passkey
+        // ceremony completes (the AS can refuse `loginBegin` too) is
+        // unambiguously about that account - unlike a user-driven login, which
+        // may be for someone else entirely.
+        try? await login(refusalAccountId: replacedAccountId)
         // The check above cannot be atomic with the call - login() is a long
         // async operation and logout()/destroy() are synchronous and can land
         // anywhere inside it. So undo rather than prevent: a session
@@ -212,7 +188,7 @@ extension SirosWallet {
     ///   no longer exists and a new enrollment is the only way forward. That
     ///   one is forgotten here, exactly as `deactivateWallet()` forgets it
     ///   when the user asks for the same thing from this device - but only
-    ///   when `subject` names it. An unidentified deactivation forgets
+    ///   when `accountId` names it. An unidentified deactivation forgets
     ///   nothing: a stale entry on the login screen is recoverable, deleting
     ///   the wrong account's passkeys is not.
     ///
@@ -221,23 +197,28 @@ extension SirosWallet {
     /// `SirosError.WalletLifecycleRefusal.resolve(errorCode:scope:)`. Against
     /// such a backend this path behaves exactly as it did before #340.
     ///
-    /// - Parameter subject: which cached account the refusal is about. Only
-    ///   consulted for `.deactivated`; see `LifecycleRefusalSubject` for why
-    ///   `login()` must not settle for the registry's active account.
+    /// - Parameter accountId: the account the operation that met this refusal
+    ///   was for, **captured when that operation started**, or nil when it
+    ///   could not be determined - which means forget nothing. Consulted only
+    ///   for `.deactivated`.
+    ///
+    ///   It has no default and is never read from
+    ///   `AccountRegistry.activeAccountId` here, deliberately. Every refusal
+    ///   arrives after async work, and the registry is mutable throughout it:
+    ///   a login or an account switch landing in between would make the
+    ///   registry name the *replacement* account, and this would then delete
+    ///   the wrong wallet. `login()` has the sharpest version of that - it is
+    ///   refused by `loginFinish`, before it moves the active account at all,
+    ///   so the registry there still names the session it was replacing.
     @discardableResult
-    func handleLifecycleRefusal(
-        _ error: Error, subject: LifecycleRefusalSubject = .activeAccount
-    ) async -> Bool {
+    func handleLifecycleRefusal(_ error: Error, forAccount accountId: String?) async -> Bool {
         guard let sirosError = error as? SirosError,
               let reason = sirosError.walletLifecycleRefusal else { return false }
         let message = sirosError.serverMessage
         #if canImport(os)
         logger.warning("Wallet lifecycle refusal: \(reason.errorCode) (\(sirosError.serverScope ?? "no scope")) — \(message ?? "(no message from the backend)")")
         #endif
-        // Read before the teardown: `endSessionLocally()` clears the registry's
-        // active account id, so asking afterwards always answers nil and a
-        // deactivated wallet would keep its now-useless cached account.
-        let accountToForget: String? = reason == .deactivated ? subject.accountId(in: accountRegistry) : nil
+        let accountToForget: String? = reason == .deactivated ? accountId : nil
         // End the session either way - nothing this installation holds can be
         // used until someone else acts - and do not schedule the remote
         // DELETE: a retry after the instance is reactivated reuses the same AS

@@ -184,7 +184,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_SUSPENDED","message":"This device is suspended"}"#
-        ))
+        ), forAccount: "default:user-1")
 
         XCTAssertTrue(handled)
         guard case let .lifecycleBlocked(reason, message, accounts) = wallet.state else {
@@ -211,7 +211,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_REVOKED","scope":"instance","message":"This device was removed"}"#
-        ))
+        ), forAccount: "default:user-1")
 
         XCTAssertTrue(handled)
         guard case let .lifecycleBlocked(reason, message, accounts) = wallet.state else {
@@ -239,7 +239,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_REVOKED","message":"This wallet was deactivated and its data erased"}"#
-        ))
+        ), forAccount: "default:user-1")
 
         XCTAssertTrue(handled)
         guard case let .lifecycleBlocked(reason, _, accounts) = wallet.state else {
@@ -261,7 +261,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_REVOKED","scope":"tenant","message":"x"}"#
-        ))
+        ), forAccount: "default:user-1")
 
         guard case let .lifecycleBlocked(reason, _, accounts) = wallet.state else {
             return XCTFail("expected .lifecycleBlocked, got \(wallet.state)")
@@ -287,7 +287,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             code: 403,
             message: "AS request failed: 403",
             body: #"{"error":"WALLET_REVOKED","scope":"wallet","message":"This wallet was deactivated"}"#
-        ))
+        ), forAccount: "default:user-1")
 
         XCTAssertTrue(handled)
         guard case let .lifecycleBlocked(reason, message, accounts) = wallet.state else {
@@ -318,7 +318,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
         _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403, message: "", body: #"{"error":"WALLET_SUSPENDED"}"#
-        ))
+        ), forAccount: "default:user-1")
         // Whatever the blocked path scheduled has had every chance to run.
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -349,7 +349,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             SirosError.backendApi(
                 code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
             ),
-            subject: .resolved("default:user-1")
+            forAccount: "default:user-1"
         )
 
         XCTAssertTrue(handled)
@@ -377,7 +377,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             SirosError.backendApi(
                 code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
             ),
-            subject: .resolved(other.accountId)
+            forAccount: other.accountId
         )
 
         let left = registry.listLoginableAccounts().map(\.userId)
@@ -398,7 +398,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
             SirosError.backendApi(
                 code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
             ),
-            subject: .resolved(nil)
+            forAccount: nil
         )
 
         XCTAssertTrue(handled, "the refusal is still handled - only the forgetting is skipped")
@@ -426,13 +426,13 @@ final class SirosWalletLifecycleTests: XCTestCase {
         let wallet = makeWallet(registry: registry)  // tenant "default", https://wallet.example.invalid
 
         XCTAssertEqual(
-            wallet.loginRefusalSubject(forCredential: Data("cred".utf8)),
-            .resolved("default:user-1"),
+            wallet.accountId(owningInScope: Data("cred".utf8)),
+            "default:user-1",
             "the in-scope owner, even though two out-of-scope duplicates precede it"
         )
         XCTAssertEqual(
-            wallet.loginRefusalSubject(forCredential: Data("nobodys-credential".utf8)),
-            .resolved(nil),
+            wallet.accountId(owningInScope: Data("nobodys-credential".utf8)),
+            nil,
             "a platform passkey with no registry entry identifies nothing"
         )
     }
@@ -446,7 +446,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
         registry.upsertAccount(account(userId: "user-2"))
         let wallet = makeWallet(registry: registry)
 
-        XCTAssertEqual(wallet.loginRefusalSubject(forCredential: Data("cred".utf8)), .resolved(nil))
+        XCTAssertNil(wallet.accountId(owningInScope: Data("cred".utf8)))
     }
 
     /// One account holding the shared credential id `cred` (base64url of
@@ -465,14 +465,25 @@ final class SirosWalletLifecycleTests: XCTestCase {
         )
     }
 
-    /// `LifecycleRefusalSubject` is the whole decision, so pin both arms:
-    /// `.activeAccount` reads the registry (resume, unlock, cut-off re-login),
-    /// `.resolved` never does.
-    func testTheRefusalSubjectDecidesWhichAccountIsRead() {
-        let registry = seededRegistry()
-        XCTAssertEqual(LifecycleRefusalSubject.activeAccount.accountId(in: registry), "default:user-1")
-        XCTAssertEqual(LifecycleRefusalSubject.resolved("default:user-9").accountId(in: registry), "default:user-9")
-        XCTAssertNil(LifecycleRefusalSubject.resolved(nil).accountId(in: registry))
+    /// The account to forget comes from the caller alone. Whatever the registry
+    /// calls active at refusal time is never consulted: the refusal arrives
+    /// after async work, and a login landing in between would make the registry
+    /// name the replacement account.
+    func testTheAccountToForgetComesFromTheCallerNotTheRegistry() async {
+        let registry = seededRegistry()  // active: default:user-1
+        let wallet = makeWallet(registry: registry)
+
+        _ = await wallet.handleLifecycleRefusal(
+            SirosError.backendApi(
+                code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
+            ),
+            forAccount: "default:user-9"  // an account the registry does not hold
+        )
+
+        XCTAssertEqual(
+            registry.listLoginableAccounts().map(\.userId), ["user-1"],
+            "the active account is not the one named, so it survives"
+        )
     }
 
     /// Forgetting the account on a deactivation must not drag in `logout()`'s
@@ -489,7 +500,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
         _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
-        ))
+        ), forAccount: "default:user-1")
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertEqual(server.deletedSessions, 0)
@@ -516,7 +527,7 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
         _ = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 403, message: "", body: #"{"error":"WALLET_REVOKED","scope":"wallet"}"#
-        ))
+        ), forAccount: "default:user-1")
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertEqual(
@@ -582,9 +593,9 @@ final class SirosWalletLifecycleTests: XCTestCase {
 
         let plain401 = await wallet.handleLifecycleRefusal(SirosError.backendApi(
             code: 401, message: "AS request failed: 401", body: #"{"error":"auth_failed"}"#
-        ))
+        ), forAccount: "default:user-1")
         XCTAssertFalse(plain401)
-        let offline = await wallet.handleLifecycleRefusal(SirosError.network(message: "offline"))
+        let offline = await wallet.handleLifecycleRefusal(SirosError.network(message: "offline"), forAccount: "default:user-1")
         XCTAssertFalse(offline)
         if case .lifecycleBlocked = wallet.state {
             XCTFail("a non-lifecycle failure must not enter the blocked state")

@@ -148,8 +148,9 @@ extension SirosWallet {
         return candidates
     }
 
-    /// Which account a `login()` refusal is about, from the credential the
-    /// ceremony completed with.
+    /// The account `credentialId` belongs to *in this deployment*, or nil when
+    /// that cannot be answered unambiguously. What `login()` names as the
+    /// account a `.deactivated` refusal may forget.
     ///
     /// Resolved against the same scope `loginPrfCandidates` offered its
     /// candidates under - this tenant, this backend - rather than by filtering
@@ -157,20 +158,20 @@ extension SirosWallet {
     /// anywhere in the registry, so an out-of-scope duplicate arriving first
     /// would hide the real owner. Only an unambiguous single owner counts.
     ///
-    /// Everything else answers `.resolved(nil)` - forget nothing: a platform
-    /// passkey with no registry entry, a credential that belongs to another
-    /// tenant or deployment, and a registry that somehow holds the same
-    /// credential id twice in scope. This decides whether a `.deactivated`
-    /// refusal deletes a cached account, so "not sure" has to mean "don't".
-    func loginRefusalSubject(forCredential credentialId: Data) -> LifecycleRefusalSubject {
+    /// Everything else answers nil - forget nothing: a platform passkey with
+    /// no registry entry, a credential that belongs to another tenant or
+    /// deployment, and a registry that somehow holds the same credential id
+    /// twice in scope. This decides whether a `.deactivated` refusal deletes a
+    /// cached account, so "not sure" has to mean "don't".
+    func accountId(owningInScope credentialId: Data) -> String? {
         let credIdB64url = Self.b64UrlEncode(credentialId)
         let owners = accountRegistry.listAccounts().filter { account in
             account.tenantId == config.tenantId
                 && account.backendUrl == config.backendUrl
                 && account.passkeys.contains { $0.credentialId == credIdB64url }
         }
-        guard owners.count == 1, let owner = owners.first else { return .resolved(nil) }
-        return .resolved(owner.accountId)
+        guard owners.count == 1 else { return nil }
+        return owners.first?.accountId
     }
 
     /// The cached account that registered `credentialId`, if any.
