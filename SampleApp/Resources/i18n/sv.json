@@ -66,6 +66,8 @@
     "statusNotYetValidDetail": "Det här intyget är inte giltigt än",
     "statusRevokedDetail": "Det här intyget har återkallats av utfärdaren",
     "statusSuspendedDetail": "Det här intyget har spärrats tillfälligt av utfärdaren",
+    "statusUnknown": "Okänt",
+    "statusUnknownDetail": "Det gick inte att fastställa detta intygs status",
     "fieldHolderBinding": "Innehavarbindning"
   },
   "presentation": {

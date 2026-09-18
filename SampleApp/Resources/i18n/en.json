@@ -66,6 +66,8 @@
     "statusNotYetValidDetail": "This credential is not valid yet",
     "statusRevokedDetail": "This credential has been revoked by its issuer",
     "statusSuspendedDetail": "This credential has been suspended by its issuer",
+    "statusUnknown": "Unknown",
+    "statusUnknownDetail": "This credential’s status could not be determined",
     "fieldHolderBinding": "Holder binding"
   },
   "presentation": {
