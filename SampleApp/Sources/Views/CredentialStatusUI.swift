@@ -19,6 +19,7 @@ extension CredentialStatus {
         case .notYetValid: return L10n.string("credentials.statusNotYetValid")
         case .revoked: return L10n.string("credentials.statusRevoked")
         case .suspended: return L10n.string("credentials.statusSuspended")
+        case .unknown: return L10n.string("credentials.statusUnknown")
         }
     }
 
@@ -31,6 +32,7 @@ extension CredentialStatus {
         case .notYetValid: return L10n.string("credentials.statusNotYetValidDetail")
         case .revoked: return L10n.string("credentials.statusRevokedDetail")
         case .suspended: return L10n.string("credentials.statusSuspendedDetail")
+        case .unknown: return L10n.string("credentials.statusUnknownDetail")
         }
     }
 
@@ -41,7 +43,7 @@ extension CredentialStatus {
     var ribbonColor: Color {
         switch self {
         case .expired, .revoked: return SirosTheme.error
-        case .notYetValid, .suspended: return SirosTheme.warning
+        case .notYetValid, .suspended, .unknown: return SirosTheme.warning
         case .valid: return SirosTheme.success
         }
     }
