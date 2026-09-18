@@ -174,10 +174,97 @@ extension SirosWallet {
     static func resolveIssuerSigningKey(
         issuer: String,
         kid: String?,
-        resolver: DidResolver
+        resolver: DidResolver,
+        profile: DiipProfile
     ) async -> [String: String]? {
-        await resolver.resolve(issuer).document?
-            .findPublicKey(kid: kid, relationship: .assertionMethod)
+        if DidMethod.of(issuer) != nil {
+            return await resolver.resolve(issuer).document?
+                .findPublicKey(kid: kid, relationship: .assertionMethod)
+        }
+        return await resolveHttpsIssuerSigningKey(issuer: issuer, kid: kid, profile: profile)
+    }
+
+    /// The signing key an HTTPS-identified Issuer publishes, from its SD-JWT
+    /// VC issuer metadata (`jwks`, or `jwks_uri`).
+    ///
+    /// Most Issuers are identified by an HTTPS URL rather than a DID, so
+    /// without this the Token Status List could never be verified for them and
+    /// every revocation check would degrade to "unavailable" - which this SDK
+    /// deliberately treats as usable, so revocation would silently never
+    /// apply.
+    ///
+    /// This is not a trust decision and does not pretend to be one. The path
+    /// is derived from the Issuer's own identifier, so there is no choice of
+    /// authority to make - unlike DID method resolution, which is go-trust's
+    /// (see ``DidResolver``). Whether this Issuer is trusted at all is
+    /// answered by the issuer trust list, the same as for the credential
+    /// itself; all this does is obtain the key that Issuer publishes under its
+    /// own name.
+    ///
+    /// The well-known suffix moves with the profile: SD-JWT VC renamed it
+    /// between drafts, so it comes from
+    /// ``DiipProfile/sdJwtVcIssuerMetadataPath`` rather than being hardcoded.
+    /// Both spellings are tried, since an issuer pinned to the other draft is
+    /// common.
+    static func resolveHttpsIssuerSigningKey(
+        issuer: String,
+        kid: String?,
+        profile: DiipProfile
+    ) async -> [String: String]? {
+        guard issuer.hasPrefix("https://") else { return nil }
+        // Trim every trailing slash, not just one: the well-known path
+        // carries its own leading slash.
+        var base = issuer
+        while base.hasSuffix("/") { base.removeLast() }
+
+        var paths = [profile.sdJwtVcIssuerMetadataPath]
+        for fallback in ["/.well-known/jwt-vc-issuer", "/.well-known/vc-issuer"]
+        where !paths.contains(fallback) {
+            paths.append(fallback)
+        }
+
+        for path in paths {
+            guard let body = await fetchPublicUrl(base + path, headers: [:]),
+                  let keys = await issuerJwks(metadata: body)
+            else { continue }
+            if let key = selectIssuerKey(keys, kid: kid) { return key }
+        }
+        return nil
+    }
+
+    /// The JWK set an SD-JWT VC issuer metadata document points at, inline or
+    /// by reference.
+    static func issuerJwks(metadata body: Data) async -> [[String: Any]]? {
+        guard let metadata = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            return nil
+        }
+        if let jwks = metadata["jwks"] as? [String: Any], let keys = jwks["keys"] as? [[String: Any]] {
+            return keys
+        }
+        guard let uri = metadata["jwks_uri"] as? String,
+              let referenced = await fetchPublicUrl(uri, headers: [:]),
+              let jwks = try? JSONSerialization.jsonObject(with: referenced) as? [String: Any],
+              let keys = jwks["keys"] as? [[String: Any]]
+        else { return nil }
+        return keys
+    }
+
+    /// Pick the key a Status List Token's `kid` names, or the only usable one
+    /// when it named none. A set with several keys and no `kid` is ambiguous,
+    /// and guessing there would mean accepting a signature from whichever key
+    /// happened to be first.
+    static func selectIssuerKey(_ keys: [[String: Any]], kid: String?) -> [String: String]? {
+        // A key carrying private material is not something an issuer publishes
+        // for verification; refusing it keeps a misconfigured JWKS from being
+        // treated as a verification key.
+        let usable = keys.filter { $0["d"] == nil && $0["k"] == nil }
+        let match: [String: Any]?
+        if let kid {
+            match = usable.first { ($0["kid"] as? String) == kid }
+        } else {
+            match = usable.count == 1 ? usable[0] : nil
+        }
+        return match?.compactMapValues { $0 as? String }
     }
 
     /// Fetch a URL that belongs to a third party - an issuer's Status List

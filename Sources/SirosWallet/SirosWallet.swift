@@ -744,6 +744,7 @@ public final class SirosWallet: @unchecked Sendable {
         // not this wallet's to make by fetching whatever a domain serves.
         let backendUrl = config.backendUrl
         let tenantId = config.tenantId
+        let diipProfile = config.diipProfile
         let resolver = DidResolver(profile: config.diipProfile) { did in
             let client = BackendApiClient(
                 baseUrl: backendUrl,
@@ -759,7 +760,9 @@ public final class SirosWallet: @unchecked Sendable {
                     await SirosWallet.fetchPublicUrl(url, headers: headers)
                 },
                 resolveIssuerKey: { issuer, kid in
-                    await SirosWallet.resolveIssuerSigningKey(issuer: issuer, kid: kid, resolver: resolver)
+                    await SirosWallet.resolveIssuerSigningKey(
+                        issuer: issuer, kid: kid, resolver: resolver, profile: diipProfile
+                    )
                 }
             ),
             clockTolerance: config.clockTolerance
