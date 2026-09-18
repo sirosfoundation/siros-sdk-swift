@@ -46,6 +46,9 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     func lock() {}
     func generateKey(algorithm: String) async throws -> String { "\(label)-key" }
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { Data() }
+    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey, holderBinding: nil)
+    }
     func generateProof(
         audience: String, nonce: String, freshKey: Bool, holderBinding: HolderBinding?
     ) async throws -> String {

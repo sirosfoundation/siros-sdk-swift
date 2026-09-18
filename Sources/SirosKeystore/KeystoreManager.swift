@@ -50,8 +50,7 @@ public protocol KeystoreManager: AnyObject, Sendable {
     func generateProof(
         audience: String,
         nonce: String,
-        freshKey: Bool,
-        holderBinding: HolderBinding?
+        freshKey: Bool
     ) async throws -> String
 
     /// Sign a verifiable presentation for OID4VP.
@@ -272,12 +271,24 @@ public protocol KeystoreManager: AnyObject, Sendable {
 public extension KeystoreManager {
     /// Default: freshKey=false for backward compatibility.
     func generateProof(audience: String, nonce: String) async throws -> String {
-        try await generateProof(audience: audience, nonce: nonce, freshKey: false, holderBinding: nil)
+        try await generateProof(audience: audience, nonce: nonce, freshKey: false)
     }
 
-    /// Default: let the keystore's own profile decide the holder binding.
-    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
-        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey, holderBinding: nil)
+    /// ``generateProof(audience:nonce:freshKey:)`` with the Holder binding
+    /// decided per issuance.
+    ///
+    /// Defaulted rather than a protocol requirement so that a conformer
+    /// written before DIIP - including a host's own `KeystoreManager` - keeps
+    /// compiling. Such a conformer cannot honour `holderBinding`, so this
+    /// ignores it and produces whatever shape that keystore has always
+    /// produced; the keystores in this SDK override it.
+    func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey)
     }
 
     func securityProperties() async -> SignerSecurityProperties? { nil }

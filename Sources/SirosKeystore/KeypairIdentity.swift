@@ -148,14 +148,23 @@ enum HolderIdentity {
         return thumbprint != nil && thumbprintOfDidJwk(kid) == thumbprint
     }
 
-    /// The JWK thumbprint of the key a `did:jwk` - or a verification method of
-    /// one - embeds, or nil when `kid` is not one.
+    /// The JWK thumbprint of the key a `did:jwk` embeds, or nil when `kid` is
+    /// not one of its verification methods.
+    ///
+    /// A `did:jwk` document has exactly one verification method, `#0`, so the
+    /// only DID URLs that name a key here are the bare DID and `<did>#0`.
+    /// Anything else names nothing: accepting `did:jwk:<key>#anything` would
+    /// let a malformed or hostile `cnf.kid` bind a credential to a key it
+    /// never named, which is the DID URL binding this exists to enforce.
     static func thumbprintOfDidJwk(_ kid: String) -> String? {
         guard kid.hasPrefix("did:jwk:") else { return nil }
         let did = String(kid.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0])
-        guard let jwk = Did.resolveDidJwk(did).document?.findPublicKey(kid: nil, relationship: .any) else {
-            return nil
-        }
+        guard kid == did || kid == Did.didJwkKeyId(did) else { return nil }
+        // kid is now known to name `#0`, so look that method up by its own id
+        // rather than by whatever spelling the credential used.
+        guard let jwk = Did.resolveDidJwk(did).document?
+            .findPublicKey(kid: Did.didJwkKeyId(did), relationship: .authentication)
+        else { return nil }
         return JwtHelpers.jwkThumbprint(jwk)
     }
 

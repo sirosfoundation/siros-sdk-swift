@@ -114,15 +114,32 @@ extension SirosWallet {
             return override.holderBinding
         }
 
+        // The offer's identifier and the one the proof is being signed for are
+        // compared the way an override is, not as raw strings: the same issuer
+        // routinely writes itself with and without a trailing slash, or with
+        // an explicit :443. Treating those as different issuers would discard
+        // what the Issuer advertised and fall back to the configured profile -
+        // silently sending a DIIP-only Issuer the HAIP proof shape.
         let advertised = activeOffer
             .flatMap { offer -> [String]? in
-                guard issuer == nil || offer.credentialIssuerIdentifier == issuer else { return nil }
+                guard Self.sameAdvertisedIssuer(offer.credentialIssuerIdentifier, issuer) else { return nil }
                 return offer.cryptographicBindingMethodsSupported
             }
         if let negotiated = HolderBinding.negotiate(advertised) {
             return negotiated
         }
         return config.interopProfile.holderBinding
+    }
+
+    /// Whether the active offer's issuer is the one a proof is being signed
+    /// for. A nil `issuer` means the caller did not say, in which case the
+    /// active offer is the only issuance in flight and does apply.
+    static func sameAdvertisedIssuer(_ offerIssuer: String?, _ issuer: String?) -> Bool {
+        guard let issuer else { return true }
+        guard let offerIssuer else { return false }
+        if offerIssuer == issuer { return true }
+        guard let url = URL(string: issuer) else { return false }
+        return sameIssuer(url, offerIssuer)
     }
 
     /// Evaluate one credential's status.
@@ -177,7 +194,13 @@ extension SirosWallet {
         resolver: DidResolver,
         profile: DiipProfile
     ) async -> [String: String]? {
-        if DidMethod.of(issuer) != nil {
+        // Any syntactically valid DID goes to the resolver, which delegates
+        // whatever is not did:jwk to go-trust. Testing DidMethod.of here would
+        // make an issuer identified by a method this SDK does not name -
+        // did:ebsi, say - fall through to the HTTPS branch, where it resolves
+        // to nothing: its status list would then never verify, and revocation
+        // for it would silently never apply.
+        if DidMethod.methodName(of: issuer) != nil {
             return await resolver.resolve(issuer).document?
                 .findPublicKey(kid: kid, relationship: .assertionMethod)
         }
@@ -310,6 +333,13 @@ extension SirosWallet {
 /// cookies. An ephemeral configuration with the cookie and credential storage
 /// removed is what makes the guarantee in `fetchPublicUrl` true rather than
 /// merely intended.
+///
+/// The delegate refuses a redirect to anything but HTTPS for the same reason.
+/// `fetchPublicUrl` checks the URL this wallet asks for, but URLSession follows
+/// redirects on its own, so without this a status-list or metadata URL could
+/// answer with a 302 to `http://` and serve the JWKS or the status token in the
+/// clear - the downgrade the HTTPS-only rule exists to prevent, arranged by
+/// whoever controls the URL.
 private let thirdPartySession: URLSession = {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil
@@ -318,8 +348,32 @@ private let thirdPartySession: URLSession = {
     configuration.urlCredentialStorage = nil
     configuration.urlCache = nil
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    return URLSession(configuration: configuration)
+    return URLSession(
+        configuration: configuration,
+        delegate: HttpsOnlyRedirectDelegate(),
+        delegateQueue: nil
+    )
 }()
+
+/// Refuses any redirect that would leave HTTPS.
+///
+/// Passing nil to the completion handler stops the redirect and returns the
+/// 3xx response itself, which `fetchPublicUrl` then rejects as not a 2xx.
+final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard request.url?.scheme?.lowercased() == "https" else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+}
 
 /// A small mutable cache of evaluated statuses.
 ///
