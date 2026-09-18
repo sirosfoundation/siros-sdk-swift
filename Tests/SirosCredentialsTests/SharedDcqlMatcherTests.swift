@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+@preconcurrency import SwiftCBOR
 @testable import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
@@ -213,6 +214,106 @@ final class SharedDcqlMatcherTests: XCTestCase {
         let paths = SharedDcqlMatcher.matchingClaims(credential).map(\.path)
         XCTAssertFalse(paths.contains(["_sd"]))
         XCTAssertFalse(paths.contains(["_sd_alg"]))
+    }
+
+    // MARK: - docType(for:)
+
+    /// An mdoc's docType comes from its own MSO, with no metadata at all.
+    ///
+    /// Issuer metadata only carries a doctype when the issuer exposes a
+    /// SIROS-internal schema endpoint; a standards-conformant third-party
+    /// issuer has no reason to, and its credentials would otherwise be
+    /// unmatchable while looking perfectly valid.
+    func testAnMdocResolvesItsDocTypeFromItsOwnMsoWithNoMetadata() {
+        let credential = StoredCredential(
+            id: 1, format: "mso_mdoc", raw: mdocRaw(docType: "org.iso.18013.5.1.mDL"),
+            metadata: nil, batchId: 1, instanceId: 0
+        )
+        XCTAssertEqual(SharedDcqlMatcher.docType(for: credential), "org.iso.18013.5.1.mDL")
+    }
+
+    /// The declared format decides, not the bytes.
+    ///
+    /// The raw value here would parse perfectly well as an mdoc. It must still
+    /// not produce an mdoc docType, because the credential says it is an
+    /// SD-JWT. Parsing unconditionally let the content of `raw` answer a
+    /// question only `format` may answer - the regression this guards.
+    func testAnSdJwtCredentialTakesItsDocTypeFromItsFormatNotItsBytes() {
+        let credential = StoredCredential(
+            id: 2, format: "dc+sd-jwt", raw: mdocRaw(docType: "org.iso.18013.5.1.mDL"),
+            metadata: nil, batchId: 2, instanceId: 0
+        )
+        XCTAssertNil(SharedDcqlMatcher.docType(for: credential))
+    }
+
+    /// The case actually reported (siros-sdk-kotlin#204).
+    ///
+    /// A real compact serialization is not base64url, so on this platform the
+    /// unguarded parse failed silently rather than throwing as it did on
+    /// Android - meaning this assertion held before the guard too. It pins the
+    /// reported behaviour; the test above is the one that proves the fix.
+    func testARealSdJwtSerializationIsNeverParsedAsAnMdoc() {
+        let credential = StoredCredential(
+            id: 3, format: "vc+sd-jwt",
+            raw: "eyJhbGciOiJFUzI1NiJ9.eyJ2Y3QiOiJodHRwczovL2lzc3Vlci5leGFtcGxlL3BpZCJ9.sig~WQ~",
+            metadata: nil, batchId: 3, instanceId: 0
+        )
+        XCTAssertNil(SharedDcqlMatcher.docType(for: credential))
+    }
+
+    /// A genuine mdoc the parser cannot read still falls back to metadata.
+    ///
+    /// The guard must not turn an mdoc into a metadata-only path, nor swallow
+    /// the fallback that keeps such a credential matchable.
+    func testAnUnparseableMdocFallsBackToMetadata() {
+        let credential = StoredCredential(
+            id: 4, format: "mso_mdoc", raw: "not base64url at all!",
+            metadata: CredentialMetadata(doctype: "org.iso.18013.5.1.mDL"),
+            batchId: 4, instanceId: 0
+        )
+        XCTAssertEqual(SharedDcqlMatcher.docType(for: credential), "org.iso.18013.5.1.mDL")
+    }
+
+    /// A DeviceResponse-shaped mdoc envelope, base64url encoded the way
+    /// `StoredCredential.raw` holds it. The MSO carries the docType the way the
+    /// wire format does (ISO 18013-5 9.1.2.4): a byteString whose content
+    /// decodes to a tag-24 byteString, which itself decodes to the MSO map.
+    private func mdocRaw(docType: String) -> String {
+        let mso: CBOR = .map([.utf8String("docType"): .utf8String(docType)])
+        let taggedMso: CBOR = .tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerAuth: CBOR = .array([
+            .byteString([]),
+            .map([:]),
+            .byteString(taggedMso.encode()),
+            .byteString([UInt8](repeating: 0, count: 64)),
+        ])
+        let item: CBOR = .map([
+            .utf8String("digestID"): .unsignedInt(0),
+            .utf8String("random"): .byteString([UInt8](repeating: 0, count: 16)),
+            .utf8String("elementIdentifier"): .utf8String("family_name"),
+            .utf8String("elementValue"): .utf8String("Doe"),
+        ])
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([
+                .utf8String("org.iso.18013.5.1"): .array([
+                    .tagged(.encodedCBORDataItem, .byteString(item.encode())),
+                ]),
+            ]),
+            .utf8String("issuerAuth"): issuerAuth,
+        ])
+        let envelope: CBOR = .map([
+            .utf8String("documents"): .array([
+                .map([
+                    .utf8String("docType"): .utf8String(docType),
+                    .utf8String("issuerSigned"): issuerSigned,
+                ]),
+            ]),
+            .utf8String("status"): .unsignedInt(0),
+        ])
+        return Data(envelope.encode()).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }
 
