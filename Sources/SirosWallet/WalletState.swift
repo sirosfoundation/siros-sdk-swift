@@ -21,29 +21,44 @@ public enum WalletState: Sendable, Equatable {
     case flowActive(userId: String, displayName: String?, flowId: String, flowType: String, status: String, credentials: [StoredCredential])
 
     /// The backend refuses this installation because of its wallet instance's
-    /// lifecycle (SID-AUTH-06): the instance is suspended, or the wallet has
-    /// been deactivated and its data erased. Terminal for this session - it is
-    /// not an error to retry or dismiss, but a condition that only someone
-    /// else (another device, the provider) can lift.
+    /// lifecycle (SID-AUTH-06): the instance is suspended, the instance was
+    /// revoked, or the whole wallet has been deactivated and its data erased.
+    /// Terminal for this session - it is not an error to retry or dismiss, but
+    /// a condition that only someone else (another device, the provider) can
+    /// lift.
     ///
     /// Entered from `login()`, `unlockKeystore()`, `resumeSession()` and from
     /// the SDK's own re-login after a token cut-off, whenever the
     /// authorization server answers `403` with `WALLET_SUSPENDED` /
     /// `WALLET_REVOKED`.
     ///
-    /// **Neither reason forgets anything local**, and `cachedAccounts` still
-    /// lists this account. `.revoked` is *not* proof the wallet was erased:
-    /// the backend answers with it for the login gate of a single revoked
-    /// instance as well, and only deactivates the wallet when the last
-    /// non-revoked instance is revoked - the user's other devices keep working
-    /// either way. Only `message`, which is written for the user, tells the
-    /// two apart, so the SDK shows it rather than guessing.
+    /// `.suspended` and `.revoked` are scoped to *this* wallet instance and
+    /// **forget nothing local**: `cachedAccounts` still lists this account,
+    /// and the cached credentials stay, because the user's other devices and
+    /// passkeys keep working. `.deactivated` is the whole wallet - every
+    /// instance revoked, the data erased server-side - so the SDK forgets the
+    /// affected account there, the same way `SirosWallet.deactivateWallet`
+    /// does, and `cachedAccounts` no longer lists it.
+    ///
+    /// The one qualification: the SDK only forgets an account it has
+    /// identified. A login refused before its passkey resolved to a cached
+    /// account - the ceremony never completed, or it completed with a
+    /// credential this deployment does not know - leaves every cached account
+    /// alone, because the alternative is deleting one the refusal was not
+    /// about. So treat `.deactivated` as "this account is gone if it is
+    /// listed", not as "`cachedAccounts` is now empty"; render whatever it
+    /// actually contains.
+    ///
+    /// The three are told apart by the refusal's machine-readable `scope`
+    /// (go-wallet-backend#340), never by `message` - which is prose for the
+    /// user. A backend older than #340 sends no `scope`, and `WALLET_REVOKED`
+    /// then resolves to the per-instance `.revoked`, so nothing local is lost
+    /// on a backend that cannot say which it meant.
     ///
     /// What an app should offer: for `.suspended`, a retry - a later `login()`
     /// succeeds once the instance is reactivated from another device. For
-    /// `.revoked`, a fresh enrollment, which is the way forward in both the
-    /// per-instance and the deactivated case. `SirosWallet.deactivateWallet`
-    /// is the only thing that forgets the cached account.
+    /// `.revoked` and `.deactivated`, a fresh enrollment; for `.deactivated`
+    /// there is also nothing left of the old wallet to come back to.
     case lifecycleBlocked(
         reason: SirosError.WalletLifecycleRefusal,
         message: String?,

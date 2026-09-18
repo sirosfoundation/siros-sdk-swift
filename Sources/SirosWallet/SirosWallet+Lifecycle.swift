@@ -271,7 +271,19 @@ extension SirosWallet {
     // Not `private`: called from `SirosWallet.swift`'s `unlockKeystore`
     // (this function now lives in `SirosWallet+Lifecycle.swift`) - same
     // cross-file-extension-access reason as `keystore` above.
-    func fetchPrivateData() async -> Data {
+    /// The encrypted private-data container for this session, or empty when it
+    /// could not be fetched - a first login has none yet, and a transient
+    /// failure must not take down a login that can still unlock from what the
+    /// session store holds.
+    ///
+    /// The one failure that is **not** tolerated is a wallet lifecycle refusal
+    /// (SID-AUTH-06): this is the first wallet-API call a login makes, so a
+    /// suspended instance or a deactivated wallet is usually met right here.
+    /// Swallowed, it became an empty container and then a keystore-unlock
+    /// error, and the wallet never reached `WalletState.lifecycleBlocked` -
+    /// nor forgot the account of a wallet that had been deactivated. It is
+    /// rethrown so the caller's `handleLifecycleRefusal` can see it.
+    func fetchPrivateData() async throws -> Data {
         lock.lock(); let client = apiClient; lock.unlock()
         guard let client else { return Data() }
         do {
@@ -290,6 +302,11 @@ extension SirosWallet {
                 }
             }
         } catch {
+            // See this function's doc comment: a lifecycle refusal is a state
+            // the caller has to enter, not a fetch that came back empty.
+            if let sirosError = error as? SirosError, sirosError.walletLifecycleRefusal != nil {
+                throw sirosError
+            }
             #if canImport(os)
             logger.warning("Could not fetch privateData: \(error.localizedDescription)")
             #endif

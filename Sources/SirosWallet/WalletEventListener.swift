@@ -91,24 +91,34 @@ public protocol WalletEventListener: AnyObject, Sendable {
     func onReauthenticationRequired()
 
     /// The backend refuses this installation because of its wallet instance's
-    /// lifecycle (SID-AUTH-06): the instance was suspended, or the wallet was
-    /// deactivated and its data erased. Fired when `SirosWallet` enters
-    /// `WalletState.lifecycleBlocked` - from a login, a keystore unlock, a
-    /// session resume, or the SDK's own single re-login after a token cut-off.
+    /// lifecycle (SID-AUTH-06): the instance was suspended, the instance was
+    /// revoked, or the whole wallet was deactivated and its data erased. Fired
+    /// when `SirosWallet` enters `WalletState.lifecycleBlocked` - from a login,
+    /// a keystore unlock, a session resume, or the SDK's own single re-login
+    /// after a token cut-off.
     ///
     /// Unlike `onReauthenticationRequired()` this is not "prompt again":
     /// another login attempt with the same passkey is refused the same way
     /// until someone else acts. `.suspended` is lifted by reactivating the
     /// instance from another device; `.revoked` is terminal *for this
-    /// installation's instance* and needs a fresh enrollment.
+    /// installation's instance* and needs a fresh enrollment; `.deactivated`
+    /// is terminal for the whole wallet in this tenant.
     ///
-    /// `.revoked` does **not** imply the wallet was deactivated and erased:
-    /// the backend answers with it for a single revoked instance too, while
-    /// the account's other passkeys and devices keep working. Nothing local is
-    /// discarded on either reason - `message` is the only thing that
-    /// distinguishes the cases, and it is written for the user - so do not
-    /// treat this callback as licence to drop account state. Apps that already
-    /// render `WalletState.lifecycleBlocked` need not implement this.
+    /// `.revoked` does **not** imply the wallet was deactivated and erased -
+    /// the account's other passkeys and devices keep working - so nothing
+    /// local is discarded for it or for `.suspended`, and this callback is not
+    /// licence to drop account state. Only `.deactivated` says the wallet is
+    /// gone, and by then the SDK has forgotten the cached account itself - if
+    /// it could tell which one. A login refused before its passkey resolved to
+    /// a known account leaves every cached account in place rather than delete
+    /// one the refusal was not about, so read
+    /// `WalletState.lifecycleBlocked`'s `cachedAccounts` for what is left
+    /// instead of assuming the login picker is now empty.
+    ///
+    /// The three are told apart by the refusal's `scope`
+    /// (go-wallet-backend#340), not by `message`, which is prose for the user.
+    /// Apps that already render `WalletState.lifecycleBlocked` need not
+    /// implement this.
     func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
 
     /// A credential batch was renewed (credential re-issuance/renewal plan,

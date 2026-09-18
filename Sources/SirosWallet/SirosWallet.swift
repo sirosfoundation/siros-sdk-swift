@@ -108,13 +108,28 @@ public final class SirosWallet: @unchecked Sendable {
         // never saw a match and the active account was forgotten without a
         // logout, leaving tokens and session state in place.
         let wasActive = accountRegistry.activeAccountId == accountId
-        accountRegistry.removeAccount(accountId: accountId)
+        forgetAccountLocally(accountId: accountId)
         if wasActive {
             logout()
         } else {
             // Re-emit state so UI reflects the removed account
             setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
+    }
+
+    /// The removal `forgetAccount` performs, without the session teardown it
+    /// decides on afterwards.
+    ///
+    /// The lifecycle-blocked path uses this. It has already run
+    /// `endSessionLocally()`, and it must never reach `logout()`: that would
+    /// send `DELETE /auth/session`, which the whole blocked path is built to
+    /// avoid (see `endSessionLocally()`). Asking `forgetAccount` not to would
+    /// mean trusting `activeAccountId` to still be nil after the awaits in
+    /// between - and a login started concurrently can put it back.
+    // Not `private`: `SirosWallet+SessionLifecycle.swift` needs it - same
+    // cross-file-extension-access reason as `keystore` above.
+    func forgetAccountLocally(accountId: String) {
+        accountRegistry.removeAccount(accountId: accountId)
     }
 
     // MARK: - Passkey Management
@@ -169,7 +184,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// Suspend, reactivate or revoke one of this user's wallet instances
     /// (`PUT /user/session/instances/{id}/status`). Suspension is reversible
     /// and only blocks that installation (login, attestation, sessions);
-    /// revocation is terminal. Revoking the last non-revoked instance
+    /// revocation is terminal, but - per the EUDI wallet-unit lifecycle, which
+    /// SIROS follows exactly - terminal *for that instance only*: the user's
+    /// other devices are untouched. Revoking the last non-revoked instance
     /// deactivates the wallet - prefer `deactivateWallet(reason:)` for that,
     /// which also clears local state.
     ///
@@ -195,8 +212,10 @@ public final class SirosWallet: @unchecked Sendable {
     /// Deactivate this wallet: revoke every wallet instance of the user
     /// (`POST /user/session/instances/revoke-all`). The backend erases the
     /// wallet's private data and server-side credentials and refuses every
-    /// passkey of the user at login with `WALLET_REVOKED`; a new enrollment
-    /// is required afterwards. The local cached account is forgotten and the
+    /// passkey of the user at login with `WALLET_REVOKED` at scope `wallet`
+    /// (which reaches other installations as
+    /// `WalletState.lifecycleBlocked(reason: .deactivated, ...)`); a new
+    /// enrollment is required afterwards. The local cached account is forgotten and the
     /// wallet logged out, since the vault it decrypts no longer exists.
     /// The local account is forgotten in both outcomes, since the revocations
     /// stand even when the backend's erasure cascade did not finish.
@@ -983,6 +1002,21 @@ public final class SirosWallet: @unchecked Sendable {
 
     /// Login with an existing passkey.
     public func login() async throws {
+        // A user-driven login answers only for itself: until its passkey
+        // resolves to an account, a `.deactivated` refusal has nothing it may
+        // forget. The registry's active account is not an answer here - it
+        // belongs to whatever session came before, possibly another user.
+        try await login(refusalAccountId: nil)
+    }
+
+    /// `login()`, told which account a lifecycle refusal is about while the
+    /// ceremony has not yet identified one itself.
+    ///
+    /// Only the SDK's own re-login after a token cut-off has one: it replaces
+    /// a session whose account it captured before its teardown began, and a
+    /// refusal arriving before the passkey ceremony completes is unambiguously
+    /// about that account. See `handleLifecycleRefusal(_:forAccount:)`.
+    func login(refusalAccountId: String?) async throws {
         guard let asClient = authServerClient, let tokens = authTokens else {
             throw SirosError.wallet(message: "AuthServerClient not initialized")
         }
@@ -991,9 +1025,18 @@ public final class SirosWallet: @unchecked Sendable {
         // account (or from before a re-enrollment) must not be what identifies
         // this device once this login resolves.
         lock.lock(); cachedWia = nil; cachedWiaExpiresAt = 0; lock.unlock()
+        // Which account this login is for, as soon as the passkey resolves to
+        // one. `accountRegistry.activeAccountId` is deliberately not moved
+        // until the unlock below has succeeded, so it cannot answer that for a
+        // login refused by `loginFinish` - and for a user-driven login the
+        // account it still names is the *previous* session's. So until the
+        // ceremony identifies one, this is whatever the caller vouched for.
+        // See `handleLifecycleRefusal(_:forAccount:)`.
+        var loginAccountId = refusalAccountId
         do {
             // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
             let assertion = try await performPasskeyAssertion(asClient: asClient)
+            loginAccountId = accountId(owningInScope: assertion.credentialId)
             let prfOutput = assertion.prfOutput
 
             // Step 3: Complete login with AS
@@ -1010,9 +1053,12 @@ public final class SirosWallet: @unchecked Sendable {
             // moved once the unlock has succeeded.
             let accountId = "\(config.tenantId):\(session.uuid)"
             sessionStore.activeAccountId = accountId
+            // Now the server has named the account, so a refusal from anything
+            // below this line is unambiguously about it.
+            loginAccountId = accountId
 
             setupApiClientWithTokens(tokens)
-            let privateData = await fetchPrivateData()
+            let privateData = try await fetchPrivateData()
 
             // HKDF parameters: this account's session store first (unlock
             // after resume), then its registry entry (login after logout, when
@@ -1064,13 +1110,13 @@ public final class SirosWallet: @unchecked Sendable {
             // A SID-AUTH-06 refusal is a state, not an error: this passkey's
             // wallet instance is suspended or the wallet was deactivated, and
             // retrying the same login changes nothing until someone else acts.
-            if await handleLifecycleRefusal(e) { return }
+            if await handleLifecycleRefusal(e, forAccount: loginAccountId) { return }
             #if canImport(os)
             logger.error("Login failed: \(e.localizedDescription)")
             #endif
             setState(.error(message: e.localizedDescription))
         } catch {
-            if await handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error, forAccount: loginAccountId) { return }
             #if canImport(os)
             logger.error("Login failed: \(error.localizedDescription)")
             #endif
@@ -1140,8 +1186,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// Resume a previous session without requiring a new WebAuthn assertion.
     public func resumeSession() async {
         // Restore the active account ID so the session store reads the right data
-        if let activeId = accountRegistry.activeAccountId {
-            sessionStore.activeAccountId = activeId
+        let resumingAccountId = accountRegistry.activeAccountId
+        if let resumingAccountId {
+            sessionStore.activeAccountId = resumingAccountId
         }
         guard let userId = sessionStore.userId, let tokens = authTokens else { return }
         setState(.connecting)
@@ -1154,7 +1201,7 @@ public final class SirosWallet: @unchecked Sendable {
             do {
                 _ = try await tokens.ensureBackendToken()
             } catch {
-                if await handleLifecycleRefusal(error) { return }
+                if await handleLifecycleRefusal(error, forAccount: resumingAccountId) { return }
                 sessionStore.clear()
                 lock.lock(); apiClient = nil; lock.unlock()
                 setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
@@ -1173,7 +1220,7 @@ public final class SirosWallet: @unchecked Sendable {
                 setState(.ready(userId: userId, displayName: displayName, credentials: []))
             }
         } catch {
-            if await handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error, forAccount: resumingAccountId) { return }
             setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
         }
     }
@@ -1184,6 +1231,10 @@ public final class SirosWallet: @unchecked Sendable {
     public func unlockKeystore() async throws {
         guard case .keystoreLocked(let userId, let displayName) = state,
               let asClient = authServerClient else { return }
+        // The account being unlocked, captured before the ceremony: a refusal
+        // arrives after it, and the registry is mutable in between. See
+        // `handleLifecycleRefusal(_:forAccount:)`.
+        let unlockingAccountId = accountRegistry.activeAccountId
         do {
             // Use AS login to get PRF output via biometric assertion, then
             // complete it (refreshes the session cookie). Candidates are scoped
@@ -1225,7 +1276,7 @@ public final class SirosWallet: @unchecked Sendable {
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
             await reloadPresentationHistory()
         } catch {
-            if await handleLifecycleRefusal(error) { return }
+            if await handleLifecycleRefusal(error, forAccount: unlockingAccountId) { return }
             setState(.error(message: error.localizedDescription))
         }
     }

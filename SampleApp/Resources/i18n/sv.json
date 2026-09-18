@@ -317,8 +317,10 @@
     "suspendedTitle": "Den här enheten är pausad",
     "suspendedMessage": "Återaktivera den från någon av dina andra enheter, eller kontakta din plånboksleverantör. Dina intyg är orörda.",
     "retry": "Försök igen",
-    "revokedTitle": "Den här plånboken avaktiverades",
-    "revokedMessage": "Dess data raderades på servern och den här passkey-nyckeln kan inte längre logga in. Registrera dig igen för att börja om.",
-    "enrollAgain": "Registrera igen"
+    "revokedTitle": "Den här enheten togs bort",
+    "revokedMessage": "Dess åtkomst till plånboken återkallades. Dina andra enheter påverkas inte. Registrera den här enheten igen för att använda den.",
+    "enrollAgain": "Registrera igen",
+    "deactivatedTitle": "Den här plånboken avaktiverades",
+    "deactivatedMessage": "Alla enheter togs bort och plånbokens data raderades på servern. Registrera dig igen för att börja om."
   }
 }

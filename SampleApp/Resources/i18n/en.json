@@ -317,8 +317,10 @@
     "suspendedTitle": "This device is suspended",
     "suspendedMessage": "Reactivate it from another one of your devices, or contact your wallet provider. Your credentials are untouched.",
     "retry": "Try again",
-    "revokedTitle": "This wallet was deactivated",
-    "revokedMessage": "Its data was erased on the server and this passkey can no longer sign in. Enroll again to start over.",
-    "enrollAgain": "Enroll again"
+    "revokedTitle": "This device was removed",
+    "revokedMessage": "Its access to this wallet was revoked. Your other devices are unaffected. Enroll again to use this one.",
+    "enrollAgain": "Enroll again",
+    "deactivatedTitle": "This wallet was deactivated",
+    "deactivatedMessage": "Every device was removed and the wallet's data was erased on the server. Enroll again to start over."
   }
 }
