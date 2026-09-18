@@ -1,7 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
-import SwiftCBOR
+@preconcurrency import SwiftCBOR
 @testable import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
