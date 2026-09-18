@@ -306,8 +306,15 @@ public enum CredentialUtils {
         if let status = mso[CBOR.utf8String("status")],
            let statusList = status[CBOR.utf8String("status_list")] {
             var reference: [String: Any] = [:]
-            if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")] {
-                reference["idx"] = Int(idx)
+            // `idx` comes from the credential, which is not this wallet's to
+            // trust before it has been verified. `Int(idx)` traps on a value
+            // past Int.max, and a trap is not a parse failure - it takes the
+            // process down. A status list with that many entries does not
+            // exist, so an index that will not convert is simply not read,
+            // leaving the reference incomplete and the status unavailable.
+            if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")],
+               let index = Int(exactly: idx) {
+                reference["idx"] = index
             }
             if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
                 reference["uri"] = uri
