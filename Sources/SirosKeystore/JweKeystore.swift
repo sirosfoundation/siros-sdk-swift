@@ -332,6 +332,11 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         return Data(jws.utf8)
     }
 
+    /// The pre-DIIP call shape: this keystore's own profile decides.
+    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey, holderBinding: nil)
+    }
+
     public func generateProof(
         audience: String,
         nonce: String,
@@ -1416,6 +1421,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func sign(keyId: String, payload: Data, algorithm: String = "ES256") async throws -> Data {
+        throw KeystoreError.cryptoError("CryptoKit not available on this platform")
+    }
+    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func generateProof(

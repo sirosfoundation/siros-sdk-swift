@@ -223,6 +223,11 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return try await signer.sign(keyId: keyId, data: payload)
     }
 
+    /// The pre-DIIP call shape: this keystore's own profile decides.
+    public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey, holderBinding: nil)
+    }
+
     public func generateProof(
         audience: String,
         nonce: String,
@@ -777,15 +782,13 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         )
     }
 
-    /// The JWK thumbprint of the key a `did:jwk` (or a verification method of
-    /// one) embeds, or nil if `kid` is not one.
+    /// The JWK thumbprint of the key a `did:jwk` embeds, or nil if `kid` is not
+    /// one of its verification methods - see
+    /// ``HolderIdentity/thumbprintOfDidJwk(_:)``, which this defers to. A
+    /// did:jwk document has only `#0`, so any other fragment names nothing and
+    /// must not select a key.
     private func thumbprintOfDidJwk(_ kid: String) -> String? {
-        guard kid.hasPrefix("did:jwk:") else { return nil }
-        let did = kid.split(separator: "#", maxSplits: 1).map(String.init)[0]
-        guard let jwk = Did.resolveDidJwk(did).document?.findPublicKey(kid: nil, relationship: .any) else {
-            return nil
-        }
-        return JwtHelpers.jwkThumbprint(jwk)
+        HolderIdentity.thumbprintOfDidJwk(kid)
     }
 
     /// The `did:jwk` for a public key, when this issuance identifies the

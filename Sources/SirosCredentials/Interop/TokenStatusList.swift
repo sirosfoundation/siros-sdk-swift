@@ -59,11 +59,24 @@ public enum TokenStatusList {
     public static func extractReference(from claims: [String: Any]) -> Reference? {
         guard let status = claims["status"] as? [String: Any],
               let statusList = status["status_list"] as? [String: Any],
-              let idx = (statusList["idx"] as? NSNumber)?.intValue ?? (statusList["idx"] as? Int),
+              let idx = exactIndex(statusList["idx"]),
               let uri = statusList["uri"] as? String,
-              idx >= 0, !uri.isEmpty
+              !uri.isEmpty
         else { return nil }
         return Reference(idx: idx, uri: uri)
+    }
+
+    /// `idx` as an exact, non-negative `Int`, or nil.
+    ///
+    /// It selects which bit of the status list applies, and it comes from the
+    /// credential. `NSNumber.intValue` truncates a fractional value and clamps
+    /// one that does not fit - either of which would read some other
+    /// credential's status - so the conversion has to be exact. Casting to
+    /// `Int` is exactly that: since SE-0170 an `NSNumber` cast fails rather
+    /// than losing information.
+    private static func exactIndex(_ value: Any?) -> Int? {
+        guard let idx = value as? Int, idx >= 0 else { return nil }
+        return idx
     }
 
     /// Read the status at `idx` from a decompressed status list.
