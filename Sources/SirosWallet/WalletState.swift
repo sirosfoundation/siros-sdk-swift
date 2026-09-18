@@ -37,8 +37,17 @@ public enum WalletState: Sendable, Equatable {
     /// and the cached credentials stay, because the user's other devices and
     /// passkeys keep working. `.deactivated` is the whole wallet - every
     /// instance revoked, the data erased server-side - so the SDK forgets the
-    /// cached account there, the same way `SirosWallet.deactivateWallet` does,
-    /// and `cachedAccounts` no longer lists it.
+    /// affected account there, the same way `SirosWallet.deactivateWallet`
+    /// does, and `cachedAccounts` no longer lists it.
+    ///
+    /// The one qualification: the SDK only forgets an account it has
+    /// identified. A login refused before its passkey resolved to a cached
+    /// account - the ceremony never completed, or it completed with a
+    /// credential this deployment does not know - leaves every cached account
+    /// alone, because the alternative is deleting one the refusal was not
+    /// about. So treat `.deactivated` as "this account is gone if it is
+    /// listed", not as "`cachedAccounts` is now empty"; render whatever it
+    /// actually contains.
     ///
     /// The three are told apart by the refusal's machine-readable `scope`
     /// (go-wallet-backend#340), never by `message` - which is prose for the

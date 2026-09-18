@@ -390,42 +390,57 @@ final class SirosWalletLifecycleTests: XCTestCase {
         )
     }
 
-    /// The passkey's owner is looked up across the *whole* registry, which can
-    /// hold the same credential id for an account of another tenant or another
-    /// deployment. Only an owner inside the scope the ceremony offered its
-    /// candidates under (this tenant, this backend) may name the account a
-    /// deactivation forgets - anything else is not an account this login could
-    /// have been for.
+    /// The passkey's owner is resolved against the scope the ceremony offered
+    /// its candidates under (this tenant, this backend) - not by taking the
+    /// first match anywhere in the registry and filtering afterwards, which an
+    /// out-of-scope duplicate arriving first would defeat. Only an owner in
+    /// that scope may name the account a deactivation forgets.
     func testTheLoginRefusalSubjectOnlyAcceptsAnOwnerFromThisDeployment() {
-        let wallet = makeWallet()  // tenant "default", https://wallet.example.invalid
-
-        func account(tenantId: String, backendUrl: String) -> CachedAccount {
-            CachedAccount(
-                userId: "user-1",
-                tenantId: tenantId,
-                displayName: "Alice",
-                backendUrl: backendUrl,
-                passkeys: [CachedPasskey(credentialId: "cred-1", prfSalt: "c2FsdA==")]
-            )
-        }
+        // Registry order matters: the out-of-scope duplicate is inserted first,
+        // which is exactly what a first-match-then-filter lookup falls for.
+        let registry = AccountRegistry.inMemory()
+        registry.upsertAccount(account(userId: "user-elsewhere", backendUrl: "https://other.example.invalid"))
+        registry.upsertAccount(account(userId: "user-othertenant", tenantId: "other"))
+        registry.upsertAccount(account(userId: "user-1"))
+        let wallet = makeWallet(registry: registry)  // tenant "default", https://wallet.example.invalid
 
         XCTAssertEqual(
-            wallet.loginRefusalSubject(for: account(tenantId: "default", backendUrl: "https://wallet.example.invalid")),
-            .resolved("default:user-1")
+            wallet.loginRefusalSubject(forCredential: Data("cred".utf8)),
+            .resolved("default:user-1"),
+            "the in-scope owner, even though two out-of-scope duplicates precede it"
         )
         XCTAssertEqual(
-            wallet.loginRefusalSubject(for: account(tenantId: "other", backendUrl: "https://wallet.example.invalid")),
+            wallet.loginRefusalSubject(forCredential: Data("nobodys-credential".utf8)),
             .resolved(nil),
-            "another tenant's account is not what this login was for"
-        )
-        XCTAssertEqual(
-            wallet.loginRefusalSubject(for: account(tenantId: "default", backendUrl: "https://other.example.invalid")),
-            .resolved(nil),
-            "the same credential id on another deployment must not be forgotten here"
-        )
-        XCTAssertEqual(
-            wallet.loginRefusalSubject(for: nil), .resolved(nil),
             "a platform passkey with no registry entry identifies nothing"
+        )
+    }
+
+    /// A registry that somehow holds the same credential twice *in scope*
+    /// names no one account, and the destructive path must read that as
+    /// "unknown" rather than pick one.
+    func testAnAmbiguousOwnerIdentifiesNothing() {
+        let registry = AccountRegistry.inMemory()
+        registry.upsertAccount(account(userId: "user-1"))
+        registry.upsertAccount(account(userId: "user-2"))
+        let wallet = makeWallet(registry: registry)
+
+        XCTAssertEqual(wallet.loginRefusalSubject(forCredential: Data("cred".utf8)), .resolved(nil))
+    }
+
+    /// One account holding the shared credential id `cred` (base64url of
+    /// "cred" is "Y3JlZA"), in this deployment unless told otherwise.
+    private func account(
+        userId: String,
+        tenantId: String = "default",
+        backendUrl: String = "https://wallet.example.invalid"
+    ) -> CachedAccount {
+        CachedAccount(
+            userId: userId,
+            tenantId: tenantId,
+            displayName: userId,
+            backendUrl: backendUrl,
+            passkeys: [CachedPasskey(credentialId: "Y3JlZA", prfSalt: "c2FsdA==")]
         )
     }
 

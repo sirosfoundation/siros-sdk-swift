@@ -32,8 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `WalletEventListener.onWalletLifecycleBlocked` can now report
     `.deactivated`. Existing `switch`es over the enum must handle it.
   - Only `.deactivated` forgets the cached account, by the same path
-    `deactivateWallet()` uses. `.suspended` and `.revoked` behave exactly as
-    before: session ended locally, account and credentials kept.
+    `deactivateWallet()` uses, and only the account the refusal is about: a
+    login refused before its passkey resolved to a known account of this
+    tenant and backend forgets nothing, since deleting the wrong account's
+    passkeys is worse than leaving a stale entry on the login screen.
+    `.suspended` and `.revoked` behave exactly as before: session ended
+    locally, account and credentials kept.
   - A backend older than #340 sends no `scope`, and `WALLET_REVOKED` then
     resolves to `.revoked` - so against every deployment that exists today the
     behaviour is bit-for-bit what it was. An unrecognised `scope` falls back

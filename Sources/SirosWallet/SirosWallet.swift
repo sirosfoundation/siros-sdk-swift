@@ -1021,7 +1021,7 @@ public final class SirosWallet: @unchecked Sendable {
         do {
             // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
             let assertion = try await performPasskeyAssertion(asClient: asClient)
-            loginSubject = loginRefusalSubject(for: assertion.cachedAccount)
+            loginSubject = loginRefusalSubject(forCredential: assertion.credentialId)
             let prfOutput = assertion.prfOutput
 
             // Step 3: Complete login with AS

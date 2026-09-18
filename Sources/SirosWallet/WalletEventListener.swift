@@ -108,8 +108,14 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// the account's other passkeys and devices keep working - so nothing
     /// local is discarded for it or for `.suspended`, and this callback is not
     /// licence to drop account state. Only `.deactivated` says the wallet is
-    /// gone, and by the time it fires the SDK has already forgotten the cached
-    /// account itself. The three are told apart by the refusal's `scope`
+    /// gone, and by then the SDK has forgotten the cached account itself - if
+    /// it could tell which one. A login refused before its passkey resolved to
+    /// a known account leaves every cached account in place rather than delete
+    /// one the refusal was not about, so read
+    /// `WalletState.lifecycleBlocked`'s `cachedAccounts` for what is left
+    /// instead of assuming the login picker is now empty.
+    ///
+    /// The three are told apart by the refusal's `scope`
     /// (go-wallet-backend#340), not by `message`, which is prose for the user.
     /// Apps that already render `WalletState.lifecycleBlocked` need not
     /// implement this.

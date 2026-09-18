@@ -17,6 +17,11 @@ extension SirosWallet {
         let prfSalt: Data
         /// The cached account whose passkey answered the ceremony, if known.
         let cachedAccount: CachedAccount?
+        /// The credential the ceremony actually completed with. Kept raw
+        /// alongside `cachedAccount` because that is only ever the *first*
+        /// registry match, which is not enough to decide anything destructive
+        /// - see `loginRefusalSubject(forCredential:)`.
+        let credentialId: Data
     }
 
     /// Runs `loginBegin` -> platform `authenticate` -> PRF resolution.
@@ -117,7 +122,8 @@ extension SirosWallet {
             credential: credential,
             prfOutput: prfOutput,
             prfSalt: prfSalt,
-            cachedAccount: cachedAccount
+            cachedAccount: cachedAccount,
+            credentialId: result.credentialId
         )
     }
 
@@ -142,21 +148,29 @@ extension SirosWallet {
         return candidates
     }
 
-    /// Which account a `login()` refusal is about, from the passkey the
+    /// Which account a `login()` refusal is about, from the credential the
     /// ceremony completed with.
     ///
-    /// `cachedAccount(owning:)` searches the whole registry, which can hold the
-    /// same credential id for an account of another deployment - so the owner
-    /// counts only under the scope `loginPrfCandidates` offered its candidates
-    /// under (this tenant, this backend). Anything else is not an account this
-    /// login could have been for, and must never be the one a `.deactivated`
-    /// refusal forgets. Same answer, `.resolved(nil)`, for a platform passkey
-    /// with no registry entry at all: forget nothing rather than guess.
-    func loginRefusalSubject(for cachedAccount: CachedAccount?) -> LifecycleRefusalSubject {
-        guard let account = cachedAccount,
-              account.tenantId == config.tenantId,
-              account.backendUrl == config.backendUrl else { return .resolved(nil) }
-        return .resolved(account.accountId)
+    /// Resolved against the same scope `loginPrfCandidates` offered its
+    /// candidates under - this tenant, this backend - rather than by filtering
+    /// `cachedAccount(owning:)` afterwards: that answers the *first* match
+    /// anywhere in the registry, so an out-of-scope duplicate arriving first
+    /// would hide the real owner. Only an unambiguous single owner counts.
+    ///
+    /// Everything else answers `.resolved(nil)` - forget nothing: a platform
+    /// passkey with no registry entry, a credential that belongs to another
+    /// tenant or deployment, and a registry that somehow holds the same
+    /// credential id twice in scope. This decides whether a `.deactivated`
+    /// refusal deletes a cached account, so "not sure" has to mean "don't".
+    func loginRefusalSubject(forCredential credentialId: Data) -> LifecycleRefusalSubject {
+        let credIdB64url = Self.b64UrlEncode(credentialId)
+        let owners = accountRegistry.listAccounts().filter { account in
+            account.tenantId == config.tenantId
+                && account.backendUrl == config.backendUrl
+                && account.passkeys.contains { $0.credentialId == credIdB64url }
+        }
+        guard owners.count == 1, let owner = owners.first else { return .resolved(nil) }
+        return .resolved(owner.accountId)
     }
 
     /// The cached account that registered `credentialId`, if any.

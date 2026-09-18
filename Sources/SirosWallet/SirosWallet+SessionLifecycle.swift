@@ -211,7 +211,10 @@ extension SirosWallet {
     ///   data erased server-side, so the cached account decrypts a vault that
     ///   no longer exists and a new enrollment is the only way forward. That
     ///   one is forgotten here, exactly as `deactivateWallet()` forgets it
-    ///   when the user asks for the same thing from this device.
+    ///   when the user asks for the same thing from this device - but only
+    ///   when `subject` names it. An unidentified deactivation forgets
+    ///   nothing: a stale entry on the login screen is recoverable, deleting
+    ///   the wrong account's passkeys is not.
     ///
     /// A backend older than #340 sends no `scope`, and `WALLET_REVOKED` then
     /// resolves to the per-instance `.revoked` - see
