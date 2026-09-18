@@ -343,7 +343,12 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     func lock() {}
     func generateKey(algorithm: String) async throws -> String { "key" }
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { Data() }
-    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String { "proof" }
+    func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String { "proof" }
     func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String { "" }
     func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String, kid: String?) async throws -> String { "" }
     func exportEncryptedContainer() async throws -> Data { Data() }
