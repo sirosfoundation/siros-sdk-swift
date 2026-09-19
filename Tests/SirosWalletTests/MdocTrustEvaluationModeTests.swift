@@ -164,6 +164,10 @@ final class MdocTrustEvaluationModeTests: XCTestCase {
                 "URLError.\(code) should count as unreachable"
             )
         }
+
+        // A cancelled task is not an outage. If it counted as one, cancelling
+        // the remote evaluation would be a way to reach the weaker local roots.
+        XCTAssertFalse(wallet.isRemoteTrustEvaluationUnreachable(URLError(.cancelled)))
     }
 
     // MARK: - Each mode routes where it says it does

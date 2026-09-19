@@ -210,7 +210,15 @@ extension SirosWallet {
             // `URLError`, never wrapped in `SirosError.network`. Without this
             // case a real network outage - the condition the local fallback
             // exists for - would fail closed instead of falling back.
-            return error is URLError
+            //
+            // Cancellation is excluded: `URLSession` reports a cancelled task
+            // as `URLError.cancelled`, and a cancelled evaluation is not an
+            // unreachable backend. Treating it as one would let cancelling the
+            // remote call be a way to reach the weaker local roots.
+            if let urlError = error as? URLError {
+                return urlError.code != .cancelled
+            }
+            return false
         }
     }
 
