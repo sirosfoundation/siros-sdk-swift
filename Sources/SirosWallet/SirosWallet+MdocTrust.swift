@@ -185,6 +185,66 @@ extension SirosWallet {
     }
     #endif
 
+    /// Whether `error` means the remote AuthZEN backend could not be reached
+    /// (transport failure, backend outage) - the only condition under which
+    /// `.remoteWithLocalFallback` may drop to the weaker local X.509 check.
+    ///
+    /// An explicit 4xx means the backend was reachable and rejected the
+    /// CALLER - an authorization failure - not the trust QUESTION. Falling
+    /// back on that would let anything that makes the backend return e.g.
+    /// 403 silently downgrade a security-relevant deny. That is not
+    /// hypothetical: it was confirmed live at Geneva 2026, where a 403 on
+    /// `/v1/evaluate` was treated exactly the same as an unreachable
+    /// backend. Ported from the Kotlin SDK's
+    /// `isRemoteTrustEvaluationUnreachable`, which this SDK was missing.
+    func isRemoteTrustEvaluationUnreachable(_ error: Error) -> Bool {
+        switch error {
+        case SirosError.network:
+            return true
+        case SirosError.backendApi(let code, _, _):
+            return code == 0 || code >= 500
+        default:
+            return false
+        }
+    }
+
+    /// The shared mode/fallback decision behind `evaluateReaderTrust` and
+    /// `evaluateIssuerTrust`, so the two cannot drift apart on a security
+    /// decision. `remote` and `local` are the registry-specific halves.
+    func evaluateMdocTrust(
+        mode: MdocTrustEvaluationMode,
+        framework: String,
+        entityLabel: String,
+        registryName: String,
+        remote: () async throws -> TrustResult,
+        local: () -> TrustResult
+    ) async -> TrustResult {
+        if mode == .localOnly {
+            return local()
+        }
+        do {
+            return try await remote()
+        } catch {
+            guard isRemoteTrustEvaluationUnreachable(error) else {
+                return TrustResult(
+                    trusted: false,
+                    framework: framework,
+                    reason: "Remote \(entityLabel) trust evaluation failed: \(error.localizedDescription)"
+                )
+            }
+            if mode == .remoteOnly {
+                return TrustResult(
+                    trusted: false,
+                    framework: framework,
+                    reason: "Remote \(entityLabel) trust evaluation is unreachable and this wallet is configured " +
+                        "for remote-only evaluation, so local \(registryName) root validation was not attempted: " +
+                        "\(error.localizedDescription)"
+                )
+            }
+            return local()
+        }
+    }
+
     func sha256Hex(_ bytes: [UInt8]) -> String {
         SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }
