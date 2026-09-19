@@ -323,20 +323,7 @@ extension SirosWallet {
     /// These carry NO wallet credentials: attaching this wallet's bearer token
     /// or tenant id to a request at an arbitrary domain would leak them.
     static func fetchPublicUrl(_ urlString: String, headers: [String: String]) async -> Data? {
-        guard let url = URL(string: urlString) else { return nil }
-        // Everything reached this way - a Status List Token, an issuer's
-        // metadata, the `jwks_uri` it points at - is used to decide whether a
-        // credential is still valid and which key says so. Over plaintext,
-        // anyone on the path can answer those questions instead of the issuer:
-        // serve a status list that says "valid", or a JWKS holding their own
-        // key. An issuer identifier is an HTTPS URL to begin with, so this
-        // rejects nothing a well-formed deployment does.
-        // Userinfo means nothing for an issuer's metadata or status list, and
-        // a URL carrying it is the classic way to make a host look like one it
-        // is not (`https://issuer.example@evil.example/`).
-        guard url.scheme?.lowercased() == "https", url.user == nil, url.password == nil,
-              url.host != nil
-        else { return nil }
+        guard let url = URL(string: urlString), isPublicFetchAllowed(url) else { return nil }
         var request = URLRequest(url: url)
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
@@ -381,7 +368,28 @@ private let thirdPartySession: URLSession = {
     )
 }()
 
-/// Refuses any redirect that would leave HTTPS.
+/// Whether a third-party URL may be fetched at all.
+///
+/// Everything reached this way - a Status List Token, an issuer's metadata,
+/// the `jwks_uri` it points at - is used to decide whether a credential is
+/// still valid and which key says so. Over plaintext, anyone on the path can
+/// answer those questions instead of the issuer: serve a status list that says
+/// "valid", or a JWKS holding their own key. An issuer identifier is an HTTPS
+/// URL to begin with, so this rejects nothing a well-formed deployment does.
+///
+/// Userinfo means nothing for an issuer's metadata or status list, and a URL
+/// carrying it is the classic way to make a host look like one it is not
+/// (`https://issuer.example@evil.example/`).
+///
+/// One predicate, applied to the URL this wallet asks for *and* to every
+/// redirect it is offered: a rule enforced on the first request and not on the
+/// hop after it is not a rule.
+func isPublicFetchAllowed(_ url: URL) -> Bool {
+    url.scheme?.lowercased() == "https" && url.user == nil && url.password == nil && url.host != nil
+}
+
+/// Refuses any redirect that ``isPublicFetchAllowed(_:)`` would not have
+/// allowed as a first request.
 ///
 /// Passing nil to the completion handler stops the redirect and returns the
 /// 3xx response itself, which `fetchPublicUrl` then rejects as not a 2xx.
@@ -393,7 +401,7 @@ final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchec
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard request.url?.scheme?.lowercased() == "https" else {
+        guard let url = request.url, isPublicFetchAllowed(url) else {
             completionHandler(nil)
             return
         }
