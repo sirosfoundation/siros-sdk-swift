@@ -34,6 +34,15 @@ struct CredentialCardView: View {
     /// Only ever shown/invoked when `instances` is non-nil and every
     /// instance's `sigCount > 0`; ignored (no button rendered) if nil.
     var onRenewClick: (() -> Void)? = nil
+    /// Why this credential cannot currently be used, from the SDK's run of
+    /// DIIP's Validity and Revocation Algorithm (see
+    /// `SirosWallet.refreshCredentialStatuses`). Nil - the default - means it
+    /// can be used, or that no evaluation has run yet.
+    ///
+    /// The card renders it and computes none of it: establishing revocation
+    /// means fetching the issuer's Token Status List, which belongs in the
+    /// SDK, not in a SwiftUI body.
+    var credentialStatus: CredentialStatus? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var svgState: SvgLoadState = .notApplicable
@@ -67,15 +76,15 @@ struct CredentialCardView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if isExpired {
-                Text("EXPIRED")
+            if let status = unusableStatus {
+                Text(status.ribbonLabel.uppercased())
                     .font(.caption2.bold())
                     .foregroundColor(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(SirosTheme.error)
+                            .fill(status.ribbonColor)
                     )
                     .padding(8)
             } else if let unusedCount {
@@ -167,10 +176,20 @@ struct CredentialCardView: View {
         .shadow(color: bgColor.opacity(0.3), radius: 8, y: 4)
     }
 
-    private var isExpired: Bool {
+    /// The status to show, or nil when the credential is usable.
+    ///
+    /// Falls back to the credential's own `exp` when the SDK has not evaluated
+    /// this credential yet, so a card rendered before the first refresh still
+    /// says "expired" rather than nothing.
+    private var unusableStatus: CredentialStatus? {
+        if let credentialStatus {
+            return credentialStatus.isUsable ? nil : credentialStatus
+        }
         // expiresAt is a JWT `exp` claim - always epoch seconds, not millis.
-        guard let expiresAt = credential.expiresAt, expiresAt > 0 else { return false }
-        return Date(timeIntervalSince1970: Double(expiresAt)) < Date()
+        guard let expiresAt = credential.expiresAt, expiresAt > 0,
+              Date(timeIntervalSince1970: Double(expiresAt)) < Date()
+        else { return nil }
+        return .expired
     }
 
     @ViewBuilder

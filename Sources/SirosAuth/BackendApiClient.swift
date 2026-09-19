@@ -149,6 +149,32 @@ public final class BackendApiClient: @unchecked Sendable {
         return try await post("/v1/resolve", body: body)
     }
 
+    /// POST /v1/resolve — resolve a DID through the backend, which delegates
+    /// to go-trust.
+    ///
+    /// DID method resolution is a trust decision: which document is
+    /// authoritative for an identifier. That belongs to the deployment's trust
+    /// registry, not to each wallet's own idea of which hosts to believe, so
+    /// the wallet asks rather than fetches. `did:jwk` is the one exception and
+    /// never gets here - it carries its own key and resolves offline.
+    ///
+    /// DIDs are `subject_type: "key"` on this API, matching wallet-frontend's
+    /// AuthZEN client; the resolved document comes back under
+    /// `context.trust_metadata`.
+    ///
+    /// - Returns: the DID document, or nil if the backend could not resolve it.
+    public func resolveDid(_ did: String) async throws -> [String: Any]? {
+        let response = try await post("/v1/resolve", body: [
+            "subject_id": did,
+            "subject_type": "key",
+        ])
+        guard let context = response["context"] as? [String: Any],
+              let document = context["trust_metadata"] as? [String: Any],
+              document["id"] != nil
+        else { return nil }
+        return document
+    }
+
     /// GET /verifier/all — list registered verifiers
     public func getVerifiers() async throws -> [String: Any] {
         try await get("/verifier/all")

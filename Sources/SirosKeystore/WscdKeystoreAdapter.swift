@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
 
@@ -74,8 +75,18 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return manager
     }
 
-    public init(signer: Signer) {
+    /// The interoperability profile this keystore signs for - see
+    /// ``InteropProfile``. Unlike ``JweKeystore``, the key ids themselves come
+    /// from the WSCD (which assigns RFC 7638 thumbprints) and are not changed
+    /// by this setting; what it controls is the identifier presented to
+    /// Issuers. A `did:jwk` carries the public key inside the identifier, so a
+    /// `cnf.kid` naming one can always be mapped back to the WSCD key that
+    /// signs for it - see `resolveSigningKey`.
+    private let profile: InteropProfile
+
+    public init(signer: Signer, profile: InteropProfile = .default) {
         self.signer = signer
+        self.profile = profile
     }
 
     // MARK: - WscdManager conformance
@@ -212,7 +223,17 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         return try await signer.sign(keyId: keyId, data: payload)
     }
 
+    /// The pre-DIIP call shape: this keystore's own profile decides.
     public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey, holderBinding: nil)
+    }
+
+    public func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
         try checkUnlocked()
         var keys = try await signer.listKeys()
         if keys.isEmpty || freshKey {
@@ -229,18 +250,30 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         let pubKeyData = try await signer.exportPublicKey(keyId: key.keyId)
         let pubKeyJwk = try jsonDict(from: pubKeyData)
 
-        let header = JwtHelpers.jsonBase64Url([
+        // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
+        // `iss` and to name the key with a `kid` from that DID document; HAIP
+        // carries the key in the header instead. The caller may know which
+        // this issuer speaks; when it does not, this keystore's own profile
+        // decides. The DID is derived from the public key rather than stored:
+        // a did:jwk *is* its key, so it needs no bookkeeping and cannot drift
+        // out of sync with the WSCD.
+        let did = try holderDid(forPublicKey: pubKeyJwk, binding: holderBinding ?? profile.holderBinding)
+
+        var headerFields: [String: Any] = [
             "alg": algorithmJoseId(key.algorithm),
             "typ": "openid4vci-proof+jwt",
-            "jwk": pubKeyJwk,
-        ] as [String: Any])
+        ]
+        if let did {
+            headerFields["kid"] = Did.didJwkKeyId(did)
+        } else {
+            headerFields["jwk"] = pubKeyJwk
+        }
+        let header = JwtHelpers.jsonBase64Url(headerFields)
 
         let now = Int(Date().timeIntervalSince1970)
-        let claims = JwtHelpers.jsonBase64Url([
-            "aud": audience,
-            "iat": now,
-            "nonce": nonce,
-        ] as [String: Any])
+        var claimFields: [String: Any] = ["aud": audience, "iat": now, "nonce": nonce]
+        if let did { claimFields["iss"] = did }
+        let claims = JwtHelpers.jsonBase64Url(claimFields)
 
         let signingInput = "\(header).\(claims)"
         let signature = try await signer.sign(keyId: key.keyId, data: Data(signingInput.utf8))
@@ -365,7 +398,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     ) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        let key = try selectSigningKey(keys, kid: kid)
+        // The credential's own `cnf` is authoritative about which key it is
+        // bound to and how that key is named - an issuer may bind by `cnf.jwk`
+        // even when this wallet presents did:jwk identifiers, and vice versa.
+        let cnf = HolderIdentity.cnf(of: credential)
+        let cnfKid = HolderIdentity.resolveCnfKid(cnf)
+        let key = try await resolveSigningKey(keys, kid: kid ?? cnfKid)
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -395,11 +433,20 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         let pubKeyData = try await signer.exportPublicKey(keyId: key.keyId)
         let pubKeyJwk = try jsonDict(from: pubKeyData)
 
-        let kbHeader = JwtHelpers.jsonBase64Url([
+        // When the credential binds the holder by name (`cnf.kid`, which is
+        // what DIIP requires), the KB-JWT names the same verification method
+        // rather than re-embedding the key. A `cnf.jwk` binding keeps the
+        // embedded-key form it was issued under.
+        var kbHeaderFields: [String: Any] = [
             "alg": algorithmJoseId(key.algorithm),
             "typ": "kb+jwt",
-            "jwk": pubKeyJwk,
-        ] as [String: Any])
+        ]
+        if cnf?["jwk"] == nil, let cnfKid {
+            kbHeaderFields["kid"] = cnfKid
+        } else {
+            kbHeaderFields["jwk"] = pubKeyJwk
+        }
+        let kbHeader = JwtHelpers.jsonBase64Url(kbHeaderFields)
 
         let now = Int(Date().timeIntervalSince1970)
         var kbClaimsDict: [String: Any] = [
@@ -705,6 +752,61 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
             throw KeystoreError.keyNotFound("no keys available for signing")
         }
         return key
+    }
+
+    /// ``selectSigningKey(_:kid:)``, but able to map the `kid` a credential
+    /// names its holder key by onto the WSCD key that signs for it.
+    ///
+    /// The WSCD assigns its own key ids (RFC 7638 thumbprints), but a
+    /// credential may name the key any of three ways: by that id, by a
+    /// `did:jwk` verification method, or by a thumbprint computed elsewhere
+    /// (an mdoc device key, an SD-JWT `cnf.jwk`). A `did:jwk` resolves offline
+    /// - the key is the identifier - so all three reduce to a thumbprint
+    /// comparison, and no mapping needs to be persisted.
+    private func resolveSigningKey(_ keys: [SignerKeyInfo], kid: String?) async throws -> SignerKeyInfo {
+        guard let kid else { return try selectSigningKey(keys, kid: nil) }
+        if let exact = keys.first(where: { $0.keyId == kid }) { return exact }
+
+        let wanted = thumbprintOfDidJwk(kid) ?? kid
+        if let match = keys.first(where: { $0.keyId == wanted }) { return match }
+
+        for key in keys {
+            guard let data = try? await signer.exportPublicKey(keyId: key.keyId),
+                  let jwk = try? jsonDict(from: data),
+                  JwtHelpers.jwkThumbprint(jwk) == wanted
+            else { continue }
+            return key
+        }
+        throw KeystoreError.keyNotFound(
+            "Signing key '\(kid)' not found - this credential's bound key is unavailable"
+        )
+    }
+
+    /// The JWK thumbprint of the key a `did:jwk` embeds, or nil if `kid` is not
+    /// one of its verification methods - see
+    /// ``HolderIdentity/thumbprintOfDidJwk(_:)``, which this defers to. A
+    /// did:jwk document has only `#0`, so any other fragment names nothing and
+    /// must not select a key.
+    private func thumbprintOfDidJwk(_ kid: String) -> String? {
+        HolderIdentity.thumbprintOfDidJwk(kid)
+    }
+
+    /// The `did:jwk` for a public key, when this issuance identifies the
+    /// holder that way. Nil for ``HolderBinding/embeddedJwk``, where the proof
+    /// carries the key instead of naming it.
+    private func holderDid(forPublicKey jwk: [String: Any], binding: HolderBinding) throws -> String? {
+        guard binding == .didJwk else { return nil }
+        let stringMembers = jwk.compactMapValues { $0 as? String }
+        // No fallback: `.didJwk` is what this issuance negotiated, and the
+        // embedded-jwk shape is a different profile the Issuer did not agree
+        // to. Failing here says so; falling back would send a proof the Issuer
+        // cannot verify and report it as success.
+        guard stringMembers["kty"] != nil else {
+            throw KeystoreError.cryptoError(
+                "Could not derive a did:jwk for the negotiated DIIP holder binding"
+            )
+        }
+        return Did.createDidJwk(stringMembers)
     }
 
     /// Translate SIROS's internal WSCD key-storage/user-authentication

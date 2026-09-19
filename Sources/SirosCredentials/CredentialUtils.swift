@@ -252,6 +252,101 @@ public enum CredentialUtils {
     /// the advertised type, so an issuer that advertises one type and issues
     /// another would have every one of those decisions made about the wrong
     /// credential.
+    /// How this credential names the Holder key it is bound to - which is also
+    /// which interoperability profile it was issued under.
+    ///
+    /// A `cnf.kid` naming a DID verification method is DIIP; a `cnf.jwk`
+    /// carrying the key is HAIP. An mdoc always carries the device key by
+    /// value, so it is the HAIP form by construction. Nil when the credential
+    /// has no holder binding at all.
+    ///
+    /// Nothing in the wallet needs to be told this - signing follows the `cnf`
+    /// directly (see `KeystoreManager.signVpToken`) - but it is what a person
+    /// debugging a wallet that talks to both ecosystems wants to see.
+    public static func holderBinding(_ credential: StoredCredential) -> HolderBinding? {
+        if credential.format == "mso_mdoc" { return .embeddedJwk }
+        guard let cnf = parseJwtPayload(credential.raw)?["cnf"] as? [String: Any] else { return nil }
+        if cnf["kid"] != nil { return .didJwk }
+        if cnf["jwk"] != nil { return .embeddedJwk }
+        return nil
+    }
+
+    /// The claims DIIP's Validity and Revocation Algorithm reads - the
+    /// validity window and the Token Status List reference - normalised to one
+    /// JSON shape across credential formats.
+    ///
+    /// For the JWT-based formats these are simply the credential's own claims.
+    /// An mdoc keeps them somewhere else entirely: the validity window lives
+    /// in the MSO's `validityInfo`, and the status reference (where an issuer
+    /// publishes one) in the MSO's `status`. Returning them under the same
+    /// names is what lets one evaluator serve every format.
+    public static func validityClaims(_ credential: StoredCredential) -> [String: Any]? {
+        try? parseValidityClaims(credential)
+    }
+
+    /// ``validityClaims(_:)`` without swallowing the failure, so a caller can
+    /// tell "this credential says nothing about its validity" (nil) from
+    /// "this credential's validity data would not parse" (throws).
+    ///
+    /// The difference matters: the first is an ordinary credential and the
+    /// second must not be reported as valid, which is what collapsing both to
+    /// nil did.
+    public static func parseValidityClaims(_ credential: StoredCredential) throws -> [String: Any]? {
+        if credential.format == "mso_mdoc" {
+            return try mdocValidityClaims(credential)
+        }
+        return parseJwtPayload(credential.raw)
+    }
+
+    /// Raised when a credential's validity data is present but unreadable.
+    public struct UnreadableValidityClaims: Error {}
+
+    private static func mdocValidityClaims(_ credential: StoredCredential) throws -> [String: Any]? {
+        guard let document = parseMdocDocument(credential.raw) else {
+            throw UnreadableValidityClaims()
+        }
+        let mso = try MdocCbor.decodeMso(issuerAuth: document.issuerSigned.issuerAuth)
+
+        var claims: [String: Any] = [:]
+        if let validity = mso[CBOR.utf8String("validityInfo")] {
+            // ISO 18013-5 encodes these as tdate (a tag-0 RFC 3339 string),
+            // which is the same lexical form the VCDM uses for
+            // validFrom/validUntil - so no conversion is needed, only untagging.
+            for key in ["validFrom", "validUntil"] {
+                if let text = untaggedString(validity[CBOR.utf8String(key)]) {
+                    claims[key] = text
+                }
+            }
+        }
+        if let status = mso[CBOR.utf8String("status")],
+           let statusList = status[CBOR.utf8String("status_list")] {
+            var reference: [String: Any] = [:]
+            // `idx` comes from the credential, which is not this wallet's to
+            // trust before it has been verified. `Int(idx)` traps on a value
+            // past Int.max, and a trap is not a parse failure - it takes the
+            // process down. A status list with that many entries does not
+            // exist, so an index that will not convert is simply not read,
+            // leaving the reference incomplete and the status unavailable.
+            if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")],
+               let index = Int(exactly: idx) {
+                reference["idx"] = index
+            }
+            if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
+                reference["uri"] = uri
+            }
+            if !reference.isEmpty { claims["status"] = ["status_list": reference] }
+        }
+        return claims.isEmpty ? nil : claims
+    }
+
+    private static func untaggedString(_ value: CBOR?) -> String? {
+        switch value {
+        case .utf8String(let text): return text
+        case .tagged(_, let inner): return untaggedString(inner)
+        default: return nil
+        }
+    }
+
     public static func declaredType(format: String, raw: String) -> String? {
         if format == "mso_mdoc" {
             return parseMdocDocument(raw)?.docType

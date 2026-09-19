@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
@@ -120,7 +121,77 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // only ever needs it ephemerally to forward a single renewal request.
     private var credentialRefreshTokens: [Int64: CredentialRefreshTokenEntry] = [:]
 
-    public init() {}
+    // kid -> the DID that key pair is published under. Kept alongside `keys`
+    // rather than recomputed on export, because a key read back from the
+    // container must round-trip the DID it was stored with: recomputing it
+    // under a different `didKeyVersion` would silently re-identify a key that
+    // credentials are already bound to.
+    private var keyDids: [String: String] = [:]
+
+    /// The interoperability profile this keystore signs for - see
+    /// ``InteropProfile``. It decides how a new key pair is named and, unless
+    /// a caller overrides it per issuance, how the Holder's key is named in an
+    /// OID4VCI proof. Defaults to HAIP, which is what this SDK has always
+    /// sent.
+    private let profile: InteropProfile
+
+    /// How a newly generated key pair is named - see ``DidKeyVersion``.
+    /// Follows `profile` unless a wallet needs something else. Keys already in
+    /// the container keep whatever id they were stored with regardless of this
+    /// setting, so changing it never orphans a credential.
+    private let didKeyVersion: DidKeyVersion
+
+    public init(profile: InteropProfile = .default, didKeyVersion: DidKeyVersion? = nil) {
+        self.profile = profile
+        self.didKeyVersion = didKeyVersion ?? DidKeyVersion.forProfile(profile)
+    }
+
+    /// Generate a key pair, name it per ``didKeyVersion``, and add it to the
+    /// in-memory state. The caller is already holding `mutex`.
+    private func registerNewKey() -> (keyId: String, key: P256.Signing.PrivateKey) {
+        let privateKey = P256.Signing.PrivateKey()
+        let identity = HolderIdentity.derive(
+            publicJwk: JwtHelpers.publicKeyJwk(privateKey),
+            version: didKeyVersion
+        )
+        keys[identity.kid] = privateKey
+        keyDids[identity.kid] = identity.did
+        return (identity.kid, privateKey)
+    }
+
+    /// Find a stored key pair by the `kid` a credential refers to it by.
+    ///
+    /// Matches on the stored id first, then falls back to comparing JWK
+    /// thumbprints - see ``HolderIdentity/matches(storedKid:publicJwk:kid:)``
+    /// for why a wallet naming its keys by `did:jwk` URL still has to answer
+    /// to a thumbprint.
+    private func findKeypair(kid: String) -> (keyId: String, key: P256.Signing.PrivateKey)? {
+        if let key = keys[kid] { return (kid, key) }
+        for (storedKid, key) in keys
+        where HolderIdentity.matches(
+            storedKid: storedKid,
+            publicJwk: JwtHelpers.publicKeyJwk(key),
+            kid: kid
+        ) {
+            return (storedKid, key)
+        }
+        return nil
+    }
+
+    /// The public JWK of a stored key pair, found by whichever identifier a
+    /// credential names it with - see ``findKeypair(kid:)``.
+    func publicKeyJwk(forKid kid: String) -> [String: String]? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return findKeypair(kid: kid).map { JwtHelpers.publicKeyJwk($0.key) }
+    }
+
+    /// The DID a stored key pair is published under, if it has one.
+    public func did(forKid kid: String) -> String? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return keyDids[kid]
+    }
 
     public var isUnlocked: Bool {
         mutex.lock()
@@ -227,6 +298,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         keys.removeAll()
         credentials.removeAll()
         presentationRecords.removeAll()
+        keyDids.removeAll()
         wscdCredentials.removeAll()
         extensions.removeAll()
         credentialRefreshTokens.removeAll()
@@ -241,10 +313,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
-        let keyId = UUID().uuidString.lowercased()
-        let privateKey = P256.Signing.PrivateKey()
-        keys[keyId] = privateKey
-        return keyId
+        return registerNewKey().keyId
     }
 
     public func sign(keyId: String, payload: Data, algorithm: String = "ES256") async throws -> Data {
@@ -263,34 +332,69 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         return Data(jws.utf8)
     }
 
+    /// The pre-DIIP call shape: this keystore's own profile decides.
     public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey, holderBinding: nil)
+    }
+
+    public func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
 
+        // `freshKey` means batch issuance: each credential in the batch must
+        // be bound to its own key, or every copy shares one holder key and
+        // presenting them is linkable. Honouring it also keeps the recorded
+        // per-credential `kid` meaningful.
+        let keyId: String
         let key: P256.Signing.PrivateKey
-        if let first = keys.values.first {
-            key = first
+        if freshKey {
+            (keyId, key) = registerNewKey()
+        } else if let first = keys.first {
+            (keyId, key) = (first.key, first.value)
         } else {
-            let keyId = UUID().uuidString.lowercased()
-            let newKey = P256.Signing.PrivateKey()
-            keys[keyId] = newKey
-            key = newKey
+            (keyId, key) = registerNewKey()
         }
 
+        // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
+        // `iss` and to name the key with a `kid` from that DID document; HAIP
+        // carries the key in the header instead. The caller may know which
+        // this issuer speaks; when it does not, this keystore's own profile
+        // decides.
+        //
+        // The DID is derived from the key rather than read from `keyDids`,
+        // exactly as `WscdKeystoreAdapter` does it. A did:jwk *is* its public
+        // key, so any key pair has one whether or not it was created under
+        // `DidKeyVersion.jwk`. Requiring a stored did:jwk here made the whole
+        // negotiation inert for the default wallet: `didKeyVersion` follows
+        // `interopProfile`, which defaults to HAIP, so a negotiated `.didJwk`
+        // could never be satisfied and every proof fell back to the HAIP shape
+        // that a DIIP-only Issuer rejects. What a key was *created* as is a
+        // storage question; how this issuance names its holder is not.
+        //
+        // For a keystore already on `DidKeyVersion.jwk` this is the same value
+        // it stored - `createDidJwk` is deterministic over the canonical
+        // public JWK - so nothing changes there.
+        let binding = holderBinding ?? profile.holderBinding
         let publicJwk = JwtHelpers.publicKeyJwk(key)
-        let header = JwtHelpers.jsonBase64Url([
-            "alg": "ES256",
-            "typ": "openid4vci-proof+jwt",
-            "jwk": publicJwk,
-        ] as [String: Any])
+        let did = binding == .didJwk ? Did.createDidJwk(publicJwk) : nil
+        var headerFields: [String: Any] = ["alg": "ES256", "typ": "openid4vci-proof+jwt"]
+        if let did {
+            headerFields["kid"] = Did.didJwkKeyId(did)
+        } else {
+            headerFields["jwk"] = publicJwk
+        }
+        let header = JwtHelpers.jsonBase64Url(headerFields)
 
         let now = Int(Date().timeIntervalSince1970)
-        let claims = JwtHelpers.jsonBase64Url([
-            "aud": audience,
-            "iat": now,
-            "nonce": nonce,
-        ] as [String: Any])
+        var claimFields: [String: Any] = ["aud": audience, "iat": now, "nonce": nonce]
+        if let did { claimFields["iss"] = did }
+        let claims = JwtHelpers.jsonBase64Url(claimFields)
 
         let signingInput = "\(header).\(claims)"
         let signature = try key.signature(for: Data(signingInput.utf8))
@@ -401,7 +505,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         defer { mutex.unlock() }
         try requireUnlocked()
 
-        let (_, key) = try selectSigningKey(kid: kid)
+        // The credential's own `cnf` is authoritative about which key it is
+        // bound to and how that key is named. An issuer may bind by `cnf.jwk`
+        // even when this wallet names its keys by did:jwk URL (and vice
+        // versa), so both the lookup and the KB-JWT header follow the
+        // credential rather than this wallet's configuration.
+        let cnf = HolderIdentity.cnf(of: credential)
+        let cnfKid = HolderIdentity.resolveCnfKid(cnf)
+        let (_, key) = try selectSigningKey(kid: kid ?? cnfKid)
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -427,13 +538,17 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         let sdHashDigest = SHA256.hash(data: Data(sdJwtPresentation.utf8))
         let sdHash = EncryptedContainer.base64UrlEncode(Data(sdHashDigest))
 
-        // Build KB-JWT
-        let publicJwk = JwtHelpers.publicKeyJwk(key)
-        let kbHeader = JwtHelpers.jsonBase64Url([
-            "alg": "ES256",
-            "typ": "kb+jwt",
-            "jwk": publicJwk,
-        ] as [String: Any])
+        // Build KB-JWT. When the credential binds the holder by name
+        // (`cnf.kid`, which is what DIIP requires), the KB-JWT names the same
+        // verification method rather than re-embedding the key. A `cnf.jwk`
+        // binding keeps the embedded-key form it was issued under.
+        var kbHeaderFields: [String: Any] = ["alg": "ES256", "typ": "kb+jwt"]
+        if cnf?["jwk"] == nil, let cnfKid {
+            kbHeaderFields["kid"] = cnfKid
+        } else {
+            kbHeaderFields["jwk"] = JwtHelpers.publicKeyJwk(key)
+        }
+        let kbHeader = JwtHelpers.jsonBase64Url(kbHeaderFields)
 
         let now = Int(Date().timeIntervalSince1970)
         let kbClaims = JwtHelpers.jsonBase64Url([
@@ -656,9 +771,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         var result: [KeypairInfo] = []
         for _ in 0..<count {
-            let keyId = UUID().uuidString.lowercased()
-            let privateKey = P256.Signing.PrivateKey()
-            keys[keyId] = privateKey
+            let (keyId, privateKey) = registerNewKey()
             let jwk = JwtHelpers.publicKeyJwk(privateKey)
             // Convert [String: String] to [String: Any]
             var jwkAny: [String: Any] = [:]
@@ -684,9 +797,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // this lock - NSLock isn't reentrant).
         var generated: [(keyId: String, privateKey: P256.Signing.PrivateKey)] = []
         for _ in 0..<count {
-            let keyId = UUID().uuidString.lowercased()
-            let privateKey = P256.Signing.PrivateKey()
-            keys[keyId] = privateKey
+            let (keyId, privateKey) = registerNewKey()
             generated.append((keyId: keyId, privateKey: privateKey))
         }
 
@@ -731,18 +842,15 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     /// the only meaningful choice.
     private func selectSigningKey(kid: String?) throws -> (keyId: String, key: P256.Signing.PrivateKey) {
         if let kid {
-            guard let key = keys[kid] else {
+            guard let found = findKeypair(kid: kid) else {
                 throw KeystoreError.keyNotFound("Signing key '\(kid)' not found - this credential's bound key is unavailable")
             }
-            return (kid, key)
+            return found
         }
         if let first = keys.first {
             return (first.key, first.value)
         }
-        let keyId = UUID().uuidString.lowercased()
-        let newKey = P256.Signing.PrivateKey()
-        keys[keyId] = newKey
-        return (keyId, newKey)
+        return registerNewKey()
     }
 
     private func filterDisclosures(_ disclosures: [String], claimNames: [String]) -> [String] {
@@ -790,6 +898,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             let dData = EncryptedContainer.base64UrlDecode(dStr)
             if let key = try? P256.Signing.PrivateKey(rawRepresentation: dData) {
                 keys[kid] = key
+                if let did = keypairObj["did"] as? String, !did.isEmpty {
+                    keyDids[kid] = did
+                }
             }
         }
     }
@@ -1050,9 +1161,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 "y": EncryptedContainer.base64UrlEncode(y),
                 "d": EncryptedContainer.base64UrlEncode(d),
             ]
-            // Preserve DID from original state if available; only compute for fresh keys
+            // A key generated this session knows its own DID; otherwise
+            // preserve whatever the loaded container recorded. Never
+            // recomputed, so a wallet reconfigured to a different
+            // `didKeyVersion` cannot re-identify an existing key.
             let originalKeypair = originalKeypairsByKid[kid]?["keypair"] as? [String: Any]
-            let did = originalKeypair?["did"] as? String ?? ""
+            let did = keyDids[kid] ?? originalKeypair?["did"] as? String ?? ""
             return [
                 "kid": kid,
                 "keypair": [
@@ -1310,6 +1424,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String {
+        throw KeystoreError.cryptoError("CryptoKit not available on this platform")
+    }
+    public func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String {

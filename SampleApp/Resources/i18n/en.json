@@ -57,7 +57,18 @@
     "payloadLabel": "Payload",
     "disclosureLabel": "Disclosure %1$d",
     "rowActionAdd": "Add",
-    "rowActionClose": "Close"
+    "rowActionClose": "Close",
+    "statusExpired": "Expired",
+    "statusNotYetValid": "Not yet valid",
+    "statusRevoked": "Revoked",
+    "statusSuspended": "Suspended",
+    "statusExpiredDetail": "This credential has expired",
+    "statusNotYetValidDetail": "This credential is not valid yet",
+    "statusRevokedDetail": "This credential has been revoked by its issuer",
+    "statusSuspendedDetail": "This credential has been suspended by its issuer",
+    "statusUnknown": "Unknown",
+    "statusUnknownDetail": "This credential’s status could not be determined",
+    "fieldHolderBinding": "Holder binding"
   },
   "presentation": {
     "title": "Credential Request",
@@ -109,7 +120,8 @@
     "credentialDetailsToggle": "Credential Details",
     "credentialDetailsDescription": "Whether tapping a credential opens the detail screen (raw credential, claims, disclosures).",
     "diagnosticMessagesToggle": "Diagnostic Messages",
-    "diagnosticMessagesDescription": "Show the raw backend step token alongside the friendly progress label during a flow."
+    "diagnosticMessagesDescription": "Show the raw backend step token alongside the friendly progress label during a flow.",
+    "interopProfiles": "Interop profiles"
   },
   "wscd": {
     "title": "WSCA Developer",

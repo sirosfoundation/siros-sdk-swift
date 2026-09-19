@@ -140,6 +140,37 @@ public struct WalletConfig: Sendable {
     /// `preferLocalReaderTrustEvaluation`.
     public var preferLocalIssuerTrustEvaluation: Bool
 
+    /// The interoperability profile this wallet speaks when nothing more
+    /// specific is known - see ``InteropProfile``. Both HAIP and DIIP are
+    /// implemented and a wallet holds credentials from both; this decides only
+    /// which shape an OID4VCI proof takes when the Issuer's own metadata says
+    /// nothing. Presentation always follows the credential's own `cnf`, so
+    /// this never affects a credential the wallet already holds.
+    public var interopProfile: InteropProfile
+
+    /// Per-Issuer overrides of ``interopProfile``, keyed by credential issuer
+    /// identifier (matched by prefix so a path under it counts).
+    ///
+    /// An escape hatch for an Issuer whose metadata is wrong, not the normal
+    /// path: the binding is normally negotiated from what the Issuer
+    /// advertises - see `SirosWallet.holderBinding(for:)`.
+    public var issuerInteropProfiles: [String: InteropProfile]
+
+    /// The DIIP profile version this wallet targets when it speaks
+    /// ``InteropProfile/diip`` - see ``DiipProfile``.
+    ///
+    /// Defaults to the newest this SDK implements. Each version is additive
+    /// over the one before, so the default does not drop support for an
+    /// ecosystem still on an older release; pin an older one only when a
+    /// deployment needs the wire details of that release exactly.
+    public var diipProfile: DiipProfile
+
+    /// Leeway, in seconds, applied when checking a credential's validity
+    /// window and a Status List Token's own lifetime - so a credential is not
+    /// shown as expired because of a few seconds of clock skew. Matches the
+    /// tolerance wallet-frontend applies to signature verification.
+    public var clockTolerance: TimeInterval
+
     public init(
         backendUrl: String,
         tenantId: String = "default",
@@ -157,7 +188,11 @@ public struct WalletConfig: Sendable {
         readerTrustRootCertificatesPem: [String] = [],
         preferLocalReaderTrustEvaluation: Bool = false,
         issuerTrustRootCertificatesPem: [String] = [],
-        preferLocalIssuerTrustEvaluation: Bool = false
+        preferLocalIssuerTrustEvaluation: Bool = false,
+        interopProfile: InteropProfile = .default,
+        issuerInteropProfiles: [String: InteropProfile] = [:],
+        diipProfile: DiipProfile = .latest,
+        clockTolerance: TimeInterval = 60
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -176,6 +211,10 @@ public struct WalletConfig: Sendable {
         self.preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation
         self.issuerTrustRootCertificatesPem = issuerTrustRootCertificatesPem
         self.preferLocalIssuerTrustEvaluation = preferLocalIssuerTrustEvaluation
+        self.interopProfile = interopProfile
+        self.issuerInteropProfiles = issuerInteropProfiles
+        self.diipProfile = diipProfile
+        self.clockTolerance = clockTolerance
     }
 
     /// Discover the engine base URL from the backend's

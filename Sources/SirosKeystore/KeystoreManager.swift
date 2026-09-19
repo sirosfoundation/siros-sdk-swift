@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosCredentials
 
 /// Manages encrypted credential key storage.
 ///
@@ -37,7 +38,19 @@ public protocol KeystoreManager: AnyObject, Sendable {
 
     /// Generate a proof JWT for credential issuance (c_nonce binding).
     /// When `freshKey` is true, a new key is generated for this proof (batch issuance).
-    func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String
+    ///
+    /// This names the Holder's key however the keystore itself sees fit - for
+    /// the keystores here, the way their ``InteropProfile`` says. To choose
+    /// per issuance instead, implement
+    /// ``generateProof(audience:nonce:freshKey:holderBinding:)``, which is
+    /// what an Issuer's advertised binding methods are negotiated into; it is
+    /// a defaulted overload rather than a requirement so that a keystore
+    /// written before that existed still conforms.
+    func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool
+    ) async throws -> String
 
     /// Sign a verifiable presentation for OID4VP.
     ///
@@ -258,6 +271,30 @@ public extension KeystoreManager {
     /// Default: freshKey=false for backward compatibility.
     func generateProof(audience: String, nonce: String) async throws -> String {
         try await generateProof(audience: audience, nonce: nonce, freshKey: false)
+    }
+
+    /// ``generateProof(audience:nonce:freshKey:)`` with the Holder binding
+    /// decided per issuance.
+    ///
+    /// `holderBinding` is the one place HAIP and DIIP genuinely disagree, and
+    /// OID4VCI allows only one of `jwk` and `kid` in a proof header, so it has
+    /// to be decided per issuance: an Issuer that does not resolve DIDs cannot
+    /// verify a DIIP-shaped proof, and a DIIP conformance suite will not accept
+    /// a HAIP-shaped one. Nil uses whatever profile the keystore was built for,
+    /// which is right whenever the caller has nothing more specific to go on.
+    ///
+    /// Defaulted rather than a protocol requirement so that a conformer
+    /// written before DIIP - including a host's own `KeystoreManager` - keeps
+    /// compiling. Such a conformer cannot honour `holderBinding`, so this
+    /// ignores it and produces whatever shape that keystore has always
+    /// produced; the keystores in this SDK override it.
+    func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
+    ) async throws -> String {
+        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey)
     }
 
     func securityProperties() async -> SignerSecurityProperties? { nil }
