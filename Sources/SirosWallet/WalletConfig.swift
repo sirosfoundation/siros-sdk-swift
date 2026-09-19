@@ -112,14 +112,28 @@ public struct WalletConfig: Sendable {
     /// untrusted rather than silently no-oping.
     public var readerTrustRootCertificatesPem: [String]
 
+    /// How `SirosWallet.evaluateReaderTrust` answers a RICAL question:
+    /// remotely against go-trust, locally against the roots above, or
+    /// remotely with local as a fallback. Defaults to
+    /// `.remoteWithLocalFallback`, which is what every previous release did.
+    public var readerTrustEvaluationMode: MdocTrustEvaluationMode
+
     /// Forces `SirosWallet.evaluateReaderTrust` to always use the local
     /// X.509 fallback (see `readerTrustRootCertificatesPem`) instead of
-    /// attempting the remote AuthZEN call first - e.g. for offline event
-    /// scenarios, or a host app setting the user explicitly opted into.
-    /// Default `false`: the remote path is preferred since it's the only
-    /// one that honors RICAL's temporary/dynamic trust roots - local
-    /// fallback only happens automatically when the remote call itself fails.
-    public var preferLocalReaderTrustEvaluation: Bool
+    /// attempting the remote AuthZEN call first.
+    ///
+    /// Now a view onto `readerTrustEvaluationMode`, so reading and writing
+    /// it both still work: `true` is `.localOnly`, and setting it to `false`
+    /// restores `.remoteWithLocalFallback`.
+    ///
+    /// - Warning: Superseded by `readerTrustEvaluationMode`, which can also
+    ///   express "remotely, and fail closed if go-trust is unreachable" -
+    ///   a choice a boolean cannot make.
+    @available(*, deprecated, message: "Use readerTrustEvaluationMode. `true` is .localOnly, `false` is .remoteWithLocalFallback.")
+    public var preferLocalReaderTrustEvaluation: Bool {
+        get { readerTrustEvaluationMode == .localOnly }
+        set { readerTrustEvaluationMode = newValue ? .localOnly : .remoteWithLocalFallback }
+    }
 
     /// PEM-encoded VICAL (Verified Issuer CA List, ISO/IEC 18013-5 Annex C)
     /// root certificate(s) for `SirosWallet.evaluateIssuerTrust`'s local
@@ -131,14 +145,23 @@ public struct WalletConfig: Sendable {
     /// than silently no-oping - same convention as `readerTrustRootCertificatesPem`.
     public var issuerTrustRootCertificatesPem: [String]
 
+    /// How `SirosWallet.evaluateIssuerTrust` answers a VICAL question. Same
+    /// convention as `readerTrustEvaluationMode`, and independent of it: a
+    /// wallet may reasonably insist on remote issuer trust at issuance time
+    /// while tolerating local reader trust at an offline checkpoint.
+    public var issuerTrustEvaluationMode: MdocTrustEvaluationMode
+
     /// Forces `SirosWallet.evaluateIssuerTrust` to always use the local
     /// X.509 fallback (see `issuerTrustRootCertificatesPem`) instead of
-    /// attempting the remote AuthZEN call first. Default `false`: the
-    /// remote path is preferred since it's the only one that honors
-    /// VICAL's dynamic updates - local fallback only happens automatically
-    /// when the remote call itself fails. Same convention as
-    /// `preferLocalReaderTrustEvaluation`.
-    public var preferLocalIssuerTrustEvaluation: Bool
+    /// attempting the remote AuthZEN call first.
+    ///
+    /// - Warning: Superseded by `issuerTrustEvaluationMode`. Same convention
+    ///   as `preferLocalReaderTrustEvaluation`.
+    @available(*, deprecated, message: "Use issuerTrustEvaluationMode. `true` is .localOnly, `false` is .remoteWithLocalFallback.")
+    public var preferLocalIssuerTrustEvaluation: Bool {
+        get { issuerTrustEvaluationMode == .localOnly }
+        set { issuerTrustEvaluationMode = newValue ? .localOnly : .remoteWithLocalFallback }
+    }
 
     public init(
         backendUrl: String,
@@ -157,7 +180,9 @@ public struct WalletConfig: Sendable {
         readerTrustRootCertificatesPem: [String] = [],
         preferLocalReaderTrustEvaluation: Bool = false,
         issuerTrustRootCertificatesPem: [String] = [],
-        preferLocalIssuerTrustEvaluation: Bool = false
+        preferLocalIssuerTrustEvaluation: Bool = false,
+        readerTrustEvaluationMode: MdocTrustEvaluationMode? = nil,
+        issuerTrustEvaluationMode: MdocTrustEvaluationMode? = nil
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -173,9 +198,17 @@ public struct WalletConfig: Sendable {
         self.registryUrl = registryUrl
         self.zkCircuitUrls = zkCircuitUrls
         self.readerTrustRootCertificatesPem = readerTrustRootCertificatesPem
-        self.preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation
         self.issuerTrustRootCertificatesPem = issuerTrustRootCertificatesPem
-        self.preferLocalIssuerTrustEvaluation = preferLocalIssuerTrustEvaluation
+        // An explicitly chosen mode always wins; the deprecated boolean only
+        // decides when no mode was passed at all. The parameter is optional
+        // rather than defaulted precisely so that "unset" and "explicitly
+        // .remoteWithLocalFallback" are distinguishable - comparing against
+        // the default value cannot tell them apart, which would silently
+        // downgrade a caller who asked for the fallback mode by name.
+        self.readerTrustEvaluationMode = readerTrustEvaluationMode
+            ?? (preferLocalReaderTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
+        self.issuerTrustEvaluationMode = issuerTrustEvaluationMode
+            ?? (preferLocalIssuerTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
     }
 
     /// Discover the engine base URL from the backend's

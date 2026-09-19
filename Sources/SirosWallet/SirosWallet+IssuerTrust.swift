@@ -21,13 +21,11 @@ extension SirosWallet {
     /// `MdocCose.verify1`) - this method is purely the trust decision.
     /// Ported from the Kotlin SDK's `SirosWallet.evaluateIssuerTrust`.
     ///
-    /// Defaults to the remote AuthZEN call - this is the only path that
-    /// honors VICAL's dynamic updates, since go-trust's own registry
-    /// cache/refresh handles freshness and the wallet just calls it fresh
-    /// each time. Falls back to local X.509 path validation against
-    /// `WalletConfig.issuerTrustRootCertificatesPem` if the remote call
-    /// throws (backend unreachable), or unconditionally if
-    /// `WalletConfig.preferLocalIssuerTrustEvaluation` is set.
+    /// Which path runs is `WalletConfig.issuerTrustEvaluationMode`, with the
+    /// same three choices and the same refused-versus-unreachable rule as
+    /// `evaluateReaderTrust`. The default, `.remoteWithLocalFallback`,
+    /// prefers the remote AuthZEN call: it is the only path that honors
+    /// VICAL's dynamic updates.
     ///
     /// - Parameter x5chain: the issuer's DER-encoded certificate chain, leaf first.
     /// - Parameter docType: the credential's mdoc doctype (e.g.
@@ -39,14 +37,14 @@ extension SirosWallet {
         guard !x5chain.isEmpty else {
             return TrustResult(trusted: false, reason: "issuerAuth has no certificate chain")
         }
-        if config.preferLocalIssuerTrustEvaluation {
-            return evaluateIssuerTrustLocally(x5chain)
-        }
-        do {
-            return try await evaluateIssuerTrustRemote(x5chain, docType: docType)
-        } catch {
-            return evaluateIssuerTrustLocally(x5chain)
-        }
+        return await evaluateMdocTrust(
+            mode: config.issuerTrustEvaluationMode,
+            framework: "vical",
+            entityLabel: "issuer",
+            registryName: "VICAL",
+            remote: { try await self.evaluateIssuerTrustRemote(x5chain, docType: docType) },
+            local: { self.evaluateIssuerTrustLocally(x5chain) }
+        )
     }
 
     /// The subject is the issuer's URL as its DS certificate names it (see
