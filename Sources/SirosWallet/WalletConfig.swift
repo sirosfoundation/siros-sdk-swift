@@ -181,8 +181,8 @@ public struct WalletConfig: Sendable {
         preferLocalReaderTrustEvaluation: Bool = false,
         issuerTrustRootCertificatesPem: [String] = [],
         preferLocalIssuerTrustEvaluation: Bool = false,
-        readerTrustEvaluationMode: MdocTrustEvaluationMode = .remoteWithLocalFallback,
-        issuerTrustEvaluationMode: MdocTrustEvaluationMode = .remoteWithLocalFallback
+        readerTrustEvaluationMode: MdocTrustEvaluationMode? = nil,
+        issuerTrustEvaluationMode: MdocTrustEvaluationMode? = nil
     ) {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
@@ -200,15 +200,15 @@ public struct WalletConfig: Sendable {
         self.readerTrustRootCertificatesPem = readerTrustRootCertificatesPem
         self.issuerTrustRootCertificatesPem = issuerTrustRootCertificatesPem
         // An explicitly chosen mode always wins; the deprecated boolean only
-        // decides while the mode is still at its default, so a caller passing
-        // the new parameter is never silently overridden by a legacy one they
-        // did not set.
-        self.readerTrustEvaluationMode = readerTrustEvaluationMode != .remoteWithLocalFallback
-            ? readerTrustEvaluationMode
-            : (preferLocalReaderTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
-        self.issuerTrustEvaluationMode = issuerTrustEvaluationMode != .remoteWithLocalFallback
-            ? issuerTrustEvaluationMode
-            : (preferLocalIssuerTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
+        // decides when no mode was passed at all. The parameter is optional
+        // rather than defaulted precisely so that "unset" and "explicitly
+        // .remoteWithLocalFallback" are distinguishable - comparing against
+        // the default value cannot tell them apart, which would silently
+        // downgrade a caller who asked for the fallback mode by name.
+        self.readerTrustEvaluationMode = readerTrustEvaluationMode
+            ?? (preferLocalReaderTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
+        self.issuerTrustEvaluationMode = issuerTrustEvaluationMode
+            ?? (preferLocalIssuerTrustEvaluation ? .localOnly : .remoteWithLocalFallback)
     }
 
     /// Discover the engine base URL from the backend's

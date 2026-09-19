@@ -204,7 +204,13 @@ extension SirosWallet {
         case SirosError.backendApi(let code, _, _):
             return code == 0 || code >= 500
         default:
-            return false
+            // `BackendApiClient`'s default HTTP function calls
+            // `URLSession.shared.data(for:)` directly, so a DNS failure, a
+            // timeout or a refused connection arrives here as a bare
+            // `URLError`, never wrapped in `SirosError.network`. Without this
+            // case a real network outage - the condition the local fallback
+            // exists for - would fail closed instead of falling back.
+            return error is URLError
         }
     }
 

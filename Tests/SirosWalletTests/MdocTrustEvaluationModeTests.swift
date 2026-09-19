@@ -107,6 +107,26 @@ final class MdocTrustEvaluationModeTests: XCTestCase {
         XCTAssertEqual(config.readerTrustEvaluationMode, .remoteOnly)
     }
 
+    /// The awkward case: `.remoteWithLocalFallback` is also the value an unset
+    /// mode resolves to, so comparing against the default cannot tell "the
+    /// caller asked for the fallback mode" from "the caller said nothing". The
+    /// init parameter is optional so that it can.
+    func testExplicitlyChoosingTheFallbackModeIsNotDowngradedByTheLegacyBoolean() {
+        let reader = WalletConfig(
+            backendUrl: "https://example.invalid",
+            preferLocalReaderTrustEvaluation: true,
+            readerTrustEvaluationMode: .remoteWithLocalFallback
+        )
+        XCTAssertEqual(reader.readerTrustEvaluationMode, .remoteWithLocalFallback)
+
+        let issuer = WalletConfig(
+            backendUrl: "https://example.invalid",
+            preferLocalIssuerTrustEvaluation: true,
+            issuerTrustEvaluationMode: .remoteWithLocalFallback
+        )
+        XCTAssertEqual(issuer.issuerTrustEvaluationMode, .remoteWithLocalFallback)
+    }
+
     // MARK: - Reachable-but-refused is not the same as unreachable
 
     func testOnlyTransportFailuresAndServerErrorsCountAsUnreachable() {
@@ -129,6 +149,21 @@ final class MdocTrustEvaluationModeTests: XCTestCase {
             SirosError.backendApi(code: 404, message: "not found")))
         XCTAssertFalse(wallet.isRemoteTrustEvaluationUnreachable(
             SirosError.wallet(message: "Not connected")))
+    }
+
+    /// `BackendApiClient`'s default HTTP function calls URLSession directly,
+    /// so a real outage surfaces as a bare `URLError`. Classifying that as
+    /// "reachable" would make the default mode fail closed on exactly the
+    /// condition the local fallback exists for.
+    func testBareTransportErrorsFromURLSessionCountAsUnreachable() {
+        let wallet = makeWallet(config())
+
+        for code: URLError.Code in [.notConnectedToInternet, .timedOut, .cannotFindHost, .networkConnectionLost] {
+            XCTAssertTrue(
+                wallet.isRemoteTrustEvaluationUnreachable(URLError(code)),
+                "URLError.\(code) should count as unreachable"
+            )
+        }
     }
 
     // MARK: - Each mode routes where it says it does
