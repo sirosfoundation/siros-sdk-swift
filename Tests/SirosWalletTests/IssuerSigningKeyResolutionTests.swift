@@ -120,4 +120,17 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         )
         XCTAssertNil(key, "unreachable, but it must have tried rather than refused the spelling")
     }
+    func testTheRedirectPolicyIsTheSameAsTheFirstRequestPolicy() {
+        // A rule enforced on the first request and not on the hop after it is
+        // not a rule: a 3xx could otherwise bounce to `https://user@host/`,
+        // which `fetchPublicUrl` refuses outright. Both now ask the same
+        // predicate.
+        XCTAssertTrue(isPublicFetchAllowed(URL(string: "https://issuer.example/list")!))
+        XCTAssertTrue(isPublicFetchAllowed(URL(string: "HTTPS://issuer.example/list")!))
+
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "http://issuer.example/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://issuer.example@evil.example/l")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://user:pass@evil.example/l")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "ftp://issuer.example/list")!))
+    }
 }
