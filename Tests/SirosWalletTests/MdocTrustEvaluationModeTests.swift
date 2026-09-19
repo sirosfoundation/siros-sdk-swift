@@ -132,8 +132,16 @@ final class MdocTrustEvaluationModeTests: XCTestCase {
     func testOnlyTransportFailuresAndServerErrorsCountAsUnreachable() {
         let wallet = makeWallet(config())
 
+        // `.network` wrapping a real transport error is an outage...
         XCTAssertTrue(wallet.isRemoteTrustEvaluationUnreachable(
-            SirosError.network(message: "connection refused")))
+            SirosError.network(message: "connection refused", underlying: URLError(.cannotConnectToHost))))
+        // ...but on its own it is what this SDK throws for a protocol or
+        // configuration failure ("Invalid response", "Invalid URL"), and a
+        // misconfigured base URL must not open the weaker local roots.
+        XCTAssertFalse(wallet.isRemoteTrustEvaluationUnreachable(
+            SirosError.network(message: "Invalid URL: https://example.invalid/v1/evaluate")))
+        XCTAssertFalse(wallet.isRemoteTrustEvaluationUnreachable(
+            SirosError.network(message: "Invalid response")))
         XCTAssertTrue(wallet.isRemoteTrustEvaluationUnreachable(
             SirosError.backendApi(code: 0, message: "no response")))
         XCTAssertTrue(wallet.isRemoteTrustEvaluationUnreachable(
@@ -200,7 +208,7 @@ final class MdocTrustEvaluationModeTests: XCTestCase {
             framework: "mdocrical",
             entityLabel: "reader",
             registryName: "RICAL",
-            remote: { throw SirosError.network(message: "offline") },
+            remote: { throw URLError(.notConnectedToInternet) },
             local: { TrustResult(trusted: true, framework: "local-rical-root") }
         )
 
@@ -238,7 +246,7 @@ final class MdocTrustEvaluationModeTests: XCTestCase {
             framework: "mdocrical",
             entityLabel: "reader",
             registryName: "RICAL",
-            remote: { throw SirosError.network(message: "offline") },
+            remote: { throw URLError(.notConnectedToInternet) },
             local: {
                 localWasCalled = true
                 return TrustResult(trusted: true, framework: "local-rical-root")

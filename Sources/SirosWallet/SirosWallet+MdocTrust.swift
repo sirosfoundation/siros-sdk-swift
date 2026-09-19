@@ -199,8 +199,22 @@ extension SirosWallet {
     /// `isRemoteTrustEvaluationUnreachable`, which this SDK was missing.
     func isRemoteTrustEvaluationUnreachable(_ error: Error) -> Bool {
         switch error {
-        case SirosError.network:
-            return true
+        case SirosError.network(_, let underlying):
+            // `.network` is not a transport error in this SDK. Every site
+            // that throws it does so for a protocol or configuration failure -
+            // "Invalid response" for a non-HTTP response, "Invalid URL" for a
+            // misconfigured base URL - and a real transport failure never
+            // reaches it at all, because the HTTP boundary lets `URLError`
+            // escape unwrapped (see below). Only an instance that actually
+            // wraps something counts, which keeps the door open for a future
+            // caller that does wrap a transport error, and keeps a
+            // misconfigured URL from opening the weaker local roots.
+            //
+            // The Kotlin SDK's `NetworkException` is genuinely transport-only
+            // - it is thrown from exactly one place, always around a real
+            // transport exception - so this is what parity with it means, not
+            // a blanket match on the case.
+            return underlying != nil
         case SirosError.backendApi(let code, _, _):
             return code == 0 || code >= 500
         default:
