@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-21
+
+### Added
+- **Local or remote mdoc trust evaluation is now a choice, per registry.**
+  `MdocTrustEvaluationMode` — `.remoteWithLocalFallback` (the default, and
+  what every previous release did), `.remoteOnly`, `.localOnly` — selectable
+  independently for RICAL readers and VICAL issuers via
+  `WalletConfig.readerTrustEvaluationMode` and `issuerTrustEvaluationMode`.
+  The local path is deliberately the weaker of the two (plain X.509 path
+  validation, no RICAL/VICAL CBOR parsing, no `trustConstraints`, no
+  per-certificate `docType`), so which one runs is a security decision;
+  `.remoteOnly` is for a deployment that would rather deny a presentation than
+  accept one on the weaker check.
+  - `WalletConfig.preferLocalReaderTrustEvaluation` and
+    `preferLocalIssuerTrustEvaluation` keep working and keep their meaning
+    (`true` is `.localOnly`) — they are now views onto the mode, so reading and
+    writing both still behave — and are deprecated. An explicitly chosen mode
+    always wins over them.
+
+### Fixed
+- **A reader or issuer that the backend *refused* no longer falls back to the
+  local roots.** Both evaluators ended in a catch-all that dropped to local
+  X.509 validation on any thrown error, so an expired token producing a `403`
+  on `/v1/evaluate` silently downgraded a security-relevant deny — the Kotlin
+  SDK has distinguished these since Geneva 2026, and this SDK did not. Only a
+  genuine transport failure or a `5xx` now falls back.
+  - Relatedly, `SirosError.network` is not a transport error in this SDK: every
+    site that throws it does so for a protocol or configuration failure
+    ("Invalid response", "Invalid URL"), and a real outage escapes as a bare
+    `URLError` because the HTTP boundary does not wrap it. Unreachability is
+    judged accordingly, and a cancelled request (`URLError.cancelled`) is not
+    an outage.
+- **An SD-JWT's docType comes from its format, not its bytes.** `toFfi` called
+  `parseMdocDocument` for every stored credential whatever its format; only an
+  mdoc has an MSO, so for an SD-JWT the parse returned nil and the bytes were
+  left to decide the docType. It now parses only for `mso_mdoc`.
+  (siros-sdk-kotlin#204 is the same bug, louder.)
+
 ### Changed
 - **A wallet lifecycle refusal now says whether it ends one device or the whole
   wallet**, and the SDK acts on that rather than on prose. SIROS adopts the
