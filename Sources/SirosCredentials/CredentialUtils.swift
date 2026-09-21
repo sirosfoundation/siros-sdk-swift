@@ -252,6 +252,20 @@ public enum CredentialUtils {
     /// the advertised type, so an issuer that advertises one type and issues
     /// another would have every one of those decisions made about the wrong
     /// credential.
+    /// The `vct` a credential declares, read from the credential itself and
+    /// only then from its metadata.
+    ///
+    /// `metadata` is a rendering artefact: it is absent until an issuance flow
+    /// has an offer to build it from, and the hydration pass that repopulates
+    /// it skips any credential whose metadata is already real. Anything that
+    /// decides what a credential *is* must therefore read the credential, or
+    /// it will disagree with the issuer about a credential that is perfectly
+    /// valid. An mdoc has no `vct` and falls through to the metadata, which is
+    /// where a doctype-shaped question belongs instead — see ``declaredType``.
+    public static func vctOf(_ credential: StoredCredential) -> String? {
+        (parseJwtPayload(credential.raw)?["vct"] as? String) ?? credential.metadata?.vct
+    }
+
     public static func declaredType(format: String, raw: String) -> String? {
         if format == "mso_mdoc" {
             return parseMdocDocument(raw)?.docType

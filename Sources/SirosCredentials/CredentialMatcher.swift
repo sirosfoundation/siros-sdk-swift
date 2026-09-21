@@ -337,13 +337,23 @@ public enum CredentialMatcher {
 
     private static func matchesVct(_ credential: StoredCredential, vctValues: Set<String>?) -> Bool {
         guard let vctValues, !vctValues.isEmpty else { return true }
-        guard let credVct = credential.metadata?.vct else { return false }
+        // The vct the credential carries, and only then the metadata copy -
+        // see ``CredentialUtils/vctOf(_:)``. Matching on the copy alone makes
+        // a credential that is present, valid and presentable invisible to
+        // DCQL for a reason that has nothing to do with the credential.
+        guard let credVct = CredentialUtils.vctOf(credential) else { return false }
         return vctValues.contains(credVct)
     }
 
     private static func matchesDoctype(_ credential: StoredCredential, doctypeValue: String?) -> Bool {
         guard let doctypeValue else { return true }
-        guard let credDoctype = credential.metadata?.doctype else { return false }
+        // The real docType, from the credential's own MSO. `metadata.doctype`
+        // is only populated when the issuer happens to expose an MDDL schema
+        // at a SIROS-internal endpoint, so a third-party mdoc - a real interop
+        // event's mDL, say - has none and would be unmatchable while being
+        // perfectly presentable.
+        guard let credDoctype = CredentialUtils.parseMdocDocument(credential.raw)?.docType
+            ?? credential.metadata?.doctype else { return false }
         return credDoctype == doctypeValue
     }
 

@@ -60,6 +60,59 @@ final class CredentialMatcherTests: XCTestCase {
         StoredCredential(id: id, format: format, raw: raw, metadata: metadata, batchId: id, instanceId: 0)
     }
 
+    /// An SD-JWT whose payload carries `vct`, in the `<jwt>~` shape stored.
+    private func sdJwtRaw(vct: String) -> String {
+        func b64(_ s: String) -> String {
+            Data(s.utf8).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        return "\(b64("{\"alg\":\"ES256\"}")).\(b64("{\"vct\":\"\(vct)\"}")).c2ln~"
+    }
+
+    /// A credential is matched on the vct it carries, not on whether the
+    /// wallet happens to have built display metadata for it yet.
+    ///
+    /// `metadata` is a rendering artefact - absent until the issuance flow has
+    /// an offer to build it from, repopulated later by hydration, which skips
+    /// credentials whose metadata is already real. Matching on it alone made a
+    /// freshly issued EBW-OID credential invisible to a query naming its exact
+    /// vct, on the gdc environment, while the PID beside it matched.
+    func testMatchUsesTheCredentialsOwnVctWhenMetadataHasNone() {
+        let credentials = [
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: sdJwtRaw(vct: "uri:eu.ebw.oid.1"))
+        ]
+        let query = parseJSON("""
+        {"credentials":[{"id":"ebw_oid","format":"dc+sd-jwt",
+          "meta":{"vct_values":["uri:eu.ebw.oid.1"]}}]}
+        """)
+
+        let results = CredentialMatcher.match(dcqlQuery: query, credentials: credentials)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].candidates.map(\.id), [1])
+    }
+
+    /// The payload's vct wins, and a query for the stale one no longer matches.
+    func testMatchPrefersThePayloadVctOverAStaleMetadataCopy() {
+        let credentials = [
+            storedCredential(id: 1, format: "dc+sd-jwt", raw: sdJwtRaw(vct: "uri:eu.ebw.oid.1"),
+                             metadata: CredentialMetadata(vct: "urn:stale:1"))
+        ]
+        func queryFor(_ vct: String) -> [String: Any] {
+            parseJSON("""
+            {"credentials":[{"id":"q","format":"dc+sd-jwt","meta":{"vct_values":["\(vct)"]}}]}
+            """)
+        }
+
+        XCTAssertEqual(
+            CredentialMatcher.match(dcqlQuery: queryFor("uri:eu.ebw.oid.1"), credentials: credentials)[0]
+                .candidates.count, 1)
+        XCTAssertTrue(
+            CredentialMatcher.match(dcqlQuery: queryFor("urn:stale:1"), credentials: credentials)[0]
+                .candidates.isEmpty)
+    }
+
     func testMatchFiltersByFormatAndVct() {
         let credentials = [
             storedCredential(id: 1, format: "dc+sd-jwt", raw: "raw-1",
