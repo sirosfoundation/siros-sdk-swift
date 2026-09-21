@@ -185,6 +185,94 @@ extension SirosWallet {
     }
     #endif
 
+    /// Whether `error` means the remote AuthZEN backend could not be reached
+    /// (transport failure, backend outage) - the only condition under which
+    /// `.remoteWithLocalFallback` may drop to the weaker local X.509 check.
+    ///
+    /// An explicit 4xx means the backend was reachable and rejected the
+    /// CALLER - an authorization failure - not the trust QUESTION. Falling
+    /// back on that would let anything that makes the backend return e.g.
+    /// 403 silently downgrade a security-relevant deny. That is not
+    /// hypothetical: it was confirmed live at Geneva 2026, where a 403 on
+    /// `/v1/evaluate` was treated exactly the same as an unreachable
+    /// backend. Ported from the Kotlin SDK's
+    /// `isRemoteTrustEvaluationUnreachable`, which this SDK was missing.
+    func isRemoteTrustEvaluationUnreachable(_ error: Error) -> Bool {
+        switch error {
+        case SirosError.network(_, let underlying):
+            // `.network` is not a transport error in this SDK. Every site
+            // that throws it does so for a protocol or configuration failure -
+            // "Invalid response" for a non-HTTP response, "Invalid URL" for a
+            // misconfigured base URL - and a real transport failure never
+            // reaches it at all, because the HTTP boundary lets `URLError`
+            // escape unwrapped (see below). Only an instance that actually
+            // wraps something counts, which keeps the door open for a future
+            // caller that does wrap a transport error, and keeps a
+            // misconfigured URL from opening the weaker local roots.
+            //
+            // The Kotlin SDK's `NetworkException` is genuinely transport-only
+            // - it is thrown from exactly one place, always around a real
+            // transport exception - so this is what parity with it means, not
+            // a blanket match on the case.
+            return underlying != nil
+        case SirosError.backendApi(let code, _, _):
+            return code == 0 || code >= 500
+        default:
+            // `BackendApiClient`'s default HTTP function calls
+            // `URLSession.shared.data(for:)` directly, so a DNS failure, a
+            // timeout or a refused connection arrives here as a bare
+            // `URLError`, never wrapped in `SirosError.network`. Without this
+            // case a real network outage - the condition the local fallback
+            // exists for - would fail closed instead of falling back.
+            //
+            // Cancellation is excluded: `URLSession` reports a cancelled task
+            // as `URLError.cancelled`, and a cancelled evaluation is not an
+            // unreachable backend. Treating it as one would let cancelling the
+            // remote call be a way to reach the weaker local roots.
+            if let urlError = error as? URLError {
+                return urlError.code != .cancelled
+            }
+            return false
+        }
+    }
+
+    /// The shared mode/fallback decision behind `evaluateReaderTrust` and
+    /// `evaluateIssuerTrust`, so the two cannot drift apart on a security
+    /// decision. `remote` and `local` are the registry-specific halves.
+    func evaluateMdocTrust(
+        mode: MdocTrustEvaluationMode,
+        framework: String,
+        entityLabel: String,
+        registryName: String,
+        remote: () async throws -> TrustResult,
+        local: () -> TrustResult
+    ) async -> TrustResult {
+        if mode == .localOnly {
+            return local()
+        }
+        do {
+            return try await remote()
+        } catch {
+            guard isRemoteTrustEvaluationUnreachable(error) else {
+                return TrustResult(
+                    trusted: false,
+                    framework: framework,
+                    reason: "Remote \(entityLabel) trust evaluation failed: \(error.localizedDescription)"
+                )
+            }
+            if mode == .remoteOnly {
+                return TrustResult(
+                    trusted: false,
+                    framework: framework,
+                    reason: "Remote \(entityLabel) trust evaluation is unreachable and this wallet is configured " +
+                        "for remote-only evaluation, so local \(registryName) root validation was not attempted: " +
+                        "\(error.localizedDescription)"
+                )
+            }
+            return local()
+        }
+    }
+
     func sha256Hex(_ bytes: [UInt8]) -> String {
         SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }

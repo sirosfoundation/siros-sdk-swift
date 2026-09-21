@@ -12,27 +12,29 @@ extension SirosWallet {
     /// `"mdoc-reader-auth"` action name against go-trust's `mdocrical`
     /// registry. Ported from the Kotlin SDK's `SirosWallet.evaluateReaderTrust`.
     ///
-    /// Defaults to the remote AuthZEN call - this is the only path that
-    /// honors RICAL's temporary/dynamic trust roots, since go-trust's own
-    /// registry cache/refresh handles freshness and the wallet just calls it
-    /// fresh each time. Falls back to local X.509 path validation against
-    /// `WalletConfig.readerTrustRootCertificatesPem` if the remote call
-    /// throws (backend unreachable), or unconditionally if
-    /// `WalletConfig.preferLocalReaderTrustEvaluation` is set.
+    /// Which path runs is `WalletConfig.readerTrustEvaluationMode`. The
+    /// default, `.remoteWithLocalFallback`, prefers the remote AuthZEN call:
+    /// it is the only path that honors RICAL's temporary and dynamic trust
+    /// roots, since go-trust's own registry cache and refresh handle
+    /// freshness and the wallet just asks fresh each time. It drops to local
+    /// X.509 validation against `WalletConfig.readerTrustRootCertificatesPem`
+    /// only when go-trust could not be REACHED - a backend that refuses the
+    /// caller fails closed instead. `.remoteOnly` never drops, and
+    /// `.localOnly` never asks.
     ///
     /// - Parameter x5chain: the reader's DER-encoded certificate chain, leaf first.
     public func evaluateReaderTrust(_ x5chain: [[UInt8]]) async -> TrustResult {
         guard !x5chain.isEmpty else {
             return TrustResult(trusted: false, reason: "readerAuth has no certificate chain")
         }
-        if config.preferLocalReaderTrustEvaluation {
-            return evaluateReaderTrustLocally(x5chain)
-        }
-        do {
-            return try await evaluateReaderTrustRemote(x5chain)
-        } catch {
-            return evaluateReaderTrustLocally(x5chain)
-        }
+        return await evaluateMdocTrust(
+            mode: config.readerTrustEvaluationMode,
+            framework: "mdocrical",
+            entityLabel: "reader",
+            registryName: "RICAL",
+            remote: { try await self.evaluateReaderTrustRemote(x5chain) },
+            local: { self.evaluateReaderTrustLocally(x5chain) }
+        )
     }
 
     private func evaluateReaderTrustRemote(_ x5chain: [[UInt8]]) async throws -> TrustResult {
