@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-21
+
+### Fixed
+- **A credential is matched on the vct it carries, not on its metadata.**
+  DCQL matching read `credential.metadata?.vct`, which is a rendering
+  artefact rather than the credential's identity: it is absent until an
+  issuance flow has an offer to build it from, and the hydration pass that
+  repopulates it skips any credential whose metadata is already real. A
+  freshly issued credential could therefore be present, valid, correctly
+  typed and presentable, and still match nothing. Found on the Android side
+  of the same bug, where an EBW-OID credential carrying
+  `vct: uri:eu.ebw.oid.1` matched 0 candidates against a query naming exactly
+  that.
+
+  This package already had `CredentialUtils.declaredType`, whose own comment
+  explains that what the holder received is not what the issuer advertised;
+  nothing in the matcher used it. `vctOf` now reads the credential first and
+  the metadata copy second, and all four places that declare what a
+  credential *is* use it: `CredentialMatcher`, `SharedDcqlMatcher` (the
+  shared Rust engine's input) and both `SirosWallet+Engine` sites. (#162)
+- **An mdoc is matched on the docType in its own MSO.** `matchesDoctype` read
+  `metadata?.doctype`, which is only populated when an issuer happens to
+  expose an MDDL schema at a SIROS-internal endpoint — so a third-party mdoc,
+  such as a real interop event's mDL, was unmatchable by DCQL while being
+  perfectly presentable. Brings this package in line with the Android SDK,
+  which fixed the same thing earlier. (#162)
+
 ## [0.13.0] - 2026-09-21
 
 ### Added
