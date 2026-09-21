@@ -544,7 +544,7 @@ extension SirosWallet {
                 credentialQueryId: queryId,
                 credentialId: String(cred.id),
                 format: cred.format,
-                vct: cred.metadata?.vct,
+                vct: CredentialUtils.vctOf(cred),
                 availableClaims: nil
             )
         }
@@ -1133,7 +1133,7 @@ extension SirosWallet {
                 credentialQueryId: queryId,
                 credentialId: String(cred.id),
                 format: cred.format,
-                vct: cred.metadata?.vct
+                vct: CredentialUtils.vctOf(cred)
             )
         }
         let noMatchReason = matches.isEmpty ? Self.answerForEmptySelection(dcqlQuery: dcqlQuery, selection: selection).reason : nil

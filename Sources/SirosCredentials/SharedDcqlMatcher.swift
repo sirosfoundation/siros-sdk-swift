@@ -398,7 +398,7 @@ extension SharedDcqlMatcher {
             id: String(credential.id),
             format: credential.format,
             doctype: docType(for: credential),
-            vct: credential.metadata?.vct,
+            vct: CredentialUtils.vctOf(credential),
             title: credential.metadata?.name ?? credential.format,
             subtitle: credential.metadata?.issuer?.name ?? "",
             iconId: nil,
