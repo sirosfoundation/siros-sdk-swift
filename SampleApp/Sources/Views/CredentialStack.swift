@@ -91,6 +91,18 @@ struct CredentialStack: View {
         /// Down, not yet moved past slop or held past the long-press
         /// deadline - could still resolve to any of the three.
         case pending
+        /// Moved past slop, but not yet past `pullThreshold` - a real,
+        /// deliberate touch-and-hold-then-drag versus an incidental jiggle,
+        /// but not yet enough to say the user means to pull this specific
+        /// card out rather than scroll the whole deck past it. `dragOffset`
+        /// stays 0 and `isDragging` stays false throughout this phase (see
+        /// their doc comments) precisely so the card doesn't visually
+        /// follow a touch that may turn out to be a scroll - resolves to
+        /// no action at all on release (see `handleEnded`) rather than a
+        /// tap or a reorder, since real movement already ruled those out.
+        case scrolling
+        /// Past `pullThreshold` - committed to treating this touch as
+        /// pulling `activeId`'s card out, not scrolling the deck.
         case dragging
         /// Fired; nothing further happens for the rest of this touch (in
         /// particular, the eventual release must not also read as a tap).
@@ -106,12 +118,22 @@ struct CredentialStack: View {
     /// happens to be drawn (matches ordinary touch tracking: once a
     /// recognizer claims a touch, subsequent moves stay owned by it).
     @State private var activeId: Int64?
-    /// Live drag translation for `activeId`'s card, reset to 0 on release -
-    /// under `credentialStackSpring` (`handleEnded`'s `.dragging` case),
-    /// whether or not the drag went far enough to also commit a reorder,
-    /// so a short drag that springs back reads the same as a long one that
+    /// Live drag translation for `activeId`'s card. Stays 0 for the whole
+    /// `.pending`/`.scrolling` phases (see `GesturePhase`) - only
+    /// `.dragging` ever assigns it - so the card doesn't visibly chase a
+    /// touch that hasn't (yet, or ever) committed to pulling it out, and
+    /// `ScrollView`'s own gesture is free to move the deck under an
+    /// undecided touch instead. Reset to 0 on release, under
+    /// `credentialStackSpring` (`handleEnded`'s `.dragging` case), whether
+    /// or not the drag went far enough to also commit a reorder, so a
+    /// short drag that springs back reads the same as a long one that
     /// commits: the offset settling to zero, not a snap.
     @State private var dragOffset: CGFloat = 0
+    /// True only once `.dragging` is entered - see `dragOffset` and
+    /// `GesturePhase.scrolling`'s doc comments. Also what
+    /// `scrollDisabled(isDragging)` (below) keys off: the deck's own scroll
+    /// stays enabled through `.pending`/`.scrolling` and is only cut off
+    /// once a touch has actually committed to pulling a card out.
     @State private var isDragging = false
     @State private var gesturePhase: GesturePhase = .idle
     @State private var longPressTask: Task<Void, Never>?
@@ -185,15 +207,17 @@ struct CredentialStack: View {
                 // for the touch in the first place. `.simultaneousGesture`
                 // lets both recognizers observe the same touch, so a swipe
                 // that never resolves to a committed card-drag (this
-                // recognizer's own `.pending`/tap/long-press outcomes leave
-                // `isDragging` false throughout) still scrolls the deck;
-                // `scrollDisabled(isDragging)` (unchanged below) is what
-                // then stops the deck from ALSO scrolling once a touch
-                // commits to actually pulling a specific card forward.
+                // recognizer's own `.pending`/`.scrolling` phases leave
+                // `isDragging` false throughout - see `GesturePhase`'s doc
+                // comment) still scrolls the deck; `scrollDisabled(isDragging)`
+                // (unchanged below) is what then stops the deck from ALSO
+                // scrolling once a touch commits (past `pullThreshold`, not
+                // merely past touch slop - see `handleChanged`) to actually
+                // pulling a specific card forward.
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            handleChanged(value, peek: peek, cardHeight: cardHeight)
+                            handleChanged(value, peek: peek, cardHeight: cardHeight, pullThreshold: pullThreshold)
                         }
                         .onEnded { value in
                             handleEnded(value, pullThreshold: pullThreshold)
@@ -237,7 +261,7 @@ struct CredentialStack: View {
         return nil
     }
 
-    private func handleChanged(_ value: DragGesture.Value, peek: CGFloat, cardHeight: CGFloat) {
+    private func handleChanged(_ value: DragGesture.Value, peek: CGFloat, cardHeight: CGFloat, pullThreshold: CGFloat) {
         switch gesturePhase {
         case .idle:
             guard let id = hitTestCard(atY: value.startLocation.y, peek: peek, cardHeight: cardHeight) else { return }
@@ -245,9 +269,26 @@ struct CredentialStack: View {
             gesturePhase = .pending
             startLongPressTimer(for: id)
         case .pending:
+            // Real movement rules out a tap/long-press regardless of how far
+            // it eventually goes, so the long-press timer is cancelled here,
+            // at slop - but `isDragging`/`dragOffset` do NOT flip on at slop
+            // (a Copilot review caught this: flipping them this early made
+            // `scrollDisabled(isDragging)` cut the deck's own scroll off
+            // after only ~10pt of any vertical touch, which defeated
+            // `.simultaneousGesture` in practice - nearly every real scroll
+            // swipe is well past 10pt). Only `.scrolling`, below, decides
+            // that.
             if abs(value.translation.height) > credentialTouchSlop {
-                gesturePhase = .dragging
                 longPressTask?.cancel()
+                gesturePhase = .scrolling
+            }
+        case .scrolling:
+            // Still not touching `dragOffset`/`isDragging` - this phase's
+            // whole point is leaving the deck's `ScrollView` gesture as the
+            // one actually responding to the touch until it's unambiguous
+            // that the user means to pull a specific card out instead.
+            if abs(value.translation.height) > pullThreshold {
+                gesturePhase = .dragging
                 isDragging = true
                 dragOffset = value.translation.height
             }
@@ -293,6 +334,13 @@ struct CredentialStack: View {
             } else {
                 bringToFront(id)
             }
+        case .scrolling:
+            // Real movement occurred, but never enough to commit to pulling
+            // a card out - this was the deck's own `ScrollView` gesture's
+            // touch to handle (see `GesturePhase.scrolling`'s doc comment),
+            // so resolve to no action here at all, rather than falling
+            // through to `.pending`'s tap/reorder behavior.
+            break
         case .longPressed, .idle:
             break
         }
