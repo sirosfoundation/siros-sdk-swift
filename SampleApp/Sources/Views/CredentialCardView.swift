@@ -13,7 +13,8 @@ import SVGView
 /// re-deriving a copy that could silently drift from this one. Nil (no
 /// batch/usage data on hand) is never treated as exhausted.
 func credentialBatchExhausted(_ instances: [CredentialInstance]?) -> Bool {
-    instances?.filter { $0.sigCount == 0 }.count == 0
+    guard let instances else { return false }
+    return !instances.contains { $0.sigCount == 0 }
 }
 
 /// Credit-card style credential display.
