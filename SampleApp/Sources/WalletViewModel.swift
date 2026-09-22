@@ -350,6 +350,9 @@ final class WalletViewModel: ObservableObject {
             .flatMap { $0.isEmpty ? nil : $0 } ?? [ZkCircuitClient.defaultZkCircuitUrl]
         self.preferLocalReaderTrustEvaluation = defaults.bool(forKey: "siros_prefer_local_reader_trust_evaluation")
         self.readerTrustRootCertificatePem = defaults.string(forKey: "siros_reader_trust_root_certificate_pem") ?? ""
+        #if DEBUG
+        applyFixtureCredentialsIfRequested()
+        #endif
     }
 
     // MARK: - Public actions

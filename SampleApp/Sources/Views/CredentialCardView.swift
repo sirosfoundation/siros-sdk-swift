@@ -4,6 +4,19 @@ import SwiftUI
 import SirosCredentials
 import SVGView
 
+/// Whether every instance in a batch has already been used in a
+/// presentation (`sigCount > 0`) - the single canonical definition of
+/// "exhausted" so callers that resolve a tap without going through
+/// `CredentialCardView.onClick` (`CredentialStack`, which reads every touch
+/// through its own single gesture recognizer instead - see that file's doc
+/// comment) can apply the identical rule before opening detail, rather than
+/// re-deriving a copy that could silently drift from this one. Nil (no
+/// batch/usage data on hand) is never treated as exhausted.
+func credentialBatchExhausted(_ instances: [CredentialInstance]?) -> Bool {
+    guard let instances else { return false }
+    return !instances.contains { $0.sigCount == 0 }
+}
+
 /// Credit-card style credential display.
 ///
 /// Uses background_color/text_color from credential metadata when available,
@@ -29,6 +42,16 @@ struct CredentialCardView: View {
     /// instance already used - see `instances`) - mirrors the Kotlin sample
     /// app's `CredentialCard` owning its own click-vs-exhausted gating
     /// internally rather than leaving it to the caller.
+    ///
+    /// Nil (the default) attaches NO tap gesture at all, rather than one
+    /// whose action is merely a no-op - `CredentialStack` relies on this:
+    /// it reads every touch on a stacked card through its own single
+    /// gesture recognizer (see `CredentialStack.swift`'s doc comment), and
+    /// an inert-but-still-present `.onTapGesture` here would be exactly the
+    /// two-independent-recognizers setup that silently ate every tap the
+    /// first time this was tried (confirmed live in the simulator, not from
+    /// reading the code) - a no-op *action* wasn't enough to prevent that;
+    /// the modifier itself has to be absent.
     var onClick: (() -> Void)? = nil
     /// Called when the user taps "Renew" on a fully-exhausted credential.
     /// Only ever shown/invoked when `instances` is non-nil and every
@@ -42,14 +65,14 @@ struct CredentialCardView: View {
     /// `instances`'s doc comment) - only gates the greyed-out/Renew state
     /// when we actually know the count, never on the strength of an absence.
     private var unusedCount: Int? { instances?.filter { $0.sigCount == 0 }.count }
-    private var isExhausted: Bool { unusedCount == 0 }
+    private var isExhausted: Bool { credentialBatchExhausted(instances) }
 
     var body: some View {
         let meta = credential.metadata
         let bgColor = meta?.backgroundColor.flatMap { Color(hex: $0) } ?? .accentColor
         let fgColor = meta?.textColor.flatMap { Color(hex: $0) } ?? .white
 
-        Group {
+        let card = Group {
             switch svgState {
             case .loaded(let svgText):
                 SVGView(string: svgText)
@@ -117,13 +140,19 @@ struct CredentialCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isExhausted else { return }
-            onClick?()
-        }
         .task(id: SvgLoadKey(credentialId: credential.id, isDark: colorScheme == .dark)) {
             await loadSvg(preferDark: colorScheme == .dark)
+        }
+
+        if let onClick {
+            card
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !isExhausted else { return }
+                    onClick()
+                }
+        } else {
+            card
         }
     }
 
