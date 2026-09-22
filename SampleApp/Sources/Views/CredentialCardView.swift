@@ -4,6 +4,18 @@ import SwiftUI
 import SirosCredentials
 import SVGView
 
+/// Whether every instance in a batch has already been used in a
+/// presentation (`sigCount > 0`) - the single canonical definition of
+/// "exhausted" so callers that resolve a tap without going through
+/// `CredentialCardView.onClick` (`CredentialStack`, which reads every touch
+/// through its own single gesture recognizer instead - see that file's doc
+/// comment) can apply the identical rule before opening detail, rather than
+/// re-deriving a copy that could silently drift from this one. Nil (no
+/// batch/usage data on hand) is never treated as exhausted.
+func credentialBatchExhausted(_ instances: [CredentialInstance]?) -> Bool {
+    instances?.filter { $0.sigCount == 0 }.count == 0
+}
+
 /// Credit-card style credential display.
 ///
 /// Uses background_color/text_color from credential metadata when available,
@@ -52,7 +64,7 @@ struct CredentialCardView: View {
     /// `instances`'s doc comment) - only gates the greyed-out/Renew state
     /// when we actually know the count, never on the strength of an absence.
     private var unusedCount: Int? { instances?.filter { $0.sigCount == 0 }.count }
-    private var isExhausted: Bool { unusedCount == 0 }
+    private var isExhausted: Bool { credentialBatchExhausted(instances) }
 
     var body: some View {
         let meta = credential.metadata

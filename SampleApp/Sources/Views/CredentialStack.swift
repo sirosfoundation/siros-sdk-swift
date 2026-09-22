@@ -37,6 +37,13 @@ let credentialLongPressDuration: TimeInterval = 0.5
 /// a comparable value (iOS's own gesture recognizers commonly use ~10pt).
 let credentialTouchSlop: CGFloat = 10
 
+/// Shared spring for every settle-back-to-rest motion in the deck: a
+/// reorder (`bringToFront`) and a released drag that never pulled far
+/// enough to commit to one (`handleEnded`'s `.dragging` case) are the same
+/// family of motion - just landing in a different place - so both use this
+/// one curve rather than one of them defaulting to an instant snap.
+let credentialStackSpring = Animation.spring(response: 0.42, dampingFraction: 1.0)
+
 /// The accessibility identifier of a stacked card, keyed on its batch id -
 /// lets both the manual on-device verification and
 /// `CredentialStackInteractionUITests` address one card in `CredentialStack`
@@ -99,12 +106,11 @@ struct CredentialStack: View {
     /// happens to be drawn (matches ordinary touch tracking: once a
     /// recognizer claims a touch, subsequent moves stay owned by it).
     @State private var activeId: Int64?
-    /// Live drag translation for `activeId`'s card. Reset to 0 instantly
-    /// (not animated) on release - that card's resting slot is a pure
-    /// function of its index in `order`, so removing the live offset alone
-    /// already reveals it sitting at rest; an actual reorder's spring comes
-    /// from `bringToFront`'s `withAnimation`, not from animating this back
-    /// to zero.
+    /// Live drag translation for `activeId`'s card, reset to 0 on release -
+    /// under `credentialStackSpring` (`handleEnded`'s `.dragging` case),
+    /// whether or not the drag went far enough to also commit a reorder,
+    /// so a short drag that springs back reads the same as a long one that
+    /// commits: the offset settling to zero, not a snap.
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging = false
     @State private var gesturePhase: GesturePhase = .idle
@@ -169,7 +175,22 @@ struct CredentialStack: View {
                 }
                 .frame(width: proxy.size.width, height: totalHeight, alignment: .top)
                 .contentShape(Rectangle())
-                .gesture(
+                // `.simultaneousGesture`, not `.gesture` - a plain `.gesture`
+                // here claims the touch exclusively, and a `ScrollView`'s
+                // own scroll gesture always loses that arbitration to an
+                // explicit `.gesture()` on its content, which left a deck
+                // taller than the viewport with no way to reach anything
+                // below the fold: `scrollDisabled(isDragging)` never
+                // mattered because the ScrollView was never in the running
+                // for the touch in the first place. `.simultaneousGesture`
+                // lets both recognizers observe the same touch, so a swipe
+                // that never resolves to a committed card-drag (this
+                // recognizer's own `.pending`/tap/long-press outcomes leave
+                // `isDragging` false throughout) still scrolls the deck;
+                // `scrollDisabled(isDragging)` (unchanged below) is what
+                // then stops the deck from ALSO scrolling once a touch
+                // commits to actually pulling a specific card forward.
+                .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             handleChanged(value, peek: peek, cardHeight: cardHeight)
@@ -251,13 +272,24 @@ struct CredentialStack: View {
         case .dragging:
             isDragging = false
             let pulledFarEnough = abs(dragOffset) > pullThreshold
-            dragOffset = 0
+            withAnimation(credentialStackSpring) {
+                dragOffset = 0
+            }
             if pulledFarEnough && !isFrontmost {
                 bringToFront(id)
             }
         case .pending:
             if isFrontmost {
-                onCredentialClick(entry.credential)
+                // Mirrors `CredentialCardView`'s own tap gating: this stack
+                // passes `onClick: nil` into it and resolves every touch
+                // itself instead (see the type's doc comment), so it has to
+                // re-apply the same exhausted check `CredentialCardView`
+                // would otherwise have enforced - an exhausted frontmost
+                // card stays non-selectable (Renew is still reachable
+                // through its own button) rather than opening detail.
+                if !credentialBatchExhausted(entry.instances) {
+                    onCredentialClick(entry.credential)
+                }
             } else {
                 bringToFront(id)
             }
@@ -297,7 +329,7 @@ struct CredentialStack: View {
         var newOrder = order
         newOrder.remove(at: idx)
         newOrder.append(id)
-        withAnimation(.spring(response: 0.42, dampingFraction: 1.0)) {
+        withAnimation(credentialStackSpring) {
             order = newOrder
         }
     }
