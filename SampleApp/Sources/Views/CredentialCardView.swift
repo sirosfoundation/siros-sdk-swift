@@ -29,6 +29,16 @@ struct CredentialCardView: View {
     /// instance already used - see `instances`) - mirrors the Kotlin sample
     /// app's `CredentialCard` owning its own click-vs-exhausted gating
     /// internally rather than leaving it to the caller.
+    ///
+    /// Nil (the default) attaches NO tap gesture at all, rather than one
+    /// whose action is merely a no-op - `CredentialStack` relies on this:
+    /// it reads every touch on a stacked card through its own single
+    /// gesture recognizer (see `CredentialStack.swift`'s doc comment), and
+    /// an inert-but-still-present `.onTapGesture` here would be exactly the
+    /// two-independent-recognizers setup that silently ate every tap the
+    /// first time this was tried (confirmed live in the simulator, not from
+    /// reading the code) - a no-op *action* wasn't enough to prevent that;
+    /// the modifier itself has to be absent.
     var onClick: (() -> Void)? = nil
     /// Called when the user taps "Renew" on a fully-exhausted credential.
     /// Only ever shown/invoked when `instances` is non-nil and every
@@ -49,7 +59,7 @@ struct CredentialCardView: View {
         let bgColor = meta?.backgroundColor.flatMap { Color(hex: $0) } ?? .accentColor
         let fgColor = meta?.textColor.flatMap { Color(hex: $0) } ?? .white
 
-        Group {
+        let card = Group {
             switch svgState {
             case .loaded(let svgText):
                 SVGView(string: svgText)
@@ -117,13 +127,19 @@ struct CredentialCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isExhausted else { return }
-            onClick?()
-        }
         .task(id: SvgLoadKey(credentialId: credential.id, isDark: colorScheme == .dark)) {
             await loadSvg(preferDark: colorScheme == .dark)
+        }
+
+        if let onClick {
+            card
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !isExhausted else { return }
+                    onClick()
+                }
+        } else {
+            card
         }
     }
 

@@ -3,11 +3,6 @@
 import SwiftUI
 import SirosCredentials
 
-/// Number of credential cards shown in full before the rest collapse into
-/// `CredentialStackOverflow` - mirrors the Kotlin sample app's
-/// `CREDENTIAL_STACK_THRESHOLD` exactly.
-private let credentialStackThreshold = 3
-
 struct CredentialsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
@@ -23,13 +18,20 @@ struct CredentialsView: View {
         )
     }
 
-    /// Past `credentialStackThreshold` cards, the tail collapses into one
-    /// fanned overflow item instead of extending the scroll further - keeps
-    /// the common case (a handful of credentials) showing several full
-    /// cards at once, while an overview that would otherwise need a lot of
-    /// scrolling gets a single glanceable summary that expands to the full
-    /// list on tap. Mirrors the Kotlin sample app's `showAllCredentials`.
-    @State private var showAllCredentials = false
+    /// Long-press action menu (Renew/Delete), driven by `CredentialStack`'s
+    /// `onCredentialLongClick` rather than SwiftUI's native `.contextMenu` -
+    /// see `CredentialStack.swift`'s doc comment for why a native
+    /// `.contextMenu` (this screen's previous long-press mechanism, before
+    /// the stack) can't be reused here: it's a self-contained system
+    /// interaction with its own gesture recognizer, not something that can
+    /// be triggered imperatively from a hand-rolled one, and layering it
+    /// alongside a custom drag/tap recognizer on the same card reproduces
+    /// the same two-recognizers-starve-each-other problem the stack's own
+    /// gesture handling was written specifically to avoid. Same two actions,
+    /// same two-step confirmation for Delete, only a bottom action sheet
+    /// instead of the native popup.
+    @State private var actionMenuFor: StoredCredential?
+    @State private var pendingDeleteFor: StoredCredential?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -48,52 +50,64 @@ struct CredentialsView: View {
             let entries = grouped
             if entries.isEmpty {
                 emptyState
-            } else if entries.count == 1 {
-                let entry = entries[0]
-                CredentialCardView(
-                    credential: entry.credential,
-                    instances: entry.instances,
-                    onClick: { viewModel.openCredentialDetail(entry.credential) },
-                    onRenewClick: { viewModel.renewCredential(entry.credential) }
+                Spacer()
+            } else {
+                // A partially-overlapping, interactive deck instead of a
+                // plain scrolling list - see `CredentialStack.swift`'s doc
+                // comment. It owns its own scrolling (a card's drag and a
+                // plain vertical scroll are the same gesture, so it has to
+                // arbitrate between them itself) and its own reorder state,
+                // so there's nothing further to wrap it in here.
+                CredentialStack(
+                    entries: entries,
+                    onCredentialClick: { viewModel.openCredentialDetail($0) },
+                    onCredentialLongClick: { actionMenuFor = $0 },
+                    onRenewCredential: { viewModel.renewCredential($0) }
                 )
                 .padding(.horizontal, 16)
-                .credentialContextMenu(entry.credential, viewModel: viewModel)
-            } else {
-                // Vertically-scrolling list rather than a horizontal
-                // one-at-a-time pager: phone screens are tall, not wide, so
-                // a horizontal `TabView` page wastes the ample vertical
-                // screen estate available for showing multiple credentials
-                // at once (live-testing feedback from the user). Kept
-                // conceptually aligned with the equivalent fix in the
-                // Kotlin sample app's `CredentialsTab`.
-                let visibleCount = showAllCredentials ? entries.count : min(entries.count, credentialStackThreshold)
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 16) {
-                        ForEach(entries.prefix(visibleCount), id: \.credential.id) { entry in
-                            CredentialCardView(
-                                credential: entry.credential,
-                                instances: entry.instances,
-                                onClick: { viewModel.openCredentialDetail(entry.credential) },
-                                onRenewClick: { viewModel.renewCredential(entry.credential) }
-                            )
-                            .padding(.horizontal, 16)
-                            .credentialContextMenu(entry.credential, viewModel: viewModel)
-                        }
-                        if visibleCount < entries.count {
-                            CredentialStackOverflow(
-                                remaining: entries.dropFirst(visibleCount),
-                                onClick: { showAllCredentials = true }
-                            )
-                            .padding(.horizontal, 16)
-                        }
-                    }
-                    .padding(.bottom, 16)
-                }
             }
-
-            Spacer()
         }
         .padding(.top, 12)
+        .confirmationDialog(
+            actionMenuFor.map { $0.metadata?.name ?? $0.format } ?? "",
+            isPresented: Binding(
+                get: { actionMenuFor != nil },
+                set: { if !$0 { actionMenuFor = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: actionMenuFor
+        ) { credential in
+            Button(L10n.string("credentials.renew")) {
+                viewModel.renewCredential(credential)
+                actionMenuFor = nil
+            }
+            Button(L10n.string("common.delete"), role: .destructive) {
+                pendingDeleteFor = credential
+                actionMenuFor = nil
+            }
+            Button(L10n.string("common.cancel"), role: .cancel) {
+                actionMenuFor = nil
+            }
+        }
+        .confirmationDialog(
+            L10n.string("credentials.deleteConfirmTitle"),
+            isPresented: Binding(
+                get: { pendingDeleteFor != nil },
+                set: { if !$0 { pendingDeleteFor = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeleteFor
+        ) { credential in
+            Button(L10n.string("common.delete"), role: .destructive) {
+                viewModel.deleteCredential(credential.id)
+                pendingDeleteFor = nil
+            }
+            Button(L10n.string("common.cancel"), role: .cancel) {
+                pendingDeleteFor = nil
+            }
+        } message: { credential in
+            Text(L10n.string("credentials.deleteConfirmMessage", credential.metadata?.name ?? credential.format))
+        }
     }
 
     private var credentialCountText: String {
@@ -130,92 +144,5 @@ struct CredentialsView: View {
         .onTapGesture {
             viewModel.openAddCredential()
         }
-    }
-}
-
-/// Compact fanned-card summary for credentials past `credentialStackThreshold`
-/// - a glance at how many/which issuers are collapsed, without rendering
-/// each one's full SVG card (that's the expensive part the cache in
-/// `CredentialCardView` handles; this overview only needs flat background
-/// colors). Tapping it expands the full list. Mirrors the Kotlin sample
-/// app's `CredentialStackOverflow`.
-private struct CredentialStackOverflow: View {
-    // ArraySlice, not [CredentialWithInstances] - avoids copying the whole
-    // (potentially large) overflow tail on every body recompute, since the
-    // caller only ever passes `entries.dropFirst(visibleCount)`.
-    let remaining: ArraySlice<CredentialWithInstances>
-    let onClick: () -> Void
-
-    private let maxFanned = 3
-
-    var body: some View {
-        Button(action: onClick) {
-            ZStack {
-                ForEach(Array(remaining.prefix(maxFanned).enumerated()), id: \.element.credential.id) { index, entry in
-                    let bgColor = entry.credential.metadata?.backgroundColor.flatMap { Color(hex: $0) } ?? SirosTheme.brandLighter
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(bgColor)
-                        .frame(width: 40, height: 26)
-                        .offset(x: CGFloat(index * 14))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(L10n.string("credentials.stackOverflowMore", remaining.count))
-                    .font(.headline)
-                    .foregroundColor(SirosTheme.onSurface)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity)
-            .frame(height: 72)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(SirosTheme.surfaceVariant)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct CredentialContextMenuModifier: ViewModifier {
-    let credential: StoredCredential
-    let viewModel: WalletViewModel
-    @State private var showDeleteConfirmation = false
-
-    func body(content: Content) -> some View {
-        content
-            .contextMenu {
-                Button {
-                    viewModel.renewCredential(credential)
-                } label: {
-                    Label(L10n.string("credentials.renew"), systemImage: "arrow.clockwise")
-                }
-                Button(role: .destructive) {
-                    showDeleteConfirmation = true
-                } label: {
-                    Label(L10n.string("common.delete"), systemImage: "trash")
-                }
-            }
-            .confirmationDialog(
-                L10n.string("credentials.deleteConfirmTitle"),
-                isPresented: $showDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button(L10n.string("common.delete"), role: .destructive) {
-                    viewModel.deleteCredential(credential.id)
-                }
-                Button(L10n.string("common.cancel"), role: .cancel) {}
-            } message: {
-                Text(L10n.string("credentials.deleteConfirmMessage", credential.metadata?.name ?? credential.format))
-            }
-    }
-}
-
-private extension View {
-    /// Long-press action menu (Renew/Delete) for a credential card - SwiftUI's
-    /// native `.contextMenu` gesture, matching the Kotlin sample app's
-    /// long-press bottom sheet.
-    func credentialContextMenu(_ credential: StoredCredential, viewModel: WalletViewModel) -> some View {
-        modifier(CredentialContextMenuModifier(credential: credential, viewModel: viewModel))
     }
 }

@@ -90,15 +90,37 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         ALWAYS_SEARCH_USER_PATHS: "NO"
 
+  # Drives the real running app via XCUIApplication - taps and drags, not a
+  # simulated callback invocation - because the whole point of
+  # CredentialStack is that tap, long-press and drag resolve correctly
+  # against each other on a single continuous touch, which only a real
+  # on-device/simulator gesture can exercise. Mirrors the Kotlin sample
+  # app's androidTest CredentialStackInteractionTest.
+  SirosSampleAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: SirosSampleApp
+    settings:
+      base:
+        SWIFT_VERSION: "5.10"
+        GENERATE_INFOPLIST_FILE: YES
+        ALWAYS_SEARCH_USER_PATHS: "NO"
+        TEST_TARGET_NAME: SirosSampleApp
+
 schemes:
   SirosSampleApp:
     build:
       targets:
         SirosSampleApp: all
         SirosSampleAppTests: [test]
+        SirosSampleAppUITests: [test]
     test:
       config: Debug
       targets:
         - SirosSampleAppTests
+        - SirosSampleAppUITests
     run:
       config: Debug
