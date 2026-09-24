@@ -87,6 +87,27 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     private let maxReconnectAttempts = 5
     private let baseReconnectDelayMs: UInt64 = 1000
 
+    /// This session's own WebSocket ping cadence, in milliseconds - starts
+    /// at `WalletEngineSession.defaultPingIntervalMs` and is updated
+    /// whenever the server reports a different value via
+    /// `HandshakeCompleteMessage.config` (see `handleMessage`'s
+    /// `handshakeComplete` case). Unlike the Kotlin SDK's OkHttp-based
+    /// equivalent, `startPingLoop` re-reads this on every iteration, so a
+    /// mid-connection update takes effect on this same connection's very
+    /// next ping rather than only the next reconnect.
+    private var pingIntervalMs: Int64 = WalletEngineSession.defaultPingIntervalMs
+
+    /// Used until (and unless) the server tells us otherwise via
+    /// `HandshakeCompleteMessage.config` - see `pingIntervalMs`'s doc
+    /// comment. 3s, not some more conventional-sounding round number like
+    /// 30s: found empirically (raw idle-TLS-connection tests against
+    /// production Fly.io apps, not documentation - Fly's own docs don't
+    /// state a number) that Fly.io's edge closes a connection with no
+    /// traffic on it after ~5-6s, which is why every engine WebSocket in
+    /// production was silently reconnecting every few seconds. Matches
+    /// go-wallet-backend's own default (`config.ServerConfig.EngineWSPingInterval`).
+    static let defaultPingIntervalMs: Int64 = 3000
+
     // Typed message channels
     private let messagesContinuation: AsyncStream<EngineMessage>.Continuation
     private let _messages: AsyncStream<EngineMessage>
@@ -251,6 +272,31 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         }
 
         startReceiveLoop(task)
+        startPingLoop(task)
+    }
+
+    /// Sends a WebSocket ping every `pingIntervalMs` for as long as `task`
+    /// stays open. `URLSessionWebSocketTask` (unlike OkHttp's WebSocket
+    /// client) has no automatic client-initiated ping - it only
+    /// auto-responds to pings the SERVER sends - so without this, the
+    /// client side of the connection never generated any traffic of its
+    /// own; see `pingIntervalMs`'s doc comment for why that matters against
+    /// production infrastructure. Mirrors `startReceiveLoop`'s
+    /// `task.state == .running` loop-exit convention rather than tracking a
+    /// separate cancellation handle.
+    private func startPingLoop(_ task: URLSessionWebSocketTask) {
+        Task { [weak self] in
+            while task.state == .running {
+                let intervalMs = self?.pingIntervalMs ?? Self.defaultPingIntervalMs
+                try? await Task.sleep(nanoseconds: UInt64(intervalMs) * 1_000_000)
+                guard task.state == .running else { return }
+                task.sendPing { [weak self] error in
+                    if let error {
+                        self?.logWarning("WebSocket ping failed: \(error)")
+                    }
+                }
+            }
+        }
     }
 
     private func startReceiveLoop(_ task: URLSessionWebSocketTask) {
@@ -338,6 +384,15 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             if let msg = try? decoder.decode(HandshakeCompleteMessage.self, from: data) {
                 sessionId = msg.sessionId
                 setState(.connected)
+                if let serverPingIntervalMs = msg.config?.pingIntervalMs,
+                   serverPingIntervalMs > 0,
+                   serverPingIntervalMs != pingIntervalMs {
+                    logWarning(
+                        "Server ping interval (\(serverPingIntervalMs)ms) differs from ours " +
+                        "(\(pingIntervalMs)ms) - adopting it"
+                    )
+                    pingIntervalMs = serverPingIntervalMs
+                }
             }
         case MessageTypes.flowProgress:
             if let msg = try? decoder.decode(FlowProgressMessage.self, from: data) {

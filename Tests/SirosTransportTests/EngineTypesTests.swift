@@ -307,6 +307,15 @@ final class EngineTypesTests: XCTestCase {
         let msg = try decoder.decode(HandshakeCompleteMessage.self, from: json.data(using: .utf8)!)
         XCTAssertEqual(msg.sessionId, "session-123")
         XCTAssertEqual(msg.capabilities, ["oid4vci", "oid4vp"])
+        XCTAssertNil(msg.config)
+    }
+
+    func testHandshakeCompleteDecodingWithConfig() throws {
+        let json = """
+        {"type":"handshake_complete","session_id":"session-123","config":{"ping_interval_ms":7000}}
+        """
+        let msg = try decoder.decode(HandshakeCompleteMessage.self, from: json.data(using: .utf8)!)
+        XCTAssertEqual(msg.config?.pingIntervalMs, 7000)
     }
 
     func testFlowProgressDecoding() throws {

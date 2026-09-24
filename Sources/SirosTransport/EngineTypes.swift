@@ -392,10 +392,48 @@ public struct HandshakeCompleteMessage: Codable, Sendable {
     public var sessionId: String
     public var capabilities: [String]?
     public var timestamp: String?
+    /// Server-controlled tunables this client should adopt - see
+    /// ``SessionConfig``'s own doc comment. Optional so this decodes cleanly
+    /// against an older server that predates this field entirely, not just
+    /// one that sends it empty.
+    public var config: SessionConfig?
 
     enum CodingKeys: String, CodingKey {
-        case type, capabilities, timestamp
+        case type, capabilities, timestamp, config
         case sessionId = "session_id"
+    }
+}
+
+/// Server-controlled tunables delivered via ``HandshakeCompleteMessage``
+/// right after authentication succeeds. Deliberately the seed of a general
+/// post-auth config/capability handshake rather than a one-off field:
+/// anywhere the client would otherwise have to hardcode a value that only
+/// works if it happens to match what the server independently assumes, that
+/// value belongs here instead - `pingIntervalMs` is just the first case (see
+/// its own doc comment for why it specifically had to stop being
+/// independently guessed by each side). Add new fields as optional so an
+/// older client ignores fields it doesn't understand yet, and a client
+/// talking to an older server that never sends a given field falls back to
+/// its own hardcoded default.
+public struct SessionConfig: Codable, Sendable {
+    /// How often THIS client should send its own WebSocket ping frames, in
+    /// milliseconds - mirrors the server's own keepalive cadence
+    /// (go-wallet-backend's `config.ServerConfig.EngineWSPingInterval`) so
+    /// neither side has to independently guess a value low enough to
+    /// satisfy whatever intermediary (Fly.io's edge proxy, in production -
+    /// confirmed empirically to close an idle connection after ~5-6s,
+    /// nowhere near the 30s this used to be hardcoded to on both sides)
+    /// would otherwise consider the connection idle and close it. Nil (the
+    /// server hasn't said) means: use ``WalletEngineSession``'s own
+    /// hardcoded default rather than treat it as "no ping at all".
+    public var pingIntervalMs: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case pingIntervalMs = "ping_interval_ms"
+    }
+
+    public init(pingIntervalMs: Int64? = nil) {
+        self.pingIntervalMs = pingIntervalMs
     }
 }
 
