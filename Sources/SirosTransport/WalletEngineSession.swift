@@ -87,15 +87,37 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     private let maxReconnectAttempts = 5
     private let baseReconnectDelayMs: UInt64 = 1000
 
+    /// Guards `_pingIntervalMs` - read from the ping-loop `Task` (see
+    /// `startPingLoop`) and written from `handleMessage`'s
+    /// `handshakeComplete` case (via `adoptServerPingInterval`), which can
+    /// run on a different thread. A Copilot review on this PR caught the
+    /// resulting data race - `WalletEngineSession` being `@unchecked
+    /// Sendable` doesn't make an actually-shared mutable property safe, it
+    /// just tells the compiler to stop checking.
+    private let pingIntervalLock = NSLock()
+
     /// This session's own WebSocket ping cadence, in milliseconds - starts
     /// at `WalletEngineSession.defaultPingIntervalMs` and is updated
     /// whenever the server reports a different value via
-    /// `HandshakeCompleteMessage.config` (see `handleMessage`'s
-    /// `handshakeComplete` case). Unlike the Kotlin SDK's OkHttp-based
-    /// equivalent, `startPingLoop` re-reads this on every iteration, so a
-    /// mid-connection update takes effect on this same connection's very
-    /// next ping rather than only the next reconnect.
-    private var pingIntervalMs: Int64 = WalletEngineSession.defaultPingIntervalMs
+    /// `HandshakeCompleteMessage.config`. Unlike the Kotlin SDK's
+    /// OkHttp-based equivalent, `startPingLoop` re-reads this on every
+    /// iteration, so a mid-connection update takes effect on this same
+    /// connection's very next ping rather than only the next reconnect.
+    /// Always access via `currentPingIntervalMs()`/`setPingIntervalMs(_:)`,
+    /// never directly - see `pingIntervalLock`.
+    private var _pingIntervalMs: Int64 = WalletEngineSession.defaultPingIntervalMs
+
+    private func currentPingIntervalMs() -> Int64 {
+        pingIntervalLock.lock()
+        defer { pingIntervalLock.unlock() }
+        return _pingIntervalMs
+    }
+
+    private func setPingIntervalMs(_ value: Int64) {
+        pingIntervalLock.lock()
+        defer { pingIntervalLock.unlock() }
+        _pingIntervalMs = value
+    }
 
     /// Used until (and unless) the server tells us otherwise via
     /// `HandshakeCompleteMessage.config` - see `pingIntervalMs`'s doc
@@ -107,6 +129,19 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// production was silently reconnecting every few seconds. Matches
     /// go-wallet-backend's own default (`config.ServerConfig.EngineWSPingInterval`).
     static let defaultPingIntervalMs: Int64 = 3000
+
+    /// Upper bound applied to any value adopted from the server (see
+    /// `adoptServerPingInterval`) - another Copilot catch on this PR: a
+    /// buggy or compromised server could send an `Int64` close to
+    /// `Int64.max`, and `startPingLoop`'s `UInt64(intervalMs) * 1_000_000`
+    /// (converting milliseconds to nanoseconds for `Task.sleep`) would
+    /// overflow `UInt64` and trap. 60s is already far past any interval
+    /// that would still serve this mechanism's actual purpose (staying
+    /// under whatever intermediary's idle-connection timeout prompted it),
+    /// so anything larger is nonsensical regardless of where it's clamped -
+    /// clamping here, at the single point values from the server enter
+    /// this type, keeps every reader of `_pingIntervalMs` safe for free.
+    static let maxPingIntervalMs: Int64 = 60_000
 
     // Typed message channels
     private let messagesContinuation: AsyncStream<EngineMessage>.Continuation
@@ -287,7 +322,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     private func startPingLoop(_ task: URLSessionWebSocketTask) {
         Task { [weak self] in
             while task.state == .running {
-                let intervalMs = self?.pingIntervalMs ?? Self.defaultPingIntervalMs
+                let intervalMs = self?.currentPingIntervalMs() ?? Self.defaultPingIntervalMs
                 try? await Task.sleep(nanoseconds: UInt64(intervalMs) * 1_000_000)
                 guard task.state == .running else { return }
                 task.sendPing { [weak self] error in
@@ -299,23 +334,25 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         }
     }
 
-    /// Adopts `config.pingIntervalMs` (if present, positive, and different
-    /// from what this session is already using) for `pingIntervalMs` - see
-    /// that property's doc comment. Split out of `handleMessage`'s
+    /// Adopts `config.pingIntervalMs` (clamped to `maxPingIntervalMs`, and
+    /// only if present, positive, and different from what this session is
+    /// already using) for `pingIntervalMs` - see that property's doc
+    /// comment and `maxPingIntervalMs`'s. Split out of `handleMessage`'s
     /// `handshakeComplete` case purely to keep that already-large `switch`
     /// under swiftlint's cyclomatic-complexity ceiling; there's nothing
     /// about this logic itself that needs its own function.
     private func adoptServerPingInterval(from config: SessionConfig?) {
-        guard let serverPingIntervalMs = config?.pingIntervalMs,
-              serverPingIntervalMs > 0,
-              serverPingIntervalMs != pingIntervalMs else {
+        guard let serverPingIntervalMs = config?.pingIntervalMs, serverPingIntervalMs > 0 else {
             return
         }
+        let clamped = min(serverPingIntervalMs, Self.maxPingIntervalMs)
+        let current = currentPingIntervalMs()
+        guard clamped != current else { return }
         logWarning(
-            "Server ping interval (\(serverPingIntervalMs)ms) differs from ours " +
-            "(\(pingIntervalMs)ms) - adopting it"
+            "Server ping interval (\(clamped)ms) differs from ours " +
+            "(\(current)ms) - adopting it"
         )
-        pingIntervalMs = serverPingIntervalMs
+        setPingIntervalMs(clamped)
     }
 
     private func startReceiveLoop(_ task: URLSessionWebSocketTask) {
