@@ -299,6 +299,25 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         }
     }
 
+    /// Adopts `config.pingIntervalMs` (if present, positive, and different
+    /// from what this session is already using) for `pingIntervalMs` - see
+    /// that property's doc comment. Split out of `handleMessage`'s
+    /// `handshakeComplete` case purely to keep that already-large `switch`
+    /// under swiftlint's cyclomatic-complexity ceiling; there's nothing
+    /// about this logic itself that needs its own function.
+    private func adoptServerPingInterval(from config: SessionConfig?) {
+        guard let serverPingIntervalMs = config?.pingIntervalMs,
+              serverPingIntervalMs > 0,
+              serverPingIntervalMs != pingIntervalMs else {
+            return
+        }
+        logWarning(
+            "Server ping interval (\(serverPingIntervalMs)ms) differs from ours " +
+            "(\(pingIntervalMs)ms) - adopting it"
+        )
+        pingIntervalMs = serverPingIntervalMs
+    }
+
     private func startReceiveLoop(_ task: URLSessionWebSocketTask) {
         Task { [weak self] in
             while task.state == .running {
@@ -384,15 +403,7 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             if let msg = try? decoder.decode(HandshakeCompleteMessage.self, from: data) {
                 sessionId = msg.sessionId
                 setState(.connected)
-                if let serverPingIntervalMs = msg.config?.pingIntervalMs,
-                   serverPingIntervalMs > 0,
-                   serverPingIntervalMs != pingIntervalMs {
-                    logWarning(
-                        "Server ping interval (\(serverPingIntervalMs)ms) differs from ours " +
-                        "(\(pingIntervalMs)ms) - adopting it"
-                    )
-                    pingIntervalMs = serverPingIntervalMs
-                }
+                adoptServerPingInterval(from: msg.config)
             }
         case MessageTypes.flowProgress:
             if let msg = try? decoder.decode(FlowProgressMessage.self, from: data) {
