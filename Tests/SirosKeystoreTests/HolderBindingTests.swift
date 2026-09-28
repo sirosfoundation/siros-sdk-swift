@@ -414,6 +414,41 @@ final class HolderBindingTests: XCTestCase {
         }
         return "\(b64(#"{"alg":"ES256","typ":"dc+sd-jwt"}"#)).\(b64(payload)).sig~"
     }
+    // MARK: - base58btc
+
+    func testBase58EncodesTheStandardVectors() {
+        // Independently computed, not taken from this implementation. The
+        // leading-zero rule is the part that was wrong: each leading zero byte
+        // is one '1' and is not part of the value, so an all-zero input has no
+        // numeric part at all.
+        let vectors: [([UInt8], String)] = [
+            ([], ""),
+            ([0x00], "1"),
+            ([0x00, 0x00], "11"),
+            ([0x01], "2"),
+            ([0x00, 0x01], "12"),
+            ([57], "z"),
+            ([58], "21"),
+            (Array("Hello World!".utf8), "2NEpo7TZRRrLZSi2U"),
+        ]
+        for (input, expected) in vectors {
+            XCTAssertEqual(HolderIdentity.base58btc(input), expected, "base58btc(\(input))")
+        }
+    }
+
+    func testADidKeyIsUnaffectedByTheLeadingZeroRule() {
+        // The multicodec prefix is 0x80, so a did:key never has a leading zero
+        // byte - which is why the bug above was invisible here. Pinned so the
+        // fix cannot regress the shape that is actually published.
+        let jwk = [
+            "kty": "EC", "crv": "P-256",
+            "x": "acbIQiuMs3i8_uszEjJ2tpTtRM4EU3yz91PH6CdH2V0",
+            "y": "_KcyLj9vWMptnmKtm46GqDz8wf74I5LKgrl2GzH3nSE",
+        ]
+        let did = HolderIdentity.didKey(publicJwk: jwk)
+        XCTAssertTrue(did.hasPrefix("did:key:z"), did)
+        XCTAssertFalse(did.hasPrefix("did:key:z1"), "no spurious leading '1'")
+    }
 }
 
 #endif

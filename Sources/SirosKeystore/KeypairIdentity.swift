@@ -119,12 +119,20 @@ enum HolderIdentity {
                 carry /= 58
             }
         }
-        // Leading zero bytes are encoded as leading '1's, not dropped.
-        var result = String(repeating: "1", count: input.prefix { $0 == 0 }.count)
-        for digit in digits.reversed() where !(result.isEmpty && digit == 0) {
-            result.append(base58Alphabet[Int(digit)])
+        // The value, most significant digit first, with the big-number
+        // representation's own leading zeros dropped - `digits` is seeded with
+        // a zero, and that is not a digit of the value.
+        var numeric = ""
+        for digit in digits.reversed() where !(numeric.isEmpty && digit == 0) {
+            numeric.append(base58Alphabet[Int(digit)])
         }
-        return result.isEmpty ? "1" : result
+        // Each leading zero byte is one '1', and they are not part of the
+        // value. An all-zero input therefore has no numeric part at all: its
+        // encoding is exactly those '1's, which is why the zero digit above
+        // has to be skipped against `numeric` rather than against the whole
+        // result - skipping against the whole result never fires once the
+        // prefix is in it, and `[0x00]` came out as "11".
+        return String(repeating: "1", count: input.prefix { $0 == 0 }.count) + numeric
     }
 
     /// Whether a stored key pair is the one a credential means by `kid`.
