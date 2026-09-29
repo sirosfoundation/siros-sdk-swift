@@ -139,8 +139,8 @@ final class WalletViewModelTests: XCTestCase {
         let vm = makeViewModel()
         vm.credentials = [
             StoredCredential(
-                id: 1, format: "mso_mdoc", raw: "", batchId: 1, instanceId: 0,
-                credentialConfigurationId: "siros_id"
+                id: 1, format: "mso_mdoc", raw: "",
+                credentialConfigurationId: "siros_id", batchId: 1, instanceId: 0
             ),
         ]
         XCTAssertTrue(vm.hasPhotoIdCredential())
@@ -150,8 +150,8 @@ final class WalletViewModelTests: XCTestCase {
         let vm = makeViewModel()
         vm.credentials = [
             StoredCredential(
-                id: 1, format: "vc+sd-jwt", raw: "", batchId: 1, instanceId: 0,
-                credentialConfigurationId: "pid"
+                id: 1, format: "vc+sd-jwt", raw: "",
+                credentialConfigurationId: "pid", batchId: 1, instanceId: 0
             ),
             StoredCredential(id: 2, format: "vc+sd-jwt", raw: "", batchId: 2, instanceId: 0),
         ]
