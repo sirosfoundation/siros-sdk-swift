@@ -314,7 +314,8 @@ public enum CredentialUtils {
                     label: meta?.label ?? formatClaimKey(elementId),
                     value: formatCborValue(entry.item.elementValue),
                     description: meta?.description,
-                    mandatory: meta?.mandatory ?? false
+                    mandatory: meta?.mandatory ?? false,
+                    svgId: meta?.svgId
                 )
             }
         }
@@ -342,9 +343,19 @@ public enum CredentialUtils {
                 return ClaimMeta(
                     path: [namespace, elementId],
                     label: claimDisplay?.name,
-                    mandatory: meta.mandatory
+                    mandatory: meta.mandatory,
+                    svgId: meta.svgId
                 )
             }
+        }
+
+        let svgTemplates: [SvgTemplateInfo]? = display?.rendering?.svgTemplates?.map { template in
+            SvgTemplateInfo(
+                uri: template.uri,
+                colorScheme: template.properties?.colorScheme,
+                contrast: template.properties?.contrast,
+                orientation: template.properties?.orientation
+            )
         }
 
         return CredentialMetadata(
@@ -356,15 +367,24 @@ public enum CredentialUtils {
             textColor: display?.textColor ?? offer.textColor,
             logo: display?.logo.map { LogoInfo(uri: $0.uri, altText: $0.altText) }
                 ?? offer.logoUri.map { LogoInfo(uri: $0) },
-            claims: claims
+            claims: claims,
+            svgTemplates: svgTemplates
         )
     }
 
-    /// Format a decoded CBOR element value for display.
+    /// Format a decoded CBOR element value for display. A byte string that
+    /// sniffs as a JPEG or PNG (e.g. an ISO 18013-5/23220 `portrait`) is
+    /// turned into a `data:image/...;base64,...` URI so it can be embedded
+    /// directly in an SVG rendering card - see `SvgTemplateRenderer`. Any
+    /// other byte string (including JPEG 2000 - see this SDK's issue #176
+    /// "Decision: JPEG 2000": no image-decoding dependency is added here,
+    /// despite `UIImage`/ImageIO being able to decode JP2 natively - issuers
+    /// targeting SVG cards are expected to transcode JP2 themselves) keeps
+    /// today's plain `"<N bytes>"` placeholder.
     private static func formatCborValue(_ value: CBOR) -> String {
         switch value {
         case .utf8String(let s): return s
-        case .byteString(let b): return "<\(b.count) bytes>"
+        case .byteString(let b): return imageDataUri(b) ?? "<\(b.count) bytes>"
         case .unsignedInt(let n): return String(n)
         case .negativeInt(let n): return String(-1 - Int64(n))
         case .boolean(let b): return b ? "true" : "false"
@@ -372,6 +392,25 @@ public enum CredentialUtils {
         case .float(let f): return String(f)
         default: return String(describing: value)
         }
+    }
+
+    /// Sniffs `bytes` for a JPEG or PNG magic number and, if found, returns a
+    /// `data:image/...;base64,...` URI. Returns nil for anything else
+    /// (including JPEG 2000, deliberately not decoded - see `formatCborValue`),
+    /// so callers fall back to their own non-image placeholder.
+    private static func imageDataUri(_ bytes: [UInt8]) -> String? {
+        let mimeType: String
+        if bytes.count >= 3, bytes[0] == 0xFF, bytes[1] == 0xD8, bytes[2] == 0xFF {
+            mimeType = "image/jpeg"
+        } else if bytes.count >= 4, bytes[0] == 0x89, bytes[1] == 0x50, bytes[2] == 0x4E, bytes[3] == 0x47 {
+            mimeType = "image/png"
+        } else {
+            return nil
+        }
+        // Defensive copy: some CBOR decoders can hand back a slice/view into
+        // a larger shared buffer rather than a standalone array.
+        let base64 = Data(bytes).base64EncodedString()
+        return "data:\(mimeType);base64,\(base64)"
     }
 
     /// Build credential metadata from an offer, optional VCTM, and raw credential.

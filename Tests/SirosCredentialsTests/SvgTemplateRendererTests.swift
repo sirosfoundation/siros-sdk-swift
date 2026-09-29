@@ -50,6 +50,28 @@ final class SvgTemplateRendererTests: XCTestCase {
         XCTAssertEqual(SvgTemplateRenderer.escapeXml("&<>\"'"), "&amp;&lt;&gt;&quot;&apos;")
     }
 
+    func testSubstitutesADataUriImageClaimUnescaped() {
+        let template = #"<image href="{{portrait}}"/>"#
+        let dataUri = "data:image/jpeg;base64,/9j/4AAQ"
+        let claims = [
+            DisplayClaim(key: "org.iso.23220.1.portrait", label: "Portrait", value: dataUri, svgId: "portrait"),
+        ]
+        XCTAssertEqual(SvgTemplateRenderer.substitute(template, claims: claims), #"<image href="\#(dataUri)"/>"#)
+    }
+
+    func testRendersADashForAnSvgBoundClaimThatCouldNotBeDecodedAsAnImage() {
+        // Mirrors CredentialUtils.formatCborValue's fallback for a byte
+        // string that isn't a recognized JPEG/PNG (e.g. JPEG 2000, or a
+        // filtered/undisclosed portrait) - showing the raw byte count where
+        // an image was expected would be more confusing than an explicit
+        // "not shown" marker.
+        let template = #"<image href="{{portrait}}"/>"#
+        let claims = [
+            DisplayClaim(key: "org.iso.23220.1.portrait", label: "Portrait", value: "<38000 bytes>", svgId: "portrait"),
+        ]
+        XCTAssertEqual(SvgTemplateRenderer.substitute(template, claims: claims), #"<image href="-"/>"#)
+    }
+
     func testRealDc4euDiplomaTemplateSubstitutesCorrectly() {
         // Reproduces the actual live template fetched from the diploma VCTM
         // during manual verification of the Kotlin SDK.
