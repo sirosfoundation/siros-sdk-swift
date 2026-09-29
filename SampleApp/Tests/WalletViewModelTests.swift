@@ -130,6 +130,34 @@ final class WalletViewModelTests: XCTestCase {
         XCTAssertFalse(vm.showActivate)
     }
 
+    // MARK: - PhotoID onboarding
+
+    /// Per Copilot review: hasPhotoIdCredential() gates Home's onboarding
+    /// CTA, so both sides of the check need coverage - a stored "siros_id"
+    /// credential must suppress it, and anything else must not.
+    func testHasPhotoIdCredentialIsTrueWhenASirosIdCredentialIsStored() {
+        let vm = makeViewModel()
+        vm.credentials = [
+            StoredCredential(
+                id: 1, format: "mso_mdoc", raw: "", batchId: 1, instanceId: 0,
+                credentialConfigurationId: "siros_id"
+            ),
+        ]
+        XCTAssertTrue(vm.hasPhotoIdCredential())
+    }
+
+    func testHasPhotoIdCredentialIsFalseForADifferentOrMissingConfigurationId() {
+        let vm = makeViewModel()
+        vm.credentials = [
+            StoredCredential(
+                id: 1, format: "vc+sd-jwt", raw: "", batchId: 1, instanceId: 0,
+                credentialConfigurationId: "pid"
+            ),
+            StoredCredential(id: 2, format: "vc+sd-jwt", raw: "", batchId: 2, instanceId: 0),
+        ]
+        XCTAssertFalse(vm.hasPhotoIdCredential())
+    }
+
     // MARK: - Disconnect
 
     func testDisconnectClearsState() {

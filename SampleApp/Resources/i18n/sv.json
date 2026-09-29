@@ -112,7 +112,7 @@
     "diagnosticMessagesToggle": "Diagnostikmeddelanden",
     "diagnosticMessagesDescription": "Visa den råa backend-stegtoken tillsammans med den vänliga förloppsetiketten under ett flöde.",
     "photoIdOnboardingToggle": "PhotoID-registrering",
-    "photoIdOnboardingDescription": "Visa en genväg \"Skaffa ditt PhotoID\" på hemskärmen när denna klient erbjuder identitetsverifierad PhotoID-utfärdande"
+    "photoIdOnboardingDescription": "Visa en genväg \"Skaffa ditt PhotoID\" på hemskärmen när denna klient erbjuder identitetsverifierat PhotoID-utfärdande"
   },
   "wscd": {
     "title": "WSCA Utvecklare",

@@ -1118,7 +1118,9 @@ final class WalletViewModel: ObservableObject {
 
     private var presentationContinuation: CheckedContinuation<[Int64], Never>?
 
-    private func setError(_ message: String) {
+    /// Not `private` - other WalletViewModel+*.swift extension files (e.g.
+    /// PhotoIdOnboarding) need this from another file in the same target.
+    func setError(_ message: String) {
         errorMessage = message
         showError = true
     }

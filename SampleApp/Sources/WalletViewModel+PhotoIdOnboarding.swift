@@ -52,7 +52,11 @@ extension WalletViewModel {
                 let rootViewController = windowScene?.windows.first?.rootViewController ?? UIViewController()
                 try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: rootViewController)
             } catch {
-                errorMessage = "IDV failed: \(error.localizedDescription)"
+                // Per Copilot review: this must set `showError` too, not just
+                // `errorMessage` - ContentView.syncBanner() only displays an
+                // error when both are set, so a failure here previously sent
+                // the user back to Home with no visible feedback at all.
+                setError("IDV failed: \(error.localizedDescription)")
             }
             isLoading = false
         }
