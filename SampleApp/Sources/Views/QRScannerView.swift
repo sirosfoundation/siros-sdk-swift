@@ -64,7 +64,7 @@ struct QRScannerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(L10n.string("common.cancel")) { viewModel.closeQrScanner() }
+                    Button(L10n.string("common.cancel")) { viewModel.closeActivate() }
                 }
             }
         }
