@@ -261,14 +261,12 @@ struct ErrorView: View {
 
 struct MainTabView: View {
     @EnvironmentObject var viewModel: WalletViewModel
-    /// Home (tag 1) is the default/start tab - see `HomeView`.
-    @State private var selectedTab = 1
 
     var body: some View {
         VStack(spacing: 0) {
             // Content area
             Group {
-                switch selectedTab {
+                switch viewModel.selectedTab {
                 case 1:
                     HomeView()
                 case 2:
@@ -322,8 +320,8 @@ struct MainTabView: View {
 
     @ViewBuilder
     private func tabButton(icon: String? = nil, mark: Bool = false, label: String, tag: Int, identifier: String) -> some View {
-        let isSelected = selectedTab == tag
-        Button(action: { selectedTab = tag }) {
+        let isSelected = viewModel.selectedTab == tag
+        Button(action: { viewModel.selectedTab = tag }) {
             VStack(spacing: 2) {
                 if mark {
                     // The SIROS mark is two-tone (navy star on white), so it's
