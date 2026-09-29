@@ -95,6 +95,23 @@ final class WalletViewModelTests: XCTestCase {
         XCTAssertEqual(vm.activateMode, .qr)
     }
 
+    /// Exercises a real mode transition (unlike `testOpenActivateSetsFlag`,
+    /// which starts from the default `.qr` and would pass even if
+    /// `openActivate()` stopped resetting a previous mode) - per Copilot
+    /// review.
+    func testOpenActivateResetsModeToQrAfterASwitchToProximity() {
+        let vm = makeViewModel()
+        vm.openActivate()
+        vm.switchActivateMode(.proximity)
+        XCTAssertEqual(vm.activateMode, .proximity)
+        vm.closeActivate()
+
+        vm.openActivate()
+
+        XCTAssertTrue(vm.showActivate)
+        XCTAssertEqual(vm.activateMode, .qr, "reopening Activate must always start in QR mode, even after a prior session left it in proximity mode")
+    }
+
     func testCloseActivateClearsFlag() {
         let vm = makeViewModel()
         vm.showActivate = true
