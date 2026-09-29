@@ -932,9 +932,11 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Activate (QR scan + proximity engagement)
 
-    /// Opens Activate, always starting in QR mode (the default engagement path).
-    func openActivate() {
-        activateMode = .qr
+    /// Opens Activate, defaulting to QR mode (the default engagement path).
+    /// Pass `.proximity` for a direct shortcut into tap-to-share mode (see
+    /// `HomeView`'s long-press gesture on the SIROS mark).
+    func openActivate(mode: ActivateMode = .qr) {
+        activateMode = mode
         showActivate = true
     }
 
