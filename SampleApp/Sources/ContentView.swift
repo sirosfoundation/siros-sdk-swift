@@ -286,19 +286,22 @@ struct MainTabView: View {
                 tabButton(
                     icon: "wallet.pass",
                     label: L10n.string("nav.credentials"),
-                    tag: 0
+                    tag: 0,
+                    identifier: "nav-tab-credentials"
                 )
                 Spacer()
                 tabButton(
                     mark: true,
                     label: L10n.string("nav.home"),
-                    tag: 1
+                    tag: 1,
+                    identifier: "nav-tab-home"
                 )
                 Spacer()
                 tabButton(
                     icon: "gear",
                     label: L10n.string("nav.settings"),
-                    tag: 2
+                    tag: 2,
+                    identifier: "nav-tab-settings"
                 )
             }
             .padding(.horizontal, 32)
@@ -318,7 +321,7 @@ struct MainTabView: View {
     }
 
     @ViewBuilder
-    private func tabButton(icon: String? = nil, mark: Bool = false, label: String, tag: Int) -> some View {
+    private func tabButton(icon: String? = nil, mark: Bool = false, label: String, tag: Int, identifier: String) -> some View {
         let isSelected = selectedTab == tag
         Button(action: { selectedTab = tag }) {
             VStack(spacing: 2) {
@@ -340,5 +343,9 @@ struct MainTabView: View {
             }
         }
         .buttonStyle(.plain)
+        // Stable, locale-independent hook for UI tests (see
+        // CredentialStackInteractionUITests, which must switch off Home to
+        // reach the Credentials tab before it can exercise the stack).
+        .accessibilityIdentifier(identifier)
     }
 }
