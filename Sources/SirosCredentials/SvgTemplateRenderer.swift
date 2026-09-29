@@ -14,27 +14,34 @@ public enum SvgTemplateRenderer {
 
     private static let unmatchedToken = try! NSRegularExpression(pattern: "\\{\\{[^}]*\\}\\}")
 
-    /// Matches `CredentialUtils`'s `"<N bytes>"` placeholder for a byte-string
-    /// claim that isn't a recognized/decodable image (JPEG 2000, or a
-    /// filtered/undisclosed portrait) - see `substitute`.
-    private static let undecodableBytesPlaceholder = try! NSRegularExpression(pattern: "^<\\d+ bytes>$")
-
     /// Replace every `{{claim.svgId}}` token in `svgTemplate` with that claim's
     /// resolved, XML-escaped value. Any token left over (a claim the VCTM
     /// defines but that isn't present in this particular credential) is
-    /// blanked rather than shown to the user literally. A claim bound to an
-    /// `svgId` whose value is a byte string that couldn't be turned into a
-    /// displayable image (see `CredentialUtils.formatCborValue`) renders as
-    /// `-` instead of the raw `"<N bytes>"` placeholder - showing a byte
-    /// count where an image was expected would be more confusing than an
-    /// explicit "not shown" marker.
+    /// blanked rather than shown to the user literally.
+    ///
+    /// A claim carrying `imageDataUri` (a byte-string that decoded to a
+    /// displayable image - see `CredentialUtils.extractMdocClaims`)
+    /// substitutes that URI rather than its concise `value` placeholder.
+    /// A claim marked `isUndecodableBytes` (a byte string present but not
+    /// recognized as an image, e.g. JPEG 2000) renders as `-` instead -
+    /// showing a byte count where an image was expected would be more
+    /// confusing than an explicit "not shown" marker. Note these two fields
+    /// are read directly rather than inferred from `value`'s text: a
+    /// legitimate text claim could otherwise coincidentally equal
+    /// `formatCborValue`'s placeholder shape (e.g. a claim literally valued
+    /// `"<12 bytes>"`) and be misclassified.
     public static func substitute(_ svgTemplate: String, claims: [DisplayClaim]) -> String {
         var result = svgTemplate
         for claim in claims {
             guard let id = claim.svgId else { continue }
-            let valueRange = NSRange(claim.value.startIndex..., in: claim.value)
-            let isUndecodableBytes = undecodableBytesPlaceholder.firstMatch(in: claim.value, range: valueRange) != nil
-            let value = isUndecodableBytes ? "-" : claim.value
+            let value: String
+            if let imageDataUri = claim.imageDataUri {
+                value = imageDataUri
+            } else if claim.isUndecodableBytes {
+                value = "-"
+            } else {
+                value = claim.value
+            }
             result = result.replacingOccurrences(of: "{{\(id)}}", with: escapeXml(value))
         }
         let range = NSRange(result.startIndex..., in: result)

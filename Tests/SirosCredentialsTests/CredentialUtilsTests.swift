@@ -393,7 +393,14 @@ final class CredentialUtilsTests: XCTestCase {
         let claims = CredentialUtils.extractClaims(cred)
         let portrait = claims.first { $0.key == "\(mdocNamespace).portrait" }
         let expectedBase64 = Data(jpegBytes).base64EncodedString()
-        XCTAssertEqual(portrait?.value, "data:image/jpeg;base64,\(expectedBase64)")
+        // The generic display `value` stays the concise placeholder - only
+        // `imageDataUri` carries the (potentially huge) base64 URI, so a
+        // credential's Claims tab never renders a giant base64 blob for a
+        // portrait (see `SvgTemplateRenderer`, which is the only consumer
+        // of `imageDataUri`).
+        XCTAssertEqual(portrait?.value, "<\(jpegBytes.count) bytes>")
+        XCTAssertEqual(portrait?.imageDataUri, "data:image/jpeg;base64,\(expectedBase64)")
+        XCTAssertFalse(portrait?.isUndecodableBytes ?? true)
         XCTAssertEqual(portrait?.svgId, "portrait")
     }
 
@@ -411,7 +418,9 @@ final class CredentialUtilsTests: XCTestCase {
         let claims = CredentialUtils.extractClaims(cred)
         let portrait = claims.first { $0.key == "\(mdocNamespace).portrait" }
         let expectedBase64 = Data(pngBytes).base64EncodedString()
-        XCTAssertEqual(portrait?.value, "data:image/png;base64,\(expectedBase64)")
+        XCTAssertEqual(portrait?.value, "<\(pngBytes.count) bytes>")
+        XCTAssertEqual(portrait?.imageDataUri, "data:image/png;base64,\(expectedBase64)")
+        XCTAssertFalse(portrait?.isUndecodableBytes ?? true)
     }
 
     func testExtractMdocClaimsLeavesAnUndecodableByteStringAsTheNBytesPlaceholder() {
@@ -432,6 +441,8 @@ final class CredentialUtilsTests: XCTestCase {
         let claims = CredentialUtils.extractClaims(cred)
         let portrait = claims.first { $0.key == "\(mdocNamespace).portrait" }
         XCTAssertEqual(portrait?.value, "<\(jp2Bytes.count) bytes>")
+        XCTAssertNil(portrait?.imageDataUri)
+        XCTAssertTrue(portrait?.isUndecodableBytes ?? false)
     }
 
     // MARK: - eligibleInstances / CredentialConsumptionPolicy

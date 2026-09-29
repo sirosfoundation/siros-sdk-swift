@@ -22,6 +22,17 @@ public struct DisplayClaim: Sendable, Equatable {
     public let mandatory: Bool
     /// VCTM SVG template placeholder ID this claim fills, if any.
     public let svgId: String?
+    /// A `data:image/...;base64,...` URI when this claim is a byte-string
+    /// that decoded to a displayable image (e.g. an mdoc portrait) - kept
+    /// separate from `value` so a generic claims list still shows the
+    /// concise `"<N bytes>"` placeholder instead of an enormous base64
+    /// string; only `SvgTemplateRenderer` substitutes this into a card.
+    public let imageDataUri: String?
+    /// True when this claim is a byte-string that could not be turned into
+    /// a displayable image (e.g. JPEG 2000 - see `CredentialUtils.formatCborValue`).
+    /// `SvgTemplateRenderer` renders such a claim as `-` rather than the raw
+    /// `"<N bytes>"` placeholder, which would be more confusing in an image slot.
+    public let isUndecodableBytes: Bool
 
     public init(
         key: String,
@@ -29,7 +40,9 @@ public struct DisplayClaim: Sendable, Equatable {
         value: String,
         description: String? = nil,
         mandatory: Bool = false,
-        svgId: String? = nil
+        svgId: String? = nil,
+        imageDataUri: String? = nil,
+        isUndecodableBytes: Bool = false
     ) {
         self.key = key
         self.label = label
@@ -37,6 +50,8 @@ public struct DisplayClaim: Sendable, Equatable {
         self.description = description
         self.mandatory = mandatory
         self.svgId = svgId
+        self.imageDataUri = imageDataUri
+        self.isUndecodableBytes = isUndecodableBytes
     }
 }
 
@@ -297,6 +312,19 @@ public enum CredentialUtils {
         }
     }
 
+    /// Extract an mdoc credential's data elements as display claims.
+    ///
+    /// A byte-string data element (e.g. an ISO 18013-5/23220 `portrait`) is
+    /// only turned into a displayable image (`DisplayClaim.imageDataUri`,
+    /// consumed by `SvgTemplateRenderer` for `svg_templates` cards) when it
+    /// is JPEG or PNG. **Issuers must not issue JPEG 2000 portraits if they
+    /// want them to render in an SVG card** - this SDK deliberately does not
+    /// decode JPEG 2000 (see issue #176 "Decision: JPEG 2000"); a JPEG
+    /// 2000 (or any other non-JPEG/PNG) byte string instead renders as `-`
+    /// in that card slot (`DisplayClaim.isUndecodableBytes`). An issuer
+    /// wanting SVG-card portraits from a JPEG-2000-native pipeline (e.g.
+    /// ISO 18013-5's default, or `facetec-api`'s FaceTec capture) must
+    /// transcode to JPEG or PNG server-side before issuance.
     public static func extractMdocClaims(_ credential: StoredCredential) -> [DisplayClaim] {
         guard let document = parseMdocDocument(credential.raw) else { return [] }
 
@@ -309,13 +337,22 @@ public enum CredentialUtils {
             items.map { entry -> DisplayClaim in
                 let elementId = entry.item.elementIdentifier
                 let meta = claimMetaByPath["\(namespace)/\(elementId)"]
+                let cborValue = entry.item.elementValue
+                var imageUri: String?
+                var isUndecodableBytes = false
+                if case .byteString(let bytes) = cborValue {
+                    imageUri = imageDataUri(bytes)
+                    isUndecodableBytes = imageUri == nil
+                }
                 return DisplayClaim(
                     key: "\(namespace).\(elementId)",
                     label: meta?.label ?? formatClaimKey(elementId),
-                    value: formatCborValue(entry.item.elementValue),
+                    value: formatCborValue(cborValue),
                     description: meta?.description,
                     mandatory: meta?.mandatory ?? false,
-                    svgId: meta?.svgId
+                    svgId: meta?.svgId,
+                    imageDataUri: imageUri,
+                    isUndecodableBytes: isUndecodableBytes
                 )
             }
         }
@@ -372,19 +409,27 @@ public enum CredentialUtils {
         )
     }
 
-    /// Format a decoded CBOR element value for display. A byte string that
-    /// sniffs as a JPEG or PNG (e.g. an ISO 18013-5/23220 `portrait`) is
-    /// turned into a `data:image/...;base64,...` URI so it can be embedded
-    /// directly in an SVG rendering card - see `SvgTemplateRenderer`. Any
-    /// other byte string (including JPEG 2000 - see this SDK's issue #176
-    /// "Decision: JPEG 2000": no image-decoding dependency is added here,
-    /// despite `UIImage`/ImageIO being able to decode JP2 natively - issuers
-    /// targeting SVG cards are expected to transcode JP2 themselves) keeps
-    /// today's plain `"<N bytes>"` placeholder.
+    /// Format a decoded CBOR element value for display. A byte string always
+    /// stays the concise `"<N bytes>"` placeholder here, even when it sniffs
+    /// as a displayable image - `DisplayClaim.imageDataUri` (see
+    /// `extractMdocClaims`) is the only place the actual
+    /// `data:image/...;base64,...` URI is surfaced, so a generic claims list
+    /// never has to render an enormous base64 string for a portrait; only
+    /// `SvgTemplateRenderer` substitutes the image URI into a rendering card.
+    ///
+    /// Integrators targeting `svg_templates` cards for mdoc portraits must
+    /// issue the underlying byte string as JPEG or PNG - see `imageDataUri`
+    /// below for exactly which magic bytes are recognized. JPEG 2000 (the
+    /// ISO 18013-5/23220 default) is deliberately NOT decoded by this SDK
+    /// (see issue #176 "Decision: JPEG 2000"); an issuer whose portraits are
+    /// JPEG 2000 must transcode to JPEG or PNG server-side (e.g.
+    /// `facetec-api`'s `issuer.format: mdoc` pipeline does this) before a
+    /// wallet using this SDK can render that portrait in an SVG card - it
+    /// will otherwise always render as `-` in that slot (`DisplayClaim.isUndecodableBytes`).
     private static func formatCborValue(_ value: CBOR) -> String {
         switch value {
         case .utf8String(let s): return s
-        case .byteString(let b): return imageDataUri(b) ?? "<\(b.count) bytes>"
+        case .byteString(let b): return "<\(b.count) bytes>"
         case .unsignedInt(let n): return String(n)
         case .negativeInt(let n): return String(-1 - Int64(n))
         case .boolean(let b): return b ? "true" : "false"
