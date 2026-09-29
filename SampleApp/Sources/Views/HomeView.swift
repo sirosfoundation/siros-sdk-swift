@@ -43,6 +43,18 @@ struct HomeView: View {
             )
             .accessibilityLabel(L10n.string("home.activateButton"))
             .accessibilityAddTraits(.isButton)
+            // The raw LongPressGesture/TapGesture composition above has no
+            // VoiceOver equivalent of its own - a real Copilot-review finding:
+            // adding the .isButton trait alone only changes how this view is
+            // ANNOUNCED, it doesn't give VoiceOver an activation action, so a
+            // VoiceOver user could neither trigger the default QR scan nor
+            // reach the long-press shortcut at all. The unnamed action below
+            // is what VoiceOver's standard double-tap invokes; the named one
+            // surfaces as an additional custom action (rotor/actions menu).
+            .accessibilityAction { viewModel.openActivate() }
+            .accessibilityAction(named: Text(L10n.string("activate.useProximityInstead"))) {
+                viewModel.openActivate(mode: .proximity)
+            }
 
             if viewModel.credentials.isEmpty {
                 Button(L10n.string("home.addCredentialButton")) {
