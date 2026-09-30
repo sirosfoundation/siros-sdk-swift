@@ -102,7 +102,11 @@ jobs:
   test-linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
-    container: swift:6.1
+    # Deliberately older than the toolchain this is developed on, so that a
+    # construct only the newer type-checker can handle is caught here rather
+    # than by whoever next builds on an older Swift. 6.2 is the floor set by
+    # swift-crypto 5, which declares tools version 6.2.0.
+    container: swift:6.2
     steps:
       - uses: actions/checkout@v7
       - name: Build & Test
