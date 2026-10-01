@@ -208,11 +208,22 @@ public actor CredentialStatusEvaluator {
             clockTolerance: clockTolerance
         )
         switch resolution {
+        // Transport could not be reached at all - offline-friendly, by
+        // design (see Resolution.unreachable's doc comment).
+        case .unreachable(let reason):
+            #if canImport(os)
+            statusLogger.warning("Could not reach the status list: \(reason, privacy: .public)")
+            #endif
+            return .valid
+        // A response came back but could not be verified - NOT the same as
+        // unreachable (review finding): conflating the two previously let
+        // ANY verification failure, a forged/invalid signature included,
+        // read exactly like an offline wallet and report `.valid`.
         case .unavailable(let reason):
             #if canImport(os)
             statusLogger.warning("Could not determine revocation status: \(reason, privacy: .public)")
             #endif
-            return .valid
+            return .unknown
         case .found(let status):
             switch status {
             case TokenStatusList.Status.valid: return .valid

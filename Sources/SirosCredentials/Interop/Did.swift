@@ -409,9 +409,18 @@ public enum Did {
         case "EC": required = ["crv", "kty", "x", "y"]
         case "OKP": required = ["crv", "kty", "x"]
         case "RSA": required = ["e", "kty", "n"]
-        case "oct": required = ["k", "kty"]
-        // An unknown key type has no defined required set; keeping only what
-        // is certainly part of every JWK is safer than guessing a wider one.
+        // `oct` deliberately has NO required-member entry, unlike every
+        // other recognised kty (review finding): it is symmetric SECRET
+        // material (`k` is a shared secret, not a public key), and every
+        // caller of this function - createDidJwk included - uses the result
+        // to build or compare a DID *identity*. A did:jwk minted from an
+        // `oct` JWK would otherwise embed that secret directly in the
+        // identifier string; falling to the `default` case below (just
+        // `kty`, no `k`) keeps it out, the same way isUsablePublicJwk
+        // already refuses to treat `oct` as usable on the resolving side.
+        // An unknown key type has no defined required set either; keeping
+        // only what is certainly part of every JWK is safer than guessing a
+        // wider one.
         default: required = ["kty"]
         }
         return required.compactMap { member in jwk[member].map { (member, $0) } }

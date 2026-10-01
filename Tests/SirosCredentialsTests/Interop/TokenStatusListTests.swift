@@ -48,6 +48,27 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 1, idx: -1))
     }
 
+    /// Regression (review finding): a genuinely unreachable transport (no
+    /// response at all) is the ONE case that gets the offline-friendly
+    /// treatment - `.unreachable`, not `.unavailable`. Every OTHER failure
+    /// mode (a reached-but-unverifiable response) must stay `.unavailable`,
+    /// which `CredentialStatusEvaluator` now maps to `.unknown` rather than
+    /// `.valid` - conflating the two previously let a forged/invalid
+    /// signature read exactly like an offline wallet.
+    func testOnlyAGenuineTransportFailureIsUnreachable() async {
+        let unreachableClient = TokenStatusListClient(httpGet: { _, _ in nil })
+        let unreachable = await unreachableClient.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unreachable = unreachable else {
+            return XCTFail("expected .unreachable for a transport that returns nothing, got \(unreachable)")
+        }
+
+        let garbageClient = TokenStatusListClient(httpGet: { _, _ in Data("not-a-jws".utf8) })
+        let garbage = await garbageClient.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unavailable = garbage else {
+            return XCTFail("a reached-but-unparseable response is .unavailable, not .unreachable, got \(garbage)")
+        }
+    }
+
     func testAnIllegalEntryWidthIsReportedAsSuchNotAsAMissingIndex() async {
         // "Index 1 is outside the status list" would send whoever is debugging
         // the issuer looking in entirely the wrong place.
@@ -122,11 +143,56 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertEqual(count, 2, "clearCache must force a real refetch, not another cache hit")
     }
 
+    /// Regression (review finding): with no bound at all, a wallet holding
+    /// many credentials with distinct status-list URIs would retain every
+    /// one of their lists for the life of this client, growing memory
+    /// without limit. The oldest entry must be evicted once the cache
+    /// exceeds its cap (500 - see TokenStatusListClient.maxCacheEntries), so
+    /// resolving it again is a real refetch, while a recently-touched entry
+    /// stays cached.
+    func testTheOldestCacheEntryIsEvictedOncePastTheCap() async {
+        let key = P256.Signing.PrivateKey()
+        let issuer = "https://issuer.example"
+        actor FetchCounter {
+            private(set) var uris: [String] = []
+            func record(_ uri: String) { uris.append(uri) }
+        }
+        let fetched = FetchCounter()
+        let client = TokenStatusListClient(
+            httpGet: { uri, _ in
+                await fetched.record(uri)
+                return Data(Self.statusListToken(bits: 1, signedBy: key, uri: uri).utf8)
+            },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+
+        let oldestUri = "https://x.example/0"
+        // One past the cap: the 501st distinct uri must evict the 1st.
+        for index in 0...500 {
+            let uri = "https://x.example/\(index)"
+            _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: uri), expectedIssuer: issuer)
+        }
+
+        let fetchesBefore = await fetched.uris.count
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: oldestUri), expectedIssuer: issuer)
+        let fetchesAfter = await fetched.uris.count
+        XCTAssertEqual(fetchesAfter, fetchesBefore + 1, "the evicted oldest entry must be refetched, not cached")
+
+        let recentUri = "https://x.example/500"
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: recentUri), expectedIssuer: issuer)
+        let fetchesFinal = await fetched.uris.count
+        XCTAssertEqual(fetchesFinal, fetchesAfter, "a recently-touched entry must still be served from cache")
+    }
+
     /// A properly signed Status List Token declaring `bits` as its entry width.
     ///
     /// Really signed, because the reader verifies the signature before it
     /// looks at the list - an unsigned shell never reaches the width check.
-    private static func statusListToken(bits: Int, signedBy key: P256.Signing.PrivateKey) -> String {
+    private static func statusListToken(
+        bits: Int,
+        signedBy key: P256.Signing.PrivateKey,
+        uri: String = "https://x.example"
+    ) -> String {
         func b64(_ object: [String: Any]) -> String {
             EncryptedContainerBase64.urlEncode(
                 // swiftlint:disable:next force_try
@@ -146,11 +212,11 @@ final class TokenStatusListTests: XCTestCase {
         let statusList: [String: Any] = ["bits": bits, "lst": "eJxjYGRiZmFlYwcAAFwAHQ=="]
         let payload: [String: Any] = [
             "iss": "https://issuer.example",
-            // Must match the `Reference.uri` every caller of this helper
-            // resolves against ("https://x.example") - `sub` is REQUIRED
-            // (review finding, see TokenStatusList's own doc comment), so an
-            // absent one is no longer a signed-but-otherwise-valid token.
-            "sub": "https://x.example",
+            // Must match the `Reference.uri` the caller resolves against -
+            // `sub` is REQUIRED (review finding, see TokenStatusList's own
+            // doc comment), so an absent one is no longer a signed-but-
+            // otherwise-valid token.
+            "sub": uri,
             "status_list": statusList,
         ]
         let signingInput = "\(b64(header)).\(b64(payload))"

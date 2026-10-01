@@ -110,6 +110,21 @@ final class DidTests: XCTestCase {
         XCTAssertNil(Did.resolveDidJwk(did).document)
     }
 
+    /// Regression (review finding): `createDidJwk` (MINTING, not resolving)
+    /// must not serialize an `oct` JWK's `k` secret into the identifier
+    /// string at all - `isUsablePublicJwk` rejecting `oct` on the resolving
+    /// side is too late once the secret is already embedded in a DID that
+    /// gets handed out/stored. canonicalPublicJwk's own table has no `oct`
+    /// entry, so this falls to the `kty`-only default and the secret never
+    /// reaches the output.
+    func testCreateDidJwkNeverEmbedsAnOctSecretInTheIdentifier() {
+        let did = Did.createDidJwk(["kty": "oct", "k": "shared-secret"])
+        let encoded = String(did.dropFirst("did:jwk:".count))
+        let decoded = String(data: EncryptedContainerBase64.urlDecode(encoded), encoding: .utf8) ?? ""
+        XCTAssertFalse(decoded.contains("shared-secret"), "the oct secret must never reach the minted identifier")
+        XCTAssertFalse(decoded.contains("\"k\""), "no k member at all, not just not this specific secret value")
+    }
+
     /// Regression (review finding): private key material (`d`) embedded
     /// alongside a legitimate public key must never be echoed back through
     /// `publicKeyJwk` - only the members `canonicalPublicJwk` recognises as

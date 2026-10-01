@@ -187,6 +187,19 @@ enum HolderIdentity {
         let jwt = credential.split(separator: "~", omittingEmptySubsequences: false).first.map(String.init) ?? credential
         return JwtHelpers.parseJwtPayload(jwt)?["cnf"] as? [String: Any]
     }
+
+    /// Whether a credential's payload carries a `cnf` MEMBER at all, even one
+    /// not shaped like an object - distinguishes "no cnf claim" from "cnf
+    /// present but malformed" the way `cnf(of:)` alone cannot (review
+    /// finding): `{"cnf":"malformed"}` and an entirely absent `cnf` both
+    /// make `cnf(of:)` return nil, but only the first is a credential whose
+    /// binding this wallet failed to parse - the second genuinely has none,
+    /// which is the ordinary, fine case `signVpToken`'s legacy `kid`
+    /// fallback exists for.
+    static func hasCnfClaim(of credential: String) -> Bool {
+        let jwt = credential.split(separator: "~", omittingEmptySubsequences: false).first.map(String.init) ?? credential
+        return JwtHelpers.parseJwtPayload(jwt)?["cnf"] != nil
+    }
 }
 
 #endif

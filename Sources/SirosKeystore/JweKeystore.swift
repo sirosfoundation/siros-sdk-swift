@@ -512,14 +512,16 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // credential rather than this wallet's configuration.
         let cnf = HolderIdentity.cnf(of: credential)
         let cnfKid = HolderIdentity.resolveCnfKid(cnf)
-        // cnf, when present, decides BOTH the signing key and the header
-        // below, not `kid ?? cnfKid` (review finding): a disagreeing
-        // caller-supplied kid could otherwise sign with a different key
-        // than the header announces. `kid` only matters with no cnf at all.
-        // An unresolvable-but-present cnf must refuse, not reach
-        // selectSigningKey(kid: nil)'s first-available-key fallback.
-        let effectiveKid = cnf != nil ? cnfKid : kid
-        if cnf != nil, effectiveKid == nil {
+        // "cnf present" means the MEMBER is present, not just parsed as an
+        // object (review finding): `{"cnf":"malformed"}` must not collapse
+        // to the same nil an ABSENT cnf gives.
+        let cnfPresent = cnf != nil || HolderIdentity.hasCnfClaim(of: credential)
+        // cnf, when present, decides BOTH the key and the header below, not
+        // `kid ?? cnfKid` (review finding): a disagreeing kid could sign
+        // with a different key than the header announces. kid only matters
+        // with no cnf at all; unresolvable-but-present must refuse.
+        let effectiveKid = cnfPresent ? cnfKid : kid
+        if cnfPresent, effectiveKid == nil {
             throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
         }
         let (_, key) = try selectSigningKey(kid: effectiveKid)
@@ -553,9 +555,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // verification method rather than re-embedding the key. A `cnf.jwk`
         // binding keeps the embedded-key form it was issued under.
         //
-        // Keys off an EXPLICIT cnf.kid, not cnfKid != nil (review finding) -
-        // cnfKid is also non-nil for a cnf.jwk-only credential (its
-        // thumbprint, for lookup, not a wire-shape signal).
+        // Keys off an EXPLICIT cnf.kid, not cnfKid != nil - also non-nil for
+        // a jwk-only credential (its thumbprint, for lookup, not a shape signal).
         var kbHeaderFields: [String: Any] = ["alg": "ES256", "typ": "kb+jwt"]
         if let explicitCnfKid = cnf?["kid"] as? String {
             kbHeaderFields["kid"] = explicitCnfKid

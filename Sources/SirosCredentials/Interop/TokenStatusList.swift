@@ -47,10 +47,25 @@ public enum TokenStatusList {
         /// The status bits found at the credential's index.
         case found(Int)
 
-        /// The status could not be established - typically an unreachable
-        /// list. A caller must treat this as a warning, not a revocation: a
-        /// wallet that hid every credential whose status endpoint is down
-        /// would be unusable offline.
+        /// The list's own HTTP endpoint could not be reached at all - no
+        /// response, of any kind, came back. A caller must treat this as a
+        /// warning, not a revocation: a wallet that hid every credential
+        /// whose status endpoint happens to be down would be unusable
+        /// offline. The ONLY case this fail-open treatment is for - see
+        /// ``unavailable(_:)``'s doc comment for why every other failure
+        /// mode is a DIFFERENT case, not this one (review finding).
+        case unreachable(String)
+
+        /// A response came back, but the status could not be established
+        /// from it - wrong `typ`, an issuer/subject mismatch, an expired or
+        /// not-yet-valid token, a malformed list, no resolvable signing key,
+        /// an invalid signature, and so on. Unlike ``unreachable(_:)``, this
+        /// is NOT offline-friendly: a reachable-but-unverifiable response
+        /// means revocation cannot be established, which a caller must
+        /// treat as `.unknown`/unusable, never as `.valid` - conflating the
+        /// two previously let ANY verification failure, a forged/invalid
+        /// signature included, read exactly like a wallet that is merely
+        /// offline (review finding).
         case unavailable(String)
     }
 
@@ -146,6 +161,15 @@ public actor TokenStatusListClient {
     private let resolveIssuerKey: (@Sendable (String, String?) async -> [String: String]?)?
     private let now: @Sendable () -> Date
     private var cache: [String: TokenStatusList.CacheEntry] = [:]
+    // Oldest-first insertion order, for FIFO eviction once maxCacheEntries is
+    // exceeded (review finding): without a bound, a wallet holding many
+    // credentials with distinct status-list URIs retains every one of their
+    // lists - each up to Inflate's own 64 MiB output cap - for the life of
+    // this client, growing memory without limit. A re-inserted (re-fetched)
+    // uri is moved back to the end, so repeatedly-consulted lists are the
+    // ones that survive eviction.
+    private var cacheOrder: [String] = []
+    private let maxCacheEntries = 500
 
     /// - Parameters:
     ///   - httpGet: fetches a URL with the given headers, returning the body
@@ -176,6 +200,24 @@ public actor TokenStatusListClient {
     /// account's credentials next point at the same `uri`.
     public func clearCache() {
         cache.removeAll()
+        cacheOrder.removeAll()
+    }
+
+    /// Record a freshly-verified entry, evicting the oldest one first if
+    /// this would exceed `maxCacheEntries` (review finding - see
+    /// `cacheOrder`'s doc comment).
+    private func setCacheEntry(_ entry: TokenStatusList.CacheEntry, forUri uri: String) {
+        if cache[uri] == nil {
+            cacheOrder.append(uri)
+        } else {
+            cacheOrder.removeAll { $0 == uri }
+            cacheOrder.append(uri)
+        }
+        cache[uri] = entry
+        while cacheOrder.count > maxCacheEntries {
+            let evicted = cacheOrder.removeFirst()
+            cache.removeValue(forKey: evicted)
+        }
     }
 
     /// Look up one credential's entry.
@@ -218,7 +260,7 @@ public actor TokenStatusListClient {
                   .trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty
         else {
-            return .unavailable("Could not fetch the status list at \(reference.uri)")
+            return .unreachable("Could not fetch the status list at \(reference.uri)")
         }
 
         let segments = token.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
@@ -301,13 +343,16 @@ public actor TokenStatusListClient {
         let ttl = (statusList["ttl"] as? NSNumber)?.doubleValue
             ?? (claims["ttl"] as? NSNumber)?.doubleValue
             ?? 0
-        cache[reference.uri] = TokenStatusList.CacheEntry(
-            fetchedAt: currentTime,
-            ttlSeconds: ttl,
-            bits: bits,
-            list: inflated,
-            issuer: expectedIssuer,
-            expiresAt: (claims["exp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+        setCacheEntry(
+            TokenStatusList.CacheEntry(
+                fetchedAt: currentTime,
+                ttlSeconds: ttl,
+                bits: bits,
+                list: inflated,
+                issuer: expectedIssuer,
+                expiresAt: (claims["exp"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+            ),
+            forUri: reference.uri
         )
 
         guard let status = TokenStatusList.readStatus(in: inflated, bits: bits, idx: reference.idx) else {

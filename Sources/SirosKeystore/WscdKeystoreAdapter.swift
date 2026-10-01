@@ -416,6 +416,10 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // even when this wallet presents did:jwk identifiers, and vice versa.
         let cnf = HolderIdentity.cnf(of: credential)
         let cnfKid = HolderIdentity.resolveCnfKid(cnf)
+        // "cnf present" means the MEMBER is present, not just that it parsed
+        // as an object (review finding): `{"cnf":"malformed"}` must not
+        // collapse to the same nil `cnf(of:)` gives an ABSENT cnf.
+        let cnfPresent = cnf != nil || HolderIdentity.hasCnfClaim(of: credential)
         // cnf, when present, decides BOTH the signing key and the header
         // below - the caller's `kid` is ignored rather than merely
         // preferred (review finding): a caller-supplied id that disagreed
@@ -426,8 +430,8 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // refuse, not reach resolveSigningKey(kid: nil)'s
         // first-available-key fallback - that's for a credential with no
         // binding, not an unparsed one.
-        let effectiveKid = cnf != nil ? cnfKid : kid
-        if cnf != nil, effectiveKid == nil {
+        let effectiveKid = cnfPresent ? cnfKid : kid
+        if cnfPresent, effectiveKid == nil {
             throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
         }
         let key = try await resolveSigningKey(keys, kid: effectiveKid)

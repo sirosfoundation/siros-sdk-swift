@@ -238,6 +238,11 @@ final class CredentialStatusTests: XCTestCase {
         XCTAssertEqual(status, .valid)
     }
 
+    /// Regression (review finding, also fixing a self-contradicting
+    /// assertion this test previously made - its own name said "is not
+    /// trusted" while asserting `.valid`): a garbage response IS reachable,
+    /// just unverifiable - exactly the `Resolution.unavailable` case that
+    /// must never read as the offline-friendly `.unreachable` one.
     func testAStatusListThatIsNotATypedStatusListTokenIsNotTrusted() async {
         let evaluator = CredentialStatusEvaluator(
             statusListClient: TokenStatusListClient(httpGet: { _, _ in Data("not-a-jws".utf8) }),
@@ -246,7 +251,7 @@ final class CredentialStatusTests: XCTestCase {
         let status = await evaluator.evaluate(claims: claims("""
         {"iss":"https://issuer.example","status":{"status_list":{"idx":1,"uri":"https://x.example"}}}
         """))
-        XCTAssertEqual(status, .valid)
+        XCTAssertEqual(status, .unknown)
     }
 
     func testOnlyValidIsUsable() {

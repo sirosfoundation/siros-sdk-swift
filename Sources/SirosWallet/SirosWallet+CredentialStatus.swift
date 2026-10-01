@@ -177,6 +177,16 @@ extension SirosWallet {
         }
         guard let claims = parsed else { return .valid }
 
+        // Captured BEFORE the (potentially slow, real-network) evaluation
+        // below, not after (review finding): a logout/new-login or this
+        // credential's own deletion can complete WHILE evaluate() is still
+        // running, and without this, the write below would land after
+        // endSessionLocally()'s credentialStatusCache.clear() or
+        // deleteCredential(_:)'s .remove(_:) already ran - silently
+        // resurrecting a previous account's (or a deleted credential's)
+        // status for whichever account/credential next reuses the id.
+        lock.lock(); let generation = sessionGeneration; lock.unlock()
+
         // An mdoc's normalised claims carry no `iss`, so the credential's own
         // stored issuer identifier is what binds its Status List Token to an
         // issuer. Without it that check is skipped for every mdoc.
@@ -184,7 +194,14 @@ extension SirosWallet {
             claims: claims,
             credentialIssuer: credential.credentialIssuerIdentifier
         )
-        credentialStatusCache.set(credential.id, status)
+
+        lock.lock(); let sameSession = generation == sessionGeneration; lock.unlock()
+        // Also re-checks the credential still exists - the session boundary
+        // above catches a logout/relogin, but deleteCredential(_:) removes
+        // one credential without bumping the session generation at all.
+        if sameSession, await credentialStore.getById(credential.id) != nil {
+            credentialStatusCache.set(credential.id, status)
+        }
         return status
     }
 
