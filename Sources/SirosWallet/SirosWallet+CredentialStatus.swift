@@ -398,12 +398,33 @@ func isPublicFetchAllowed(_ url: URL) -> Bool {
     url.scheme?.lowercased() == "https" && url.user == nil && url.password == nil && url.host != nil
 }
 
+/// The most a third-party response's COMPRESSED body may be, enforced while
+/// it is still arriving (review finding), not only on `Inflate`'s own output
+/// afterward: `URLSession`'s plain `data(for:)` buffers an entire response
+/// before returning it, with no size limit of its own, so a credential-
+/// controlled status-list URI (or a chunked/streamed response at one) could
+/// otherwise make evaluating a single stored credential consume unbounded
+/// memory. Far above anything a real Status List Token needs (a few
+/// kilobytes, per the draft) but well short of a denial-of-service payload.
+let maxPublicFetchResponseBytes = 10 * 1024 * 1024
+
 /// Refuses any redirect that ``isPublicFetchAllowed(_:)`` would not have
-/// allowed as a first request.
+/// allowed as a first request, AND enforces
+/// ``maxPublicFetchResponseBytes`` while a response body is still arriving.
 ///
-/// Passing nil to the completion handler stops the redirect and returns the
-/// 3xx response itself, which `fetchPublicUrl` then rejects as not a 2xx.
-final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+/// Passing nil to the redirect completion handler stops the redirect and
+/// returns the 3xx response itself, which `fetchPublicUrl` then rejects as
+/// not a 2xx. `URLSession`'s async `data(for:)` still routes through a
+/// `URLSessionDataDelegate`'s `didReceive data:` as chunks arrive even though
+/// its own return value is the fully-buffered `Data` - cancelling the task
+/// here, the moment the running total exceeds the cap, is what keeps
+/// `data(for:)` from ever finishing that buffer for an oversized response;
+/// the cancellation surfaces to `fetchPublicUrl` as a thrown error, caught
+/// there the same way any other transport failure already is.
+final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytesReceived: [ObjectIdentifier: Int] = [:]
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -416,6 +437,23 @@ final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchec
             return
         }
         completionHandler(request)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let key = ObjectIdentifier(dataTask)
+        lock.lock()
+        let total = (bytesReceived[key] ?? 0) + data.count
+        bytesReceived[key] = total
+        lock.unlock()
+        if total > maxPublicFetchResponseBytes {
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        lock.lock()
+        bytesReceived.removeValue(forKey: ObjectIdentifier(task))
+        lock.unlock()
     }
 }
 

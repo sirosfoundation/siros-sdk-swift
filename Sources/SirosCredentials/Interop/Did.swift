@@ -340,11 +340,26 @@ public enum Did {
                   let rawId = object["id"] as? String
             else { return nil }
             let vmId = absolute(rawId)
+            // Filtered to canonical public members, same as the offline
+            // did:jwk path (review finding): a DELEGATED document - go-trust,
+            // reached through a DidResolutionDelegate, for did:web/did:webvh -
+            // is attacker-adjacent the same way an embedded JWK is, and
+            // copying every string member verbatim would expose a private
+            // `d` (or an `oct` secret `k`) through this public model exactly
+            // as it would there. A key missing what its own `kty` requires is
+            // not registered as usable at all - `nil`, the same as this
+            // method declaring no key - rather than exposed as a garbage
+            // partial key nothing could verify anything against anyway.
+            var publicKeyJwk: [String: String]?
+            if let rawPublicKeyJwk = (object["publicKeyJwk"] as? [String: Any])?.compactMapValues({ $0 as? String }) {
+                let filtered = Dictionary(uniqueKeysWithValues: canonicalPublicJwk(rawPublicKeyJwk))
+                publicKeyJwk = isUsablePublicJwk(filtered) ? filtered : nil
+            }
             methods[vmId] = VerificationMethod(
                 id: vmId,
                 type: object["type"] as? String ?? "",
                 controller: object["controller"] as? String ?? id,
-                publicKeyJwk: (object["publicKeyJwk"] as? [String: Any])?.compactMapValues { $0 as? String }
+                publicKeyJwk: publicKeyJwk
             )
             return vmId
         }

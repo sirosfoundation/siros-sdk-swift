@@ -43,13 +43,39 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// the keystores here, the way their ``InteropProfile`` says. To choose
     /// per issuance instead, implement
     /// ``generateProof(audience:nonce:freshKey:holderBinding:)``, which is
-    /// what an Issuer's advertised binding methods are negotiated into; it is
-    /// a defaulted overload rather than a requirement so that a keystore
-    /// written before that existed still conforms.
+    /// what an Issuer's advertised binding methods are negotiated into.
     func generateProof(
         audience: String,
         nonce: String,
         freshKey: Bool
+    ) async throws -> String
+
+    /// ``generateProof(audience:nonce:freshKey:)`` with the Holder binding
+    /// decided per issuance.
+    ///
+    /// `holderBinding` is the one place HAIP and DIIP genuinely disagree, and
+    /// OID4VCI allows only one of `jwk` and `kid` in a proof header, so it has
+    /// to be decided per issuance: an Issuer that does not resolve DIDs cannot
+    /// verify a DIIP-shaped proof, and a DIIP conformance suite will not accept
+    /// a HAIP-shaped one. Nil uses whatever profile the keystore was built for,
+    /// which is right whenever the caller has nothing more specific to go on.
+    ///
+    /// A protocol REQUIREMENT, not merely a defaulted extension method (review
+    /// finding): a protocol extension's default implementation is statically
+    /// dispatched, so calling this through a value statically typed as the
+    /// `KeystoreManager` existential - which is exactly how `SirosWallet`
+    /// holds its `keystore` - would always have run the ignore-and-forward
+    /// default below, even when the underlying concrete instance is a
+    /// `JweKeystore`/`WscdKeystoreAdapter` that overrides it; per-issuer HAIP/
+    /// DIIP negotiation would have been silently inert in the one call site
+    /// that actually matters. A conformer written before this requirement
+    /// existed still compiles unchanged: the default implementation below
+    /// satisfies it automatically.
+    func generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Bool,
+        holderBinding: HolderBinding?
     ) async throws -> String
 
     /// Sign a verifiable presentation for OID4VP.
@@ -273,21 +299,10 @@ public extension KeystoreManager {
         try await generateProof(audience: audience, nonce: nonce, freshKey: false)
     }
 
-    /// ``generateProof(audience:nonce:freshKey:)`` with the Holder binding
-    /// decided per issuance.
-    ///
-    /// `holderBinding` is the one place HAIP and DIIP genuinely disagree, and
-    /// OID4VCI allows only one of `jwk` and `kid` in a proof header, so it has
-    /// to be decided per issuance: an Issuer that does not resolve DIDs cannot
-    /// verify a DIIP-shaped proof, and a DIIP conformance suite will not accept
-    /// a HAIP-shaped one. Nil uses whatever profile the keystore was built for,
-    /// which is right whenever the caller has nothing more specific to go on.
-    ///
-    /// Defaulted rather than a protocol requirement so that a conformer
-    /// written before DIIP - including a host's own `KeystoreManager` - keeps
-    /// compiling. Such a conformer cannot honour `holderBinding`, so this
-    /// ignores it and produces whatever shape that keystore has always
-    /// produced; the keystores in this SDK override it.
+    /// Default for a conformer - including a host's own `KeystoreManager`,
+    /// written before this requirement existed - that does not override it:
+    /// ignores `holderBinding` and produces whatever shape that keystore has
+    /// always produced. The keystores in this SDK override it.
     func generateProof(
         audience: String,
         nonce: String,

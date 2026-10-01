@@ -325,6 +325,14 @@ public actor TokenStatusListClient {
         guard let jwk = await resolveIssuerKey(issuer, header["kid"] as? String) else {
             return .failure("Could not resolve the Status List Token signing key for \(issuer)")
         }
+        // kty/crv checked explicitly, not inferred from x/y merely being
+        // present (review finding): a JWKS entry for a different key type or
+        // purpose - an RSA key, or an EC key on a different curve - that
+        // happens to also carry members named `x`/`y` would otherwise still
+        // be imported and treated as valid ES256/P-256 material.
+        guard jwk["kty"] == "EC", jwk["crv"] == "P-256" else {
+            return .failure("Status List Token signing key is not an EC P-256 public key")
+        }
         guard let x = jwk["x"], let y = jwk["y"] else {
             return .failure("Status List Token signing key is not an EC public key")
         }

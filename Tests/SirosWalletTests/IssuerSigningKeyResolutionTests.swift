@@ -1,6 +1,10 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import SirosCredentials
 @testable import SirosWallet
 
@@ -132,5 +136,43 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://issuer.example@evil.example/l")!))
         XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://user:pass@evil.example/l")!))
         XCTAssertFalse(isPublicFetchAllowed(URL(string: "ftp://issuer.example/list")!))
+    }
+
+    /// Regression (review finding): a third-party response's COMPRESSED body
+    /// must be capped while it is still arriving, not only checked against
+    /// `Inflate`'s own output-size limit afterward - otherwise a credential-
+    /// controlled status-list URI could make evaluating one stored
+    /// credential buffer an unbounded amount of memory.
+    ///
+    /// No real network round trip (the real `thirdPartySession` is
+    /// constructed once, at module load, with no seam left to intercept it) -
+    /// this instead drives the delegate's own `didReceive`/cancellation logic
+    /// directly against a real (never-`resume()`d, so no actual request is
+    /// ever made) `URLSessionDataTask`, the same object shape the real
+    /// session hands it.
+    func testHttpsOnlyRedirectDelegateCancelsOnceTheCapIsExceeded() {
+        let delegate = HttpsOnlyRedirectDelegate()
+        let task = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/status")!)
+
+        let halfCap = Data(repeating: 0, count: maxPublicFetchResponseBytes / 2)
+        delegate.urlSession(URLSession.shared, dataTask: task, didReceive: halfCap)
+        XCTAssertNotEqual(task.state, .canceling, "half the cap in one chunk must not cancel")
+
+        // A second chunk takes the running total past the cap.
+        delegate.urlSession(URLSession.shared, dataTask: task, didReceive: halfCap)
+        delegate.urlSession(URLSession.shared, dataTask: task, didReceive: Data([0, 1]))
+        XCTAssertEqual(task.state, .canceling, "exceeding the cap must cancel the task")
+    }
+
+    func testHttpsOnlyRedirectDelegateTracksBytesPerTaskIndependently() {
+        let delegate = HttpsOnlyRedirectDelegate()
+        let taskA = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/a")!)
+        let taskB = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/b")!)
+
+        let almostCap = Data(repeating: 0, count: maxPublicFetchResponseBytes - 1)
+        delegate.urlSession(URLSession.shared, dataTask: taskA, didReceive: almostCap)
+        delegate.urlSession(URLSession.shared, dataTask: taskB, didReceive: Data([0]))
+        XCTAssertNotEqual(taskA.state, .canceling, "taskA alone is still under its own cap")
+        XCTAssertNotEqual(taskB.state, .canceling, "taskB's one byte must not inherit taskA's running total")
     }
 }

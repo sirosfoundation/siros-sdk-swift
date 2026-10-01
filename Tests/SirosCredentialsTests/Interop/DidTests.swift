@@ -221,6 +221,45 @@ final class DidTests: XCTestCase {
         XCTAssertEqual(key?["x"], "cc")
     }
 
+    /// Regression (review finding): a delegated document's verification
+    /// method is filtered to canonical public members the same way the
+    /// offline did:jwk path is - private key material embedded alongside a
+    /// legitimate public key must never reach `publicKeyJwk`.
+    func testPrivateKeyMaterialInADelegatedDocumentNeverReachesThePublicKey() {
+        let root = try? JSONSerialization.jsonObject(with: Data("""
+        {
+          "id": "did:web:x.example",
+          "authentication": [{
+            "id": "#inline",
+            "type": "JsonWebKey2020",
+            "publicKeyJwk": {"kty":"EC","crv":"P-256","x":"cc","y":"dd","d":"super-secret"}
+          }]
+        }
+        """.utf8)) as? [String: Any]
+        let document = Did.parseDidDocument(root ?? [:])
+        let key = document?.findPublicKey(kid: "did:web:x.example#inline", relationship: .authentication)
+        XCTAssertEqual(key?["x"], "cc")
+        XCTAssertNil(key?["d"], "private key material must never be exposed through publicKeyJwk")
+    }
+
+    /// Regression (review finding): a verification method whose embedded
+    /// `publicKeyJwk` is missing what its own `kty` requires (here, no `y`)
+    /// must not be registered as a usable key at all.
+    func testADelegatedDocumentsIncompletePublicKeyIsNotRegistered() {
+        let root = try? JSONSerialization.jsonObject(with: Data("""
+        {
+          "id": "did:web:x.example",
+          "authentication": [{
+            "id": "#inline",
+            "type": "JsonWebKey2020",
+            "publicKeyJwk": {"kty":"EC","crv":"P-256","x":"cc"}
+          }]
+        }
+        """.utf8)) as? [String: Any]
+        let document = Did.parseDidDocument(root ?? [:])
+        XCTAssertNil(document?.findPublicKey(kid: "did:web:x.example#inline", relationship: .authentication))
+    }
+
     func testADocumentWithSeveralKeysAndNoKidIsAmbiguousRatherThanTheFirstOne() {
         // Taking the first would make verification depend on document order:
         // a token signed by the issuer's other assertion key would be

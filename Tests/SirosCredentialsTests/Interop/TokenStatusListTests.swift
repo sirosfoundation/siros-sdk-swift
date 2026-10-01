@@ -66,6 +66,26 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertTrue(reason.contains("entry width of 3 bits"), reason)
     }
 
+    /// Regression (review finding): `kty`/`crv` are checked explicitly, not
+    /// inferred from `x`/`y` merely being present - a JWKS entry for a
+    /// different key type or purpose that happens to also carry members
+    /// named `x`/`y` must not be imported as ES256/P-256 material.
+    func testAResolvedSigningKeyDeclaringTheWrongKtyIsRejected() async {
+        let key = P256.Signing.PrivateKey()
+        let token = Self.statusListToken(bits: 1, signedBy: key)
+        var wrongKty = Self.publicJwk(of: key)
+        wrongKty["kty"] = "RSA"
+        let client = TokenStatusListClient(
+            httpGet: { _, _ in Data(token.utf8) },
+            resolveIssuerKey: { _, _ in wrongKty }
+        )
+        let resolution = await client.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unavailable(let reason) = resolution else {
+            return XCTFail("expected an unavailable status, got \(resolution)")
+        }
+        XCTAssertTrue(reason.contains("not an EC P-256 public key"), reason)
+    }
+
     /// Regression (review finding): without a way to clear it, a fetched
     /// Status List Token could survive a session boundary (logout, account
     /// switch) and keep answering for the next account's credentials -

@@ -60,6 +60,34 @@ final class HolderBindingTests: XCTestCase {
         XCTAssertFalse(kid.hasPrefix("did:"))
     }
 
+    /// Regression (review finding): `generateProof(audience:nonce:freshKey:
+    /// holderBinding:)` was declared ONLY in a protocol extension, not the
+    /// `KeystoreManager` protocol itself - a defaulted extension method is
+    /// statically dispatched, so calling it through a value statically typed
+    /// as the `KeystoreManager` EXISTENTIAL (exactly how `SirosWallet` holds
+    /// `keystore`) always ran the ignore-and-forward default, even though
+    /// `JweKeystore` overrides this same method with real per-issuance
+    /// negotiation. Per-issuer HAIP/DIIP negotiation was therefore silently
+    /// inert at the one call site that matters - every test calling through
+    /// the CONCRETE `JweKeystore` type (as every other test in this file
+    /// does) couldn't have caught it, because concrete-type calls resolve
+    /// correctly regardless.
+    func testGenerateProofHonoursHolderBindingThroughTheProtocolExistential() async throws {
+        // A HAIP-configured keystore, called with an EXPLICIT .didJwk
+        // override through the KeystoreManager protocol type - exactly the
+        // static type SirosWallet.keystore actually has.
+        let keystore = try await unlocked(.haip)
+        let manager: KeystoreManager = keystore
+
+        let proof = try await manager.generateProof(
+            audience: "https://issuer.example", nonce: "nonce", freshKey: false, holderBinding: .didJwk
+        )
+
+        let header = try XCTUnwrap(JwtHelpers.parseJwtHeader(proof))
+        XCTAssertNotNil(header["kid"], "an explicit .didJwk override must produce a DIIP-shaped proof")
+        XCTAssertNil(header["jwk"], "not the HAIP shape this keystore's own profile would otherwise default to")
+    }
+
     func testAKeyPairsDidSurvivesAContainerRoundTrip() async throws {
         let keystore = try await unlocked()
         let kid = try await keystore.generateKey()
