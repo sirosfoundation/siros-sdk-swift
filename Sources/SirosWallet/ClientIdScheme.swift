@@ -99,11 +99,6 @@ public enum ClientIdScheme: Sendable {
         if clientId.hasPrefix("x509_hash:") {
             return .x509Hash(hash: String(clientId.dropFirst("x509_hash:".count)))
         }
-        // OID4VP 1.0 Final's prefix for a DID-identified Verifier. Checked
-        // before the bare "did:" form, since the prefixed spelling contains it.
-        if clientId.hasPrefix("decentralized_identifier:") {
-            return didOf(String(clientId.dropFirst("decentralized_identifier:".count)))
-        }
         if clientId.hasPrefix("did:") {
             return didOf(clientId)
         }
