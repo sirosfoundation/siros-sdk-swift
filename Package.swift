@@ -212,10 +212,15 @@ let package = Package(
                 // is correspondingly wrapped in `#if os(iOS)`.
                 .target(name: "siros_wscd_managerFFI", condition: .when(platforms: [.iOS])),
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
-                // Only used by LongfellowZkProofSystem.swift, which is
-                // itself `#if os(iOS)`-gated (see that file) since the
-                // native zk_cred_longfellowFFI it wraps is iOS-only.
+                // Only used by LongfellowZkProofSystem.swift and
+                // VegaProofSystem.swift, both themselves `#if os(iOS)`-gated
+                // (see those files) since the native FFI they each wrap is
+                // iOS-only.
                 .product(name: "libzstd", package: "zstd", condition: .when(platforms: [.iOS])),
+                // Only used by VegaProofSystem.swift's ECDSA witness
+                // (a real modular inverse mod the P-256 curve order) -
+                // itself `#if os(iOS)`-gated, same reason as libzstd above.
+                .product(name: "BigInt", package: "BigInt", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosKeystore"
         ),
