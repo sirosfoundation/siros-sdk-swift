@@ -124,9 +124,25 @@ public struct DidDocument: Sendable, Equatable {
 
         let match: String?
         if let kid {
-            // A `kid` may be the absolute DID URL, or just the fragment.
-            let wantedFragment = kid.firstIndex(of: "#").map { String(kid[kid.index(after: $0)...]) } ?? kid
-            match = candidates.first { $0 == kid || $0.hasSuffix("#" + wantedFragment) }
+            // A `kid` may be the absolute DID URL, or - naming a key WITHIN
+            // this document - just the fragment (`"#0"`, or a bare fragment
+            // with no `#` at all). A bare fragment is resolved against this
+            // document's own `id`; a fully-qualified kid must match some
+            // candidate's id EXACTLY, never by comparing fragments alone -
+            // matching by fragment suffix let a token whose `kid` names a
+            // DIFFERENT subject entirely (e.g. `"did:evil.example#key-1"`)
+            // select this document's identically-fragmented verification
+            // method, even though that method is not the one the token
+            // actually named (review finding).
+            let qualified: String
+            if kid.hasPrefix("#") {
+                qualified = id + kid
+            } else if kid.contains("#") {
+                qualified = kid
+            } else {
+                qualified = id + "#" + kid
+            }
+            match = candidates.first { $0 == qualified }
         } else {
             // With no `kid` to go on, only one key is unambiguous. Taking the
             // first would make verification depend on document order: a token

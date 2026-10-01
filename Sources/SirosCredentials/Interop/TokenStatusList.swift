@@ -220,9 +220,17 @@ public actor TokenStatusListClient {
                 "Status List Token was issued by \(issuer ?? "nobody"), expected \(expectedIssuer)"
             )
         }
-        // §5.1: `sub` binds the token to the URI it was served from.
-        if let subject = claims["sub"] as? String, subject != reference.uri {
-            return .unavailable("Status List Token subject \(subject) does not match \(reference.uri)")
+        // §5.1: `sub` binds the token to the URI it was served from - REQUIRED,
+        // not merely checked when present (review finding). A token missing
+        // `sub` entirely would otherwise pass this check for free and could be
+        // served back at any credential status URI the issuer's key signs
+        // anything for, defeating the subject-to-URI binding the field exists
+        // to enforce.
+        let subject = claims["sub"] as? String
+        guard subject == reference.uri else {
+            return .unavailable(
+                "Status List Token subject \(subject ?? "<missing>") does not match \(reference.uri)"
+            )
         }
 
         switch await verifySignature(segments: segments, header: header, issuer: issuer) {

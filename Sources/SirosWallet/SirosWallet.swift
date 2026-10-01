@@ -757,6 +757,17 @@ public final class SirosWallet: @unchecked Sendable {
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
 
+        // Set up new AS-based auth. Moved ahead of the DID resolver below
+        // (it used to follow it) so `tokens` already exists to authenticate
+        // the resolver's own `BackendApiClient` - captured directly, the
+        // same way `typeMetadataGet`'s `makeTypeMetadataHttpGet` call
+        // captures it further down, not via `self.authTokens` (`self` isn't
+        // fully initialized yet at this point in `init`).
+        let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
+        self.authServerClient = asClient
+        let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
+        self.authTokens = tokens
+
         // `did:jwk` resolves offline inside the resolver; everything else is
         // handed to the backend, which delegates to go-trust. Which document
         // is authoritative for an identifier is a trust decision, and it is
@@ -770,6 +781,11 @@ public final class SirosWallet: @unchecked Sendable {
                 tenantId: tenantId,
                 httpFn: SirosWallet.defaultHttpFn
             )
+            // Without this, every non-did:jwk resolution is unauthenticated
+            // and `/v1/resolve` refuses it outright (review finding) - DID
+            // resolution needs the same bearer token every other backend
+            // REST call does, not a bespoke unauthenticated client.
+            client.setAuthTokens(tokens)
             return try? await client.resolveDid(did)
         }
         self.didResolver = resolver
@@ -794,12 +810,6 @@ public final class SirosWallet: @unchecked Sendable {
             defaultMapping: config.defaultWscdMapping,
             requestChoice: config.requestWscdChoice
         )
-
-        // Set up new AS-based auth
-        let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
-        self.authServerClient = asClient
-        let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
-        self.authTokens = tokens
 
         // Shared HTTP GET for both type-metadata fetchers - see
         // `makeTypeMetadataHttpGet`'s doc comment for why the auth headers

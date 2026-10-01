@@ -5,6 +5,14 @@ import SirosAuth
 import SirosCredentials
 import SirosKeystore
 @testable import SirosWallet
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+// swift-crypto's `Crypto` module mirrors CryptoKit's API 1:1, including
+// SHA256 - needed only to compute the expected thumbprint independently in
+// `testGenerateProofsRecoversKeyIdFromThumbprintWhenJwkHasNoKid` below.
+import Crypto
+#endif
 
 /// Integration-level wiring tests for `SirosWallet.requestBackendKeyAttestation`'s
 /// use of `WscdSelectionPolicy` (see `WscdSelectionPolicyTests` for exhaustive
@@ -365,5 +373,47 @@ final class SirosWalletWscdSelectionTests: XCTestCase {
         XCTAssertEqual(proofs[0].attestedKeyIds, ["sw-0"])
         XCTAssertEqual(proofs[1].attestedKeyIds, ["sw-1"])
         XCTAssertEqual(proofs[2].attestedKeyIds, ["sw-2"])
+    }
+
+    /// Regression (review finding): a HAIP proof's embedded `jwk` header, as
+    /// actually built by `JweKeystore`/`WscdKeystoreAdapter`, carries only
+    /// `kty`/`crv`/`x`/`y` - no `kid` member of its own, unlike every fixture
+    /// above. `extractProofKeyId` must fall back to the RFC 7638 thumbprint
+    /// of that embedded key in that case, not stay nil - the same value
+    /// `KeypairIdentity.matches` already accepts when looking up a
+    /// HAIP-bound credential's key, so `activeAttestedKeyIds` only works for
+    /// HAIP proofs if this recovers it too.
+    func testGenerateProofsRecoversKeyIdFromThumbprintWhenJwkHasNoKid() async throws {
+        let x = "eA", y = "eQ"
+        let header: [String: Any] = [
+            "typ": "openid4vci-proof+jwt",
+            "alg": "ES256",
+            "jwk": ["kty": "EC", "crv": "P-256", "x": x, "y": y],
+        ]
+        let headerB64 = WebAuthnAuthClient.base64UrlEncode(try! JSONSerialization.data(withJSONObject: header))
+        let payloadB64 = WebAuthnAuthClient.base64UrlEncode(Data("{}".utf8))
+        let keystore = StubKeystoreManager(label: "default")
+        keystore.proofJwtOverrides = ["\(headerB64).\(payloadB64).sig"]
+
+        let config = WalletConfig(backendUrl: "https://example.invalid")
+        let wallet = SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: keystore)
+        let w = wallet!
+
+        let proofs = try await w.generateProofs(
+            audience: "https://issuer.example.com",
+            nonce: "n",
+            count: 1,
+            proofTypesSupported: nil,
+            proofTypeHint: "jwt"
+        )
+
+        let canonical = "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"\(x)\",\"y\":\"\(y)\"}"
+        let expectedThumbprint = Data(SHA256.hash(data: Data(canonical.utf8))).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        XCTAssertEqual(proofs.count, 1)
+        XCTAssertEqual(proofs[0].attestedKeyIds, [expectedThumbprint])
     }
 }

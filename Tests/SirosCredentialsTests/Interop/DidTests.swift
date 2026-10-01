@@ -208,6 +208,35 @@ final class DidTests: XCTestCase {
         )
     }
 
+    /// Regression (review finding): matching by fragment alone let a `kid`
+    /// naming a DIFFERENT subject's verification method (same fragment,
+    /// different DID) select a key from THIS document - exactly what a
+    /// token whose `kid` is `"did:evil.example#key-1"` would try against an
+    /// issuer document that happens to name one of its own methods
+    /// `"...#key-1"` too.
+    func testAFullyQualifiedKidNamingADifferentSubjectNeverMatchesByFragmentAlone() {
+        let root = try? JSONSerialization.jsonObject(with: Data("""
+        {
+          "id": "did:web:issuer.example",
+          "verificationMethod": [
+            {"id":"did:web:issuer.example#key-1","type":"JsonWebKey2020","controller":"did:web:issuer.example",
+             "publicKeyJwk":{"kty":"EC","crv":"P-256","x":"aa","y":"bb"}}
+          ],
+          "assertionMethod": ["did:web:issuer.example#key-1"]
+        }
+        """.utf8)) as? [String: Any]
+        let document = Did.parseDidDocument(root ?? [:])
+        XCTAssertNil(
+            document?.findPublicKey(kid: "did:evil.example#key-1", relationship: .assertionMethod),
+            "a kid naming a different subject must not resolve to this document's identically-fragmented key"
+        )
+        // The genuinely-matching fully-qualified kid still resolves.
+        XCTAssertEqual(
+            document?.findPublicKey(kid: "did:web:issuer.example#key-1", relationship: .assertionMethod)?["x"],
+            "aa"
+        )
+    }
+
     func testASoleKeyStillResolvesWithoutAKid() {
         let did = Did.createDidJwk(p256Jwk)
         XCTAssertNotNil(Did.resolveDidJwk(did).document?.findPublicKey(kid: nil, relationship: .authentication))

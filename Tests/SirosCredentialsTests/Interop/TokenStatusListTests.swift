@@ -85,6 +85,11 @@ final class TokenStatusListTests: XCTestCase {
         let statusList: [String: Any] = ["bits": bits, "lst": "eJw="]
         let payload: [String: Any] = [
             "iss": "https://issuer.example",
+            // Must match the `Reference.uri` every caller of this helper
+            // resolves against ("https://x.example") - `sub` is REQUIRED
+            // (review finding, see TokenStatusList's own doc comment), so an
+            // absent one is no longer a signed-but-otherwise-valid token.
+            "sub": "https://x.example",
             "status_list": statusList,
         ]
         let signingInput = "\(b64(header)).\(b64(payload))"

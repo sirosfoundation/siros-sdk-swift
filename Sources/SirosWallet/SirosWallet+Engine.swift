@@ -10,6 +10,16 @@ import SirosAuth
 import SirosKeystore
 import SirosFlow
 @preconcurrency import SwiftCBOR
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+// swift-crypto's `Crypto` module mirrors CryptoKit's API 1:1, including
+// SHA256 - see Package.swift's SirosWallet dependencies. Used only for
+// `extractProofKeyId`'s RFC 7638 thumbprint, which must work on every
+// platform this SDK builds for, unlike `DCAPIResponseEncryption` (entirely
+// CryptoKit-gated, Apple-only).
+import Crypto
+#endif
 
 #if canImport(os)
 import os
@@ -259,12 +269,45 @@ extension SirosWallet {
         guard let headerData = CredentialUtils.base64UrlDecode(String(headerPart)) else { return nil }
         guard let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any] else { return nil }
         // A DIIP proof names the key with a `kid` header and carries no `jwk`
-        // at all; a HAIP one embeds the key, with its id inside. Reading only
-        // the latter silently loses the binding for every DIIP-issued
-        // credential.
+        // at all; a HAIP one embeds the key, by value. The embedded `jwk` as
+        // actually built by `JweKeystore`/`WscdKeystoreAdapter` carries only
+        // `kty`/`crv`/`x`/`y` - no `jwk.kid` member of its own - so a
+        // conformant producer never hits the `jwk["kid"]` branch below; it
+        // stays only for a `KeystoreManager` that does embed one. Absent
+        // that, the id is the RFC 7638 thumbprint of the embedded key - the SAME
+        // value `KeypairIdentity.matches` already falls back to when looking
+        // up a HAIP-bound credential's key, so `activeAttestedKeyIds` staying
+        // nil here for every `jwk`-proof credential (review finding) would
+        // have left HAIP exactly as broken as DIIP was before this method
+        // existed, just for the opposite proof shape.
         if let kid = header["kid"] as? String { return kid }
         guard let jwk = header["jwk"] as? [String: Any] else { return nil }
-        return jwk["kid"] as? String
+        if let kid = jwk["kid"] as? String { return kid }
+        return Self.jwkThumbprint(jwk)
+    }
+
+    /// RFC 7638 JWK Thumbprint of an EC public JWK: SHA-256 over
+    /// `{"crv":...,"kty":...,"x":...,"y":...}` in lexicographic member order
+    /// with no insignificant whitespace, base64url-encoded.
+    ///
+    /// Duplicates `DCAPIResponseEncryption.jwkThumbprint` rather than calling
+    /// it: that one is entirely `#if canImport(CryptoKit)`-gated (Apple-only -
+    /// see its own doc comment), but this file - and `extractProofKeyId`'s
+    /// caller, `generateProofs` - builds and runs on every platform this SDK
+    /// targets, Linux included.
+    private static func jwkThumbprint(_ jwk: [String: Any]) -> String? {
+        guard let crv = jwk["crv"] as? String,
+              let kty = jwk["kty"] as? String,
+              let x = jwk["x"] as? String,
+              let y = jwk["y"] as? String else {
+            return nil
+        }
+        let canonical = "{\"crv\":\"\(crv)\",\"kty\":\"\(kty)\",\"x\":\"\(x)\",\"y\":\"\(y)\"}"
+        let digest = Data(SHA256.hash(data: Data(canonical.utf8)))
+        return digest.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     /// Ask go-wallet-backend's real, x5c-chained Key Attestation endpoint
