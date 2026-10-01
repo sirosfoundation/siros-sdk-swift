@@ -83,6 +83,21 @@ public actor VegaProofSystem: ZkProofSystem {
         CredentialTypeRef(format: .msoMdoc, typeId: "eu.europa.ec.eudi.pid.1"),
     ]
 
+    /// The single namespace Vega proving takes claims from, per supported
+    /// docType - same values and rationale as
+    /// `LongfellowZkProofSystem.namespaceByDocType`: deliberately NOT derived
+    /// generically from `nameSpaces.values.first` (that key set's iteration
+    /// order is unspecified, and a real mDL can carry a SECOND,
+    /// jurisdiction-specific namespace alongside this primary one - e.g. an
+    /// AAMVA-extension US mDL - so picking "the first key" is not just
+    /// non-deterministic, it can pick the wrong namespace entirely, and the
+    /// wrong one even being `exactly maxClaimsV1`-sized would silently prove
+    /// over the wrong elements rather than failing).
+    private static let namespaceByDocType: [String: String] = [
+        "org.iso.18013.5.1.mDL": "org.iso.18013.5.1",
+        "eu.europa.ec.eudi.pid.1": "eu.europa.ec.eudi.pid.1",
+    ]
+
     private let zkCircuitClient: ZkCircuitClient
 
     /// Where the loaded prover key lives - shared with any other proof
@@ -121,6 +136,23 @@ public actor VegaProofSystem: ZkProofSystem {
         signer: @escaping ZkWitnessSigner,
         priorState: [UInt8]?
     ) async throws -> ZkProofResult {
+        // Vega has no pseudonym-derivation concept at all (see this type's
+        // own doc comment). `generateProof` always reports
+        // `.notSupportedBySystem` below regardless, but a caller that also
+        // listed `zkPseudonymClaim` in `requestedClaims` has asked this
+        // system to disclose something it structurally cannot - silently
+        // succeeding would hand the verifier a presentation missing a claim
+        // it explicitly requested (the caller only ever inspects
+        // `result.pseudonym`, never `pseudonymOutcome`, when assembling the
+        // disclosed-claims wire list). Reject up front instead, mirroring
+        // `LongfellowZkProofSystem`'s identical "can't honor this request,
+        // don't pretend to" guard.
+        guard !requestedClaims.contains(zkPseudonymClaim) else {
+            throw MdocError.malformed(
+                "\(systemId) cannot prove '\(zkPseudonymClaim)' - this system has no pseudonym-derivation support"
+            )
+        }
+
         guard case let .mdoc(credentialBytes) = document else {
             throw MdocError.malformed("\(systemId) proves over mdoc only, got \(document.formatName)")
         }
@@ -194,13 +226,21 @@ public actor VegaProofSystem: ZkProofSystem {
     /// presentation disclosing a DIFFERENT subset still reuses the same
     /// slot/witness identity (only the `disclose` flags change), so reuse
     /// stays sound regardless.
-    private static func buildWitness(
+    // Not `private`: `VegaProofSystemTests` (`@testable import`) exercises
+    // the docType/namespace/digestID guards below directly against
+    // hand-built `DocumentMdoc` fixtures, without needing a real signed
+    // credential or the native prover - `private` (file-scoped) would put
+    // this out of reach from a different file even with `@testable`.
+    static func buildWitness(
         document: DocumentMdoc,
         requestedClaims: [String]
     ) throws -> ([VegaFfiClaim], FfiEcdsaWitness, FfiMsoBodyWitness) {
         let issuerAuth = document.issuerSigned.issuerAuth
-        guard let namespaceItems = document.issuerSigned.nameSpaces.values.first else {
-            throw MdocError.malformed("VegaProofSystem: mdoc credential '\(document.docType)' has no disclosed namespaces")
+        guard let namespace = namespaceByDocType[document.docType] else {
+            throw MdocError.malformed("VegaProofSystem: mdoc credential has unsupported docType '\(document.docType)'")
+        }
+        guard let namespaceItems = document.issuerSigned.nameSpaces[namespace] else {
+            throw MdocError.malformed("VegaProofSystem: mdoc credential '\(document.docType)' has no disclosed '\(namespace)' namespace")
         }
         guard namespaceItems.count == maxClaimsV1 else {
             throw MdocError.malformed(
@@ -210,11 +250,22 @@ public actor VegaProofSystem: ZkProofSystem {
         }
 
         let requested = Set(requestedClaims)
-        let claims: [VegaFfiClaim] = namespaceItems.map { entry in
-            VegaFfiClaim(
+        let claims: [VegaFfiClaim] = try namespaceItems.map { entry in
+            // `digestID` is a CBOR unsigned int, i.e. a `UInt64` in
+            // `IssuerSignedItem` - an issuer-controlled value with no spec
+            // ceiling at `UInt32.max`. `UInt32(entry.item.digestId)` traps
+            // (crashing proof generation) on a malformed/adversarial
+            // credential whose digest ID exceeds that; reject it as a
+            // malformed credential instead.
+            guard let digestId = UInt32(exactly: entry.item.digestId) else {
+                throw MdocError.malformed(
+                    "VegaProofSystem: digestID \(entry.item.digestId) for '\(entry.item.elementIdentifier)' exceeds UInt32 range"
+                )
+            }
+            return VegaFfiClaim(
                 issuerSignedItemBytes: Data(entry.original.encode()),
                 disclose: requested.contains(entry.item.elementIdentifier),
-                digestId: UInt32(entry.item.digestId)
+                digestId: digestId
             )
         }
 
@@ -225,7 +276,10 @@ public actor VegaProofSystem: ZkProofSystem {
     }
 
     /// See `buildWitness`'s "ECDSA witness" section for the reasoning here.
-    private static func buildEcdsaWitness(issuerAuth: CBOR) throws -> FfiEcdsaWitness {
+    // Not `private`: `VegaProofSystemTests` exercises the COSE alg
+    // overflow guard directly against a hand-crafted `issuerAuth` CBOR
+    // array - see `buildWitness`'s matching access-level comment above.
+    static func buildEcdsaWitness(issuerAuth: CBOR) throws -> FfiEcdsaWitness {
         guard case .array(let coseSign1) = issuerAuth, coseSign1.count == 4 else {
             throw MdocError.malformed("VegaProofSystem: issuerAuth is not a COSE_Sign1 array")
         }
@@ -233,10 +287,17 @@ public actor VegaProofSystem: ZkProofSystem {
               let protectedHeaders = try? CBOR.decode(protectedBytes) else {
             throw MdocError.malformed("VegaProofSystem: issuerAuth protected header is not decodable")
         }
+        // A malformed protected header can encode a CBOR integer above
+        // `Int64.max` (e.g. close to `UInt64.max`) - `Int64(v)` traps on
+        // that, crashing proof generation over untrusted credential data
+        // instead of surfacing the intended unsupported-algorithm error.
+        // `Int64(exactly:)` returns `nil` instead of trapping; the
+        // subsequent `alg == coseAlgES256` comparison then correctly falls
+        // through to the "unsupported alg" error for any out-of-range value.
         let alg: Int64?
         switch protectedHeaders[.unsignedInt(1)] {
-        case .unsignedInt(let v): alg = Int64(v)
-        case .negativeInt(let v): alg = -1 - Int64(v)
+        case .unsignedInt(let v): alg = Int64(exactly: v)
+        case .negativeInt(let v): alg = Int64(exactly: v).map { -1 - $0 }
         default: alg = nil
         }
         guard alg == coseAlgES256 else {
