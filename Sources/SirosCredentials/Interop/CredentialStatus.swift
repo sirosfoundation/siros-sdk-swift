@@ -192,9 +192,19 @@ public actor CredentialStatusEvaluator {
 
         // The credential's own `iss` wins - it is signed - and the stored
         // issuer identifier stands in only when there is none.
+        guard let expectedIssuer = Self.issuer(of: claims) ?? credentialIssuer else {
+            // `resolve`'s issuer check only runs when given an expected
+            // issuer to check AGAINST - passing nil here would have skipped
+            // it entirely (review finding), accepting a validly-signed
+            // Status List Token from ANY issuer (including one an attacker
+            // controls and self-signs) for a credential whose own issuer
+            // this wallet cannot even name. No issuer to bind to is not "no
+            // check needed"; it's nothing to verify the binding against.
+            return .unknown
+        }
         let resolution = await statusListClient.resolve(
             reference,
-            expectedIssuer: Self.issuer(of: claims) ?? credentialIssuer,
+            expectedIssuer: expectedIssuer,
             clockTolerance: clockTolerance
         )
         switch resolution {

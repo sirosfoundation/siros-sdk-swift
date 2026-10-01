@@ -201,6 +201,30 @@ final class CredentialStatusTests: XCTestCase {
         XCTAssertEqual(status, .unknown)
     }
 
+    /// Regression (review finding): with no known issuer to check the Status
+    /// List Token's `iss` against - neither the credential's own claims nor
+    /// `credentialIssuer` name one - resolve's issuer binding check would
+    /// have been skipped entirely (expectedIssuer: nil), accepting a validly
+    /// signed token from ANY issuer, including one an attacker controls and
+    /// self-signs, for a credential this wallet cannot even name the issuer
+    /// of. No issuer to bind to must refuse, not skip the check.
+    func testNoKnownIssuerRefusesRatherThanSkippingTheBindingCheck() async {
+        let evaluator = CredentialStatusEvaluator(
+            statusListClient: TokenStatusListClient(
+                httpGet: { _, _ in
+                    XCTFail("with no issuer to bind to, this must never reach the network")
+                    return nil
+                }
+            ),
+            now: { self.now }
+        )
+        // No "iss"/"issuer" claim, and no credentialIssuer argument either.
+        let status = await evaluator.evaluate(
+            claims: claims(#"{"status":{"status_list":{"idx":0,"uri":"https://x.example"}}}"#)
+        )
+        XCTAssertEqual(status, .unknown)
+    }
+
     func testAnUnreachableStatusListLeavesTheCredentialUsable() async {
         // Hiding a credential because the issuer's status endpoint is down
         // would make the wallet unusable offline. This is deliberate.

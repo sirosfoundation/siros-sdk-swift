@@ -385,7 +385,15 @@ public enum CredentialUtils {
             if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
                 reference["uri"] = uri
             }
-            if !reference.isEmpty { claims["status"] = ["status_list": reference] }
+            // Preserved even when EMPTY (review finding) - the MSO declared
+            // a status_list regardless of whether idx/uri came through
+            // usably, and dropping the claim entirely when both happen to
+            // be malformed made `hasStatusReference` see nothing where a
+            // status claim actually was, reporting this credential `.valid`
+            // instead of `.unknown`. `!reference.isEmpty` only ever
+            // controlled whether this is worth doing at all, never whether
+            // the claim's EXISTENCE should be recorded.
+            claims["status"] = ["status_list": reference]
         }
         return claims.isEmpty ? nil : claims
     }

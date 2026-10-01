@@ -151,6 +151,41 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         XCTAssertFalse(isPublicFetchAllowed(URL(string: "ftp://issuer.example/list")!))
     }
 
+    /// Regression (review finding): a credential-controlled status URI or
+    /// issuer jwks_uri naming a loopback/private/link-local IP literal
+    /// previously passed every other check here and was fetched - turning
+    /// status evaluation into an SSRF/local-network probing primitive.
+    func testLoopbackPrivateAndLinkLocalAddressesAreNeverFetched() {
+        // Loopback.
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://127.0.0.1/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://127.1.2.3/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://localhost/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://[::1]/list")!))
+        // The three private ranges (RFC 1918).
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://10.0.0.5/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://172.16.0.5/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://192.168.1.1/list")!))
+        // Link-local.
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://169.254.1.1/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://[fe80::1]/list")!))
+        // Unique-local IPv6 (RFC 4193's private-network analogue).
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://[fd00::1]/list")!))
+        // An IPv4-mapped IPv6 literal must not bypass the IPv4 checks.
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://[::ffff:127.0.0.1]/list")!))
+        // Carrier-grade NAT and a documentation range, for completeness.
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://100.64.0.1/list")!))
+        XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://192.0.2.1/list")!))
+    }
+
+    func testOrdinaryPublicAddressesAndHostnamesAreStillFetched() {
+        XCTAssertTrue(isPublicFetchAllowed(URL(string: "https://issuer.example/list")!))
+        // A real public IP literal (documentation-safe TEST-NET-3 analogue
+        // picked for a well-known public resolver, not actually dialed by
+        // this test - only the predicate runs here).
+        XCTAssertTrue(isPublicFetchAllowed(URL(string: "https://8.8.8.8/list")!))
+        XCTAssertTrue(isPublicFetchAllowed(URL(string: "https://[2001:4860:4860::8888]/list")!))
+    }
+
     /// Regression (review finding): a third-party response's COMPRESSED body
     /// must be capped while it is still arriving, not only checked against
     /// `Inflate`'s own output-size limit afterward - otherwise a credential-

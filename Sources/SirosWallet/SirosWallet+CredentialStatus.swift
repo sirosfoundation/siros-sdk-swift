@@ -4,6 +4,11 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import SirosCredentials
 
 /// DIIP's Validity and Revocation Algorithm, run over the credentials this
@@ -399,8 +404,86 @@ private let thirdPartySession: URLSession = {
 /// One predicate, applied to the URL this wallet asks for *and* to every
 /// redirect it is offered: a rule enforced on the first request and not on the
 /// hop after it is not a rule.
+///
+/// Also rejects an IP-literal host in a reserved/private/loopback/link-local
+/// range (review finding): without this, a credential-controlled status URI
+/// or issuer `jwks_uri` naming `https://127.0.0.1/...` or a private-network
+/// address passed every other check here and was fetched, turning status
+/// evaluation into an SSRF/local-network probing primitive. A literal
+/// `localhost` is rejected the same way, since it resolves to loopback by
+/// convention everywhere. A real HOSTNAME is not resolved here to check
+/// where it points - this is a pre-connect, static check against the URL
+/// text only, not a DNS-rebinding defense (the OS resolver settles that at
+/// connect time, after this check has already passed); closing that fully
+/// would need a custom resolver pinning the address actually connected to,
+/// which is a larger change than this fail-closed literal-IP check.
 func isPublicFetchAllowed(_ url: URL) -> Bool {
-    url.scheme?.lowercased() == "https" && url.user == nil && url.password == nil && url.host != nil
+    guard url.scheme?.lowercased() == "https",
+          url.user == nil, url.password == nil,
+          let host = url.host, !host.isEmpty
+    else { return false }
+    return !isReservedOrLoopbackHost(host)
+}
+
+/// Whether `host` (a URL's `.host`, so an IPv6 literal arrives WITHOUT its
+/// `[...]` brackets) is a loopback, private-network, link-local, or other
+/// IANA-reserved address - or the conventional `localhost` name - rather
+/// than a real, routable public hostname/address.
+private func isReservedOrLoopbackHost(_ host: String) -> Bool {
+    let lowered = host.lowercased()
+    if lowered == "localhost" || lowered.hasSuffix(".localhost") { return true }
+
+    var ipv4 = in_addr()
+    if host.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+        return isReservedIPv4(ipv4.s_addr.bigEndian)
+    }
+    var ipv6 = in6_addr()
+    if host.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
+        return isReservedIPv6(ipv6)
+    }
+    // Not an IP literal at all - a real hostname, which this check does not
+    // resolve (see the doc comment above).
+    return false
+}
+
+/// IANA-reserved/special-use IPv4 ranges (RFC 5735/6890 and successors) that
+/// are never a legitimate public issuer: loopback (127/8), "this network"
+/// (0/8), link-local (169.254/16), the three private ranges (10/8,
+/// 172.16/12, 192.168/16), carrier-grade NAT (100.64/10), the documentation
+/// ranges, and multicast/reserved (224/4 and above, which also covers the
+/// all-ones broadcast address).
+private func isReservedIPv4(_ addressBigEndian: UInt32) -> Bool {
+    func inRange(_ base: (UInt8, UInt8, UInt8, UInt8), prefixBits: Int) -> Bool {
+        let baseValue = (UInt32(base.0) << 24) | (UInt32(base.1) << 16) | (UInt32(base.2) << 8) | UInt32(base.3)
+        let mask: UInt32 = prefixBits == 0 ? 0 : (~UInt32(0)) << (32 - prefixBits)
+        return (addressBigEndian & mask) == (baseValue & mask)
+    }
+    let ranges: [((UInt8, UInt8, UInt8, UInt8), Int)] = [
+        ((0, 0, 0, 0), 8), ((10, 0, 0, 0), 8), ((100, 64, 0, 0), 10), ((127, 0, 0, 0), 8),
+        ((169, 254, 0, 0), 16), ((172, 16, 0, 0), 12), ((192, 0, 0, 0), 24), ((192, 0, 2, 0), 24),
+        ((192, 88, 99, 0), 24), ((192, 168, 0, 0), 16), ((198, 18, 0, 0), 15), ((198, 51, 100, 0), 24),
+        ((203, 0, 113, 0), 24), ((224, 0, 0, 0), 4),
+    ]
+    return ranges.contains { inRange($0.0, prefixBits: $0.1) }
+}
+
+/// IANA-reserved IPv6 ranges: loopback (::1), unique-local (fc00::/7,
+/// RFC 4193's private-network analogue), link-local (fe80::/10), and an
+/// embedded IPv4-mapped address (`::ffff:a.b.c.d`) checked against the SAME
+/// IPv4 ranges above - an IPv6 stack is not a separate network, and skipping
+/// this would let the IPv4 checks be bypassed by spelling the same address
+/// as a v6 literal.
+private func isReservedIPv6(_ address: in6_addr) -> Bool {
+    let bytes = withUnsafeBytes(of: address) { Array($0) }
+    if bytes == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] { return true } // ::1
+    if (bytes[0] & 0xFE) == 0xFC { return true } // fc00::/7
+    if bytes[0] == 0xFE, (bytes[1] & 0xC0) == 0x80 { return true } // fe80::/10
+    if bytes[0..<10].allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF {
+        let embeddedIPv4 = (UInt32(bytes[12]) << 24) | (UInt32(bytes[13]) << 16)
+            | (UInt32(bytes[14]) << 8) | UInt32(bytes[15])
+        return isReservedIPv4(embeddedIPv4)
+    }
+    return false
 }
 
 /// The most a third-party response's COMPRESSED body may be, enforced while

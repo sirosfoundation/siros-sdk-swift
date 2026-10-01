@@ -78,4 +78,44 @@ final class MdocValidityClaimsTests: XCTestCase {
             "a status_list claim IS present, just unreadable - must not look like no claim at all"
         )
     }
+
+    /// Regression (review finding): when NEITHER `idx` nor `uri` comes
+    /// through usably, the reference built from them is entirely empty -
+    /// `!reference.isEmpty` previously gated recording the claim at all, so
+    /// this most-malformed case was the one most completely indistinguishable
+    /// from "no status claim", the opposite of what fail-closed requires.
+    func testAStatusListWithNeitherIdxNorUriUsableIsStillRecordedAsPresent() throws {
+        let mso: CBOR = .map([
+            .utf8String("docType"): .utf8String("org.iso.18013.5.1.mDL"),
+            .utf8String("status"): .map([
+                .utf8String("status_list"): .map([
+                    .utf8String("idx"): .unsignedInt(UInt64.max),
+                    .utf8String("uri"): .unsignedInt(123), // not a string
+                ]),
+            ]),
+        ])
+        let msoBytes = CBOR.tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([:]),
+            .utf8String("issuerAuth"): .array([
+                .byteString([]), .map([:]), .byteString(msoBytes.encode()), .byteString([]),
+            ]),
+        ])
+        let credential = StoredCredential(
+            id: 1,
+            format: "mso_mdoc",
+            raw: Data(issuerSigned.encode()).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
+            batchId: 1,
+            instanceId: 0
+        )
+        let claims = try XCTUnwrap(CredentialUtils.validityClaims(credential))
+        XCTAssertNil(TokenStatusList.extractReference(from: claims))
+        XCTAssertTrue(
+            TokenStatusList.hasStatusReference(claims),
+            "status_list WAS declared, with nothing usable in it - still not the same as no claim at all"
+        )
+    }
 }
