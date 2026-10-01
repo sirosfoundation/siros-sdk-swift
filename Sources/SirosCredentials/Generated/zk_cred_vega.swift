@@ -997,7 +997,7 @@ extension VegaFfiClaim: Sendable {}
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeFfiClaim: FfiConverterRustBuffer {
+public struct FfiConverterTypeVegaFfiClaim: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VegaFfiClaim {
         return
             try VegaFfiClaim(
@@ -1018,15 +1018,15 @@ public struct FfiConverterTypeFfiClaim: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiClaim_lift(_ buf: RustBuffer) throws -> VegaFfiClaim {
-    return try FfiConverterTypeFfiClaim.lift(buf)
+public func FfiConverterTypeVegaFfiClaim_lift(_ buf: RustBuffer) throws -> VegaFfiClaim {
+    return try FfiConverterTypeVegaFfiClaim.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiClaim_lower(_ value: VegaFfiClaim) -> RustBuffer {
-    return FfiConverterTypeFfiClaim.lower(value)
+public func FfiConverterTypeVegaFfiClaim_lower(_ value: VegaFfiClaim) -> RustBuffer {
+    return FfiConverterTypeVegaFfiClaim.lower(value)
 }
 
 
@@ -1432,14 +1432,14 @@ fileprivate struct FfiConverterSequenceData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer {
+fileprivate struct FfiConverterSequenceTypeVegaFfiClaim: FfiConverterRustBuffer {
     typealias SwiftType = [VegaFfiClaim]
 
     public static func write(_ value: [VegaFfiClaim], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
-            FfiConverterTypeFfiClaim.write(item, into: &buf)
+            FfiConverterTypeVegaFfiClaim.write(item, into: &buf)
         }
     }
 
@@ -1448,7 +1448,7 @@ fileprivate struct FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer {
         var seq = [VegaFfiClaim]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeFfiClaim.read(from: &buf))
+            seq.append(try FfiConverterTypeVegaFfiClaim.read(from: &buf))
         }
         return seq
     }
@@ -1517,7 +1517,7 @@ public func prepProve(pk: VegaProverKey, claims: [VegaFfiClaim], ecdsaWitness: F
         uniffiCallStatus in
     uniffi_zk_cred_vega_fn_func_prep_prove(
         FfiConverterTypeVegaProverKey_lower(pk),
-        FfiConverterSequenceTypeFfiClaim.lower(claims),
+        FfiConverterSequenceTypeVegaFfiClaim.lower(claims),
         FfiConverterTypeFfiEcdsaWitness_lower(ecdsaWitness),
         FfiConverterTypeFfiMsoBodyWitness_lower(msoBody),uniffiCallStatus
     )
@@ -1533,7 +1533,7 @@ public func prove(pk: VegaProverKey, claims: [VegaFfiClaim], ecdsaWitness: FfiEc
         uniffiCallStatus in
     uniffi_zk_cred_vega_fn_func_prove(
         FfiConverterTypeVegaProverKey_lower(pk),
-        FfiConverterSequenceTypeFfiClaim.lower(claims),
+        FfiConverterSequenceTypeVegaFfiClaim.lower(claims),
         FfiConverterTypeFfiEcdsaWitness_lower(ecdsaWitness),
         FfiConverterTypeFfiMsoBodyWitness_lower(msoBody),
         FfiConverterData.lower(priorState),uniffiCallStatus
