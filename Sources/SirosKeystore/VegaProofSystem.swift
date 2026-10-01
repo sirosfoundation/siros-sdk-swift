@@ -48,11 +48,13 @@ public actor VegaProofSystem: ZkProofSystem {
     /// system at all.
     public static let maxClaimsV1 = 4
 
-    /// This system's `ZkSystemSpec.system` value - exposed so callers
-    /// outside this type (e.g. `MdocDeviceResponseBuilder`'s Vega-only
-    /// `claimSlotDigestIds` wire field) can identify a Vega presentation
-    /// without hardcoding the string a second time.
-    public static let systemIdValue = "vega-mc-p256-v1"
+    /// This system's `ZkSystemSpec.system` value - aliases the cross-platform
+    /// `vegaZkSystemId` (this type's own iOS-only `#if os(iOS)` gating means
+    /// non-iOS code, e.g. `SirosWallet+DCAPI.swift`'s Vega-only
+    /// `claimSlotDigestIds` wire field, cannot reference THIS type to get
+    /// at it, so that constant - not this one - is the actual single
+    /// source of truth).
+    public static let systemIdValue = vegaZkSystemId
 
     /// COSE algorithm identifier for ES256 (RFC 8152 §8.1) - the only alg
     /// `buildEcdsaWitness` accepts.
@@ -81,21 +83,6 @@ public actor VegaProofSystem: ZkProofSystem {
     nonisolated public let supportedCredentialTypes: Set<CredentialTypeRef> = [
         CredentialTypeRef(format: .msoMdoc, typeId: "org.iso.18013.5.1.mDL"),
         CredentialTypeRef(format: .msoMdoc, typeId: "eu.europa.ec.eudi.pid.1"),
-    ]
-
-    /// The single namespace Vega proving takes claims from, per supported
-    /// docType - same values and rationale as
-    /// `LongfellowZkProofSystem.namespaceByDocType`: deliberately NOT derived
-    /// generically from `nameSpaces.values.first` (that key set's iteration
-    /// order is unspecified, and a real mDL can carry a SECOND,
-    /// jurisdiction-specific namespace alongside this primary one - e.g. an
-    /// AAMVA-extension US mDL - so picking "the first key" is not just
-    /// non-deterministic, it can pick the wrong namespace entirely, and the
-    /// wrong one even being `exactly maxClaimsV1`-sized would silently prove
-    /// over the wrong elements rather than failing).
-    private static let namespaceByDocType: [String: String] = [
-        "org.iso.18013.5.1.mDL": "org.iso.18013.5.1",
-        "eu.europa.ec.eudi.pid.1": "eu.europa.ec.eudi.pid.1",
     ]
 
     private let zkCircuitClient: ZkCircuitClient
@@ -169,17 +156,25 @@ public actor VegaProofSystem: ZkProofSystem {
             // them off the caller's isolation domain (see
             // LongfellowZkProofSystem's matching doc comment on why an
             // `actor`, not a plain class, is what actually buys this).
-            let state: Data
-            if let priorState {
-                state = Data(priorState)
-            } else {
-                state = try prepProve(pk: proverKey, claims: claims, ecdsaWitness: ecdsaWitness, msoBody: msoBody)
-            }
+            //
+            // `priorState` is deliberately NEVER honored here, and no
+            // reusable `nextState` is ever handed back (Copilot review,
+            // PR #182): in zk-cred-vega v0.0.6, feeding a previous call's
+            // state back into `prove` carries the SAME digest-blinding
+            // nonce forward (the crate's own docs warn about exactly this),
+            // so two presentations that reused state would disclose
+            // identical blinded digests and become correlatable to each
+            // other - defeating per-presentation unlinkability even when
+            // they disclose different claim subsets. `priorState` stays in
+            // this method's signature only for `ZkProofSystem` protocol
+            // parity with `LongfellowZkProofSystem`'s own state-threading;
+            // every Vega proof prepares fresh until the native API can
+            // refresh this nonce safely on reuse.
+            let state = try prepProve(pk: proverKey, claims: claims, ecdsaWitness: ecdsaWitness, msoBody: msoBody)
             let result = try prove(pk: proverKey, claims: claims, ecdsaWitness: ecdsaWitness, msoBody: msoBody, priorState: state)
 
             return ZkProofResult(
                 proofBytes: [UInt8](result.proofBytes),
-                nextState: [UInt8](result.nextState),
                 // Vega has no pseudonym-derivation concept at all (confirmed
                 // in the Kotlin port's own design research) - always report
                 // this, regardless of whether verifierIdentity was
@@ -236,7 +231,7 @@ public actor VegaProofSystem: ZkProofSystem {
         requestedClaims: [String]
     ) throws -> ([VegaFfiClaim], FfiEcdsaWitness, FfiMsoBodyWitness) {
         let issuerAuth = document.issuerSigned.issuerAuth
-        guard let namespace = namespaceByDocType[document.docType] else {
+        guard let namespace = zkMdocNamespaceByDocType[document.docType] else {
             throw MdocError.malformed("VegaProofSystem: mdoc credential has unsupported docType '\(document.docType)'")
         }
         guard let namespaceItems = document.issuerSigned.nameSpaces[namespace] else {

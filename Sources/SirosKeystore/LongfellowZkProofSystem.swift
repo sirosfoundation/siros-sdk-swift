@@ -75,21 +75,6 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
         CredentialTypeRef(format: .msoMdoc, typeId: "eu.europa.ec.eudi.pid.1"),
     ]
 
-    /// The single namespace Longfellow proving takes claims from, per
-    /// supported docType. Deliberately NOT derived generically from
-    /// `mdoc.issuerSigned.nameSpaces.keys.first` (that key set's
-    /// iteration order is unspecified, and a real mDL can carry a SECOND,
-    /// jurisdiction-specific namespace alongside this primary one - e.g. an
-    /// AAMVA-extension US mDL - so picking "the first key" is not just
-    /// non-deterministic, it can pick the wrong namespace entirely).
-    /// Hardcoded per-docType, matching `supportedDocTypes`/`pseudonymClaim`
-    /// above already being a closed, hardcoded set rather than a generic
-    /// derivation.
-    private static let namespaceByDocType: [String: String] = [
-        "org.iso.18013.5.1.mDL": "org.iso.18013.5.1",
-        "eu.europa.ec.eudi.pid.1": "eu.europa.ec.eudi.pid.1",
-    ]
-
     private let zkCircuitClient: ZkCircuitClient
     private let pseudonymDeriver: ZkPseudonymDeriver
 
@@ -172,7 +157,7 @@ public actor LongfellowZkProofSystem: ZkProofSystem {
             throw MdocError.malformed("\(systemId) proves over mdoc only, got \(document.formatName)")
         }
         let mdoc = try MdocCbor.parseStoredCredential(credentialBytes)
-        guard let expectedNamespace = Self.namespaceByDocType[mdoc.docType] else {
+        guard let expectedNamespace = zkMdocNamespaceByDocType[mdoc.docType] else {
             throw MdocError.malformed("mdoc credential has unsupported docType '\(mdoc.docType)'")
         }
         guard mdoc.issuerSigned.nameSpaces[expectedNamespace] != nil else {
