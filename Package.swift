@@ -96,19 +96,13 @@ let package = Package(
         // --- zk-cred-vega UniFFI bindings (XCFramework) ---
         // Built by `make xcframework` in the zk-cred-vega crate (Swift/iOS
         // support added there as a prerequisite - sirosfoundation/zk-cred-vega#9,
-        // not yet merged/released as of this comment). Same naming
-        // convention as the three above: crate name + "FFI", headers
-        // nested under zk_cred_vegaFFI/ to avoid the same module.modulemap
-        // collision.
-        //
-        // TEMPORARY: points at a local build (`path:`) from that PR's
-        // branch, built and verified on the Mac mini builder, rather than a
-        // published release `url:`/`checksum:` - swap this for the real
-        // published reference once zk-cred-vega's release is cut, matching
-        // the other three binary targets' shape exactly.
+        // merged, released as v0.0.6). Same naming convention as the three
+        // above: crate name + "FFI", headers nested under zk_cred_vegaFFI/
+        // to avoid the same module.modulemap collision.
         .binaryTarget(
             name: "zk_cred_vegaFFI",
-            path: "Vendor/zk_cred_vega.xcframework"
+            url: "https://github.com/sirosfoundation/zk-cred-vega/releases/download/v0.0.6/zk_cred_vega.xcframework.zip",
+            checksum: "f95cf6d304862e1b3ba7274bda654ed19d99ff3dd30d03cb97109863606779a0"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
