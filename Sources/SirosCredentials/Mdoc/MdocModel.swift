@@ -162,6 +162,20 @@ public enum MdocCbor {
         return docType
     }
 
+    /// Decode the MSO (MobileSecurityObject) from a full COSE_Sign1
+    /// `issuerAuth` array (the whole 4-element structure, not just its
+    /// payload slot) - the entry point a caller outside this enum needs
+    /// (e.g. `VegaProofSystem`'s MSO-body witness extraction, which reads
+    /// `deviceKeyInfo`/`validityInfo` straight out of the real MSO).
+    /// `decodeMso(fromPayload:)` below does the real work once the payload
+    /// slot (index 2) is picked out.
+    public static func decodeMso(fromIssuerAuth issuerAuth: CBOR) throws -> CBOR {
+        guard case .array(let coseSign1) = issuerAuth, coseSign1.count >= 3 else {
+            throw MdocError.malformed("issuerAuth is not a COSE_Sign1 array")
+        }
+        return try decodeMso(fromPayload: coseSign1[2])
+    }
+
     /// Decode the MSO from a COSE_Sign1 `issuerAuth`'s payload slot.
     ///
     /// Per ISO 18013-5 §9.1.2.4, this slot is itself a `bstr` (COSE_Sign1's

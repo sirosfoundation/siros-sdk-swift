@@ -43,6 +43,16 @@ let package = Package(
         // not the native crate's. facebook/zstd ships its own SPM manifest
         // (a plain C target, no Swift wrapper) exposing this as `libzstd`.
         .package(url: "https://github.com/facebook/zstd.git", from: "1.5.6"),
+        // VegaProofSystem's ECDSA witness needs a real modular inverse
+        // (s^-1 mod the P-256 curve order) - the same operation Kotlin's
+        // port does via java.math.BigInteger.modInverse, a trusted
+        // platform bignum facility rather than a hand-rolled one. Swift/
+        // CryptoKit has no arbitrary-precision integer type at all; this is
+        // the de facto standard pure-Swift BigInt (no dependencies of its
+        // own), for the same reason: use a well-tested library for this
+        // rather than hand-rolling extended-Euclidean-algorithm code in a
+        // cryptographic path.
+        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.3.0"),
     ],
     targets: [
         // --- zk-cred-longfellow UniFFI bindings (XCFramework) ---
@@ -83,6 +93,24 @@ let package = Package(
             checksum: "319c9b1979c42a3569ef9d413d013729f81dc39560f61a0471e19f38123c389c"
         ),
 
+        // --- zk-cred-vega UniFFI bindings (XCFramework) ---
+        // Built by `make xcframework` in the zk-cred-vega crate (Swift/iOS
+        // support added there as a prerequisite - sirosfoundation/zk-cred-vega#9,
+        // not yet merged/released as of this comment). Same naming
+        // convention as the three above: crate name + "FFI", headers
+        // nested under zk_cred_vegaFFI/ to avoid the same module.modulemap
+        // collision.
+        //
+        // TEMPORARY: points at a local build (`path:`) from that PR's
+        // branch, built and verified on the Mac mini builder, rather than a
+        // published release `url:`/`checksum:` - swap this for the real
+        // published reference once zk-cred-vega's release is cut, matching
+        // the other three binary targets' shape exactly.
+        .binaryTarget(
+            name: "zk_cred_vegaFFI",
+            path: "Vendor/zk_cred_vega.xcframework"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -112,6 +140,14 @@ let package = Package(
                 // match. On macOS CredentialMatcher keeps its own parsing
                 // path, which is what it used everywhere until now.
                 .target(name: "siros_dc_matcher_ffiFFI", condition: .when(platforms: [.iOS])),
+                // Same story, same gate: zk_cred_vegaFFI ships iOS slices
+                // only (zk-cred-vega's own halo2curves dependency can't
+                // cross-compile for the legacy x86_64 iOS simulator, so
+                // only aarch64 device + simulator slices exist at all -
+                // see that crate's Makefile), and VegaProofSystem.swift
+                // plus Generated/zk_cred_vega.swift are `#if os(iOS)` to
+                // match.
+                .target(name: "zk_cred_vegaFFI", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosCredentials"
         ),
