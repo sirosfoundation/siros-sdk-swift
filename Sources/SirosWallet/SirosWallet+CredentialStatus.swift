@@ -453,18 +453,31 @@ private func isReservedOrLoopbackHost(_ host: String) -> Bool {
 /// ranges, and multicast/reserved (224/4 and above, which also covers the
 /// all-ones broadcast address).
 private func isReservedIPv4(_ addressBigEndian: UInt32) -> Bool {
-    func inRange(_ base: (UInt8, UInt8, UInt8, UInt8), prefixBits: Int) -> Bool {
-        let baseValue = (UInt32(base.0) << 24) | (UInt32(base.1) << 16) | (UInt32(base.2) << 8) | UInt32(base.3)
-        let mask: UInt32 = prefixBits == 0 ? 0 : (~UInt32(0)) << (32 - prefixBits)
-        return (addressBigEndian & mask) == (baseValue & mask)
+    /// A CIDR range, as the combined base address (not 4 separate octets -
+    /// SwiftLint's `large_tuple` rule caps tuples at 2 members, so this is a
+    /// struct instead) and prefix length.
+    struct Range {
+        let base: UInt32
+        let prefixBits: Int
+        init(_ o1: UInt8, _ o2: UInt8, _ o3: UInt8, _ o4: UInt8, prefixBits: Int) {
+            base = (UInt32(o1) << 24) | (UInt32(o2) << 16) | (UInt32(o3) << 8) | UInt32(o4)
+            self.prefixBits = prefixBits
+        }
+        func contains(_ address: UInt32) -> Bool {
+            let mask: UInt32 = prefixBits == 0 ? 0 : (~UInt32(0)) << (32 - prefixBits)
+            return (address & mask) == (base & mask)
+        }
     }
-    let ranges: [((UInt8, UInt8, UInt8, UInt8), Int)] = [
-        ((0, 0, 0, 0), 8), ((10, 0, 0, 0), 8), ((100, 64, 0, 0), 10), ((127, 0, 0, 0), 8),
-        ((169, 254, 0, 0), 16), ((172, 16, 0, 0), 12), ((192, 0, 0, 0), 24), ((192, 0, 2, 0), 24),
-        ((192, 88, 99, 0), 24), ((192, 168, 0, 0), 16), ((198, 18, 0, 0), 15), ((198, 51, 100, 0), 24),
-        ((203, 0, 113, 0), 24), ((224, 0, 0, 0), 4),
+    let ranges: [Range] = [
+        Range(0, 0, 0, 0, prefixBits: 8), Range(10, 0, 0, 0, prefixBits: 8),
+        Range(100, 64, 0, 0, prefixBits: 10), Range(127, 0, 0, 0, prefixBits: 8),
+        Range(169, 254, 0, 0, prefixBits: 16), Range(172, 16, 0, 0, prefixBits: 12),
+        Range(192, 0, 0, 0, prefixBits: 24), Range(192, 0, 2, 0, prefixBits: 24),
+        Range(192, 88, 99, 0, prefixBits: 24), Range(192, 168, 0, 0, prefixBits: 16),
+        Range(198, 18, 0, 0, prefixBits: 15), Range(198, 51, 100, 0, prefixBits: 24),
+        Range(203, 0, 113, 0, prefixBits: 24), Range(224, 0, 0, 0, prefixBits: 4),
     ]
-    return ranges.contains { inRange($0.0, prefixBits: $0.1) }
+    return ranges.contains { $0.contains(addressBigEndian) }
 }
 
 /// IANA-reserved IPv6 ranges: loopback (::1), unique-local (fc00::/7,
