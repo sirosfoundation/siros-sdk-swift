@@ -66,7 +66,7 @@ final class VegaZkVectorTests: XCTestCase {
     }
 
     private struct TestVector {
-        let claims: [FfiClaim]
+        let claims: [VegaFfiClaim]
         let ecdsaWitness: FfiEcdsaWitness
         let msoBody: FfiMsoBodyWitness
     }
@@ -129,7 +129,7 @@ final class VegaZkVectorTests: XCTestCase {
         let parsed = try JSONDecoder().decode(TestVectorJSON.self, from: json)
 
         let claims = parsed.claims.map {
-            FfiClaim(
+            VegaFfiClaim(
                 issuerSignedItemBytes: hexToData($0.issuerSignedItemBytesHex),
                 disclose: $0.disclose,
                 digestId: $0.digestId
