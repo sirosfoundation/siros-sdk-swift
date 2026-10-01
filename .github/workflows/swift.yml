@@ -122,23 +122,40 @@ jobs:
       - name: Generate Xcode project
         working-directory: SampleApp
         run: xcodegen generate
+      - name: Resolve simulator device
+        working-directory: SampleApp
+        run: |
+          # A concrete (bootable) simulator - not the generic destination
+          # this job used to build against - is required both here and for
+          # the test step below. Select from actually available simulator
+          # devices (not `simctl list devicetypes`, which lists templates
+          # that may not correspond to a real device instance on every
+          # runner image).
+          #
+          # The generic destination used to suffice for `build` (it doesn't
+          # need a bootable simulator), but zk_cred_vegaFFI's XCFramework
+          # (siros-sdk-swift#182) only ships arm64 iOS Simulator slices -
+          # zk-cred-vega's halo2curves dependency can't cross-compile for
+          # legacy x86_64 iOS Simulator at all (see that crate's Makefile) -
+          # and a *generic* iOS Simulator destination builds every
+          # architecture the platform considers valid for distribution,
+          # x86_64 included, which this runner (Apple Silicon, like every
+          # GitHub-hosted macos-26 image) never actually needs. A concrete
+          # destination builds only the architecture that destination's
+          # simulator actually runs.
+          DEVICE=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9]+( Pro( Max)?| Air|e)?' | sed -E 's/[[:space:]]+$//')
+          echo "DEVICE=${DEVICE}" >> "$GITHUB_ENV"
       - name: Build for iOS Simulator
         working-directory: SampleApp
         run: |
           xcodebuild build \
             -project SirosSampleApp.xcodeproj \
             -scheme SirosSampleApp \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination "platform=iOS Simulator,name=${DEVICE}" \
             CODE_SIGNING_ALLOWED=NO
       - name: Run Sample App unit tests
         working-directory: SampleApp
         run: |
-          # A concrete (bootable) simulator is required for `test`, unlike the
-          # generic destination above which suffices for `build`. Select from
-          # actually available simulator devices (not `simctl list devicetypes`,
-          # which lists templates that may not correspond to a real device
-          # instance on every runner image).
-          DEVICE=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9]+( Pro( Max)?| Air|e)?' | sed -E 's/[[:space:]]+$//')
           xcodebuild test \
             -project SirosSampleApp.xcodeproj \
             -scheme SirosSampleApp \
