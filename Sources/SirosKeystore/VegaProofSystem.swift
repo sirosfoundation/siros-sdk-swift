@@ -234,7 +234,7 @@ public actor VegaProofSystem: ZkProofSystem {
             throw MdocError.malformed("VegaProofSystem: issuerAuth protected header is not decodable")
         }
         let alg: Int64?
-        switch protectedHeaders?[.unsignedInt(1)] {
+        switch protectedHeaders[.unsignedInt(1)] {
         case .unsignedInt(let v): alg = Int64(v)
         case .negativeInt(let v): alg = -1 - Int64(v)
         default: alg = nil
@@ -296,7 +296,7 @@ public actor VegaProofSystem: ZkProofSystem {
         // seconds, so it's only safe to use for OUTPUT once the fractional
         // part has already been truncated away.
         func timestamp(_ field: String) throws -> Data {
-            guard let raw = mso["validityInfo"]?[field] else {
+            guard let raw = mso["validityInfo"]?[.utf8String(field)] else {
                 throw MdocError.malformed("VegaProofSystem: MSO validityInfo missing '\(field)'")
             }
             let iso: String
