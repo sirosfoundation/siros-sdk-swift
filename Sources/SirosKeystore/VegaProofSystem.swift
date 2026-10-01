@@ -336,9 +336,38 @@ public actor VegaProofSystem: ZkProofSystem {
 
     private func loadProverKey(spec: ZkSystemSpec) async throws -> VegaProverKey {
         let descriptor = try await zkCircuitClient.fetchCircuit(id: spec.id)
+        try Self.validateCircuitParams(descriptor)
         let compressedBytes = try await zkCircuitClient.downloadArtifact(descriptor)
         let keyBytes = try decompressZkCircuitArtifact(compressedBytes, descriptor: descriptor)
         return try deserializeProverKey(bytes: keyBytes)
+    }
+
+    /// Checks the catalog's own published `params` for this circuit against
+    /// what this type hardcodes (P-256, exactly `maxClaimsV1` claim slots)
+    /// *before* spending a real download+decompress (a 100+MB artifact) on
+    /// a circuit this type can't actually use - failing fast, locally, with
+    /// a clear diagnostic naming the mismatch, instead of discovering a
+    /// circuit-shape change only via an opaque native prove()/verify()
+    /// failure much later. Ports Kotlin's `VegaProofSystem.validateCircuitParams`
+    /// (siros-sdk-kotlin#244) - see that PR for why `maxClaimBytes` isn't
+    /// checked here either (a per-claim-byte-count mismatch is the issuer's
+    /// claim content at fault, not a circuit-shape assumption this type
+    /// makes, and already surfaces with its own clear native-layer error)
+    /// and why `saltBytes` can't be validated yet (the catalog doesn't
+    /// publish it - sirosfoundation/go-zk-circuits#29).
+    static func validateCircuitParams(_ descriptor: ZkCircuitDescriptor) throws {
+        let curve = descriptor.params["curve"]?.stringValue
+        guard curve == "P-256" else {
+            throw MdocError.malformed(
+                "Vega circuit '\(descriptor.id)' declares curve '\(curve ?? "nil")', but \(systemIdValue) only supports P-256"
+            )
+        }
+        let numClaims = descriptor.params["numClaims"]?.stringValue.flatMap(Int.init)
+        guard numClaims == maxClaimsV1 else {
+            throw MdocError.malformed(
+                "Vega circuit '\(descriptor.id)' declares numClaims=\(String(describing: numClaims)), but \(systemIdValue) is built for exactly \(maxClaimsV1) claim slots"
+            )
+        }
     }
 }
 
