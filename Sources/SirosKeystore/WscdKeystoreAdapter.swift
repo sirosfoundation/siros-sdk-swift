@@ -459,17 +459,21 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // what DIIP requires), the KB-JWT names the same verification method
         // rather than re-embedding the key. A `cnf.jwk` binding keeps the
         // embedded-key form it was issued under.
-        // Follows `cnfKid` - the SAME `resolveCnfKid` result used to select
-        // the key above, not a fresh "is `cnf.jwk` present" re-check (review
-        // finding): `resolveCnfKid` already gives `cnf.kid` precedence over
-        // `cnf.jwk`, so a credential carrying BOTH must produce a header
-        // that matches the key that precedence actually selected.
+        // Follows whether `cnf` carries an EXPLICIT `kid` member, not whether
+        // `cnfKid` (resolveCnfKid's result) is non-nil (review finding, with
+        // a correction - cnfKid is also non-nil for a `cnf.jwk`-only
+        // credential, where it holds that jwk's THUMBPRINT for key lookup,
+        // not a wire-shape decision): resolveCnfKid gives `cnf.kid`
+        // precedence over `cnf.jwk` for SELECTING the key, and the header
+        // must follow that same precedence - a credential carrying BOTH
+        // must announce `kid`, matching the key that precedence actually
+        // selected, never the unrelated embedded jwk instead.
         var kbHeaderFields: [String: Any] = [
             "alg": algorithmJoseId(key.algorithm),
             "typ": "kb+jwt",
         ]
-        if let cnfKid {
-            kbHeaderFields["kid"] = cnfKid
+        if let explicitCnfKid = cnf?["kid"] as? String {
+            kbHeaderFields["kid"] = explicitCnfKid
         } else {
             kbHeaderFields["jwk"] = pubKeyJwk
         }
