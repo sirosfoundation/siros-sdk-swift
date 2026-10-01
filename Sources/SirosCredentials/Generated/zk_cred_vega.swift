@@ -962,7 +962,7 @@ public func FfiConverterTypeVegaVerifierKey_lower(_ value: VegaVerifierKey) -> U
 /**
  * Big-endian-byte-encoded twin of [`crate::ClaimWitness`].
  */
-public struct FfiClaim: Equatable, Hashable {
+public struct VegaFfiClaim: Equatable, Hashable {
     public var issuerSignedItemBytes: Data
     public var disclose: Bool
     /**
@@ -991,23 +991,23 @@ public struct FfiClaim: Equatable, Hashable {
 }
 
 #if compiler(>=6)
-extension FfiClaim: Sendable {}
+extension VegaFfiClaim: Sendable {}
 #endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFfiClaim: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiClaim {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VegaFfiClaim {
         return
-            try FfiClaim(
+            try VegaFfiClaim(
                 issuerSignedItemBytes: FfiConverterData.read(from: &buf), 
                 disclose: FfiConverterBool.read(from: &buf), 
                 digestId: FfiConverterUInt32.read(from: &buf)
         )
     }
 
-    public static func write(_ value: FfiClaim, into buf: inout [UInt8]) {
+    public static func write(_ value: VegaFfiClaim, into buf: inout [UInt8]) {
         FfiConverterData.write(value.issuerSignedItemBytes, into: &buf)
         FfiConverterBool.write(value.disclose, into: &buf)
         FfiConverterUInt32.write(value.digestId, into: &buf)
@@ -1018,14 +1018,14 @@ public struct FfiConverterTypeFfiClaim: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiClaim_lift(_ buf: RustBuffer) throws -> FfiClaim {
+public func FfiConverterTypeFfiClaim_lift(_ buf: RustBuffer) throws -> VegaFfiClaim {
     return try FfiConverterTypeFfiClaim.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiClaim_lower(_ value: FfiClaim) -> RustBuffer {
+public func FfiConverterTypeFfiClaim_lower(_ value: VegaFfiClaim) -> RustBuffer {
     return FfiConverterTypeFfiClaim.lower(value)
 }
 
@@ -1175,7 +1175,7 @@ public func FfiConverterTypeFfiEcdsaWitness_lower(_ value: FfiEcdsaWitness) -> R
 /**
  * Big-endian-byte-encoded twin of [`crate::mso::MsoBodyWitness`] — the
  * per-credential MSO data (device key, validity timestamps) not
- * otherwise carried by [`FfiClaim`]/[`FfiEcdsaWitness`]. `device_x`/
+ * otherwise carried by [`VegaFfiClaim`]/[`FfiEcdsaWitness`]. `device_x`/
  * `device_y` must be exactly 32 bytes; the three timestamps exactly
  * [`crate::mso::TIMESTAMP_LEN`] (20) ASCII bytes, e.g.
  * `"2026-08-20T00:00:00Z"`.
@@ -1433,9 +1433,9 @@ fileprivate struct FfiConverterSequenceData: FfiConverterRustBuffer {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer {
-    typealias SwiftType = [FfiClaim]
+    typealias SwiftType = [VegaFfiClaim]
 
-    public static func write(_ value: [FfiClaim], into buf: inout [UInt8]) {
+    public static func write(_ value: [VegaFfiClaim], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
@@ -1443,9 +1443,9 @@ fileprivate struct FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer {
         }
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiClaim] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [VegaFfiClaim] {
         let len: Int32 = try readInt(&buf)
-        var seq = [FfiClaim]()
+        var seq = [VegaFfiClaim]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeFfiClaim.read(from: &buf))
@@ -1512,7 +1512,7 @@ public func deserializeVerifierKey(bytes: Data)throws  -> VegaVerifierKey  {
  * boundary as bytes rather than a long-lived handle, and `encode_prep_state`'s
  * doc for the nonce carried alongside it.
  */
-public func prepProve(pk: VegaProverKey, claims: [FfiClaim], ecdsaWitness: FfiEcdsaWitness, msoBody: FfiMsoBodyWitness)throws  -> Data  {
+public func prepProve(pk: VegaProverKey, claims: [VegaFfiClaim], ecdsaWitness: FfiEcdsaWitness, msoBody: FfiMsoBodyWitness)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeVegaFfiError__as_error_lift) {
         uniffiCallStatus in
     uniffi_zk_cred_vega_fn_func_prep_prove(
@@ -1528,7 +1528,7 @@ public func prepProve(pk: VegaProverKey, claims: [FfiClaim], ecdsaWitness: FfiEc
  * reuse on the *next* presentation of the same credential (to a
  * different verifier, say) — see `next_state` on [`FfiProveResult`].
  */
-public func prove(pk: VegaProverKey, claims: [FfiClaim], ecdsaWitness: FfiEcdsaWitness, msoBody: FfiMsoBodyWitness, priorState: Data)throws  -> FfiProveResult  {
+public func prove(pk: VegaProverKey, claims: [VegaFfiClaim], ecdsaWitness: FfiEcdsaWitness, msoBody: FfiMsoBodyWitness, priorState: Data)throws  -> FfiProveResult  {
     return try  FfiConverterTypeFfiProveResult_lift(try rustCallWithError(FfiConverterTypeVegaFfiError__as_error_lift) {
         uniffiCallStatus in
     uniffi_zk_cred_vega_fn_func_prove(

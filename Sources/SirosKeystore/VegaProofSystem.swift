@@ -197,7 +197,7 @@ public actor VegaProofSystem: ZkProofSystem {
     private static func buildWitness(
         document: DocumentMdoc,
         requestedClaims: [String]
-    ) throws -> ([FfiClaim], FfiEcdsaWitness, FfiMsoBodyWitness) {
+    ) throws -> ([VegaFfiClaim], FfiEcdsaWitness, FfiMsoBodyWitness) {
         let issuerAuth = document.issuerSigned.issuerAuth
         guard let namespaceItems = document.issuerSigned.nameSpaces.values.first else {
             throw MdocError.malformed("VegaProofSystem: mdoc credential '\(document.docType)' has no disclosed namespaces")
@@ -210,8 +210,8 @@ public actor VegaProofSystem: ZkProofSystem {
         }
 
         let requested = Set(requestedClaims)
-        let claims: [FfiClaim] = namespaceItems.map { entry in
-            FfiClaim(
+        let claims: [VegaFfiClaim] = namespaceItems.map { entry in
+            VegaFfiClaim(
                 issuerSignedItemBytes: Data(entry.original.encode()),
                 disclose: requested.contains(entry.item.elementIdentifier),
                 digestId: UInt32(entry.item.digestId)
