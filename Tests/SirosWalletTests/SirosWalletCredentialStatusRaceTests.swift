@@ -114,4 +114,40 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
             "must stay at cachedCredentialStatus's default for an unknown id - .expired must NOT have been cached"
         )
     }
+
+    /// Regression (review finding): a bare `credentialStore.getById` check
+    /// before writing to the cache is not atomic WITH a concurrent
+    /// `remove(_:)` - deletion can complete in the gap between that check
+    /// and the write itself, which a separate async lookup cannot ever
+    /// close no matter how late it runs. `CredentialStatusCache` now refuses
+    /// a `set` for any id `remove` has tombstoned, checked under the SAME
+    /// lock as the write - this exercises that guarantee directly, without
+    /// needing to reproduce the exact thread interleaving.
+    func testCacheRefusesASetForATombstonedIdEvenWithNoInterveningCheck() {
+        let cache = CredentialStatusCache()
+        cache.set(7, .valid)
+        XCTAssertEqual(cache.get(7), .valid)
+
+        cache.remove(7) // simulates deleteCredential(_:) completing concurrently
+        cache.set(7, .revoked) // simulates the in-flight evaluation's write landing after it
+        XCTAssertEqual(
+            cache.get(7), .valid,
+            "a set for a tombstoned id must be refused outright, not merely overwritten by a later remove"
+        )
+    }
+
+    /// A reused id (the credential store assigning a deleted id to a new,
+    /// unrelated credential) must not be refused forever - `retain(_:)` is
+    /// what `refreshCredentialStatuses()` calls with every currently-held id,
+    /// and an id back in that set must un-tombstone.
+    func testCacheAcceptsWritesAgainOnceRetainSeesTheIdReturn() {
+        let cache = CredentialStatusCache()
+        cache.remove(9)
+        cache.set(9, .revoked)
+        XCTAssertEqual(cache.get(9), .valid, "still tombstoned - the reused credential has not been seen yet")
+
+        cache.retain([9])
+        cache.set(9, .revoked)
+        XCTAssertEqual(cache.get(9), .revoked, "un-tombstoned once retain saw id 9 as currently held again")
+    }
 }

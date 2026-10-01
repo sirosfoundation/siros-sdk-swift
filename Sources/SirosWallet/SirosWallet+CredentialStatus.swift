@@ -164,6 +164,32 @@ extension SirosWallet {
     /// ``CredentialStatus/valid`` rather than hiding it, which is what keeps
     /// the wallet usable offline.
     public func credentialStatus(of credential: StoredCredential) async -> CredentialStatus {
+        // Captured BEFORE anything below that can suspend, including the
+        // parse step's own error path (review finding: that path used to
+        // write to the cache unconditionally, guarded by none of this) - a
+        // logout/new-login or this credential's own deletion can complete
+        // WHILE either path is still running, and without this, a write
+        // below could land after endSessionLocally()'s
+        // credentialStatusCache.clear() or deleteCredential(_:)'s
+        // .remove(_:) already ran - silently resurrecting a previous
+        // account's (or a deleted credential's) status for whichever
+        // account/credential next reuses the id.
+        lock.lock(); let generation = sessionGeneration; lock.unlock()
+
+        // Shared by every return path below, so the parse-failure case is
+        // guarded exactly the same way as the normal evaluation (review
+        // finding) rather than by a separate, easy-to-miss copy of the check.
+        // Also re-checks the credential still exists - the session-boundary
+        // check above catches a logout/relogin, but deleteCredential(_:)
+        // removes one credential without bumping the session generation at
+        // all.
+        func cacheIfStillCurrent(_ status: CredentialStatus) async {
+            lock.lock(); let sameSession = generation == sessionGeneration; lock.unlock()
+            if sameSession, await credentialStore.getById(credential.id) != nil {
+                credentialStatusCache.set(credential.id, status)
+            }
+        }
+
         // A credential whose validity data will not parse is not a valid one.
         // Collapsing the parse failure into "no claims" and then into `.valid`
         // let malformed - or deliberately malformed - MSO content skip both
@@ -172,20 +198,10 @@ extension SirosWallet {
         do {
             parsed = try CredentialUtils.parseValidityClaims(credential)
         } catch {
-            credentialStatusCache.set(credential.id, .unknown)
+            await cacheIfStillCurrent(.unknown)
             return .unknown
         }
         guard let claims = parsed else { return .valid }
-
-        // Captured BEFORE the (potentially slow, real-network) evaluation
-        // below, not after (review finding): a logout/new-login or this
-        // credential's own deletion can complete WHILE evaluate() is still
-        // running, and without this, the write below would land after
-        // endSessionLocally()'s credentialStatusCache.clear() or
-        // deleteCredential(_:)'s .remove(_:) already ran - silently
-        // resurrecting a previous account's (or a deleted credential's)
-        // status for whichever account/credential next reuses the id.
-        lock.lock(); let generation = sessionGeneration; lock.unlock()
 
         // An mdoc's normalised claims carry no `iss`, so the credential's own
         // stored issuer identifier is what binds its Status List Token to an
@@ -195,13 +211,7 @@ extension SirosWallet {
             credentialIssuer: credential.credentialIssuerIdentifier
         )
 
-        lock.lock(); let sameSession = generation == sessionGeneration; lock.unlock()
-        // Also re-checks the credential still exists - the session boundary
-        // above catches a logout/relogin, but deleteCredential(_:) removes
-        // one credential without bumping the session generation at all.
-        if sameSession, await credentialStore.getById(credential.id) != nil {
-            credentialStatusCache.set(credential.id, status)
-        }
+        await cacheIfStillCurrent(status)
         return status
     }
 
@@ -300,7 +310,7 @@ extension SirosWallet {
         }
 
         for path in paths {
-            guard let body = await fetchPublicUrl(base + path, headers: [:]),
+            guard case .success(let body) = await fetchPublicUrl(base + path, headers: [:]),
                   let keys = await issuerJwks(metadata: body)
             else { continue }
             if let key = selectIssuerKey(keys, kid: kid) { return key }
@@ -318,7 +328,7 @@ extension SirosWallet {
             return keys
         }
         guard let uri = metadata["jwks_uri"] as? String,
-              let referenced = await fetchPublicUrl(uri, headers: [:]),
+              case .success(let referenced) = await fetchPublicUrl(uri, headers: [:]),
               let jwks = try? JSONSerialization.jsonObject(with: referenced) as? [String: Any],
               let keys = jwks["keys"] as? [[String: Any]]
         else { return nil }
@@ -359,17 +369,34 @@ extension SirosWallet {
     ///
     /// These carry NO wallet credentials: attaching this wallet's bearer token
     /// or tenant id to a request at an arbitrary domain would leak them.
-    static func fetchPublicUrl(_ urlString: String, headers: [String: String]) async -> Data? {
-        guard let url = URL(string: urlString), isPublicFetchAllowed(url) else { return nil }
+    ///
+    /// Reports which of ``TokenStatusList/FetchOutcome`` resulted, not a
+    /// plain `Data?` (review finding): a request this wallet's OWN policy
+    /// refused to even attempt, and one that reached the server and got back
+    /// a non-2xx response, both used to collapse into the same `nil` a
+    /// genuinely unreachable endpoint produces - which
+    /// `TokenStatusListClient.resolve` then treated as offline-friendly and
+    /// reported `.valid`, turning a blocked or failing status URI into a
+    /// silent pass rather than an unknown.
+    static func fetchPublicUrl(_ urlString: String, headers: [String: String]) async -> TokenStatusList.FetchOutcome {
+        guard let url = URL(string: urlString), isPublicFetchAllowed(url) else {
+            // Never attempted at all - this wallet's own policy refused the
+            // URL. Not the same as the endpoint being unreachable.
+            return .rejected
+        }
         var request = URLRequest(url: url)
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        guard let (data, response) = try? await thirdPartySession.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode)
-        else { return nil }
-        return data
+        guard let (data, response) = try? await thirdPartySession.data(for: request) else {
+            // No response of any kind - the one genuine transport failure.
+            return .unreachable
+        }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            // The server WAS reached; it just didn't answer with success.
+            return .rejected
+        }
+        return .success(data)
     }
 }
 
@@ -582,6 +609,16 @@ final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, URLSess
 final class CredentialStatusCache: @unchecked Sendable {
     private let lock = NSLock()
     private var statuses: [Int64: CredentialStatus] = [:]
+    /// Ids `remove(_:)` has dropped and no later `retain(_:)` has seen come
+    /// back. `set(_:_:)` refuses to write one (review finding): a bare
+    /// existence check made by the CALLER before calling `set` is not atomic
+    /// WITH that call - `remove(_:)` can run on another thread in the gap
+    /// between the caller's check and this write, which a separate async
+    /// `credentialStore.getById` lookup cannot prevent no matter how late it
+    /// runs, since nothing holds a lock across both steps. Checking under
+    /// THIS SAME lock, in the same call that performs the write, is what
+    /// actually closes it.
+    private var tombstoned: Set<Int64> = []
 
     func get(_ id: Int64) -> CredentialStatus {
         lock.lock()
@@ -592,32 +629,44 @@ final class CredentialStatusCache: @unchecked Sendable {
     func set(_ id: Int64, _ status: CredentialStatus) {
         lock.lock()
         defer { lock.unlock() }
+        guard !tombstoned.contains(id) else { return }
         statuses[id] = status
     }
 
     /// Drop everything not in `ids` - a credential that has been deleted
-    /// should not keep a stale status alive.
+    /// should not keep a stale status alive. Also un-tombstones any id that
+    /// IS in `ids`: SQLite/the credential store can reuse a deleted id for an
+    /// unrelated, later credential, and that credential's own evaluations
+    /// must not be refused forever by a tombstone left over from the id's
+    /// previous occupant.
     func retain(_ ids: Set<Int64>) {
         lock.lock()
         defer { lock.unlock() }
         statuses = statuses.filter { ids.contains($0.key) }
+        tombstoned.subtract(ids)
     }
 
     /// Drop one id - for `deleteCredential(_:)`, so an id SQLite/the
     /// credential store later reuses for an unrelated credential (review
     /// finding: "an ID collision can expose the wrong outcome to the new
     /// account") never reads back a status that belonged to whatever used
-    /// to have this id.
+    /// to have this id, AND so an evaluation of the just-deleted credential
+    /// that is still in flight cannot resurrect one for it afterward - see
+    /// `tombstoned`'s doc comment.
     func remove(_ id: Int64) {
         lock.lock()
         defer { lock.unlock() }
         statuses.removeValue(forKey: id)
+        tombstoned.insert(id)
     }
 
-    /// All held statuses, e.g. after a logout.
+    /// All held statuses, e.g. after a logout. Clears tombstones too: a new
+    /// account's credentials can legitimately reuse any id a previous
+    /// account's did.
     func clear() {
         lock.lock()
         defer { lock.unlock() }
         statuses.removeAll()
+        tombstoned.removeAll()
     }
 }

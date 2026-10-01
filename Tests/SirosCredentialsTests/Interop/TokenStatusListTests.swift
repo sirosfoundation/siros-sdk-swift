@@ -56,16 +56,32 @@ final class TokenStatusListTests: XCTestCase {
     /// `.valid` - conflating the two previously let a forged/invalid
     /// signature read exactly like an offline wallet.
     func testOnlyAGenuineTransportFailureIsUnreachable() async {
-        let unreachableClient = TokenStatusListClient(httpGet: { _, _ in nil })
+        let unreachableClient = TokenStatusListClient(httpGet: { _, _ in .unreachable })
         let unreachable = await unreachableClient.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
         guard case .unreachable = unreachable else {
             return XCTFail("expected .unreachable for a transport that returns nothing, got \(unreachable)")
         }
 
-        let garbageClient = TokenStatusListClient(httpGet: { _, _ in Data("not-a-jws".utf8) })
+        let garbageClient = TokenStatusListClient(httpGet: { _, _ in .success(Data("not-a-jws".utf8)) })
         let garbage = await garbageClient.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
         guard case .unavailable = garbage else {
             return XCTFail("a reached-but-unparseable response is .unavailable, not .unreachable, got \(garbage)")
+        }
+    }
+
+    /// Regression (review finding): the wallet's own `fetchPublicUrl` returns
+    /// `nil` both for a genuinely unreachable endpoint AND for a request its
+    /// own policy refused to even attempt, or one that reached the server
+    /// and got back a non-2xx response - `TokenStatusList.FetchOutcome`
+    /// exists so `httpGet` can tell `resolve` apart which happened.
+    /// `.rejected` must map to `.unavailable` (and so to `.unknown`, never
+    /// `.valid`), NOT to `.unreachable`'s offline-friendly treatment - a
+    /// blocked or failing status URI is not the same as an offline wallet.
+    func testARejectedFetchIsUnavailableNotUnreachable() async {
+        let client = TokenStatusListClient(httpGet: { _, _ in .rejected })
+        let resolution = await client.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unavailable = resolution else {
+            return XCTFail("a policy-rejected or non-2xx fetch must be .unavailable, got \(resolution)")
         }
     }
 
@@ -75,7 +91,7 @@ final class TokenStatusListTests: XCTestCase {
         let key = P256.Signing.PrivateKey()
         let token = Self.statusListToken(bits: 3, signedBy: key)
         let client = TokenStatusListClient(
-            httpGet: { _, _ in Data(token.utf8) },
+            httpGet: { _, _ in .success(Data(token.utf8)) },
             resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
         )
         let resolution = await client.resolve(
@@ -97,7 +113,7 @@ final class TokenStatusListTests: XCTestCase {
         var wrongKty = Self.publicJwk(of: key)
         wrongKty["kty"] = "RSA"
         let client = TokenStatusListClient(
-            httpGet: { _, _ in Data(token.utf8) },
+            httpGet: { _, _ in .success(Data(token.utf8)) },
             resolveIssuerKey: { _, _ in wrongKty }
         )
         let resolution = await client.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
@@ -122,7 +138,7 @@ final class TokenStatusListTests: XCTestCase {
         let client = TokenStatusListClient(
             httpGet: { _, _ in
                 await fetches.increment()
-                return Data(token.utf8)
+                return .success(Data(token.utf8))
             },
             resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
         )
@@ -161,7 +177,7 @@ final class TokenStatusListTests: XCTestCase {
         let client = TokenStatusListClient(
             httpGet: { uri, _ in
                 await fetched.record(uri)
-                return Data(Self.statusListToken(bits: 1, signedBy: key, uri: uri).utf8)
+                return .success(Data(Self.statusListToken(bits: 1, signedBy: key, uri: uri).utf8))
             },
             resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
         )
@@ -265,6 +281,25 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertNil(TokenStatusList.extractReference(
             from: claims(#"{"status":{"status_list":{"uri":"https://x.example"}}}"#)
         ))
+    }
+
+    func testHasStatusReferenceDistinguishesAbsentFromUnreadable() {
+        // No status claim at all - an ordinary credential, correctly absent.
+        XCTAssertFalse(TokenStatusList.hasStatusReference(claims(#"{"iss":"https://issuer.example"}"#)))
+        // status present, but empty - no status_list declared, still absent.
+        XCTAssertFalse(TokenStatusList.hasStatusReference(claims(#"{"status":{}}"#)))
+        // A well-formed status_list - present, obviously.
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(
+            #"{"status":{"status_list":{"idx":1,"uri":"https://x.example"}}}"#
+        )))
+        // Regression (review finding): `status` is present but not even a
+        // map - `{"status":"invalid"}` - previously made `extractReference`
+        // return nil AND made this cast fail the same way, so an unreadable
+        // status read exactly like no status claim at all and the
+        // credential came back `.valid`. Status data IS present here, just
+        // unreadable - must say true so the caller reports `.unknown`.
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(#"{"status":"invalid"}"#)))
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(#"{"status":7}"#)))
     }
 
     // MARK: - decompression

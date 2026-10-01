@@ -154,7 +154,7 @@ final class CredentialStatusTests: XCTestCase {
             statusListClient: TokenStatusListClient(
                 httpGet: { _, _ in
                     XCTFail("the status list must not be fetched")
-                    return nil
+                    return .unreachable
                 }
             ),
             now: { self.now }
@@ -192,7 +192,7 @@ final class CredentialStatusTests: XCTestCase {
             statusListClient: TokenStatusListClient(
                 httpGet: { _, _ in
                     XCTFail("a malformed reference must never reach the network")
-                    return nil
+                    return .unreachable
                 }
             ),
             now: { self.now }
@@ -213,7 +213,7 @@ final class CredentialStatusTests: XCTestCase {
             statusListClient: TokenStatusListClient(
                 httpGet: { _, _ in
                     XCTFail("with no issuer to bind to, this must never reach the network")
-                    return nil
+                    return .unreachable
                 }
             ),
             now: { self.now }
@@ -229,7 +229,7 @@ final class CredentialStatusTests: XCTestCase {
         // Hiding a credential because the issuer's status endpoint is down
         // would make the wallet unusable offline. This is deliberate.
         let evaluator = CredentialStatusEvaluator(
-            statusListClient: TokenStatusListClient(httpGet: { _, _ in nil }),
+            statusListClient: TokenStatusListClient(httpGet: { _, _ in .unreachable }),
             now: { self.now }
         )
         let status = await evaluator.evaluate(claims: claims("""
@@ -245,7 +245,7 @@ final class CredentialStatusTests: XCTestCase {
     /// must never read as the offline-friendly `.unreachable` one.
     func testAStatusListThatIsNotATypedStatusListTokenIsNotTrusted() async {
         let evaluator = CredentialStatusEvaluator(
-            statusListClient: TokenStatusListClient(httpGet: { _, _ in Data("not-a-jws".utf8) }),
+            statusListClient: TokenStatusListClient(httpGet: { _, _ in .success(Data("not-a-jws".utf8)) }),
             now: { self.now }
         )
         let status = await evaluator.evaluate(claims: claims("""

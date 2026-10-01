@@ -537,7 +537,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     ) async throws -> Data {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        let key = try selectSigningKey(keys, kid: kid)
+        let key = try await resolveSigningKey(keys, kid: kid)
 
         let builder = MdocDeviceResponseBuilder(
             issuerSignedBytes: credentialBytes,
@@ -564,7 +564,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     ) async throws -> Data {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        let key = try selectSigningKey(keys, kid: kid)
+        let key = try await resolveSigningKey(keys, kid: kid)
 
         let builder = MdocDeviceResponseBuilder(
             issuerSignedBytes: credentialBytes,
@@ -588,7 +588,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     ) async throws -> Data {
         try checkUnlocked()
         let keys = try await signer.listKeys()
-        let key = try selectSigningKey(keys, kid: kid)
+        let key = try await resolveSigningKey(keys, kid: kid)
 
         let builder = MdocDeviceResponseBuilder(
             issuerSignedBytes: credentialBytes,

@@ -110,8 +110,11 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
             "file:///etc/passwd",
             "not a url at all",
         ] {
-            let body = await SirosWallet.fetchPublicUrl(url, headers: [:])
-            XCTAssertNil(body, "\(url) must not be fetched")
+            let outcome = await SirosWallet.fetchPublicUrl(url, headers: [:])
+            guard case .rejected = outcome else {
+                XCTFail("\(url) must not be fetched, got \(outcome)")
+                continue
+            }
         }
     }
 
@@ -122,8 +125,11 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
             "https://issuer.example@evil.example/list",
             "https://user:pass@evil.example/list",
         ] {
-            let body = await SirosWallet.fetchPublicUrl(url, headers: [:])
-            XCTAssertNil(body, "\(url) must not be fetched")
+            let outcome = await SirosWallet.fetchPublicUrl(url, headers: [:])
+            guard case .rejected = outcome else {
+                XCTFail("\(url) must not be fetched, got \(outcome)")
+                continue
+            }
         }
     }
 

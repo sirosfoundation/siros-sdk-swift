@@ -83,17 +83,22 @@ public enum TokenStatusList {
 
     /// Whether `claims` declares a status reference AT ALL, even one
     /// `extractReference` could not parse into a full `Reference` (a bad
-    /// `idx`, or a missing/empty `uri`).
+    /// `idx`, a missing/empty `uri`, or - review finding - a `status` member
+    /// that is not even a map).
     ///
     /// `extractReference`'s nil alone cannot distinguish "this credential
     /// carries no status claim" (an ordinary credential, correctly `.valid`)
-    /// from "it carries one this SDK could not read" (review finding:
-    /// attacker-adjacent data - `mdocValidityClaims` preserves a `status`
-    /// object even when its `idx` cannot be represented as `Int` - that must
-    /// not be silently treated the same as the first case).
+    /// from "it carries one this SDK could not read" (attacker-adjacent
+    /// data - `mdocValidityClaims` preserves a `status` object even when its
+    /// `idx` cannot be represented as `Int`, or `status` itself is a scalar -
+    /// neither must be silently treated the same as the first case). A
+    /// top-level `status` that is present but not a map (e.g.
+    /// `{"status":"invalid"}`) is exactly that: unreadable, not absent, so
+    /// this must say true, not fall through the cast and say false.
     public static func hasStatusReference(_ claims: [String: Any]) -> Bool {
-        guard let status = claims["status"] as? [String: Any] else { return false }
-        return status["status_list"] != nil
+        guard let status = claims["status"] else { return false }
+        guard let statusMap = status as? [String: Any] else { return true }
+        return statusMap["status_list"] != nil
     }
 
     /// `idx` as an exact, non-negative `Int`, or nil.
@@ -129,6 +134,29 @@ public enum TokenStatusList {
         Inflate.inflate(compressed)
     }
 
+    /// What fetching the Status List Token's own HTTP endpoint produced.
+    ///
+    /// A plain `Data?` cannot tell ``resolve(_:expectedIssuer:clockTolerance:)``
+    /// WHY no data came back, and it needs to know: a genuinely unreachable
+    /// endpoint is offline-friendly (``Resolution/unreachable(_:)``), but a
+    /// request this wallet's OWN policy refused to even attempt (non-HTTPS, a
+    /// private/loopback host, userinfo) or one that reached the server and
+    /// got back something other than 2xx is neither "offline" nor safe to
+    /// treat the same way - conflating either with genuine unreachability
+    /// let a blocked or failing status URI read as `.valid` (review finding).
+    public enum FetchOutcome: Sendable {
+        /// A response body came back.
+        case success(Data)
+        /// No response of any kind came back - DNS failure, connection
+        /// refused, timeout. The ONE case that is offline-friendly.
+        case unreachable
+        /// Either the request was never attempted at all (this wallet's own
+        /// fetch policy forbade the URL) or it reached the server and got
+        /// back a non-2xx response. Both mean "a status check was not
+        /// possible", never "offline".
+        case rejected
+    }
+
     /// A fetched status list, remembered so one list is fetched once per
     /// session rather than once per credential that points at it.
     struct CacheEntry {
@@ -157,7 +185,7 @@ public enum TokenStatusList {
 /// it across credentials: a list covering ten thousand credentials is fetched
 /// once, not once per credential that points into it.
 public actor TokenStatusListClient {
-    private let httpGet: @Sendable (String, [String: String]) async -> Data?
+    private let httpGet: @Sendable (String, [String: String]) async -> TokenStatusList.FetchOutcome
     private let resolveIssuerKey: (@Sendable (String, String?) async -> [String: String]?)?
     private let now: @Sendable () -> Date
     private var cache: [String: TokenStatusList.CacheEntry] = [:]
@@ -172,8 +200,10 @@ public actor TokenStatusListClient {
     private let maxCacheEntries = 500
 
     /// - Parameters:
-    ///   - httpGet: fetches a URL with the given headers, returning the body
-    ///     or nil. Injected so a host's own client, pinning and caching apply.
+    ///   - httpGet: fetches a URL with the given headers, reporting which of
+    ///     ``TokenStatusList/FetchOutcome`` resulted - NOT a plain `Data?`:
+    ///     see that type's doc comment for why. Injected so a host's own
+    ///     client, pinning and caching apply.
     ///   - resolveIssuerKey: resolves the Status List Token's signing key,
     ///     given the token's issuer identifier and its header `kid`. Key
     ///     resolution is always delegated this way: a certificate chain in the
@@ -183,7 +213,7 @@ public actor TokenStatusListClient {
     ///     ``DidResolver``; anything else is the host's to answer.
     ///   - now: time source, overridable for deterministic tests.
     public init(
-        httpGet: @escaping @Sendable (String, [String: String]) async -> Data?,
+        httpGet: @escaping @Sendable (String, [String: String]) async -> TokenStatusList.FetchOutcome,
         resolveIssuerKey: (@Sendable (String, String?) async -> [String: String]?)? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -255,12 +285,28 @@ public actor TokenStatusListClient {
             }
         }
 
-        guard let body = await httpGet(reference.uri, ["Accept": "application/statuslist+jwt"]),
-              let token = String(data: body, encoding: .utf8)?
+        let body: Data
+        switch await httpGet(reference.uri, ["Accept": "application/statuslist+jwt"]) {
+        case .unreachable:
+            // No response of any kind - the one genuinely offline-friendly
+            // case (review finding: this used to also catch everything
+            // below, which it must not).
+            return .unreachable("Could not fetch the status list at \(reference.uri)")
+        case .rejected:
+            // Either this wallet's own policy refused to even attempt the
+            // request, or the server was reached and answered with
+            // something other than 2xx. Neither is "offline" (review
+            // finding): a blocked or failing status URI must not read as
+            // `.valid`.
+            return .unavailable("Could not fetch the status list at \(reference.uri)")
+        case .success(let data):
+            body = data
+        }
+        guard let token = String(data: body, encoding: .utf8)?
                   .trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty
         else {
-            return .unreachable("Could not fetch the status list at \(reference.uri)")
+            return .unavailable("Status list at \(reference.uri) was empty")
         }
 
         let segments = token.split(separator: ".", omittingEmptySubsequences: false).map(String.init)

@@ -339,6 +339,35 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         }
     }
 
+    /// Regression (review finding): `signMdocPresentation`,
+    /// `signMdocPresentationForDCAPI`, and `signMdocPresentationForProximity`
+    /// called `selectSigningKey` (exact `keyId` match only) instead of
+    /// `resolveSigningKey` (which also matches a thumbprint, the way a
+    /// DIIP-bound mdoc device key names it) - a credential whose `kid` is a
+    /// thumbprint rather than the WSCD's own key id threw `keyNotFound` on
+    /// every mdoc presentation path even though the matching key WAS held.
+    func testSignMdocPresentationForDCAPIResolvesAKidNamedByThumbprintNotWscdKeyId() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+        let jwkData = try await adapter.exportPublicKey(keyId: "test-key-1")
+        let jwk = try JSONSerialization.jsonObject(with: jwkData) as? [String: Any]
+        let thumbprint = try XCTUnwrap(jwk.flatMap { JwtHelpers.jwkThumbprint($0) })
+        XCTAssertNotEqual(
+            thumbprint, "test-key-1",
+            "the test must exercise the thumbprint-fallback path, not an accidental exact keyId match"
+        )
+
+        let responseBytes = try await adapter.signMdocPresentationForDCAPI(
+            credentialBytes: buildIssuerSignedEnvelope(),
+            disclosedClaims: nil,
+            nonce: "test-nonce",
+            origin: "https://verifier.example.com",
+            encryptionPublicJwkThumbprint: nil,
+            kid: thumbprint
+        )
+        XCTAssertFalse(responseBytes.isEmpty)
+    }
+
     // MARK: - cnf fail-closed (review findings)
 
     private func sdJwt(_ payload: String) -> String {
