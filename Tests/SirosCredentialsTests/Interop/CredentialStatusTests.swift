@@ -2,6 +2,11 @@
 
 import XCTest
 @testable import SirosCredentials
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 final class CredentialStatusTests: XCTestCase {
 
@@ -9,6 +14,69 @@ final class CredentialStatusTests: XCTestCase {
 
     private func claims(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]) ?? [:]
+    }
+
+    // MARK: - selectively disclosed validity/status claims
+    //
+    // Mirrors SharedDcqlMatcherTests' sdJwt/digest helpers - building a real
+    // SD-JWT whose validity/status claim is hidden behind an `_sd` digest,
+    // the same shape an Issuer actually produces.
+
+    private func b64url(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func digest(of disclosure: String) -> String {
+        b64url(Data(SHA256.hash(data: Data(disclosure.utf8))))
+    }
+
+    /// Build a real SD-JWT VC: a JWT whose payload hides `hidden` behind an
+    /// `_sd` digest, followed by the disclosure that opens it.
+    private func sdJwt(plain: [String: Any], hidden: (String, Any)) -> String {
+        let disclosureJson = try! JSONSerialization.data(withJSONObject: ["c2FsdA", hidden.0, hidden.1])
+        let disclosure = b64url(disclosureJson)
+
+        var payload = plain
+        payload["_sd"] = [digest(of: disclosure)]
+        payload["_sd_alg"] = "sha-256"
+        let body = b64url(try! JSONSerialization.data(withJSONObject: payload))
+        return "eyJhbGciOiJFUzI1NiJ9.\(body).sig~\(disclosure)~"
+    }
+
+    private func sdJwtCredential(raw: String) -> StoredCredential {
+        StoredCredential(id: 1, format: "dc+sd-jwt", raw: raw, batchId: 1, instanceId: 0)
+    }
+
+    /// Regression (review finding): `parseValidityClaims` only ever read the
+    /// JWT body, so a selectively disclosed `validUntil` was simply absent -
+    /// `CredentialValidity.extract` then saw no bound at all and reported the
+    /// credential valid indefinitely, regardless of what the disclosed claim
+    /// actually said.
+    func testADisclosedValidUntilIsFoundNotReportedAsNoBound() throws {
+        let credential = sdJwtCredential(
+            raw: sdJwt(plain: ["vct": "urn:eu.europa.ec.eudi:pid:1"], hidden: ("validUntil", "2026-05-01T00:00:00Z"))
+        )
+        let parsed = try XCTUnwrap(CredentialUtils.parseValidityClaims(credential))
+        XCTAssertEqual(parsed["validUntil"] as? String, "2026-05-01T00:00:00Z")
+        let window = CredentialValidity.extract(from: parsed)
+        XCTAssertEqual(CredentialValidity.check(window, now: now), .expired)
+    }
+
+    /// Same regression, for the Token Status List reference rather than the
+    /// validity window - a disclosed `status` must be visible to
+    /// `CredentialStatusEvaluator` too.
+    func testADisclosedStatusReferenceIsFoundNotReportedAsAbsent() throws {
+        let statusClaim: [String: Any] = ["status_list": ["idx": 1, "uri": "https://status.example"]]
+        let credential = sdJwtCredential(
+            raw: sdJwt(plain: ["vct": "urn:eu.europa.ec.eudi:pid:1"], hidden: ("status", statusClaim))
+        )
+        let parsed = try XCTUnwrap(CredentialUtils.parseValidityClaims(credential))
+        let status = try XCTUnwrap(parsed["status"] as? [String: Any])
+        let statusList = try XCTUnwrap(status["status_list"] as? [String: Any])
+        XCTAssertEqual(statusList["uri"] as? String, "https://status.example")
     }
 
     // MARK: - the validity window
@@ -95,6 +163,15 @@ final class CredentialStatusTests: XCTestCase {
         {"validUntil":"2026-01-01T00:00:00Z","status":{"status_list":{"idx":1,"uri":"https://x.example"}}}
         """))
         XCTAssertEqual(status, .expired)
+    }
+
+    /// Regression (review finding): `clearCache()` must exist and be callable
+    /// at a session boundary (logout) regardless of whether revocation
+    /// checking is even configured - a no-op `statusListClient` must not
+    /// crash.
+    func testClearCacheIsSafeWhenRevocationCheckingIsDisabled() async {
+        let evaluator = CredentialStatusEvaluator(now: { self.now })
+        await evaluator.clearCache()
     }
 
     func testACredentialWithNoStatusReferenceIsValid() async {

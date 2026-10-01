@@ -512,7 +512,21 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // credential rather than this wallet's configuration.
         let cnf = HolderIdentity.cnf(of: credential)
         let cnfKid = HolderIdentity.resolveCnfKid(cnf)
-        let (_, key) = try selectSigningKey(kid: kid ?? cnfKid)
+        // A `cnf` that is PRESENT but does not resolve to anything usable -
+        // neither a `kid` nor a `jwk` `resolveCnfKid` can make sense of - must
+        // not silently reach `selectSigningKey(kid: nil)`'s "no id given, use
+        // whatever key is first" fallback (review finding): that fallback
+        // exists for a credential with NO holder binding at all, not for one
+        // whose binding this wallet could not parse. Signing with an
+        // unrelated key here would produce a KB-JWT the verifier rejects
+        // anyway, but only after leaking a presentation attempt; failing
+        // closed here is cheaper and exactly as safe as a mismatched
+        // signature would have been, without the attempt.
+        let effectiveKid = kid ?? cnfKid
+        if cnf != nil, effectiveKid == nil {
+            throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
+        }
+        let (_, key) = try selectSigningKey(kid: effectiveKid)
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -542,8 +556,16 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // (`cnf.kid`, which is what DIIP requires), the KB-JWT names the same
         // verification method rather than re-embedding the key. A `cnf.jwk`
         // binding keeps the embedded-key form it was issued under.
+        //
+        // Follows `cnfKid` - the SAME `resolveCnfKid` result used to select
+        // the key above, not a fresh "is `cnf.jwk` present" re-check (review
+        // finding): `resolveCnfKid` already gives `cnf.kid` precedence over
+        // `cnf.jwk`, so a credential carrying BOTH must produce a header
+        // that matches the key that precedence actually selected - a
+        // verifier must never see a kid-selected key announced as an
+        // embedded jwk instead, or vice versa.
         var kbHeaderFields: [String: Any] = ["alg": "ES256", "typ": "kb+jwt"]
-        if cnf?["jwk"] == nil, let cnfKid {
+        if let cnfKid {
             kbHeaderFields["kid"] = cnfKid
         } else {
             kbHeaderFields["jwk"] = JwtHelpers.publicKeyJwk(key)

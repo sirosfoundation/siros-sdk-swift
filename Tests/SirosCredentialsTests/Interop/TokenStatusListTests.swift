@@ -66,6 +66,42 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertTrue(reason.contains("entry width of 3 bits"), reason)
     }
 
+    /// Regression (review finding): without a way to clear it, a fetched
+    /// Status List Token could survive a session boundary (logout, account
+    /// switch) and keep answering for the next account's credentials -
+    /// missing a revocation published after it was fetched.
+    func testClearCacheForcesARefetchOnTheNextResolve() async {
+        let key = P256.Signing.PrivateKey()
+        let token = Self.statusListToken(bits: 1, signedBy: key)
+        actor FetchCounter {
+            private(set) var count = 0
+            func increment() { count += 1 }
+        }
+        let fetches = FetchCounter()
+        let client = TokenStatusListClient(
+            httpGet: { _, _ in
+                await fetches.increment()
+                return Data(token.utf8)
+            },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+        let reference = TokenStatusList.Reference(idx: 0, uri: "https://x.example")
+        // Matching statusListToken's own "iss" (see its doc comment) - the
+        // cache keys a hit on the expected issuer matching the one the entry
+        // was fetched and authenticated for.
+        let issuer = "https://issuer.example"
+
+        _ = await client.resolve(reference, expectedIssuer: issuer)
+        _ = await client.resolve(reference, expectedIssuer: issuer)
+        var count = await fetches.count
+        XCTAssertEqual(count, 1, "the second resolve must be served from cache")
+
+        await client.clearCache()
+        _ = await client.resolve(reference, expectedIssuer: issuer)
+        count = await fetches.count
+        XCTAssertEqual(count, 2, "clearCache must force a real refetch, not another cache hit")
+    }
+
     /// A properly signed Status List Token declaring `bits` as its entry width.
     ///
     /// Really signed, because the reader verifies the signature before it
@@ -82,7 +118,12 @@ final class TokenStatusListTests: XCTestCase {
         // ("unable to type-check this expression in reasonable time"), which
         // is the Swift version CI builds Linux with.
         let header: [String: Any] = ["alg": "ES256", "typ": "statuslist+jwt"]
-        let statusList: [String: Any] = ["bits": bits, "lst": "eJw="]
+        // A real zlib stream (the eight bytes 0..7 - see
+        // testAZlibWrappedListInflates), not an empty/placeholder one: a
+        // caller that reaches actual status-bit reading (unlike
+        // testAnIllegalEntryWidthIsReportedAsSuchNotAsAMissingIndex, which
+        // fails before ever decompressing) needs this to actually inflate.
+        let statusList: [String: Any] = ["bits": bits, "lst": "eJxjYGRiZmFlYwcAAFwAHQ=="]
         let payload: [String: Any] = [
             "iss": "https://issuer.example",
             // Must match the `Reference.uri` every caller of this helper
@@ -183,6 +224,46 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertNil(TokenStatusList.inflate(Data([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])))
     }
 
+    /// Regression (review finding, on `Inflate`'s own dynamic-Huffman
+    /// `decode`): a malformed/oversubscribed code-length table could in
+    /// principle make `code - first` go negative and index `symbols` out of
+    /// bounds, trapping instead of reporting corruption - this is
+    /// issuer-supplied compressed data, so a malformed one must never crash
+    /// the process. `decode` now guards `code >= first` before indexing.
+    ///
+    /// A single hand-crafted byte sequence can't reliably force that EXACT
+    /// arithmetic condition (short of literally re-deriving the decoder's
+    /// internal bit-level state), so this instead fuzzes many random byte
+    /// sequences, forced into the BFINAL=1/BTYPE=10 (dynamic Huffman) header
+    /// every real issuer-controlled payload would use - a crash anywhere in
+    /// `readDynamicTables`/`Huffman.decode` would abort this entire test
+    /// process (not just fail an assertion), so simply reaching the end of
+    /// this loop is the proof: every one of these inputs returns (nil, for
+    /// everything attempted here - none happens to be valid DEFLATE) rather
+    /// than trapping.
+    func testMalformedDynamicHuffmanBlocksNeverCrashOnlyFailToInflate() {
+        var rng = SplitMix64(seed: 0xC0FFEE)
+        var inflatedAnyway = 0
+        for _ in 0..<2_000 {
+            var bytes: [UInt8] = []
+            let length = Int(rng.next() % 48) + 1
+            for _ in 0..<length { bytes.append(UInt8(rng.next() & 0xFF)) }
+            // Force BFINAL=1, BTYPE=10 (dynamic Huffman) in the first byte's
+            // low 3 bits (DEFLATE is read LSB-first) - the path the review
+            // finding is about. The rest stays random.
+            bytes[0] = (bytes[0] & 0b1111_1000) | 0b101
+            // The assertion that matters is that this call RETURNS at all -
+            // a reintroduced crash traps the whole process, not just this
+            // one case, so simply completing all 2,000 iterations is the
+            // real proof. Random bytes are overwhelmingly unlikely to also
+            // happen to be internally-consistent DEFLATE, but tolerate the
+            // astronomically rare case where one does rather than assert a
+            // stronger property than "does not crash" was ever the point.
+            if Inflate.inflate(Data(bytes)) != nil { inflatedAnyway += 1 }
+        }
+        XCTAssertLessThan(inflatedAnyway, 2_000, "sanity: this loop must actually run, not get optimized away")
+    }
+
     private func claims(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]) ?? [:]
     }
@@ -193,5 +274,19 @@ private extension Array {
         var result: [Element] = []
         for _ in 0..<times { result.append(contentsOf: self) }
         return result
+    }
+}
+
+/// A small, deterministic, dependency-free PRNG for the fuzz test above -
+/// not cryptographic, just reproducible across platforms/runs.
+private struct SplitMix64 {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
     }
 }

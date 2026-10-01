@@ -87,7 +87,13 @@ enum Inflate {
             for length in 1...15 {
                 code |= try reader.bits(1)
                 let count = counts[length]
-                if code - first < count {
+                // `code >= first` is not redundant with `code - first < count`
+                // (review finding): a malformed table can make `first` exceed
+                // `code`, and `code - first < count` is still true for a
+                // negative difference, which then indexes `symbols` with a
+                // negative offset and traps instead of rejecting this
+                // issuer-supplied compressed payload as corrupt.
+                if code >= first, code - first < count {
                     return symbols[index + (code - first)]
                 }
                 index += count

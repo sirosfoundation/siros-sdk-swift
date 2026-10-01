@@ -338,7 +338,15 @@ public enum CredentialUtils {
         guard let claims = parseJwtPayload(credential.raw) else {
             throw UnreadableValidityClaims()
         }
-        return claims
+        // `validFrom`/`validUntil`/`status` can themselves be selectively
+        // disclosed (review finding) - `parseJwtPayload` only ever sees the
+        // JWT body, with every disclosed claim still replaced by its `_sd`
+        // digest. Reusing SharedDcqlMatcher's disclosure resolution (rather
+        // than reimplementing it) is what `matchingClaims` already does for
+        // the same reason: without it, a disclosed validity/status claim
+        // reads as absent and this credential is reported `.valid`
+        // regardless of what it actually says.
+        return SharedDcqlMatcher.resolvingDisclosures(claims, in: credential.raw)
     }
 
     /// Raised when a credential's validity data is present but unreadable.

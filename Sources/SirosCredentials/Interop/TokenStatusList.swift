@@ -153,6 +153,16 @@ public actor TokenStatusListClient {
         self.now = now
     }
 
+    /// Drop every cached Status List Token - for a session boundary
+    /// (logout, account switch), where a token fetched under the previous
+    /// account must not be reused for the next one (review finding): with no
+    /// `ttl` (or a long one), a cached entry can otherwise survive logout and
+    /// mask a revocation published after it was fetched, served to whichever
+    /// account's credentials next point at the same `uri`.
+    public func clearCache() {
+        cache.removeAll()
+    }
+
     /// Look up one credential's entry.
     ///
     /// - Parameters:

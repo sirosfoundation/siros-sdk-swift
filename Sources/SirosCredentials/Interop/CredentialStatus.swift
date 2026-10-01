@@ -147,6 +147,13 @@ public actor CredentialStatusEvaluator {
         self.now = now
     }
 
+    /// Drop every cached Status List Token - see
+    /// `TokenStatusListClient.clearCache()`'s doc comment. A no-op when
+    /// revocation checking is disabled (`statusListClient` nil).
+    public func clearCache() async {
+        await statusListClient?.clearCache()
+    }
+
     /// Evaluate a credential from its claims.
     ///
     /// The validity window is checked first and short-circuits: an expired

@@ -416,7 +416,16 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // even when this wallet presents did:jwk identifiers, and vice versa.
         let cnf = HolderIdentity.cnf(of: credential)
         let cnfKid = HolderIdentity.resolveCnfKid(cnf)
-        let key = try await resolveSigningKey(keys, kid: kid ?? cnfKid)
+        // A `cnf` that is PRESENT but does not resolve to anything usable
+        // must not silently reach `resolveSigningKey(kid: nil)`'s "no id
+        // given, use whatever key is first" fallback (review finding) - that
+        // fallback exists for a credential with NO holder binding at all,
+        // not for one whose binding this wallet could not parse.
+        let effectiveKid = kid ?? cnfKid
+        if cnf != nil, effectiveKid == nil {
+            throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
+        }
+        let key = try await resolveSigningKey(keys, kid: effectiveKid)
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)
@@ -450,11 +459,16 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // what DIIP requires), the KB-JWT names the same verification method
         // rather than re-embedding the key. A `cnf.jwk` binding keeps the
         // embedded-key form it was issued under.
+        // Follows `cnfKid` - the SAME `resolveCnfKid` result used to select
+        // the key above, not a fresh "is `cnf.jwk` present" re-check (review
+        // finding): `resolveCnfKid` already gives `cnf.kid` precedence over
+        // `cnf.jwk`, so a credential carrying BOTH must produce a header
+        // that matches the key that precedence actually selected.
         var kbHeaderFields: [String: Any] = [
             "alg": algorithmJoseId(key.algorithm),
             "typ": "kb+jwt",
         ]
-        if cnf?["jwk"] == nil, let cnfKid {
+        if let cnfKid {
             kbHeaderFields["kid"] = cnfKid
         } else {
             kbHeaderFields["jwk"] = pubKeyJwk
@@ -814,7 +828,14 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         // embedded-jwk shape is a different profile the Issuer did not agree
         // to. Failing here says so; falling back would send a proof the Issuer
         // cannot verify and report it as success.
-        guard stringMembers["kty"] != nil else {
+        //
+        // Checking only `kty` is not enough (review finding): a malformed
+        // WSCD export such as `{"kty": "EC"}` with no `x`/`y` would still
+        // mint a `did:jwk`, just one `Did.resolveDidJwk` itself rejects as
+        // unusable - sending a DIIP proof whose `iss`/`kid` cannot be
+        // resolved by anyone, including this wallet. Validating with the
+        // SAME check `resolveDidJwk` applies catches it here instead.
+        guard Did.isUsablePublicJwk(stringMembers) else {
             throw KeystoreError.cryptoError(
                 "Could not derive a did:jwk for the negotiated DIIP holder binding"
             )

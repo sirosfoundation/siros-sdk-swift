@@ -411,7 +411,12 @@ public enum Did {
     /// signature against, so there is nothing to defer: ``resolveDidJwk(_:)``
     /// is this SDK's own, entirely-offline trust root, not a lookup it hands
     /// to anyone else.
-    static func isUsablePublicJwk(_ jwk: [String: String]) -> Bool {
+    ///
+    /// Public so `SirosKeystore` (`WscdKeystoreAdapter.holderDid(forPublicKey:binding:)`)
+    /// can validate a WSCD's exported public key BEFORE minting a `did:jwk`
+    /// from it, rather than minting one `resolveDidJwk` would itself reject
+    /// the moment anyone - this wallet included - tried to resolve it back.
+    public static func isUsablePublicJwk(_ jwk: [String: String]) -> Bool {
         guard let kty = jwk["kty"] else { return false }
         let required: Set<String>
         switch kty {

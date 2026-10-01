@@ -1236,6 +1236,20 @@ public final class SirosWallet: @unchecked Sendable {
         // account's own refreshCredentialStatuses() happens to overwrite the
         // same id.
         credentialStatusCache.clear()
+        // Same account-scoping problem, one layer deeper (review finding):
+        // credentialStatusCache only holds the last-computed UI-facing
+        // result, but credentialStatusEvaluator's own TokenStatusListClient
+        // caches the fetched Status List Tokens those results came from -
+        // with no ttl (or a long one), a cached token can survive logout and
+        // be reused for the next account's credentials, missing a
+        // revocation published after it was fetched. An in-flight
+        // evaluation from the ending session could otherwise also
+        // repopulate credentialStatusCache right after this clears it, so
+        // both are cleared together, in the same place, rather than relying
+        // on cancelEngineTasks() above to have already stopped everything
+        // that could still be running one.
+        let evaluator = credentialStatusEvaluator
+        Task { await evaluator.clearCache() }
         // The WIA cache is wallet-wide but the instance key it attests is
         // account-scoped, so a WIA kept across a logout would answer
         // `thisInstanceId` (and `wallet_instance_id`) with the PREVIOUS

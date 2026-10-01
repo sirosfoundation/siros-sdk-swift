@@ -338,6 +338,56 @@ final class HolderBindingTests: XCTestCase {
         XCTAssertTrue(verify(kb, with: publicJwk))
     }
 
+    /// Regression (review finding): a `cnf` present but malformed - here,
+    /// a `kid` that is not a string and no `jwk` at all - must not silently
+    /// reach `selectSigningKey(kid: nil)`'s "no id given, use the first
+    /// available key" fallback. That fallback exists for a credential with
+    /// NO holder binding at all, not one this wallet could not parse.
+    func testAMalformedCnfRefusesRatherThanSigningWithAnUnrelatedKey() async throws {
+        let keystore = try await unlocked()
+        _ = try await keystore.generateKey()
+        let credential = sdJwt(#"{"vct":"urn:example:x","cnf":{"kid":123}}"#)
+
+        do {
+            _ = try await keystore.signVpToken(
+                credential: credential, disclosedClaims: nil, nonce: "nonce",
+                audience: "https://verifier.example", kid: nil
+            )
+            XCTFail("a cnf this wallet cannot resolve must refuse, not sign with an unrelated key")
+        } catch {
+            // expected
+        }
+    }
+
+    /// Regression (review finding): `resolveCnfKid` gives `cnf.kid`
+    /// precedence over `cnf.jwk`, so the KB-JWT header must follow the SAME
+    /// precedence - not switch to embedding a raw jwk whenever `cnf.jwk`
+    /// happens to also be present. A credential carrying both must still be
+    /// presented with a `kid` header naming the key `cnf.kid` resolves to.
+    func testACredentialWithBothCnfKidAndCnfJwkFollowsCnfKidNotCnfJwk() async throws {
+        let keystore = try await unlocked()
+        let kid = try await keystore.generateKey()
+        // A JWK for a DIFFERENT key, to make the divergence observable: if
+        // the header wrongly fell back to "cnf.jwk present -> embed a jwk",
+        // it would embed THIS one instead of naming `kid`.
+        let otherKid = try await keystore.generateKey()
+        let otherJwk = try XCTUnwrap(publicJwk(of: keystore, kid: otherKid))
+        let jwkJson = String(
+            data: try JSONSerialization.data(withJSONObject: otherJwk, options: .sortedKeys),
+            encoding: .utf8
+        )!
+        let credential = sdJwt(#"{"vct":"urn:example:x","cnf":{"kid":"\#(kid)","jwk":\#(jwkJson)}}"#)
+
+        let vp = try await keystore.signVpToken(
+            credential: credential, disclosedClaims: nil, nonce: "nonce",
+            audience: "https://verifier.example", kid: nil
+        )
+        let kb = try XCTUnwrap(vp.split(separator: "~").last.map(String.init))
+        let header = JwtHelpers.parseJwtHeader(kb)
+        XCTAssertEqual(header?["kid"] as? String, kid, "cnf.kid wins, per resolveCnfKid's own precedence")
+        XCTAssertNil(header?["jwk"], "must not also embed the unrelated cnf.jwk key")
+    }
+
     func testAKeyPairIsFoundByThumbprintEvenWhenItIsNamedByADidUrl() async throws {
         let keystore = try await unlocked()
         let kid = try await keystore.generateKey()
