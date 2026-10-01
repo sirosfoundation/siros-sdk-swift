@@ -502,12 +502,31 @@ extension SirosWallet {
         result: ZkProofResult
     ) throws -> Data {
         let document = try MdocCbor.parseStoredCredential(credBytes)
-        guard let namespace = document.issuerSigned.nameSpaces.keys.first else {
-            throw MdocError.malformed("mdoc credential '\(docType)' has no disclosed namespaces")
+        // The SAME docType-keyed, deterministic namespace lookup every mdoc
+        // ZK proof system resolves a presentation's namespace through (see
+        // `zkMdocNamespaceByDocType`'s own doc comment) - NOT
+        // `nameSpaces.keys.first` (unspecified iteration order; a real mDL
+        // can carry a second, jurisdiction-specific namespace alongside the
+        // primary one). Using anything else here risks collecting THIS
+        // function's digestIds/issuerSignedItemBytes/claimSlotDigestIds wire
+        // metadata from a different namespace than the one the proof was
+        // actually built from - confirmed as a real bug via Copilot review
+        // on PR #182.
+        guard let namespace = zkMdocNamespaceByDocType[docType] else {
+            throw MdocError.malformed("mdoc credential has unsupported docType '\(docType)'")
         }
-        let storedItems = document.issuerSigned.nameSpaces[namespace] ?? []
+        guard let storedItems = document.issuerSigned.nameSpaces[namespace] else {
+            throw MdocError.malformed("mdoc credential '\(docType)' has no disclosed '\(namespace)' namespace")
+        }
 
         var disclosedClaims: [(String, CBOR)] = []
+        // Vega-only wire metadata (see `buildZkDeviceResponse`'s own doc
+        // comment on `digestIds`/`issuerSignedItemBytes`): harmless/unused
+        // for a Longfellow presentation (positional matching, no slot
+        // concept), so these two are populated for every disclosed claim
+        // regardless of which system produced `result`.
+        var digestIds: [String: UInt32] = [:]
+        var issuerSignedItemBytes: [String: [UInt8]] = [:]
         for claimName in disclosedClaimNames {
             if claimName == zkPseudonymClaim {
                 if let pseudonym = result.pseudonym {
@@ -515,8 +534,31 @@ extension SirosWallet {
                 }
             } else if let match = storedItems.first(where: { $0.item.elementIdentifier == claimName }) {
                 disclosedClaims.append((claimName, match.item.elementValue))
+                if let digestId = UInt32(exactly: match.item.digestId) {
+                    digestIds[claimName] = digestId
+                }
+                issuerSignedItemBytes[claimName] = [UInt8](match.original.encode())
             }
         }
+
+        // The Vega verifier needs the credential's FULL, fixed-shape
+        // claim-slot digestID list (document order) to map proof slots back
+        // to digestIDs, regardless of which claims THIS presentation
+        // discloses - `VegaProofSystem.buildWitness` assigns slots in this
+        // same document order. Unlike `digestIds`/`issuerSignedItemBytes`
+        // above, this field is NOT harmless for a Longfellow presentation
+        // (positional matching, no slot concept at all) - the builder's own
+        // wire contract requires `nil` there, so this is gated on
+        // `spec.system` rather than populated unconditionally (confirmed as
+        // a real bug via Copilot review on PR #182). A malformed
+        // out-of-`UInt32`-range digestID here is the same issuer-data
+        // problem `VegaProofSystem` itself already rejects before proving
+        // even starts, so a Vega proof only reaches this point with every
+        // digestID convertible - `compactMap` is defensive, not expected to
+        // actually drop anything.
+        let claimSlotDigestIds: [UInt32]? = spec.system == vegaZkSystemId
+            ? storedItems.compactMap { UInt32(exactly: $0.item.digestId) }
+            : nil
 
         return MdocDeviceResponseBuilder.buildZkDeviceResponse(
             proofBytes: result.proofBytes,
@@ -525,7 +567,10 @@ extension SirosWallet {
             timestamp: result.timestamp,
             namespace: namespace,
             disclosedClaims: disclosedClaims,
-            issuerAuth: document.issuerSigned.issuerAuth
+            issuerAuth: document.issuerSigned.issuerAuth,
+            digestIds: digestIds,
+            issuerSignedItemBytes: issuerSignedItemBytes,
+            claimSlotDigestIds: claimSlotDigestIds
         )
     }
 
