@@ -143,7 +143,11 @@ extension SirosWallet {
     static func sameAdvertisedIssuer(_ offerIssuer: String?, _ issuer: String?) -> Bool {
         guard let issuer else { return true }
         guard let offerIssuer else { return false }
-        if offerIssuer == issuer { return true }
+        // No raw-string equality shortcut (review finding): two copies of the
+        // SAME confusing string (e.g. a URL carrying userinfo, or something
+        // that is not a URL at all) would match each other here while
+        // `sameIssuer` below - the policy this function exists to apply
+        // consistently - rejects exactly that shape. Always go through it.
         guard let url = URL(string: issuer) else { return false }
         return sameIssuer(url, offerIssuer)
     }

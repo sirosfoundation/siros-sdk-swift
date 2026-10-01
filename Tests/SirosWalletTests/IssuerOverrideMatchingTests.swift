@@ -57,4 +57,38 @@ final class IssuerOverrideMatchingTests: XCTestCase {
     func testANonDefaultPortIsADifferentIssuer() {
         XCTAssertFalse(matches("https://issuer.example:8443", "https://issuer.example"))
     }
+
+    // MARK: - sameAdvertisedIssuer (holderBinding's offer/proof-issuer match)
+    //
+    // Same policy as sameIssuer above, applied to the active offer's
+    // credential_issuer against the issuer a proof is being signed for -
+    // negotiated binding methods from the WRONG offer must never apply.
+
+    func testSameAdvertisedIssuerMatchesThroughNormalIssuerComparison() {
+        XCTAssertTrue(SirosWallet.sameAdvertisedIssuer("https://issuer.example", "https://issuer.example"))
+        // The offer's issuer is the "configured" side sameIssuer checks a
+        // path against, so a MORE specific issuer being proved for is still
+        // the same issuer the offer advertised.
+        XCTAssertTrue(SirosWallet.sameAdvertisedIssuer("https://issuer.example", "https://issuer.example:443"))
+        XCTAssertTrue(SirosWallet.sameAdvertisedIssuer("https://issuer.example", "https://issuer.example/oid4vci"))
+    }
+
+    func testSameAdvertisedIssuerNilIssuerMeansTheOnlyInFlightOfferApplies() {
+        XCTAssertTrue(SirosWallet.sameAdvertisedIssuer("https://issuer.example", nil))
+        XCTAssertFalse(SirosWallet.sameAdvertisedIssuer(nil, "https://issuer.example"))
+    }
+
+    /// Regression (review finding): a raw `==` fast path let two copies of
+    /// the SAME confusing string - a URL carrying userinfo - match each
+    /// other here while `sameIssuer` (the policy this function exists to
+    /// apply consistently) rejects exactly that shape. There must be no
+    /// shortcut around it.
+    func testSameAdvertisedIssuerNeverShortcutsAroundUserinfoRejection() {
+        let confusing = "https://issuer.example@evil.example"
+        XCTAssertFalse(
+            SirosWallet.sameAdvertisedIssuer(confusing, confusing),
+            "identical strings must not bypass sameIssuer's userinfo rejection"
+        )
+    }
+
 }
