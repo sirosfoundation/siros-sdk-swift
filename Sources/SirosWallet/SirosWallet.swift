@@ -840,7 +840,24 @@ public final class SirosWallet: @unchecked Sendable {
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
         #if os(iOS)
-        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [LongfellowZkProofSystem(zkCircuitClient: self.zkCircuitClient)])
+        // One residency shared by every mdoc ZK proof system constructed
+        // here, so the process holds one resident prover at a time, not
+        // one per system - see `ZkProverResidency`'s own doc comment for
+        // why (a real OOM crash on a real device, in the matching Kotlin
+        // SDK, before that type existed there).
+        //
+        // BbsProofSystem exists in this package (SirosCredentials) but is
+        // NOT registered here - unlike VegaProofSystem (mdoc, same
+        // residency as Longfellow), wiring it in needs a holder-state
+        // store (BbsHolderStateVault) and a WalletConfig field naming
+        // which VCTs it should handle, neither of which exists yet. This
+        // is a real, pre-existing gap (predates VegaProofSystem), left
+        // open here rather than designed as a side effect of adding Vega.
+        let zkProverResidency = ZkProverResidency()
+        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [
+            LongfellowZkProofSystem(zkCircuitClient: self.zkCircuitClient, residency: zkProverResidency),
+            VegaProofSystem(zkCircuitClient: self.zkCircuitClient, residency: zkProverResidency),
+        ])
         #else
         self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [])
         #endif
