@@ -163,18 +163,27 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
     /// directly against a real (never-`resume()`d, so no actual request is
     /// ever made) `URLSessionDataTask`, the same object shape the real
     /// session hands it.
+    /// A never-`resume()`d `URLSessionTask` starts `.suspended` and stays
+    /// there until something calls `.cancel()` on it - nothing else is
+    /// happening on it, so `.suspended` is a stable, race-free "not
+    /// cancelled" signal. Once cancelled, `.state` moves on to `.canceling`
+    /// or - observed to already be the case by the time a test asserts, on
+    /// at least one real CI runner - straight through to `.completed`;
+    /// checking merely "not still suspended" is what both transitions have
+    /// in common, so it is used instead of asserting one specific far side
+    /// of a transition this test does not control the timing of.
     func testHttpsOnlyRedirectDelegateCancelsOnceTheCapIsExceeded() {
         let delegate = HttpsOnlyRedirectDelegate()
         let task = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/status")!)
 
         let halfCap = Data(repeating: 0, count: maxPublicFetchResponseBytes / 2)
         delegate.urlSession(URLSession.shared, dataTask: task, didReceive: halfCap)
-        XCTAssertNotEqual(task.state, .canceling, "half the cap in one chunk must not cancel")
+        XCTAssertEqual(task.state, .suspended, "half the cap in one chunk must not cancel")
 
         // A second chunk takes the running total past the cap.
         delegate.urlSession(URLSession.shared, dataTask: task, didReceive: halfCap)
         delegate.urlSession(URLSession.shared, dataTask: task, didReceive: Data([0, 1]))
-        XCTAssertEqual(task.state, .canceling, "exceeding the cap must cancel the task")
+        XCTAssertNotEqual(task.state, .suspended, "exceeding the cap must cancel the task")
     }
 
     func testHttpsOnlyRedirectDelegateTracksBytesPerTaskIndependently() {
@@ -185,7 +194,7 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         let almostCap = Data(repeating: 0, count: maxPublicFetchResponseBytes - 1)
         delegate.urlSession(URLSession.shared, dataTask: taskA, didReceive: almostCap)
         delegate.urlSession(URLSession.shared, dataTask: taskB, didReceive: Data([0]))
-        XCTAssertNotEqual(taskA.state, .canceling, "taskA alone is still under its own cap")
-        XCTAssertNotEqual(taskB.state, .canceling, "taskB's one byte must not inherit taskA's running total")
+        XCTAssertEqual(taskA.state, .suspended, "taskA alone is still under its own cap")
+        XCTAssertEqual(taskB.state, .suspended, "taskB's one byte must not inherit taskA's running total")
     }
 }
