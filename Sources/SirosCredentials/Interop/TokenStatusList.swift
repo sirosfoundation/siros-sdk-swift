@@ -66,6 +66,21 @@ public enum TokenStatusList {
         return Reference(idx: idx, uri: uri)
     }
 
+    /// Whether `claims` declares a status reference AT ALL, even one
+    /// `extractReference` could not parse into a full `Reference` (a bad
+    /// `idx`, or a missing/empty `uri`).
+    ///
+    /// `extractReference`'s nil alone cannot distinguish "this credential
+    /// carries no status claim" (an ordinary credential, correctly `.valid`)
+    /// from "it carries one this SDK could not read" (review finding:
+    /// attacker-adjacent data - `mdocValidityClaims` preserves a `status`
+    /// object even when its `idx` cannot be represented as `Int` - that must
+    /// not be silently treated the same as the first case).
+    public static func hasStatusReference(_ claims: [String: Any]) -> Bool {
+        guard let status = claims["status"] as? [String: Any] else { return false }
+        return status["status_list"] != nil
+    }
+
     /// `idx` as an exact, non-negative `Int`, or nil.
     ///
     /// It selects which bit of the status list applies, and it comes from the

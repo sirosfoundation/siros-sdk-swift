@@ -180,6 +180,27 @@ final class CredentialStatusTests: XCTestCase {
         XCTAssertEqual(status, .valid)
     }
 
+    /// Regression (review finding): a status_list claim present but
+    /// unreadable (here, a `uri` with no `idx` at all - mdocValidityClaims
+    /// preserves exactly this shape when the real idx overflows Int) must
+    /// not be conflated with "no status claim", which evaluates to `.valid`
+    /// for free. A statusListClient that would fail the test if consulted
+    /// confirms this is caught before ever reaching the network, the same
+    /// way the validity-window short-circuit above is.
+    func testAStatusReferenceMissingItsIdxIsUnknownNotValid() async {
+        let evaluator = CredentialStatusEvaluator(
+            statusListClient: TokenStatusListClient(
+                httpGet: { _, _ in
+                    XCTFail("a malformed reference must never reach the network")
+                    return nil
+                }
+            ),
+            now: { self.now }
+        )
+        let status = await evaluator.evaluate(claims: claims(#"{"status":{"status_list":{"uri":"https://x.example"}}}"#))
+        XCTAssertEqual(status, .unknown)
+    }
+
     func testAnUnreachableStatusListLeavesTheCredentialUsable() async {
         // Hiding a credential because the issuer's status endpoint is down
         // would make the wallet unusable offline. This is deliberate.

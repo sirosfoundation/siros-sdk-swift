@@ -178,9 +178,17 @@ public actor CredentialStatusEvaluator {
         )
         guard windowStatus == .valid else { return windowStatus }
 
-        guard let statusListClient,
-              let reference = TokenStatusList.extractReference(from: claims)
-        else { return .valid }
+        guard let statusListClient else { return .valid }
+        guard let reference = TokenStatusList.extractReference(from: claims) else {
+            // A status_list claim present but unreadable (bad idx/uri) must
+            // not be conflated with "no status claim at all" (review
+            // finding): the latter is an ordinary credential with nothing to
+            // check, correctly `.valid`; the former is attacker-adjacent data
+            // this SDK could not read, which must not silently pass as valid
+            // either - same fail-closed treatment as an unrecognised
+            // published status value below.
+            return TokenStatusList.hasStatusReference(claims) ? .unknown : .valid
+        }
 
         // The credential's own `iss` wins - it is signed - and the stored
         // issuer identifier stands in only when there is none.

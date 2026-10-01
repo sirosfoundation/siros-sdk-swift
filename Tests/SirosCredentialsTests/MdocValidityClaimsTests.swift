@@ -69,5 +69,13 @@ final class MdocValidityClaimsTests: XCTestCase {
         )
         XCTAssertNil(statusList["idx"])
         XCTAssertNil(TokenStatusList.extractReference(from: claims))
+        // Regression (review finding): extractReference's nil alone reads
+        // the same as "no status claim at all" - hasStatusReference is what
+        // lets CredentialStatusEvaluator tell a malformed one (must not pass
+        // as valid) from a genuinely absent one (ordinarily valid) apart.
+        XCTAssertTrue(
+            TokenStatusList.hasStatusReference(claims),
+            "a status_list claim IS present, just unreadable - must not look like no claim at all"
+        )
     }
 }

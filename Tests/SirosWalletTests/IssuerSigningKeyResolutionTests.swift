@@ -53,6 +53,19 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         XCTAssertNil(SirosWallet.selectIssuerKey([only], kid: "missing"))
     }
 
+    /// Regression (review finding): two keys sharing one `kid` is exactly as
+    /// ambiguous as several keys with none - which one a verifier means is
+    /// then whichever the server's array happened to list first, not
+    /// something this wallet decided.
+    func testTwoKeysSharingOneKidIsAmbiguousAndRefused() {
+        var first = p256
+        first["kid"] = "a"
+        var second = p256
+        second["x"] = "different"
+        second["kid"] = "a"
+        XCTAssertNil(SirosWallet.selectIssuerKey([first, second], kid: "a"))
+    }
+
     func testAKeyCarryingPrivateMaterialIsNotAVerificationKey() {
         // A misconfigured JWKS that publishes a private key must not have it
         // treated as something to verify signatures with.

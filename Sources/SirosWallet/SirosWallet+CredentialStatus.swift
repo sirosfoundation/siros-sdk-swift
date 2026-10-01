@@ -314,7 +314,12 @@ extension SirosWallet {
         let usable = keys.filter { $0["d"] == nil && $0["k"] == nil }
         let match: [String: Any]?
         if let kid {
-            match = usable.first { ($0["kid"] as? String) == kid }
+            // Two keys sharing one `kid` is exactly as ambiguous as several
+            // keys with none (review finding): which one a verifier means is
+            // then whichever the server's array happened to list first, not
+            // something this wallet decided.
+            let matches = usable.filter { ($0["kid"] as? String) == kid }
+            match = matches.count == 1 ? matches[0] : nil
         } else {
             match = usable.count == 1 ? usable[0] : nil
         }

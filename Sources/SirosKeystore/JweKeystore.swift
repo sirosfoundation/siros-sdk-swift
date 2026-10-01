@@ -512,10 +512,13 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // credential rather than this wallet's configuration.
         let cnf = HolderIdentity.cnf(of: credential)
         let cnfKid = HolderIdentity.resolveCnfKid(cnf)
-        // A cnf PRESENT but unresolvable must refuse (review finding), not
-        // reach selectSigningKey(kid: nil)'s first-available-key fallback -
-        // that's for a credential with NO binding, not an unparsed one.
-        let effectiveKid = kid ?? cnfKid
+        // cnf, when present, decides BOTH the signing key and the header
+        // below, not `kid ?? cnfKid` (review finding): a disagreeing
+        // caller-supplied kid could otherwise sign with a different key
+        // than the header announces. `kid` only matters with no cnf at all.
+        // An unresolvable-but-present cnf must refuse, not reach
+        // selectSigningKey(kid: nil)'s first-available-key fallback.
+        let effectiveKid = cnf != nil ? cnfKid : kid
         if cnf != nil, effectiveKid == nil {
             throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
         }

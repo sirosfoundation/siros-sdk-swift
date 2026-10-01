@@ -99,6 +99,17 @@ final class DidTests: XCTestCase {
         XCTAssertNil(Did.resolveDidJwk(did).document)
     }
 
+    /// Regression (review finding): `oct` is symmetric SECRET material (`k`
+    /// is a shared secret, not a public key), never a usable public key for
+    /// a DID verification method regardless of which members it carries -
+    /// a did:jwk (or delegated document) declaring one must not expose that
+    /// secret through `publicKeyJwk` by being treated as "usable".
+    func testAnOctKeyIsNeverUsableAsAPublicKeyRegardlessOfWhichMembersItCarries() {
+        XCTAssertFalse(Did.isUsablePublicJwk(["kty": "oct", "k": "shared-secret"]))
+        let did = "did:jwk:" + EncryptedContainerBase64.urlEncode(Data(#"{"kty":"oct","k":"shared-secret"}"#.utf8))
+        XCTAssertNil(Did.resolveDidJwk(did).document)
+    }
+
     /// Regression (review finding): private key material (`d`) embedded
     /// alongside a legitimate public key must never be echoed back through
     /// `publicKeyJwk` - only the members `canonicalPublicJwk` recognises as

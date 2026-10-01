@@ -438,7 +438,14 @@ public enum Did {
         case "EC": required = ["crv", "kty", "x", "y"]
         case "OKP": required = ["crv", "kty", "x"]
         case "RSA": required = ["e", "kty", "n"]
-        case "oct": required = ["k", "kty"]
+        // `oct` is symmetric SECRET material (`k` is a shared secret, not a
+        // public key), never a public key - unlike canonicalPublicJwk's
+        // general required-member table, this function specifically answers
+        // "is this a usable public key for a DID verification method", and
+        // an oct JWK is never one regardless of which members it carries
+        // (review finding: a DID document - or did:jwk identifier -
+        // declaring `{"kty":"oct","k":"..."}` must not expose that secret
+        // through `publicKeyJwk` by being treated as "usable").
         default: return false
         }
         return required.isSubset(of: jwk.keys)

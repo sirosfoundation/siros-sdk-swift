@@ -416,6 +416,33 @@ final class HolderBindingTests: XCTestCase {
         XCTAssertNil(header?["jwk"], "must not also embed the unrelated cnf.jwk key")
     }
 
+    /// Regression (review finding): a caller-supplied `kid` that disagrees
+    /// with the credential's own `cnf.kid` must not select a DIFFERENT key
+    /// than the KB-JWT header (always built from `cnf`) then announces -
+    /// that would produce a presentation signed by one key while naming
+    /// another, which no verifier accepts either way. `cnf` is authoritative
+    /// over the caller's `kid` once it resolves to something usable.
+    func testAMismatchedCallerKidIsIgnoredInFavorOfCnf() async throws {
+        let keystore = try await unlocked()
+        let boundKid = try await keystore.generateKey()
+        let staleKid = try await keystore.generateKey()
+        let credential = sdJwt(#"{"vct":"urn:example:x","cnf":{"kid":"\#(boundKid)"}}"#)
+
+        let vp = try await keystore.signVpToken(
+            credential: credential, disclosedClaims: nil, nonce: "nonce",
+            audience: "https://verifier.example", kid: staleKid
+        )
+        let kb = try XCTUnwrap(vp.split(separator: "~").last.map(String.init))
+        let header = JwtHelpers.parseJwtHeader(kb)
+        XCTAssertEqual(header?["kid"] as? String, boundKid, "cnf wins over a disagreeing caller-supplied kid")
+
+        let boundJwk = try XCTUnwrap(publicJwk(of: keystore, kid: boundKid))
+        XCTAssertTrue(
+            verify(kb, with: boundJwk),
+            "must actually be signed by the key the header names, not the stale caller-supplied one"
+        )
+    }
+
     func testAKeyPairIsFoundByThumbprintEvenWhenItIsNamedByADidUrl() async throws {
         let keystore = try await unlocked()
         let kid = try await keystore.generateKey()
