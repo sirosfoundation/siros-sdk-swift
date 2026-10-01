@@ -369,30 +369,35 @@ public enum CredentialUtils {
                 }
             }
         }
-        if let status = mso[CBOR.utf8String("status")],
-           let statusList = status[CBOR.utf8String("status_list")] {
+        // Only requires "status" to be PRESENT, not that it parses as a map
+        // (review finding): the previous `if let status = ..., let
+        // statusList = status[...]` failed as a single unit when `status`
+        // was anything else (e.g. a bare scalar) - a malformed-but-declared
+        // status dropped the claim entirely, same fail-open hole
+        // `hasStatusReference` exists to close for a malformed idx/uri.
+        if let status = mso[CBOR.utf8String("status")] {
             var reference: [String: Any] = [:]
-            // `idx` comes from the credential, which is not this wallet's to
-            // trust before it has been verified. `Int(idx)` traps on a value
-            // past Int.max, and a trap is not a parse failure - it takes the
-            // process down. A status list with that many entries does not
-            // exist, so an index that will not convert is simply not read,
-            // leaving the reference incomplete and the status unavailable.
-            if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")],
-               let index = Int(exactly: idx) {
-                reference["idx"] = index
+            if let statusList = status[CBOR.utf8String("status_list")] {
+                // `idx` comes from the credential, which is not this
+                // wallet's to trust before it has been verified. `Int(idx)`
+                // traps on a value past Int.max, and a trap is not a parse
+                // failure - it takes the process down. A status list with
+                // that many entries does not exist, so an index that will
+                // not convert is simply not read, leaving the reference
+                // incomplete and the status unavailable.
+                if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")],
+                   let index = Int(exactly: idx) {
+                    reference["idx"] = index
+                }
+                if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
+                    reference["uri"] = uri
+                }
             }
-            if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
-                reference["uri"] = uri
-            }
-            // Preserved even when EMPTY (review finding) - the MSO declared
-            // a status_list regardless of whether idx/uri came through
-            // usably, and dropping the claim entirely when both happen to
-            // be malformed made `hasStatusReference` see nothing where a
-            // status claim actually was, reporting this credential `.valid`
-            // instead of `.unknown`. `!reference.isEmpty` only ever
-            // controlled whether this is worth doing at all, never whether
-            // the claim's EXISTENCE should be recorded.
+            // Preserved even when EMPTY, or status_list itself was missing
+            // or not a map (review finding) - "status" was declared
+            // regardless, which is enough for hasStatusReference to see
+            // SOMETHING rather than reporting this credential `.valid`
+            // instead of `.unknown`.
             claims["status"] = ["status_list": reference]
         }
         return claims.isEmpty ? nil : claims

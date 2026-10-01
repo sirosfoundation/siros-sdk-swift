@@ -118,4 +118,39 @@ final class MdocValidityClaimsTests: XCTestCase {
             "status_list WAS declared, with nothing usable in it - still not the same as no claim at all"
         )
     }
+
+    /// Regression (review finding): a `status` member that is not even a
+    /// map (here, a bare scalar) previously failed the whole
+    /// `if let status = ..., let statusList = status[...]` as one unit, so
+    /// `claims["status"]` was never set at all - indistinguishable from no
+    /// status claim, and reported `.valid` instead of `.unknown`.
+    func testAScalarStatusMemberIsStillRecordedAsPresent() throws {
+        let mso: CBOR = .map([
+            .utf8String("docType"): .utf8String("org.iso.18013.5.1.mDL"),
+            .utf8String("status"): .unsignedInt(7), // not a map at all
+        ])
+        let msoBytes = CBOR.tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([:]),
+            .utf8String("issuerAuth"): .array([
+                .byteString([]), .map([:]), .byteString(msoBytes.encode()), .byteString([]),
+            ]),
+        ])
+        let credential = StoredCredential(
+            id: 1,
+            format: "mso_mdoc",
+            raw: Data(issuerSigned.encode()).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
+            batchId: 1,
+            instanceId: 0
+        )
+        let claims = try XCTUnwrap(CredentialUtils.validityClaims(credential))
+        XCTAssertNil(TokenStatusList.extractReference(from: claims))
+        XCTAssertTrue(
+            TokenStatusList.hasStatusReference(claims),
+            "status WAS declared, even though it isn't a map at all - still not the same as no claim"
+        )
+    }
 }
