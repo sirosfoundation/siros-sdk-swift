@@ -324,7 +324,21 @@ public enum CredentialUtils {
         if credential.format == "mso_mdoc" {
             return try mdocValidityClaims(credential)
         }
-        return parseJwtPayload(credential.raw)
+        // A JWT that will not even parse (malformed base64url, not valid
+        // JSON) is the JWT-format analogue of `mdocValidityClaims`'s
+        // `UnreadableValidityClaims` - unreadable, not "no claims" (review
+        // finding). `parseJwtPayload` returning nil was previously forwarded
+        // as-is, which `credentialStatus(of:)` then read as "nothing to
+        // check" and reported `.valid`, exactly the fail-open this method's
+        // own doc comment says it exists to prevent. A credential whose
+        // payload DOES parse but happens to carry none of the validity-
+        // window/status keys still returns an ordinary (non-throwing) empty
+        // dictionary here, which is correctly "says nothing about its
+        // validity," not an error.
+        guard let claims = parseJwtPayload(credential.raw) else {
+            throw UnreadableValidityClaims()
+        }
+        return claims
     }
 
     /// Raised when a credential's validity data is present but unreadable.

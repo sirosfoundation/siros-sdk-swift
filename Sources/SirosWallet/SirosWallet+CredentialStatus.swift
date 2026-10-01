@@ -120,7 +120,13 @@ extension SirosWallet {
         // an explicit :443. Treating those as different issuers would discard
         // what the Issuer advertised and fall back to the configured profile -
         // silently sending a DIIP-only Issuer the HAIP proof shape.
-        let advertised = activeOffer
+        //
+        // Snapshotted under `lock` (review finding): `activeOffer` is mutated
+        // under `lock` elsewhere (`startIssuance`'s "another issuance already
+        // in progress" guard, a renewal, a reset) and a concurrent one of
+        // those could otherwise race this read with a torn or stale value.
+        lock.lock(); let snapshotOffer = activeOffer; lock.unlock()
+        let advertised = snapshotOffer
             .flatMap { offer -> [String]? in
                 guard Self.sameAdvertisedIssuer(offer.credentialIssuerIdentifier, issuer) else { return nil }
                 return offer.cryptographicBindingMethodsSupported
@@ -435,6 +441,17 @@ final class CredentialStatusCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         statuses = statuses.filter { ids.contains($0.key) }
+    }
+
+    /// Drop one id - for `deleteCredential(_:)`, so an id SQLite/the
+    /// credential store later reuses for an unrelated credential (review
+    /// finding: "an ID collision can expose the wrong outcome to the new
+    /// account") never reads back a status that belonged to whatever used
+    /// to have this id.
+    func remove(_ id: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        statuses.removeValue(forKey: id)
     }
 
     /// All held statuses, e.g. after a logout.

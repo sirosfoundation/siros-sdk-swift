@@ -282,6 +282,16 @@ public enum Did {
 
     /// Resolve a `did:jwk` - no network, and no failure mode other than a
     /// malformed identifier, since the key is the identifier.
+    ///
+    /// This is the fail-closed trust root for every `did:jwk` the SDK
+    /// resolves: it must reject a malformed or incomplete embedded JWK
+    /// rather than "resolve" to a document with nothing a verifier can
+    /// actually check a signature against (review finding - an identifier
+    /// decoding to `{}` previously resolved successfully with no usable
+    /// key). Only the members `canonicalPublicJwk` already recognises as
+    /// public, for this key's own `kty`, are kept - so a JWK carrying a
+    /// private `d`, or WebCrypto bookkeeping like `ext`/`key_ops`, never has
+    /// that material echoed back through `publicKeyJwk` either.
     public static func resolveDidJwk(_ did: String) -> DidResolution {
         guard did.hasPrefix("did:jwk:") else {
             return .failed(did: did, reason: "Not a did:jwk")
@@ -290,16 +300,20 @@ public enum Did {
             .prefix { $0 != "#" && $0 != "?" }
         let decoded = EncryptedContainerBase64.urlDecode(String(encoded))
         guard !decoded.isEmpty,
-              let jwk = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any]
+              let raw = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any]
         else {
             return .failed(did: did, reason: "did:jwk identifier is not a base64url-encoded JWK")
+        }
+        let publicJwk = Dictionary(uniqueKeysWithValues: canonicalPublicJwk(raw.compactMapValues { $0 as? String }))
+        guard isUsablePublicJwk(publicJwk) else {
+            return .failed(did: did, reason: "did:jwk identifier does not decode to a usable public key")
         }
         let vmId = didJwkKeyId(did)
         let method = VerificationMethod(
             id: vmId,
             type: "JsonWebKey2020",
             controller: did,
-            publicKeyJwk: jwk.compactMapValues { $0 as? String }
+            publicKeyJwk: publicJwk
         )
         return .resolved(
             DidDocument(
@@ -386,6 +400,28 @@ public enum Did {
         default: required = ["kty"]
         }
         return required.compactMap { member in jwk[member].map { (member, $0) } }
+    }
+
+    /// Whether `jwk` carries every member its own `kty` requires to be a
+    /// usable public key, per ``canonicalPublicJwk(_:)``'s required-member
+    /// table. An unknown, or entirely missing, `kty` is never usable -
+    /// unlike an unrecognised DID *method*, which this SDK defers to
+    /// go-trust rather than rejecting, a JWK key *type* it does not
+    /// recognise names a key shape nothing in this SDK can verify a
+    /// signature against, so there is nothing to defer: ``resolveDidJwk(_:)``
+    /// is this SDK's own, entirely-offline trust root, not a lookup it hands
+    /// to anyone else.
+    static func isUsablePublicJwk(_ jwk: [String: String]) -> Bool {
+        guard let kty = jwk["kty"] else { return false }
+        let required: Set<String>
+        switch kty {
+        case "EC": required = ["crv", "kty", "x", "y"]
+        case "OKP": required = ["crv", "kty", "x"]
+        case "RSA": required = ["e", "kty", "n"]
+        case "oct": required = ["k", "kty"]
+        default: return false
+        }
+        return required.isSubset(of: jwk.keys)
     }
 
     /// The `kid` a credential's `cnf` claim binds it to.

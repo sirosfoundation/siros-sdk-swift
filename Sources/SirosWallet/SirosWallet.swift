@@ -1230,6 +1230,12 @@ public final class SirosWallet: @unchecked Sendable {
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()
+        // Account-scoped, like the session itself (review finding): without
+        // this, cachedCredentialStatus(of:) could answer with the PREVIOUS
+        // account's status - or a deleted credential's - until the next
+        // account's own refreshCredentialStatuses() happens to overwrite the
+        // same id.
+        credentialStatusCache.clear()
         // The WIA cache is wallet-wide but the instance key it attests is
         // account-scoped, so a WIA kept across a logout would answer
         // `thisInstanceId` (and `wallet_instance_id`) with the PREVIOUS
@@ -1356,6 +1362,10 @@ public final class SirosWallet: @unchecked Sendable {
     public func deleteCredential(_ credentialId: Int64) async {
         let deletedBatchId = await credentialStore.getAll().first { $0.id == credentialId }?.batchId
         await credentialStore.delete(credentialId)
+        // A deleted id can be reused (review finding) - an unrelated
+        // credential later assigned this same id must not read back the
+        // deleted one's cached status.
+        credentialStatusCache.remove(credentialId)
         // If that was the last instance of its batch, its refresh_token
         // entry (if any) is now orphaned - privatedata-spec §6.2 requires
         // it not linger pointing at a batch that no longer exists.

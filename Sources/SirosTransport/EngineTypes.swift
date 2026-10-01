@@ -150,6 +150,7 @@ public struct FlowStartMessage: Codable, Sendable {
     /// `sign_client_auth` of the renewal so this wallet signs with that same
     /// key. Takes precedence over `dpopJwk`.
     public var dpopKeyId: String?
+    public var timestamp: String?
     /// OID4VCI `authorization_details` for the Authorization Request. DIIP
     /// requires a Wallet to be able to ask for a credential configuration this
     /// way as well as by `scope`.
@@ -161,8 +162,13 @@ public struct FlowStartMessage: Codable, Sendable {
     /// and shape match go-wallet-backend's
     /// `FlowStartMessage.AuthorizationDetails` and wallet-frontend's
     /// `flow_start` exactly.
+    ///
+    /// Appended after every pre-existing field, `timestamp` included - this
+    /// type is `public`, and a parameter inserted before an existing one
+    /// shifts every positional argument after it for any external caller
+    /// that constructs this message listing its existing arguments in
+    /// declaration order without yet naming this new one (review finding).
     public var authorizationDetails: [AuthorizationDetail]?
-    public var timestamp: String?
 
     public init(
         type: String = MessageTypes.flowStart,
@@ -183,8 +189,8 @@ public struct FlowStartMessage: Codable, Sendable {
         reissuanceKid: String? = nil,
         dpopJwk: String? = nil,
         dpopKeyId: String? = nil,
-        authorizationDetails: [AuthorizationDetail]? = nil,
-        timestamp: String? = nil
+        timestamp: String? = nil,
+        authorizationDetails: [AuthorizationDetail]? = nil
     ) {
         self.type = type
         self.protocol = `protocol`

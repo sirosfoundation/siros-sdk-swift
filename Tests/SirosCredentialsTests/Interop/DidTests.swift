@@ -78,6 +78,44 @@ final class DidTests: XCTestCase {
         XCTAssertNil(Did.resolveDidJwk("did:web:example.com").document)
     }
 
+    /// Regression (review finding): an embedded JWK decoding to `{}` (or
+    /// anything else missing the members its own `kty` requires) previously
+    /// "resolved" successfully anyway, with a `publicKeyJwk` nothing could
+    /// verify a signature against. `resolveDidJwk` is the entirely-offline
+    /// trust root for `did:jwk` - it must fail rather than resolve to a
+    /// document with no usable key.
+    func testAnEmptyEmbeddedJwkFailsRatherThanResolvingWithNoUsableKey() {
+        let did = "did:jwk:" + EncryptedContainerBase64.urlEncode(Data("{}".utf8))
+        XCTAssertNil(Did.resolveDidJwk(did).document)
+    }
+
+    /// Regression (review finding): an EC JWK missing `y` is not a usable
+    /// public key (not enough curve-point material to verify anything
+    /// against), and must not resolve just because `kty`/`crv`/`x` happen to
+    /// be present.
+    func testAnIncompleteEcJwkFailsRatherThanResolvingWithAPartialKey() {
+        let incomplete = "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"\(p256Jwk["x"]!)\"}"
+        let did = "did:jwk:" + EncryptedContainerBase64.urlEncode(Data(incomplete.utf8))
+        XCTAssertNil(Did.resolveDidJwk(did).document)
+    }
+
+    /// Regression (review finding): private key material (`d`) embedded
+    /// alongside a legitimate public key must never be echoed back through
+    /// `publicKeyJwk` - only the members `canonicalPublicJwk` recognises as
+    /// public, for this key's own `kty`, are kept.
+    func testPrivateKeyMaterialInTheEmbeddedJwkNeverReachesThePublicKey() {
+        var withPrivateKey = p256Jwk
+        withPrivateKey["d"] = "super-secret-private-scalar"
+        let json = try! JSONSerialization.data(withJSONObject: withPrivateKey)
+        let did = "did:jwk:" + EncryptedContainerBase64.urlEncode(json)
+        guard let document = Did.resolveDidJwk(did).document else {
+            return XCTFail("a JWK with the required EC public members, plus an extra private one, still resolves")
+        }
+        let key = document.findPublicKey(kid: "\(did)#0", relationship: .authentication)
+        XCTAssertEqual(key?["x"], p256Jwk["x"])
+        XCTAssertNil(key?["d"], "private key material must never be exposed through publicKeyJwk")
+    }
+
     // MARK: - delegated resolution
     //
     // Everything that is not did:jwk is a trust decision - which document is

@@ -266,7 +266,20 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         if let did {
             headerFields["kid"] = Did.didJwkKeyId(did)
         } else {
-            headerFields["jwk"] = pubKeyJwk
+            // `exportPublicKey` only promises a public JWK, not a `kid` of
+            // its own - a third-party WSCD plugin's native key id (unlike
+            // the thumbprint-style ids the default/softkey WSCD assigns) is
+            // otherwise nowhere in this proof at all. Without it, the
+            // wallet's proof bookkeeping (`SirosWallet.generateProofs`'s
+            // `extractProofKeyId`) still recovers a usable id - it falls
+            // back to the RFC 7638 thumbprint of the embedded key - but
+            // `resolveSigningKey` then has to find this exact key by
+            // exporting and thumbprinting every key the WSCD holds, one at a
+            // time, instead of matching `key.keyId` directly on the first,
+            // cheap attempt (review finding).
+            var jwkWithKid = pubKeyJwk
+            jwkWithKid["kid"] = key.keyId
+            headerFields["jwk"] = jwkWithKid
         }
         let header = JwtHelpers.jsonBase64Url(headerFields)
 

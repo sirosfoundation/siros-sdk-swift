@@ -822,7 +822,11 @@ extension SirosWallet {
     /// Nil when the offer could not be resolved, which leaves the `scope` path
     /// exactly as it was.
     func authorizationDetailsForActiveOffer() -> [AuthorizationDetail]? {
-        AuthorizationDetails.build(credentialConfigurationID: activeOffer?.credentialConfigurationId)
+        // Snapshotted under `lock` (review finding): `activeOffer` is mutated
+        // under `lock` by `startIssuance`/renewal/reset, and this is read
+        // from the async proof-generation path, which can race one of those.
+        lock.lock(); let configurationId = activeOffer?.credentialConfigurationId; lock.unlock()
+        return AuthorizationDetails.build(credentialConfigurationID: configurationId)
     }
 
     public func startIssuance(offerUri: String) async throws {

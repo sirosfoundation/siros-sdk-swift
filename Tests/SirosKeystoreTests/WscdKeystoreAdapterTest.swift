@@ -211,6 +211,32 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertNil(claims?["nonce"])
     }
 
+    /// Regression (review finding): `exportPublicKey` only promises a public
+    /// JWK, not a `kid` of its own - a HAIP proof's embedded `jwk` must carry
+    /// the WSCD's own `key.keyId` so `resolveSigningKey` can match it
+    /// directly on its first, cheap attempt instead of falling back to
+    /// exporting and thumbprinting every key the WSCD holds.
+    func testGenerateProofEmbedsTheWscdKeyIdAsTheJwkKidForHaip() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+
+        let jwt = try await adapter.generateProof(
+            audience: "https://issuer.example.com",
+            nonce: "n",
+            freshKey: false,
+            holderBinding: .embeddedJwk
+        )
+
+        let header = JwtHelpers.parseJwtHeader(jwt)
+        let jwk = header?["jwk"] as? [String: Any]
+        XCTAssertEqual(jwk?["kid"] as? String, "test-key-1")
+        // The key's own public-key members are still exactly what
+        // `exportPublicKey` returned, untouched.
+        XCTAssertNotNil(jwk?["x"])
+        XCTAssertNotNil(jwk?["y"])
+        XCTAssertNil(header?["kid"], "HAIP must not ALSO carry a top-level header kid")
+    }
+
     func testGenerateDPoPProofBuildsProofThroughSigner() async throws {
         let signer = MockSigner()
         let adapter = try await unlockedAdapter(signer)
