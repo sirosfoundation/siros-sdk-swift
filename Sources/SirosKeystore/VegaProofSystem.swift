@@ -356,7 +356,18 @@ public actor VegaProofSystem: ZkProofSystem {
     /// and why `saltBytes` can't be validated yet (the catalog doesn't
     /// publish it - sirosfoundation/go-zk-circuits#29).
     static func validateCircuitParams(_ descriptor: ZkCircuitDescriptor) throws {
-        // TEMPORARILY DISABLED to prove the new tests are non-vacuous.
+        let curve = descriptor.params["curve"]?.stringValue
+        guard curve == "P-256" else {
+            throw MdocError.malformed(
+                "Vega circuit '\(descriptor.id)' declares curve '\(curve ?? "nil")', but \(systemIdValue) only supports P-256"
+            )
+        }
+        let numClaims = descriptor.params["numClaims"]?.stringValue.flatMap(Int.init)
+        guard numClaims == maxClaimsV1 else {
+            throw MdocError.malformed(
+                "Vega circuit '\(descriptor.id)' declares numClaims=\(String(describing: numClaims)), but \(systemIdValue) is built for exactly \(maxClaimsV1) claim slots"
+            )
+        }
     }
 }
 
