@@ -91,14 +91,19 @@ public enum TokenStatusList {
     /// from "it carries one this SDK could not read" (attacker-adjacent
     /// data - `mdocValidityClaims` preserves a `status` object even when its
     /// `idx` cannot be represented as `Int`, or `status` itself is a scalar -
-    /// neither must be silently treated the same as the first case). A
-    /// top-level `status` that is present but not a map (e.g.
-    /// `{"status":"invalid"}`) is exactly that: unreadable, not absent, so
-    /// this must say true, not fall through the cast and say false.
+    /// neither must be silently treated the same as the first case).
+    ///
+    /// Any PRESENCE of the `status` key counts as declared (review finding) -
+    /// even `{"status":{}}`, an empty object with no `status_list` member at
+    /// all. A conformant issuer that means "no revocation tracking" simply
+    /// OMITS `status` entirely; one that emits the key with nothing readable
+    /// inside it is exactly as attacker-adjacent/unreadable as a `status_list`
+    /// with neither `idx` nor `uri` usable, which this already treats as
+    /// present rather than absent - the same standard applied consistently
+    /// one level up, rather than only once something is nested far enough in
+    /// to specifically be `status_list`.
     public static func hasStatusReference(_ claims: [String: Any]) -> Bool {
-        guard let status = claims["status"] else { return false }
-        guard let statusMap = status as? [String: Any] else { return true }
-        return statusMap["status_list"] != nil
+        claims["status"] != nil
     }
 
     /// `idx` as an exact, non-negative `Int`, or nil.

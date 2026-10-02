@@ -171,12 +171,22 @@ public actor CredentialStatusEvaluator {
     ///   token served from the credential's own status URI claim to be from
     ///   any issuer at all.
     public func evaluate(claims: [String: Any], credentialIssuer: String? = nil) async -> CredentialStatus {
-        let windowStatus = CredentialValidity.check(
-            CredentialValidity.extract(from: claims),
-            clockTolerance: clockTolerance,
-            now: now()
-        )
+        let window = CredentialValidity.extract(from: claims)
+        let windowStatus = CredentialValidity.check(window, clockTolerance: clockTolerance, now: now())
         guard windowStatus == .valid else { return windowStatus }
+        // Neither bound could be read, AND the MSO declared a validityInfo
+        // block anyway (review finding): that is not "no validity window",
+        // which is what a nil/nil window otherwise means (an ordinary
+        // credential, correctly valid indefinitely) - it is attacker-
+        // adjacent data this SDK could not read, which must fail closed the
+        // same way an unreadable `status` already does below.
+        if window.validFrom == nil, window.validUntil == nil,
+           CredentialUtils.hasDeclaredValidityWindow(claims) {
+            #if canImport(os)
+            statusLogger.warning("Could not read the credential's declared validity window")
+            #endif
+            return .unknown
+        }
 
         guard let statusListClient else { return .valid }
         guard let reference = TokenStatusList.extractReference(from: claims) else {

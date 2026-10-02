@@ -119,6 +119,82 @@ final class MdocValidityClaimsTests: XCTestCase {
         )
     }
 
+    /// Regression (review finding): when `validityInfo` is present but
+    /// NEITHER `validFrom` nor `validUntil` untags to a readable string
+    /// (here, both are bare integers rather than tagged date strings), the
+    /// claims dictionary previously came back empty for this block -
+    /// indistinguishable from a credential declaring no validity window at
+    /// all (an ordinary credential, correctly valid indefinitely), rather
+    /// than one whose window this SDK could not read.
+    func testAValidityInfoWithNeitherDateReadableIsStillRecordedAsPresent() throws {
+        let mso: CBOR = .map([
+            .utf8String("docType"): .utf8String("org.iso.18013.5.1.mDL"),
+            .utf8String("validityInfo"): .map([
+                .utf8String("validFrom"): .unsignedInt(1),
+                .utf8String("validUntil"): .unsignedInt(2),
+            ]),
+        ])
+        let msoBytes = CBOR.tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([:]),
+            .utf8String("issuerAuth"): .array([
+                .byteString([]), .map([:]), .byteString(msoBytes.encode()), .byteString([]),
+            ]),
+        ])
+        let credential = StoredCredential(
+            id: 1,
+            format: "mso_mdoc",
+            raw: Data(issuerSigned.encode()).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
+            batchId: 1,
+            instanceId: 0
+        )
+        let claims = try XCTUnwrap(CredentialUtils.validityClaims(credential))
+        XCTAssertNil(claims["validFrom"])
+        XCTAssertNil(claims["validUntil"])
+        XCTAssertTrue(
+            CredentialUtils.hasDeclaredValidityWindow(claims),
+            "validityInfo WAS declared, with neither date readable - still not the same as no window at all"
+        )
+    }
+
+    /// End-to-end regression (review finding): the credential above must
+    /// evaluate to `.unknown`, not `.valid` - a credential whose declared
+    /// validity window this SDK could not read is not the same thing as one
+    /// that declared no window at all.
+    func testAMdocWithAnUnreadableValidityWindowEvaluatesAsUnknown() async throws {
+        let mso: CBOR = .map([
+            .utf8String("docType"): .utf8String("org.iso.18013.5.1.mDL"),
+            .utf8String("validityInfo"): .map([
+                .utf8String("validFrom"): .unsignedInt(1),
+                .utf8String("validUntil"): .unsignedInt(2),
+            ]),
+        ])
+        let msoBytes = CBOR.tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([:]),
+            .utf8String("issuerAuth"): .array([
+                .byteString([]), .map([:]), .byteString(msoBytes.encode()), .byteString([]),
+            ]),
+        ])
+        let credential = StoredCredential(
+            id: 1,
+            format: "mso_mdoc",
+            raw: Data(issuerSigned.encode()).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
+            batchId: 1,
+            instanceId: 0
+        )
+        let claims = try XCTUnwrap(CredentialUtils.validityClaims(credential))
+        let evaluator = CredentialStatusEvaluator()
+        let status = await evaluator.evaluate(claims: claims, credentialIssuer: "https://issuer.example")
+        XCTAssertEqual(status, .unknown)
+    }
+
     /// Regression (review finding): a `status` member that is not even a
     /// map (here, a bare scalar) previously failed the whole
     /// `if let status = ..., let statusList = status[...]` as one unit, so

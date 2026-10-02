@@ -168,26 +168,28 @@ extension SirosWallet {
         // parse step's own error path (review finding: that path used to
         // write to the cache unconditionally, guarded by none of this) - a
         // logout/new-login or this credential's own deletion can complete
-        // WHILE either path is still running, and without this, a write
-        // below could land after endSessionLocally()'s
+        // WHILE either path is still running, and the generation/tombstone
+        // check `set` itself performs, atomically, under its own lock (see
+        // `CredentialStatusCache.set`'s doc comment) is what keeps a write
+        // below from landing after `endSessionLocally()`'s
         // credentialStatusCache.clear() or deleteCredential(_:)'s
         // .remove(_:) already ran - silently resurrecting a previous
         // account's (or a deleted credential's) status for whichever
         // account/credential next reuses the id.
-        lock.lock(); let generation = sessionGeneration; lock.unlock()
+        //
+        // No separate `credentialStore.getById` existence re-check here
+        // (review finding: a FORMER version of this guard had one, but a
+        // check made before - not atomically WITH - the write it guards can
+        // never fully close this race, no matter how late it runs; the
+        // cache's own generation+tombstone check, applied at the moment of
+        // the write itself, is what actually does).
+        let cacheGeneration = credentialStatusCache.currentGeneration()
 
         // Shared by every return path below, so the parse-failure case is
         // guarded exactly the same way as the normal evaluation (review
         // finding) rather than by a separate, easy-to-miss copy of the check.
-        // Also re-checks the credential still exists - the session-boundary
-        // check above catches a logout/relogin, but deleteCredential(_:)
-        // removes one credential without bumping the session generation at
-        // all.
-        func cacheIfStillCurrent(_ status: CredentialStatus) async {
-            lock.lock(); let sameSession = generation == sessionGeneration; lock.unlock()
-            if sameSession, await credentialStore.getById(credential.id) != nil {
-                credentialStatusCache.set(credential.id, status)
-            }
+        func cacheIfStillCurrent(_ status: CredentialStatus) {
+            credentialStatusCache.set(credential.id, status, generation: cacheGeneration)
         }
 
         // A credential whose validity data will not parse is not a valid one.
@@ -198,10 +200,21 @@ extension SirosWallet {
         do {
             parsed = try CredentialUtils.parseValidityClaims(credential)
         } catch {
-            await cacheIfStillCurrent(.unknown)
+            cacheIfStillCurrent(.unknown)
             return .unknown
         }
-        guard let claims = parsed else { return .valid }
+        // Cached too (review finding), not merely returned: without this, a
+        // STALE cache entry from whatever credential previously held this
+        // id (an id SQLite reuses - see the tombstone mechanism above) would
+        // survive indefinitely, since nothing else ever overwrites it for an
+        // id whose current credential has no validity/status claims at all -
+        // retain(_:) preserves any id still currently held, stale entry
+        // included. A reused id's own claim-less credential must read as
+        // `.valid` from here on, not whatever its previous occupant was.
+        guard let claims = parsed else {
+            cacheIfStillCurrent(.valid)
+            return .valid
+        }
 
         // An mdoc's normalised claims carry no `iss`, so the credential's own
         // stored issuer identifier is what binds its Status List Token to an
@@ -211,7 +224,7 @@ extension SirosWallet {
             credentialIssuer: credential.credentialIssuerIdentifier
         )
 
-        await cacheIfStillCurrent(status)
+        cacheIfStillCurrent(status)
         return status
     }
 
@@ -231,7 +244,19 @@ extension SirosWallet {
         for credential in await credentialStore.getAll() {
             statuses[credential.id] = await credentialStatus(of: credential)
         }
-        credentialStatusCache.retain(Set(statuses.keys))
+        // Re-fetched here, rather than reusing the loop's own now-possibly-
+        // stale snapshot (review finding): `credentialStatus(of:)` always
+        // returns a computed result for an id, whether or not its own
+        // generation/tombstone-guarded write actually landed - so `statuses`
+        // above can still carry an entry for a credential deleted WHILE this
+        // loop was running. `retain(_:)` un-tombstones every id it is given;
+        // handing it a deleted id would reopen that id's tombstone for
+        // exactly the id a concurrent deleteCredential(_:) just closed it
+        // for, letting a late write resurrect it. Re-fetching narrows the
+        // race to the (much smaller) gap between this call and `retain`
+        // itself, rather than spanning this whole loop's duration.
+        let stillHeld = Set(await credentialStore.getAll().map { $0.id })
+        credentialStatusCache.retain(stillHeld.intersection(statuses.keys))
         return statuses
     }
 
@@ -379,7 +404,9 @@ extension SirosWallet {
     /// reported `.valid`, turning a blocked or failing status URI into a
     /// silent pass rather than an unknown.
     static func fetchPublicUrl(_ urlString: String, headers: [String: String]) async -> TokenStatusList.FetchOutcome {
-        guard let url = URL(string: urlString), isPublicFetchAllowed(url) else {
+        guard let url = URL(string: urlString), isPublicFetchAllowed(url), let host = url.host,
+              await hostResolvesToOnlyPublicAddresses(host)
+        else {
             // Never attempted at all - this wallet's own policy refused the
             // URL. Not the same as the endpoint being unreachable.
             return .rejected
@@ -388,15 +415,31 @@ extension SirosWallet {
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        guard let (data, response) = try? await thirdPartySession.data(for: request) else {
-            // No response of any kind - the one genuine transport failure.
-            return .unreachable
+        // A fresh delegate instance per call (review finding), passed to
+        // this one request rather than relying on the session's own default
+        // delegate: `data(for:request:delegate:)` routes THIS task's
+        // callbacks to it instead, so it needs no `ObjectIdentifier`-keyed
+        // bookkeeping to stay correct under concurrent calls - there is only
+        // ever one task per instance - and, the actual point of this
+        // change, `fetchPublicUrl` can ask THIS SPECIFIC instance whether
+        // IT cancelled the request after the fact.
+        let delegate = HttpsOnlyRedirectDelegate()
+        do {
+            let (data, response) = try await thirdPartySession.data(for: request, delegate: delegate)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                // The server WAS reached; it just didn't answer with success.
+                return .rejected
+            }
+            return .success(data)
+        } catch {
+            // A cap-triggered cancellation reached the server and received
+            // (too much) data - not "could not reach it at all" (review
+            // finding): the evaluator treats ONLY a genuine transport
+            // failure as offline-friendly, so without this distinction an
+            // oversized or hostile response could force a credential to
+            // read as `.valid` instead of `.unknown`.
+            return delegate.didExceedResponseCap ? .rejected : .unreachable
         }
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            // The server WAS reached; it just didn't answer with success.
-            return .rejected
-        }
-        return .success(data)
     }
 }
 
@@ -425,11 +468,11 @@ private let thirdPartySession: URLSession = {
     configuration.urlCredentialStorage = nil
     configuration.urlCache = nil
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    return URLSession(
-        configuration: configuration,
-        delegate: HttpsOnlyRedirectDelegate(),
-        delegateQueue: nil
-    )
+    // No session-level delegate: `fetchPublicUrl` passes a fresh
+    // `HttpsOnlyRedirectDelegate` to every call instead (see its doc
+    // comment), which `data(for:request:delegate:)` uses in place of
+    // whatever the session itself declares.
+    return URLSession(configuration: configuration)
 }()
 
 /// Whether a third-party URL may be fetched at all.
@@ -467,6 +510,156 @@ func isPublicFetchAllowed(_ url: URL) -> Bool {
           let host = url.host, !host.isEmpty
     else { return false }
     return !isReservedOrLoopbackHost(host)
+}
+
+/// Whether every address `host` resolves to is public - the hostname half
+/// of blocking SSRF/local-network probing through a credential-controlled
+/// URL (review finding): `isPublicFetchAllowed` alone only rejects IP
+/// *literals* in the URL text, so an ordinary DNS name a credential/issuer
+/// points at a private address sailed through every check there untouched
+/// and was fetched.
+///
+/// Deliberately NOT folded into `isPublicFetchAllowed` itself (unlike that
+/// function, this performs real DNS I/O): dozens of existing tests call
+/// `isPublicFetchAllowed` directly against placeholder hostnames (RFC
+/// 2606's `issuer.example`) expecting a pure, instant, offline predicate -
+/// folding a real lookup in here would make the whole test suite network-
+/// dependent. This is called only from the real fetch path below and from
+/// the redirect delegate, where a DNS round trip is already about to
+/// happen regardless.
+///
+/// Bounded by `hostResolutionTimeout` (review finding, found empirically -
+/// not merely theorized - while writing this fix's own tests): `getaddrinfo`
+/// has no timeout parameter of its own, and a name that will not resolve at
+/// all can make it block for a LONG time (tens of seconds, observed) in an
+/// environment with no path to a DNS server, which would otherwise turn
+/// every status/JWKS check against such a host into a multi-second-or-worse
+/// stall - worse than simply being offline, which this whole mechanism
+/// exists to tolerate gracefully. A lookup that does not finish in time is
+/// treated the same as one that fails outright: not a policy decision this
+/// function is positioned to make either way.
+///
+/// Not airtight against DNS rebinding: the address actually dialed is
+/// still resolved a second time, by URLSession's own resolver, after this
+/// check passes - closing that fully needs a custom resolver that pins the
+/// exact address connected to, a larger change than this PR takes on (see
+/// `isPublicFetchAllowed`'s own doc comment for the same caveat on the
+/// literal-IP check). This closes the practical case the finding
+/// describes: an ordinary, slowly-changing DNS record pointed at a private
+/// address.
+func hostResolvesToOnlyPublicAddresses(_ host: String) async -> Bool {
+    // Deliberately NOT `withTaskGroup` running `resolveHostBlocking`
+    // directly in a child task (tried first, and measured, not merely
+    // suspected, to fail): that puts a genuinely BLOCKING call on Swift
+    // concurrency's own cooperative thread pool, which has as few threads
+    // as this process has cores - a slow `getaddrinfo` there can occupy the
+    // only thread able to run the timeout task's own continuation too,
+    // starving the race itself and making the "bounded" timeout wait out
+    // the full unbounded lookup anyway. Two plain GCD background blocks,
+    // outside that pool entirely, race properly.
+    let timeout = hostResolutionTimeout
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        let gate = ResumeGate()
+        DispatchQueue.global(qos: .utility).async {
+            gate.resume(with: resolveHostBlocking(host), continuation)
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+            // Could not resolve in time - not a policy decision to make
+            // here: the connect attempt still has to happen (and fail or
+            // succeed) on its own, and reads as `.unreachable` like any
+            // other transport failure, not as "blocked".
+            gate.resume(with: true, continuation)
+        }
+    }
+}
+
+/// Ensures a `CheckedContinuation` is resumed exactly once, whichever of
+/// ``hostResolvesToOnlyPublicAddresses(_:)``'s two racing background blocks
+/// - the real lookup, or the timeout - gets there first. Resuming a
+/// `CheckedContinuation` twice is a programmer error `Continuation`
+/// terminates the process over, so the second racer losing silently (not
+/// resuming at all) is required, not merely tidy.
+private final class ResumeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func resume(with value: Bool, _ continuation: CheckedContinuation<Bool, Never>) {
+        lock.lock()
+        let shouldResume = !resumed
+        resumed = true
+        lock.unlock()
+        if shouldResume { continuation.resume(returning: value) }
+    }
+}
+
+/// The same check, for the one call site that cannot `await` it - the
+/// redirect delegate's callback, a plain synchronous closure `URLSession`
+/// invokes directly. Bounded the same way, via a semaphore rather than
+/// Swift concurrency's own timeout machinery, since this runs on whatever
+/// thread `URLSession` calls the delegate back on, not inside a `Task`.
+func hostResolvesToOnlyPublicAddressesBlocking(_ host: String) -> Bool {
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = ResultBox(true)
+    DispatchQueue.global(qos: .utility).async {
+        box.value = resolveHostBlocking(host)
+        semaphore.signal()
+    }
+    _ = semaphore.wait(timeout: .now() + hostResolutionTimeout)
+    return box.value
+}
+
+/// How long ``hostResolvesToOnlyPublicAddresses(_:)`` and its blocking
+/// sibling wait for a DNS answer before giving up - see their shared doc
+/// comment for why this exists at all. A `var`, not a `let`, purely so
+/// tests can shorten it rather than wait out the real value.
+var hostResolutionTimeout: TimeInterval = 5
+
+/// A plain mutable box, `@unchecked Sendable` because access to it is
+/// already serialized by the semaphore in
+/// ``hostResolvesToOnlyPublicAddressesBlocking(_:)`` - the writer signals
+/// the semaphore after its one write, and the reader only reads after
+/// `wait` returns, so the two sides never touch `value` at the same time.
+private final class ResultBox: @unchecked Sendable {
+    var value: Bool
+    init(_ value: Bool) { self.value = value }
+}
+
+/// The actual (unbounded) `getaddrinfo` lookup - never called directly;
+/// both wrappers above bound it with a timeout first.
+private func resolveHostBlocking(_ host: String) -> Bool {
+    var hints = addrinfo()
+    // `SOCK_STREAM` is already `Int32` on Darwin but Glibc's own
+    // `__socket_type` enum on Linux, which `addrinfo.ai_socktype` (`Int32`
+    // on both) does not accept directly there.
+    #if canImport(Darwin)
+    hints.ai_socktype = SOCK_STREAM
+    #else
+    hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+    #endif
+    var result: UnsafeMutablePointer<addrinfo>?
+    guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else {
+        // Could not resolve at all - not a policy decision to make here:
+        // the connect attempt fails on its own and reads as `.unreachable`,
+        // the same as any other transport failure, not as "blocked".
+        return true
+    }
+    defer { freeaddrinfo(first) }
+
+    var node: UnsafeMutablePointer<addrinfo>? = first
+    while let current = node {
+        switch current.pointee.ai_family {
+        case AF_INET:
+            let sin = current.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+            if isReservedIPv4(sin.sin_addr.s_addr.bigEndian) { return false }
+        case AF_INET6:
+            let sin6 = current.pointee.ai_addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee }
+            if isReservedIPv6(sin6.sin6_addr) { return false }
+        default:
+            break
+        }
+        node = current.pointee.ai_next
+    }
+    return true
 }
 
 /// Whether `host` (a URL's `.host`, so an IPv6 literal arrives WITHOUT its
@@ -557,6 +750,15 @@ let maxPublicFetchResponseBytes = 10 * 1024 * 1024
 /// allowed as a first request, AND enforces
 /// ``maxPublicFetchResponseBytes`` while a response body is still arriving.
 ///
+/// One instance backs exactly one request: `fetchPublicUrl` constructs a
+/// fresh one per call and passes it to `data(for:request:delegate:)`, which
+/// is why this needs no per-task (`ObjectIdentifier`-keyed) bookkeeping -
+/// there is only ever one task to track, and, the actual reason for this
+/// shape (review finding), `fetchPublicUrl` can ask THIS instance
+/// afterward whether IT cancelled its own request, which a shared,
+/// session-wide delegate instance juggling many concurrent tasks could not
+/// answer for any one of them without a lot more bookkeeping.
+///
 /// Passing nil to the redirect completion handler stops the redirect and
 /// returns the 3xx response itself, which `fetchPublicUrl` then rejects as
 /// not a 2xx. `URLSession`'s async `data(for:)` still routes through a
@@ -564,11 +766,26 @@ let maxPublicFetchResponseBytes = 10 * 1024 * 1024
 /// its own return value is the fully-buffered `Data` - cancelling the task
 /// here, the moment the running total exceeds the cap, is what keeps
 /// `data(for:)` from ever finishing that buffer for an oversized response;
-/// the cancellation surfaces to `fetchPublicUrl` as a thrown error, caught
-/// there the same way any other transport failure already is.
+/// the cancellation surfaces to `fetchPublicUrl` as a thrown error - which
+/// `didExceedResponseCap` lets it tell apart from a genuine transport
+/// failure (review finding: collapsing the two together let an oversized or
+/// hostile response read as merely "unreachable", which is offline-friendly,
+/// instead of the "server answered, but something is wrong" this actually
+/// is).
 final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private var bytesReceived: [ObjectIdentifier: Int] = [:]
+    private var bytesReceived = 0
+    private var exceededCap = false
+
+    /// Whether THIS delegate's one task was cancelled for exceeding
+    /// ``maxPublicFetchResponseBytes`` - read by `fetchPublicUrl` after
+    /// `data(for:request:delegate:)` throws, to tell that apart from any
+    /// other transport failure.
+    var didExceedResponseCap: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return exceededCap
+    }
 
     func urlSession(
         _ session: URLSession,
@@ -577,7 +794,9 @@ final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, URLSess
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard let url = request.url, isPublicFetchAllowed(url) else {
+        guard let url = request.url, isPublicFetchAllowed(url), let host = url.host,
+              hostResolvesToOnlyPublicAddressesBlocking(host)
+        else {
             completionHandler(nil)
             return
         }
@@ -585,20 +804,14 @@ final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, URLSess
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let key = ObjectIdentifier(dataTask)
         lock.lock()
-        let total = (bytesReceived[key] ?? 0) + data.count
-        bytesReceived[key] = total
+        bytesReceived += data.count
+        let exceeded = bytesReceived > maxPublicFetchResponseBytes
+        if exceeded { exceededCap = true }
         lock.unlock()
-        if total > maxPublicFetchResponseBytes {
+        if exceeded {
             dataTask.cancel()
         }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
-        lock.lock()
-        bytesReceived.removeValue(forKey: ObjectIdentifier(task))
-        lock.unlock()
     }
 }
 
@@ -610,15 +823,26 @@ final class CredentialStatusCache: @unchecked Sendable {
     private let lock = NSLock()
     private var statuses: [Int64: CredentialStatus] = [:]
     /// Ids `remove(_:)` has dropped and no later `retain(_:)` has seen come
-    /// back. `set(_:_:)` refuses to write one (review finding): a bare
-    /// existence check made by the CALLER before calling `set` is not atomic
-    /// WITH that call - `remove(_:)` can run on another thread in the gap
-    /// between the caller's check and this write, which a separate async
+    /// back. `set(_:_:generation:)` refuses to write one (review finding): a
+    /// bare existence check made by the CALLER before calling `set` is not
+    /// atomic WITH that call - `remove(_:)` can run on another thread in the
+    /// gap between the caller's check and this write, which a separate async
     /// `credentialStore.getById` lookup cannot prevent no matter how late it
     /// runs, since nothing holds a lock across both steps. Checking under
     /// THIS SAME lock, in the same call that performs the write, is what
     /// actually closes it.
     private var tombstoned: Set<Int64> = []
+    /// Bumped by `clear()` (a session boundary - logout, account switch).
+    /// `set(_:_:generation:)` refuses to write a result computed under an
+    /// older generation than this one (review finding): a caller capturing
+    /// "is this still the same session" via a SEPARATE flag/lock before
+    /// `clear()` runs cannot be atomic with this write either, for the exact
+    /// same reason `tombstoned` cannot be checked separately from `set`
+    /// itself - a concurrent `clear()` can land in the gap between that
+    /// check and this call just as a concurrent `remove(_:)` can. Folding
+    /// the generation check into `set` itself, alongside the tombstone
+    /// check, closes both races with one mechanism instead of two.
+    private var generation = 0
 
     func get(_ id: Int64) -> CredentialStatus {
         lock.lock()
@@ -626,10 +850,25 @@ final class CredentialStatusCache: @unchecked Sendable {
         return statuses[id] ?? .valid
     }
 
-    func set(_ id: Int64, _ status: CredentialStatus) {
+    /// The cache's current generation, to capture BEFORE a (potentially
+    /// slow, real-network) evaluation starts and pass back into
+    /// `set(_:_:generation:)` once it finishes.
+    func currentGeneration() -> Int {
         lock.lock()
         defer { lock.unlock() }
-        guard !tombstoned.contains(id) else { return }
+        return generation
+    }
+
+    /// Records `status` for `id`, UNLESS `id` has been tombstoned since, OR
+    /// `generation` no longer matches - both checked, and the write applied,
+    /// under this one lock, so neither a concurrent `remove(_:)` nor a
+    /// concurrent `clear()` can land in between a caller's own check and
+    /// this write (review finding - see `tombstoned`'s and `generation`'s
+    /// doc comments).
+    func set(_ id: Int64, _ status: CredentialStatus, generation callerGeneration: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard callerGeneration == generation, !tombstoned.contains(id) else { return }
         statuses[id] = status
     }
 
@@ -662,10 +901,12 @@ final class CredentialStatusCache: @unchecked Sendable {
 
     /// All held statuses, e.g. after a logout. Clears tombstones too: a new
     /// account's credentials can legitimately reuse any id a previous
-    /// account's did.
+    /// account's did. Bumps `generation`, so a write from an evaluation that
+    /// started before this call can never land after it (review finding).
     func clear() {
         lock.lock()
         defer { lock.unlock() }
+        generation += 1
         statuses.removeAll()
         tombstoned.removeAll()
     }

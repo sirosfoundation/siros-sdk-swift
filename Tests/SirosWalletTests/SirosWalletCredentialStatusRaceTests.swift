@@ -9,6 +9,7 @@ import SirosAuth
 import SirosCredentials
 import SirosKeystore
 @testable import SirosWallet
+@preconcurrency import SwiftCBOR
 
 /// `credentialStatus(of:)` writes to `credentialStatusCache` only after
 /// `await`ing the (potentially slow, real-network) evaluator - a session
@@ -88,6 +89,31 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
         return StoredCredential(id: id, format: "dc+sd-jwt", raw: raw, batchId: id, instanceId: 0)
     }
 
+    /// An mdoc whose MSO declares NEITHER `validityInfo` NOR `status` at
+    /// all - the one shape `CredentialUtils.parseValidityClaims` returns
+    /// nil claims for (every other shape either throws or returns a
+    /// non-nil, possibly-empty, dictionary).
+    private func claimsFreeMdocCredential(id: Int64) -> StoredCredential {
+        let mso: CBOR = .map([.utf8String("docType"): .utf8String("org.iso.18013.5.1.mDL")])
+        let msoBytes = CBOR.tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([:]),
+            .utf8String("issuerAuth"): .array([
+                .byteString([]), .map([:]), .byteString(msoBytes.encode()), .byteString([]),
+            ]),
+        ])
+        return StoredCredential(
+            id: id,
+            format: "mso_mdoc",
+            raw: Data(issuerSigned.encode()).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
+            batchId: id,
+            instanceId: 0
+        )
+    }
+
     /// Regression (review finding): `deleteCredential(_:)` removes a
     /// credential without bumping the session generation at all (that's a
     /// session-boundary concept, not a per-credential one) - evaluating a
@@ -125,11 +151,14 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
     /// needing to reproduce the exact thread interleaving.
     func testCacheRefusesASetForATombstonedIdEvenWithNoInterveningCheck() {
         let cache = CredentialStatusCache()
-        cache.set(7, .valid)
+        let generation = cache.currentGeneration()
+        cache.set(7, .valid, generation: generation)
         XCTAssertEqual(cache.get(7), .valid)
 
         cache.remove(7) // simulates deleteCredential(_:) completing concurrently
-        cache.set(7, .revoked) // simulates the in-flight evaluation's write landing after it
+        // simulates the in-flight evaluation's write landing after it, still
+        // carrying the generation it captured BEFORE the remove above:
+        cache.set(7, .revoked, generation: generation)
         XCTAssertEqual(
             cache.get(7), .valid,
             "a set for a tombstoned id must be refused outright, not merely overwritten by a later remove"
@@ -143,11 +172,67 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
     func testCacheAcceptsWritesAgainOnceRetainSeesTheIdReturn() {
         let cache = CredentialStatusCache()
         cache.remove(9)
-        cache.set(9, .revoked)
+        cache.set(9, .revoked, generation: cache.currentGeneration())
         XCTAssertEqual(cache.get(9), .valid, "still tombstoned - the reused credential has not been seen yet")
 
         cache.retain([9])
-        cache.set(9, .revoked)
+        cache.set(9, .revoked, generation: cache.currentGeneration())
         XCTAssertEqual(cache.get(9), .revoked, "un-tombstoned once retain saw id 9 as currently held again")
+    }
+
+    /// Regression (review finding): a caller capturing "is this still the
+    /// same session" via a check made SEPARATELY from (before) the cache
+    /// write it guards cannot be atomic with that write, for the exact same
+    /// reason a separate existence check before `set` could not be (see the
+    /// tombstone test above) - a concurrent `clear()` (session boundary) can
+    /// land in the gap between that check and the write. Folding the
+    /// generation check into `set` itself, under its own lock, closes it.
+    func testCacheRefusesASetFromAnOlderGenerationEvenWithNoInterveningCheck() {
+        let cache = CredentialStatusCache()
+        let staleGeneration = cache.currentGeneration()
+
+        cache.clear() // simulates endSessionLocally() completing concurrently
+
+        // simulates the in-flight evaluation's write landing after it, still
+        // carrying the generation it captured BEFORE the clear above:
+        cache.set(7, .revoked, generation: staleGeneration)
+        XCTAssertEqual(
+            cache.get(7), .valid,
+            "a set from a superseded generation must be refused, not resurrect a cleared session's entry"
+        )
+
+        // A write using the CURRENT generation must still succeed - this
+        // isn't a permanently broken cache, only a stale write is refused.
+        cache.set(7, .revoked, generation: cache.currentGeneration())
+        XCTAssertEqual(cache.get(7), .revoked)
+    }
+
+    /// Regression (review finding, "previously missed" - in code unchanged
+    /// since an earlier round): `credentialStatus(of:)`'s "claims parsed to
+    /// nil" path returned `.valid` WITHOUT writing it to the cache. An id
+    /// SQLite reuses for a later, unrelated credential (the same id-
+    /// collision concern `CredentialStatusCache.tombstoned` exists for) can
+    /// go from one credential that cached a real unusable status to a new
+    /// one with no validity/status claims at all - and without this write,
+    /// `cachedCredentialStatus` kept answering with the PREVIOUS occupant's
+    /// stale `.revoked`/`.expired`/etc indefinitely, since nothing else ever
+    /// overwrites a claims-free credential's entry.
+    func testCredentialStatusCachesValidForAClaimsFreeCredentialEvenOverAStaleEntry() async {
+        let store = InMemoryCredentialStore()
+        let credential = claimsFreeMdocCredential(id: 77)
+        await store.save(credential)
+        let wallet = makeWallet(credentialStore: store)
+
+        // Simulates id 77's PREVIOUS occupant having cached a real, usable
+        // result before being deleted and this id reused.
+        wallet.credentialStatusCache.set(77, .revoked, generation: wallet.credentialStatusCache.currentGeneration())
+        XCTAssertEqual(wallet.cachedCredentialStatus(of: 77), .revoked, "sanity: the stale entry is actually there")
+
+        let status = await wallet.credentialStatus(of: credential)
+        XCTAssertEqual(status, .valid, "a claims-free credential has nothing to mark it anything but valid")
+        XCTAssertEqual(
+            wallet.cachedCredentialStatus(of: 77), .valid,
+            "must overwrite the stale entry, not leave the previous occupant's status in place forever"
+        )
     }
 }

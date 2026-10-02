@@ -50,13 +50,20 @@ public enum DiipProfile: String, Sendable, CaseIterable, Comparable {
     /// Parse a profile version as written in configuration - `"v5"`, `"V5"` or
     /// `"5"` all work. Returns nil for anything else, so a caller can fall
     /// back to ``latest`` rather than crash on a typo.
+    ///
+    /// Strips AT MOST one leading `v` (review finding): `drop(while:)` strips
+    /// every leading one it finds, so a malformed configuration value like
+    /// `"vv5"` or `"vv6"` normalized down to the SAME `"5"`/`"6"` a genuine
+    /// `"v5"`/`"v6"` does, and was silently accepted as that profile - the
+    /// opposite of what a configuration-parsing function whose whole point is
+    /// falling back to `nil` on a typo is for.
     public static func from(version: String?) -> DiipProfile? {
-        guard let normalized = version?
+        guard var normalized = version?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .drop(while: { $0 == "v" }),
-            !normalized.isEmpty
+            .lowercased(), !normalized.isEmpty
         else { return nil }
+        if normalized.hasPrefix("v") { normalized.removeFirst() }
+        guard !normalized.isEmpty else { return nil }
         return allCases.first { $0.rawValue.dropFirst() == normalized }
     }
 

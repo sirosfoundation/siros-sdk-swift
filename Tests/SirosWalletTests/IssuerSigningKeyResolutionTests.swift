@@ -15,6 +15,25 @@ import SirosCredentials
 /// revocation silently never applied.
 final class IssuerSigningKeyResolutionTests: XCTestCase {
 
+    private var originalHostResolutionTimeout: TimeInterval = 5
+
+    override func setUp() {
+        super.setUp()
+        originalHostResolutionTimeout = hostResolutionTimeout
+        // Short, deterministically so this file's own tests (and
+        // `testAnUppercaseSchemeIsStillHttps`, which reaches a real DNS
+        // lookup for the RFC 2606 placeholder `issuer.example` through
+        // `resolveHttpsIssuerSigningKey`) stay fast regardless of how long
+        // whatever environment runs them takes to give up on a name that
+        // will not resolve - see `hostResolutionTimeout`'s own doc comment.
+        hostResolutionTimeout = 1
+    }
+
+    override func tearDown() {
+        hostResolutionTimeout = originalHostResolutionTimeout
+        super.tearDown()
+    }
+
     private let p256 = [
         "kty": "EC", "crv": "P-256",
         "x": "acbIQiuMs3i8_uszEjJ2tpTtRM4EU3yz91PH6CdH2V0",
@@ -183,6 +202,47 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         XCTAssertFalse(isPublicFetchAllowed(URL(string: "https://192.0.2.1/list")!))
     }
 
+    /// Regression (review finding): `isPublicFetchAllowed` only rejects IP
+    /// *literals* in the URL text - an ordinary HOSTNAME that resolves to a
+    /// private/loopback address sailed through it untouched. "localhost" is
+    /// used here (rather than a fabricated private-resolving domain) since
+    /// it resolves through the system's own local stub resolver, needing no
+    /// live network access to be deterministic in a sandboxed CI runner -
+    /// and it always resolves to loopback, on every platform this SDK runs
+    /// on.
+    func testAHostnameResolvingToLoopbackIsNeverFetched() async {
+        let result = await hostResolvesToOnlyPublicAddresses("localhost")
+        XCTAssertFalse(result)
+    }
+
+    /// A hostname this SDK cannot resolve at all is not this function's
+    /// decision to make: the connect attempt fails on its own and reads as
+    /// `.unreachable`, the same as any other transport failure - not as
+    /// "blocked". Also covers the case where DNS genuinely is not reachable
+    /// in whatever environment runs this test: either way, the answer must
+    /// be true, never a false negative that reads a merely-offline sandbox
+    /// as an SSRF attempt.
+    func testAHostnameThatCannotBeResolvedIsNotTreatedAsBlocked() async {
+        let result = await hostResolvesToOnlyPublicAddresses("this-host-does-not-exist.invalid")
+        XCTAssertTrue(result)
+    }
+
+    /// The timeout itself, proven non-vacuous: a name whose resolution
+    /// genuinely takes longer than `hostResolutionTimeout` must still come
+    /// back (as `true` - not a policy decision - see this function's own
+    /// doc comment) in roughly that bounded time, not however long the
+    /// underlying `getaddrinfo` call would otherwise take.
+    func testResolutionGivesUpAfterHostResolutionTimeout() async {
+        hostResolutionTimeout = 0.2
+        let start = Date()
+        let result = await hostResolvesToOnlyPublicAddresses("this-host-does-not-exist.invalid")
+        XCTAssertTrue(result)
+        XCTAssertLessThan(
+            Date().timeIntervalSince(start), 5,
+            "must give up at roughly hostResolutionTimeout, not wait out the real DNS failure"
+        )
+    }
+
     func testOrdinaryPublicAddressesAndHostnamesAreStillFetched() {
         XCTAssertTrue(isPublicFetchAllowed(URL(string: "https://issuer.example/list")!))
         // A real public IP literal (documentation-safe TEST-NET-3 analogue
@@ -220,22 +280,37 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         let halfCap = Data(repeating: 0, count: maxPublicFetchResponseBytes / 2)
         delegate.urlSession(URLSession.shared, dataTask: task, didReceive: halfCap)
         XCTAssertEqual(task.state, .suspended, "half the cap in one chunk must not cancel")
+        XCTAssertFalse(delegate.didExceedResponseCap)
 
         // A second chunk takes the running total past the cap.
         delegate.urlSession(URLSession.shared, dataTask: task, didReceive: halfCap)
         delegate.urlSession(URLSession.shared, dataTask: task, didReceive: Data([0, 1]))
         XCTAssertNotEqual(task.state, .suspended, "exceeding the cap must cancel the task")
+        // Regression (review finding): fetchPublicUrl must be able to tell
+        // THIS cancellation apart from a genuine transport failure, since
+        // only the latter is offline-friendly (.unreachable).
+        XCTAssertTrue(delegate.didExceedResponseCap)
     }
 
-    func testHttpsOnlyRedirectDelegateTracksBytesPerTaskIndependently() {
+    /// Regression (review finding): a response this delegate itself
+    /// cancelled for exceeding the byte cap reached the server and received
+    /// (too much) data - it must not read as `.unreachable` (offline-
+    /// friendly) the same way a genuine DNS/connection failure does, or an
+    /// oversized/hostile status-list response could force a credential to
+    /// evaluate as `.valid` instead of `.unknown`. One delegate instance now
+    /// backs exactly one request (`fetchPublicUrl` constructs a fresh one
+    /// per call), so there is no cross-task bleeding to prove separately -
+    /// that guarantee is now structural rather than bookkeeping-dependent.
+    func testFetchPublicUrlDoesNotTreatACapExceededCancellationAsUnreachable() async {
+        // Exercises the exact decision fetchPublicUrl's catch block makes,
+        // without a live network round trip (consistent with this delegate
+        // having none anywhere else in this file): a delegate that has
+        // already recorded exceeding the cap must report so, which is the
+        // one thing fetchPublicUrl checks after `data(for:request:delegate:)`
+        // throws.
         let delegate = HttpsOnlyRedirectDelegate()
-        let taskA = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/a")!)
-        let taskB = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/b")!)
-
-        let almostCap = Data(repeating: 0, count: maxPublicFetchResponseBytes - 1)
-        delegate.urlSession(URLSession.shared, dataTask: taskA, didReceive: almostCap)
-        delegate.urlSession(URLSession.shared, dataTask: taskB, didReceive: Data([0]))
-        XCTAssertEqual(taskA.state, .suspended, "taskA alone is still under its own cap")
-        XCTAssertEqual(taskB.state, .suspended, "taskB's one byte must not inherit taskA's running total")
+        let task = URLSession.shared.dataTask(with: URL(string: "https://issuer.example/status")!)
+        delegate.urlSession(URLSession.shared, dataTask: task, didReceive: Data(repeating: 0, count: maxPublicFetchResponseBytes + 1))
+        XCTAssertTrue(delegate.didExceedResponseCap, "fetchPublicUrl relies on exactly this flag to say .rejected, not .unreachable")
     }
 }

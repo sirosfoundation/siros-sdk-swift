@@ -286,8 +286,11 @@ final class TokenStatusListTests: XCTestCase {
     func testHasStatusReferenceDistinguishesAbsentFromUnreadable() {
         // No status claim at all - an ordinary credential, correctly absent.
         XCTAssertFalse(TokenStatusList.hasStatusReference(claims(#"{"iss":"https://issuer.example"}"#)))
-        // status present, but empty - no status_list declared, still absent.
-        XCTAssertFalse(TokenStatusList.hasStatusReference(claims(#"{"status":{}}"#)))
+        // Regression (review finding): status present, but empty - no
+        // status_list declared inside it - still counts as declared, not
+        // absent. A conformant issuer meaning "no revocation tracking"
+        // omits `status` entirely rather than emitting an empty object.
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(#"{"status":{}}"#)))
         // A well-formed status_list - present, obviously.
         XCTAssertTrue(TokenStatusList.hasStatusReference(claims(
             #"{"status":{"status_list":{"idx":1,"uri":"https://x.example"}}}"#

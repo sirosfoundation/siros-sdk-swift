@@ -300,6 +300,28 @@ public enum CredentialUtils {
         return nil
     }
 
+    /// Internal marker key `parseValidityClaims` sets when an mdoc's MSO
+    /// declared a `validityInfo` block, even if neither `validFrom` nor
+    /// `validUntil` came out readable from it - see
+    /// ``hasDeclaredValidityWindow(_:)``. Never present for a JWT-based
+    /// credential's own claims, so this can never collide with a real
+    /// server-issued claim name.
+    private static let hasDeclaredValidityWindowKey = "_mdocHasDeclaredValidityInfo"
+
+    /// Whether `claims` (from ``parseValidityClaims(_:)``) declares a
+    /// validity window AT ALL, even one neither `validFrom` nor `validUntil`
+    /// could be read from.
+    ///
+    /// `CredentialValidity.extract(from:)` reading both bounds as nil cannot
+    /// distinguish "this credential declares no validity window" (an
+    /// ordinary credential, correctly valid indefinitely per VCDM semantics)
+    /// from "it declares one this SDK could not read" (review finding: an
+    /// mdoc's `validityInfo` block present but undecodable) - the same
+    /// distinction `TokenStatusList.hasStatusReference` makes for `status`.
+    static func hasDeclaredValidityWindow(_ claims: [String: Any]) -> Bool {
+        claims[hasDeclaredValidityWindowKey] as? Bool == true
+    }
+
     /// The claims DIIP's Validity and Revocation Algorithm reads - the
     /// validity window and the Token Status List reference - normalised to one
     /// JSON shape across credential formats.
@@ -368,6 +390,16 @@ public enum CredentialUtils {
                     claims[key] = text
                 }
             }
+            // A presence marker (review finding), checked by
+            // `hasDeclaredValidityWindow` below: `validityInfo` WAS present
+            // in the MSO even when neither date untags to something
+            // readable, and that must not look identical to a credential
+            // that declares no validity window at all - the latter is
+            // ordinary and correctly valid indefinitely (VCDM semantics);
+            // the former is attacker-adjacent data this SDK could not read,
+            // the same class of gap `hasStatusReference` exists to close for
+            // an unreadable `status`.
+            claims[hasDeclaredValidityWindowKey] = true
         }
         // Only requires "status" to be PRESENT, not that it parses as a map
         // (review finding): the previous `if let status = ..., let

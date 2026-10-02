@@ -22,6 +22,17 @@ final class DiipProfileTests: XCTestCase {
         XCTAssertNil(DiipProfile.from(version: nil))
     }
 
+    /// Regression (review finding): `drop(while:)` strips EVERY leading `v`,
+    /// not just one, so a malformed value like `"vv5"` normalized down to
+    /// the same `"5"` a genuine `"v5"` does and was silently accepted as
+    /// that profile - the opposite of what this function's whole "fall back
+    /// to nil on a typo" contract is for.
+    func testAMalformedVersionWithMoreThanOneLeadingVIsRejected() {
+        XCTAssertNil(DiipProfile.from(version: "vv5"))
+        XCTAssertNil(DiipProfile.from(version: "vvv6"))
+        XCTAssertNil(DiipProfile.from(version: "v"))
+    }
+
     func testEveryVersionIdentifiesHoldersByDidJwk() {
         for profile in DiipProfile.allCases {
             XCTAssertEqual(profile.holderDidMethod, .jwk, "\(profile.version)")
