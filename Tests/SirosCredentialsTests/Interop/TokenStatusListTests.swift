@@ -200,6 +200,80 @@ final class TokenStatusListTests: XCTestCase {
         XCTAssertEqual(fetchesFinal, fetchesAfter, "a recently-touched entry must still be served from cache")
     }
 
+    /// A raw (no zlib wrapper) DEFLATE stream of `byteCount` zero bytes,
+    /// built from however many stored (type 0) blocks that takes - a
+    /// stored block's LEN is 16 bits, capping each one at 65,535 bytes.
+    /// Lets a test construct an arbitrarily large, cheaply-built
+    /// decompressed list without needing a real zlib encoder in this
+    /// package (see `Inflate`'s own doc comment for why there isn't one).
+    private static func storedDeflate(byteCount: Int) -> Data {
+        var result = Data()
+        var remaining = byteCount
+        while remaining > 0 {
+            let chunk = min(remaining, 65535)
+            let isFinal = remaining == chunk
+            let len = UInt16(chunk)
+            let nlen = ~len
+            result.append(isFinal ? 0x01 : 0x00)
+            result.append(UInt8(len & 0xFF))
+            result.append(UInt8(len >> 8))
+            result.append(UInt8(nlen & 0xFF))
+            result.append(UInt8(nlen >> 8))
+            result.append(Data(repeating: 0, count: chunk))
+            remaining -= chunk
+        }
+        return result
+    }
+
+    /// Regression (review finding): `maxCacheEntries` bounds entry COUNT,
+    /// but each entry's decompressed list can be as large as `Inflate`'s own
+    /// 64 MiB output cap - far fewer than 500 oversized entries can still
+    /// retain tens of gigabytes. Shrinks the byte budget (rather than
+    /// building cache entries anywhere near the real 50 MiB default, which
+    /// would make this test slow) so a handful of modest, cheaply-built
+    /// lists - well under the entry-count cap - must still evict the
+    /// oldest ones on byte pressure alone.
+    func testTheOldestCacheEntryIsEvictedOncePastTheByteBudgetEvenUnderTheEntryCap() async {
+        let originalBudget = tokenStatusListCacheByteBudget
+        defer { tokenStatusListCacheByteBudget = originalBudget }
+        tokenStatusListCacheByteBudget = 500_000
+
+        let key = P256.Signing.PrivateKey()
+        let issuer = "https://issuer.example"
+        let bigList = EncryptedContainerBase64.urlEncode(Self.storedDeflate(byteCount: 100_000))
+        actor FetchCounter {
+            private(set) var uris: [String] = []
+            func record(_ uri: String) { uris.append(uri) }
+        }
+        let fetched = FetchCounter()
+        let client = TokenStatusListClient(
+            httpGet: { uri, _ in
+                await fetched.record(uri)
+                return .success(Data(Self.statusListToken(bits: 1, signedBy: key, uri: uri, lst: bigList).utf8))
+            },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+
+        let oldestUri = "https://x.example/big/0"
+        // 6 entries * 100,000 bytes = 600,000, past the 500,000 budget -
+        // and only 6 entries, far under the 500-entry cap, so this is the
+        // byte budget evicting, not the count one.
+        for index in 0..<6 {
+            let uri = "https://x.example/big/\(index)"
+            _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: uri), expectedIssuer: issuer)
+        }
+
+        let fetchesBefore = await fetched.uris.count
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: oldestUri), expectedIssuer: issuer)
+        let fetchesAfter = await fetched.uris.count
+        XCTAssertEqual(fetchesAfter, fetchesBefore + 1, "the oldest entry must have been evicted by byte pressure")
+
+        let recentUri = "https://x.example/big/5"
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: recentUri), expectedIssuer: issuer)
+        let fetchesFinal = await fetched.uris.count
+        XCTAssertEqual(fetchesFinal, fetchesAfter, "a recently-touched entry must still be served from cache")
+    }
+
     /// A properly signed Status List Token declaring `bits` as its entry width.
     ///
     /// Really signed, because the reader verifies the signature before it
@@ -207,7 +281,8 @@ final class TokenStatusListTests: XCTestCase {
     private static func statusListToken(
         bits: Int,
         signedBy key: P256.Signing.PrivateKey,
-        uri: String = "https://x.example"
+        uri: String = "https://x.example",
+        lst: String = "eJxjYGRiZmFlYwcAAFwAHQ=="
     ) -> String {
         func b64(_ object: [String: Any]) -> String {
             EncryptedContainerBase64.urlEncode(
@@ -225,7 +300,7 @@ final class TokenStatusListTests: XCTestCase {
         // caller that reaches actual status-bit reading (unlike
         // testAnIllegalEntryWidthIsReportedAsSuchNotAsAMissingIndex, which
         // fails before ever decompressing) needs this to actually inflate.
-        let statusList: [String: Any] = ["bits": bits, "lst": "eJxjYGRiZmFlYwcAAFwAHQ=="]
+        let statusList: [String: Any] = ["bits": bits, "lst": lst]
         let payload: [String: Any] = [
             "iss": "https://issuer.example",
             // Must match the `Reference.uri` the caller resolves against -

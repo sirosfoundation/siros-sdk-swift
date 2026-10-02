@@ -223,20 +223,47 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
     /// be true, never a false negative that reads a merely-offline sandbox
     /// as an SSRF attempt.
     func testAHostnameThatCannotBeResolvedIsNotTreatedAsBlocked() async {
+        // A generous timeout here, not the short per-test default from
+        // setUp: this test is specifically about a CLEAN, eventually-
+        // completing resolution failure (RFC 2606's `.invalid`,
+        // guaranteed never to resolve) reading as unreachable-not-blocked,
+        // which is a DIFFERENT case from timing out (review finding -
+        // see testATimedOutResolutionIsTreatedAsBlockedNotAllowed below) -
+        // a short timeout here risks the real lookup not finishing before
+        // it fires, exercising the wrong path.
+        hostResolutionTimeout = 10
         let result = await hostResolvesToOnlyPublicAddresses("this-host-does-not-exist.invalid")
         XCTAssertTrue(result)
     }
 
-    /// The timeout itself, proven non-vacuous: a name whose resolution
-    /// genuinely takes longer than `hostResolutionTimeout` must still come
-    /// back (as `true` - not a policy decision - see this function's own
-    /// doc comment) in roughly that bounded time, not however long the
-    /// underlying `getaddrinfo` call would otherwise take.
+    /// Regression (review finding): a lookup that is merely SLOW - not
+    /// necessarily ever going to fail - must not be treated the same as one
+    /// that cleanly resolves to nothing. By the time `URLSession` resolves
+    /// the same hostname again at actual connect time it could answer with
+    /// anything, a private address included - a hostname an attacker
+    /// deliberately makes slow to resolve is exactly how a timeout,
+    /// specifically, could otherwise bypass this check even though a
+    /// genuinely non-existent name fails fast on a working resolver.
+    ///
+    /// Forces the timeout branch deterministically via an effectively-zero
+    /// timeout - far too short for ANY real DNS round trip (even a purely
+    /// local one) to win - rather than depending on some real hostname
+    /// happening to resolve slowly in whatever environment runs this.
+    func testATimedOutResolutionIsTreatedAsBlockedNotAllowed() async {
+        hostResolutionTimeout = 0.000_001
+        let result = await hostResolvesToOnlyPublicAddresses("issuer.example")
+        XCTAssertFalse(result)
+    }
+
+    /// The timeout bound itself, proven non-vacuous: resolution of a name
+    /// that will never answer must still give up in roughly
+    /// `hostResolutionTimeout`, not however long the underlying
+    /// `getaddrinfo` call would otherwise take (tens of seconds, measured,
+    /// in one sandboxed environment with no path to a DNS server).
     func testResolutionGivesUpAfterHostResolutionTimeout() async {
         hostResolutionTimeout = 0.2
         let start = Date()
-        let result = await hostResolvesToOnlyPublicAddresses("this-host-does-not-exist.invalid")
-        XCTAssertTrue(result)
+        _ = await hostResolvesToOnlyPublicAddresses("this-host-does-not-exist.invalid")
         XCTAssertLessThan(
             Date().timeIntervalSince(start), 5,
             "must give up at roughly hostResolutionTimeout, not wait out the real DNS failure"

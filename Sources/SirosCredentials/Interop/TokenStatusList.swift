@@ -189,6 +189,18 @@ public enum TokenStatusList {
 /// Holds the per-session cache, so construct one per wallet session and share
 /// it across credentials: a list covering ten thousand credentials is fetched
 /// once, not once per credential that points into it.
+/// Total decompressed bytes ``TokenStatusListClient``'s cache may hold
+/// across every entry combined (review finding): entry count alone does
+/// not bound memory, since each entry's list can be as large as
+/// `Inflate`'s own 64 MiB output cap - `maxCacheEntries` entries at that
+/// size could still retain tens of gigabytes. 50 MiB is far more than any
+/// realistic deployment needs (a draft-15 list covering a million
+/// credentials at 1 bit each is roughly 125 KB) while comfortably holding
+/// many distinct real lists at once. A `var`, not a `let`, purely so tests
+/// can shrink it rather than build cache entries large enough to exceed
+/// the real value.
+public var tokenStatusListCacheByteBudget = 50 * 1024 * 1024
+
 public actor TokenStatusListClient {
     private let httpGet: @Sendable (String, [String: String]) async -> TokenStatusList.FetchOutcome
     private let resolveIssuerKey: (@Sendable (String, String?) async -> [String: String]?)?
@@ -203,6 +215,10 @@ public actor TokenStatusListClient {
     // ones that survive eviction.
     private var cacheOrder: [String] = []
     private let maxCacheEntries = 500
+    /// Running total of every cached entry's decompressed `list` size, in
+    /// bytes - bounded by ``tokenStatusListCacheByteBudget`` ALONGSIDE
+    /// `maxCacheEntries`.
+    private var totalCachedBytes = 0
 
     /// - Parameters:
     ///   - httpGet: fetches a URL with the given headers, reporting which of
@@ -236,22 +252,27 @@ public actor TokenStatusListClient {
     public func clearCache() {
         cache.removeAll()
         cacheOrder.removeAll()
+        totalCachedBytes = 0
     }
 
-    /// Record a freshly-verified entry, evicting the oldest one first if
-    /// this would exceed `maxCacheEntries` (review finding - see
-    /// `cacheOrder`'s doc comment).
+    /// Record a freshly-verified entry, evicting the oldest entries first
+    /// while EITHER `maxCacheEntries` or `maxCachedBytes` is exceeded
+    /// (review finding - see `cacheOrder`'s and `totalCachedBytes`'s doc
+    /// comments - entry count alone does not bound memory).
     private func setCacheEntry(_ entry: TokenStatusList.CacheEntry, forUri uri: String) {
-        if cache[uri] == nil {
-            cacheOrder.append(uri)
-        } else {
+        if let existing = cache[uri] {
+            totalCachedBytes -= existing.list.count
             cacheOrder.removeAll { $0 == uri }
-            cacheOrder.append(uri)
         }
         cache[uri] = entry
-        while cacheOrder.count > maxCacheEntries {
+        cacheOrder.append(uri)
+        totalCachedBytes += entry.list.count
+        while !cacheOrder.isEmpty,
+              cacheOrder.count > maxCacheEntries || totalCachedBytes > tokenStatusListCacheByteBudget {
             let evicted = cacheOrder.removeFirst()
-            cache.removeValue(forKey: evicted)
+            if let evictedEntry = cache.removeValue(forKey: evicted) {
+                totalCachedBytes -= evictedEntry.list.count
+            }
         }
     }
 

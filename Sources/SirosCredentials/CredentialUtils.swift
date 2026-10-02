@@ -308,6 +308,18 @@ public enum CredentialUtils {
     /// server-issued claim name.
     private static let hasDeclaredValidityWindowKey = "_mdocHasDeclaredValidityInfo"
 
+    /// Internal marker keys for EACH bound individually (review finding):
+    /// `hasDeclaredValidityWindowKey` alone only catches the case where
+    /// NEITHER bound could be read. A `validityInfo` with one genuinely
+    /// readable bound and one present-but-malformed one (e.g. a real
+    /// `validFrom` alongside a `validUntil` that is an integer instead of a
+    /// tagged date string) has `hasDeclaredValidityWindowKey` true but
+    /// `extract(from:)`'s OTHER bound non-nil, so the combined "both nil"
+    /// check never fires - the malformed bound silently reads as "no bound
+    /// at all" (valid indefinitely) rather than unreadable.
+    private static let unreadableValidFromKey = "_mdocValidFromUnreadable"
+    private static let unreadableValidUntilKey = "_mdocValidUntilUnreadable"
+
     /// Whether `claims` (from ``parseValidityClaims(_:)``) declares a
     /// validity window AT ALL, even one neither `validFrom` nor `validUntil`
     /// could be read from.
@@ -318,8 +330,26 @@ public enum CredentialUtils {
     /// from "it declares one this SDK could not read" (review finding: an
     /// mdoc's `validityInfo` block present but undecodable) - the same
     /// distinction `TokenStatusList.hasStatusReference` makes for `status`.
+    ///
+    /// This alone only covers a `validityInfo` with NEITHER bound readable
+    /// (including one present as an empty object, with neither key inside
+    /// it at all) - see ``hasUnreadableValidFrom(_:)``/
+    /// ``hasUnreadableValidUntil(_:)`` for the "one bound readable, the
+    /// other declared but malformed" case this does not catch.
     static func hasDeclaredValidityWindow(_ claims: [String: Any]) -> Bool {
         claims[hasDeclaredValidityWindowKey] as? Bool == true
+    }
+
+    /// Whether `validityInfo.validFrom` was present in the MSO but could not
+    /// be read as a date - distinct from simply being absent, which is not
+    /// an error (see `hasDeclaredValidityWindow`'s doc comment).
+    static func hasUnreadableValidFrom(_ claims: [String: Any]) -> Bool {
+        claims[unreadableValidFromKey] as? Bool == true
+    }
+
+    /// `validityInfo.validUntil`'s counterpart to ``hasUnreadableValidFrom(_:)``.
+    static func hasUnreadableValidUntil(_ claims: [String: Any]) -> Bool {
+        claims[unreadableValidUntilKey] as? Bool == true
     }
 
     /// The claims DIIP's Validity and Revocation Algorithm reads - the
@@ -386,8 +416,17 @@ public enum CredentialUtils {
             // which is the same lexical form the VCDM uses for
             // validFrom/validUntil - so no conversion is needed, only untagging.
             for key in ["validFrom", "validUntil"] {
-                if let text = untaggedString(validity[CBOR.utf8String(key)]) {
+                let raw = validity[CBOR.utf8String(key)]
+                if let text = untaggedString(raw) {
                     claims[key] = text
+                } else if raw != nil {
+                    // Present in the CBOR map, but not something `untaggedString`
+                    // could read (review finding): distinct from the key being
+                    // simply ABSENT, which `extract(from:)` already correctly
+                    // reads as "no bound" - this one bound was declared and is
+                    // unreadable, which must fail closed even when the OTHER
+                    // bound parsed fine.
+                    claims[key == "validFrom" ? unreadableValidFromKey : unreadableValidUntilKey] = true
                 }
             }
             // A presence marker (review finding), checked by

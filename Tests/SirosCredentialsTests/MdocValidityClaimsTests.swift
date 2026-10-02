@@ -195,6 +195,46 @@ final class MdocValidityClaimsTests: XCTestCase {
         XCTAssertEqual(status, .unknown)
     }
 
+    /// Regression (review finding): a GENUINELY readable `validFrom`
+    /// alongside a malformed `validUntil` (an integer, not a tagged date
+    /// string) previously evaluated to `.valid` - the "both bounds nil"
+    /// check this credential doesn't match, since `validFrom` parsed fine,
+    /// left the malformed `validUntil` silently reading as "no upper bound
+    /// at all" instead of unreadable.
+    func testAMdocWithOneReadableBoundAndOneMalformedBoundEvaluatesAsUnknown() async throws {
+        let mso: CBOR = .map([
+            .utf8String("docType"): .utf8String("org.iso.18013.5.1.mDL"),
+            .utf8String("validityInfo"): .map([
+                .utf8String("validFrom"): .tagged(.standardDateTimeString, .utf8String("2020-01-01T00:00:00Z")),
+                .utf8String("validUntil"): .unsignedInt(2),
+            ]),
+        ])
+        let msoBytes = CBOR.tagged(.encodedCBORDataItem, .byteString(mso.encode()))
+        let issuerSigned: CBOR = .map([
+            .utf8String("nameSpaces"): .map([:]),
+            .utf8String("issuerAuth"): .array([
+                .byteString([]), .map([:]), .byteString(msoBytes.encode()), .byteString([]),
+            ]),
+        ])
+        let credential = StoredCredential(
+            id: 1,
+            format: "mso_mdoc",
+            raw: Data(issuerSigned.encode()).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: ""),
+            batchId: 1,
+            instanceId: 0
+        )
+        let claims = try XCTUnwrap(CredentialUtils.validityClaims(credential))
+        XCTAssertEqual(claims["validFrom"] as? String, "2020-01-01T00:00:00Z", "sanity: validFrom DID parse")
+        XCTAssertTrue(CredentialUtils.hasUnreadableValidUntil(claims))
+        XCTAssertFalse(CredentialUtils.hasUnreadableValidFrom(claims))
+        let evaluator = CredentialStatusEvaluator()
+        let status = await evaluator.evaluate(claims: claims, credentialIssuer: "https://issuer.example")
+        XCTAssertEqual(status, .unknown)
+    }
+
     /// Regression (review finding): a `status` member that is not even a
     /// map (here, a bare scalar) previously failed the whole
     /// `if let status = ..., let statusList = status[...]` as one unit, so

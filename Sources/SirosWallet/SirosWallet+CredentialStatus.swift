@@ -564,11 +564,19 @@ func hostResolvesToOnlyPublicAddresses(_ host: String) async -> Bool {
             gate.resume(with: resolveHostBlocking(host), continuation)
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
-            // Could not resolve in time - not a policy decision to make
-            // here: the connect attempt still has to happen (and fail or
-            // succeed) on its own, and reads as `.unreachable` like any
-            // other transport failure, not as "blocked".
-            gate.resume(with: true, continuation)
+            // Treated as BLOCKED, not allowed (review finding - this is
+            // deliberately NOT the same answer a clean, fast resolution
+            // failure gets): a lookup that is merely slow might still
+            // resolve to anything by the time `URLSession` resolves it
+            // again at actual connect time, private address included - a
+            // hostname an attacker deliberately makes slow to resolve is
+            // exactly how a timeout, specifically, could otherwise bypass
+            // this check. A genuinely non-existent name fails FAST on a
+            // working resolver (confirmed - RFC 2606's reserved
+            // `.invalid`), so this path is for "unknown", not "ordinarily
+            // absent", and fail-closed is the only defensible default for
+            // "unknown" here, same as everywhere else in this evaluator.
+            gate.resume(with: false, continuation)
         }
     }
 }
@@ -599,7 +607,10 @@ private final class ResumeGate: @unchecked Sendable {
 /// thread `URLSession` calls the delegate back on, not inside a `Task`.
 func hostResolvesToOnlyPublicAddressesBlocking(_ host: String) -> Bool {
     let semaphore = DispatchSemaphore(value: 0)
-    let box = ResultBox(true)
+    // Defaults to BLOCKED (review finding - see the async sibling's
+    // matching comment): if `wait` below times out, this initial value is
+    // what gets returned, since the lookup never got to overwrite it.
+    let box = ResultBox(false)
     DispatchQueue.global(qos: .utility).async {
         box.value = resolveHostBlocking(host)
         semaphore.signal()
