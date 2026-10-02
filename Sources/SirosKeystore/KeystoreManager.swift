@@ -300,16 +300,33 @@ public extension KeystoreManager {
     }
 
     /// Default for a conformer - including a host's own `KeystoreManager`,
-    /// written before this requirement existed - that does not override it:
-    /// ignores `holderBinding` and produces whatever shape that keystore has
-    /// always produced. The keystores in this SDK override it.
+    /// written before this requirement existed - that does not override it.
+    /// `nil` and `.embeddedJwk` forward to ``generateProof(audience:nonce:freshKey:)``
+    /// unchanged, since a conformer written before DIIP existed can only ever
+    /// have produced the HAIP/`embeddedJwk` shape - forwarding is exactly
+    /// honoring the request. `.didJwk` is different: this conformer has no
+    /// way to produce a did:jwk-shaped proof, and silently emitting the
+    /// HAIP shape instead is not a safe fallback - it is a proof a
+    /// DIIP-only Issuer will reject, sent as if it had been negotiated
+    /// correctly. The keystores in this SDK override this method and
+    /// handle `.didJwk` for real (see `JweKeystore`/`WscdKeystoreAdapter`,
+    /// including over a hardware-backed WSCD key: a did:jwk is a pure
+    /// function of the public key, so no WSCD plugin needs special-casing);
+    /// only a third-party conformer that hasn't gets this default.
     func generateProof(
         audience: String,
         nonce: String,
         freshKey: Bool,
         holderBinding: HolderBinding?
     ) async throws -> String {
-        try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey)
+        if holderBinding == .didJwk {
+            throw KeystoreError.invalidParameter(
+                "This KeystoreManager does not implement generateProof(...holderBinding:) " +
+                "and so cannot produce a did:jwk-shaped (DIIP) proof - refusing rather than " +
+                "silently emitting a HAIP-shaped proof a DIIP-only Issuer would reject."
+            )
+        }
+        return try await generateProof(audience: audience, nonce: nonce, freshKey: freshKey)
     }
 
     func securityProperties() async -> SignerSecurityProperties? { nil }

@@ -554,6 +554,66 @@ final class HolderBindingTests: XCTestCase {
         XCTAssertTrue(did.hasPrefix("did:key:z"), did)
         XCTAssertFalse(did.hasPrefix("did:key:z1"), "no spurious leading '1'")
     }
+
+    // MARK: - default generateProof(...holderBinding:) for a pre-DIIP conformer
+
+    /// A conformer implementing only the three-argument `generateProof` -
+    /// exactly what a keystore written before DIIP existed looks like. Used
+    /// by the two tests below to exercise the default
+    /// `generateProof(...holderBinding:)` implementation itself, not an
+    /// override (every first-party keystore in this SDK overrides it).
+    private final class PreDiipKeystore: KeystoreManager, @unchecked Sendable {
+        var isUnlocked: Bool { true }
+        func unlock(prfOutput: Data, encryptedContainer: Data, hkdfSalt: Data, hkdfInfo: Data) async throws {}
+        func lock() {}
+        func generateKey(algorithm: String) async throws -> String { "key" }
+        func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data { Data() }
+        func generateProof(audience: String, nonce: String, freshKey: Bool) async throws -> String { "haip-shaped-proof" }
+        func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String { "" }
+        func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String, kid: String?) async throws -> String { "" }
+        func exportEncryptedContainer() async throws -> Data { Data() }
+        func listKeys() -> [KeyInfo] { [] }
+        func saveCredential(id: Int64, json: String) async throws {}
+        func getCredential(id: Int64) async throws -> String? { nil }
+        func getAllCredentials() async throws -> [Int64: String] { [:] }
+        func deleteCredential(id: Int64) async throws {}
+        func clearCredentials() async throws {}
+        func savePresentationRecord(id: Int64, json: String) async throws {}
+        func getAllPresentationRecords() async throws -> [Int64: String] { [:] }
+        func clearPresentationRecords() async throws {}
+        func generateKeypairs(count: Int) async throws -> [KeypairInfo] { [] }
+    }
+
+    func testAPreDiipConformerRefusesADidJwkRequestRatherThanSilentlyEmittingAHaipProof() async throws {
+        // The exact bug a DIIP-only Issuer would otherwise hit silently: a
+        // third-party KeystoreManager that only ever shipped the HAIP shape
+        // must fail the request, not hand back a proof that looks negotiated
+        // but isn't.
+        let keystore = PreDiipKeystore()
+        do {
+            _ = try await keystore.generateProof(
+                audience: "https://issuer.example", nonce: "nonce", freshKey: false, holderBinding: .didJwk
+            )
+            XCTFail("expected a KeystoreError for an unhonourable did:jwk request")
+        } catch is KeystoreError {
+            // expected
+        }
+    }
+
+    func testAPreDiipConformerStillForwardsAHaipCompatibleRequest() async throws {
+        // nil and .embeddedJwk are both requests this conformer can already
+        // satisfy by definition - the default must still forward rather than
+        // refuse everything.
+        let keystore = PreDiipKeystore()
+        let viaNil = try await keystore.generateProof(
+            audience: "https://issuer.example", nonce: "nonce", freshKey: false, holderBinding: nil
+        )
+        XCTAssertEqual(viaNil, "haip-shaped-proof")
+        let viaEmbeddedJwk = try await keystore.generateProof(
+            audience: "https://issuer.example", nonce: "nonce", freshKey: false, holderBinding: .embeddedJwk
+        )
+        XCTAssertEqual(viaEmbeddedJwk, "haip-shaped-proof")
+    }
 }
 
 #endif
