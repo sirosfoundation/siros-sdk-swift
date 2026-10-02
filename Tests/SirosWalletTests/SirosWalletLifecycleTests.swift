@@ -705,7 +705,11 @@ final class SirosWalletLifecycleTests: XCTestCase {
         wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
         let generation = try XCTUnwrap(wallet.beginSelfDrivenRelogin())
 
-        wallet.credentialStatusCache.set(42, .revoked, generation: wallet.credentialStatusCache.currentGeneration())
+        wallet.credentialStatusCache.set(
+            42, .revoked,
+            generation: wallet.credentialStatusCache.currentGeneration(),
+            idGeneration: wallet.credentialStatusCache.currentIdGeneration(42)
+        )
         XCTAssertEqual(wallet.cachedCredentialStatus(of: 42), .revoked, "sanity: the stale entry is actually there")
 
         // What logout()/destroy() do to the generation, landing while the

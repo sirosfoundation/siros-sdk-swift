@@ -168,8 +168,8 @@ extension SirosWallet {
         // parse step's own error path (review finding: that path used to
         // write to the cache unconditionally, guarded by none of this) - a
         // logout/new-login or this credential's own deletion can complete
-        // WHILE either path is still running, and the generation/tombstone
-        // check `set` itself performs, atomically, under its own lock (see
+        // WHILE either path is still running, and the generation checks
+        // `set` itself performs, atomically, under its own lock (see
         // `CredentialStatusCache.set`'s doc comment) is what keeps a write
         // below from landing after `endSessionLocally()`'s
         // credentialStatusCache.clear() or deleteCredential(_:)'s
@@ -177,19 +177,40 @@ extension SirosWallet {
         // account's (or a deleted credential's) status for whichever
         // account/credential next reuses the id.
         //
-        // No separate `credentialStore.getById` existence re-check here
-        // (review finding: a FORMER version of this guard had one, but a
-        // check made before - not atomically WITH - the write it guards can
-        // never fully close this race, no matter how late it runs; the
-        // cache's own generation+tombstone check, applied at the moment of
-        // the write itself, is what actually does).
+        // Both captured, not just the session generation (review finding,
+        // sharper than the one this guard already closed): id reuse can
+        // happen WITHOUT any session boundary at all - credential A is
+        // deleted and its id immediately reused by credential B, both within
+        // the SAME session - and a stale write for A must be refused even
+        // though the session generation never changed. `idGeneration` is
+        // what tells A's write apart from B's for the exact same id; see
+        // `CredentialStatusCache.idGenerations`'s doc comment.
         let cacheGeneration = credentialStatusCache.currentGeneration()
+        let idGeneration = credentialStatusCache.currentIdGeneration(credential.id)
 
         // Shared by every return path below, so the parse-failure case is
         // guarded exactly the same way as the normal evaluation (review
         // finding) rather than by a separate, easy-to-miss copy of the check.
-        func cacheIfStillCurrent(_ status: CredentialStatus) {
-            credentialStatusCache.set(credential.id, status, generation: cacheGeneration)
+        //
+        // The existence check and the generation checks are COMPLEMENTARY,
+        // not redundant with each other (review finding, self-caught - an
+        // earlier round dropped this check, reasoning the generation check
+        // alone made it redundant; it does not): `idGeneration` alone cannot
+        // tell "this credential was deleted and never reused" apart from "a
+        // normal evaluation that started before any delete at all" - both
+        // read as a generation match at write time, since nothing changed
+        // the id's generation AFTER capture if it was ALREADY gone before
+        // capture even happened. A fresh existence check closes exactly that
+        // gap; `idGeneration` closes the gap a bare existence check cannot
+        // (id reused by someone else - existence alone would see the NEW
+        // occupant and wrongly accept the OLD one's stale write). Together
+        // they are stronger than either alone; the sliver of a window
+        // between this check returning and `set` running is the same
+        // residual every other race in this file discloses rather than
+        // claims to fully close.
+        func cacheIfStillCurrent(_ status: CredentialStatus) async {
+            guard await credentialStore.getById(credential.id) != nil else { return }
+            credentialStatusCache.set(credential.id, status, generation: cacheGeneration, idGeneration: idGeneration)
         }
 
         // A credential whose validity data will not parse is not a valid one.
@@ -200,7 +221,7 @@ extension SirosWallet {
         do {
             parsed = try CredentialUtils.parseValidityClaims(credential)
         } catch {
-            cacheIfStillCurrent(.unknown)
+            await cacheIfStillCurrent(.unknown)
             return .unknown
         }
         // Cached too (review finding), not merely returned: without this, a
@@ -212,7 +233,7 @@ extension SirosWallet {
         // included. A reused id's own claim-less credential must read as
         // `.valid` from here on, not whatever its previous occupant was.
         guard let claims = parsed else {
-            cacheIfStillCurrent(.valid)
+            await cacheIfStillCurrent(.valid)
             return .valid
         }
 
@@ -224,7 +245,7 @@ extension SirosWallet {
             credentialIssuer: credential.credentialIssuerIdentifier
         )
 
-        cacheIfStillCurrent(status)
+        await cacheIfStillCurrent(status)
         return status
     }
 
@@ -833,26 +854,32 @@ final class HttpsOnlyRedirectDelegate: NSObject, URLSessionTaskDelegate, URLSess
 final class CredentialStatusCache: @unchecked Sendable {
     private let lock = NSLock()
     private var statuses: [Int64: CredentialStatus] = [:]
-    /// Ids `remove(_:)` has dropped and no later `retain(_:)` has seen come
-    /// back. `set(_:_:generation:)` refuses to write one (review finding): a
-    /// bare existence check made by the CALLER before calling `set` is not
-    /// atomic WITH that call - `remove(_:)` can run on another thread in the
-    /// gap between the caller's check and this write, which a separate async
-    /// `credentialStore.getById` lookup cannot prevent no matter how late it
-    /// runs, since nothing holds a lock across both steps. Checking under
-    /// THIS SAME lock, in the same call that performs the write, is what
-    /// actually closes it.
-    private var tombstoned: Set<Int64> = []
+    /// A per-id occupancy generation, bumped by `remove(_:)` - replaces a
+    /// plain tombstone set (review finding, sharper than the one
+    /// `tombstoned` itself closed): a bare "has this id been deleted"
+    /// boolean cannot tell a STALE write for the id's PREVIOUS occupant
+    /// apart from a fresh write for its NEW one once `retain(_:)` has seen
+    /// the id come back - both would see "not tombstoned" and succeed,
+    /// letting credential A's write land for credential B's id after B has
+    /// legitimately taken it over. A per-id counter that keeps incrementing
+    /// (never reset by `retain(_:)`) closes it: `set(_:_:generation:idGeneration:)`
+    /// only accepts a write whose captured `idGeneration` still matches THIS
+    /// id's CURRENT one, which changes every time the id's occupant does -
+    /// A's write, captured under the OLD value, is refused even though B's
+    /// own fresh write (captured under the new one) succeeds for the exact
+    /// same id.
+    private var idGenerations: [Int64: Int] = [:]
     /// Bumped by `clear()` (a session boundary - logout, account switch).
-    /// `set(_:_:generation:)` refuses to write a result computed under an
-    /// older generation than this one (review finding): a caller capturing
-    /// "is this still the same session" via a SEPARATE flag/lock before
-    /// `clear()` runs cannot be atomic with this write either, for the exact
-    /// same reason `tombstoned` cannot be checked separately from `set`
-    /// itself - a concurrent `clear()` can land in the gap between that
-    /// check and this call just as a concurrent `remove(_:)` can. Folding
-    /// the generation check into `set` itself, alongside the tombstone
-    /// check, closes both races with one mechanism instead of two.
+    /// `set(_:_:generation:idGeneration:)` refuses to write a result
+    /// computed under an older generation than this one (review finding): a
+    /// caller capturing "is this still the same session" via a SEPARATE
+    /// flag/lock before `clear()` runs cannot be atomic with this write
+    /// either, for the exact same reason `idGenerations` cannot be checked
+    /// separately from `set` itself - a concurrent `clear()` can land in the
+    /// gap between that check and this call just as a concurrent
+    /// `remove(_:)` can. Folding the generation check into `set` itself,
+    /// alongside the per-id one, closes both races with one mechanism
+    /// instead of two.
     private var generation = 0
 
     func get(_ id: Int64) -> CredentialStatus {
@@ -863,37 +890,50 @@ final class CredentialStatusCache: @unchecked Sendable {
 
     /// The cache's current generation, to capture BEFORE a (potentially
     /// slow, real-network) evaluation starts and pass back into
-    /// `set(_:_:generation:)` once it finishes.
+    /// `set(_:_:generation:idGeneration:)` once it finishes.
     func currentGeneration() -> Int {
         lock.lock()
         defer { lock.unlock() }
         return generation
     }
 
-    /// Records `status` for `id`, UNLESS `id` has been tombstoned since, OR
-    /// `generation` no longer matches - both checked, and the write applied,
-    /// under this one lock, so neither a concurrent `remove(_:)` nor a
-    /// concurrent `clear()` can land in between a caller's own check and
-    /// this write (review finding - see `tombstoned`'s and `generation`'s
-    /// doc comments).
-    func set(_ id: Int64, _ status: CredentialStatus, generation callerGeneration: Int) {
+    /// `id`'s current occupancy generation, to capture alongside
+    /// `currentGeneration()` at the same moment, before starting an
+    /// evaluation for it. Defaults to 0 for an id `remove(_:)` has never
+    /// been called for.
+    func currentIdGeneration(_ id: Int64) -> Int {
         lock.lock()
         defer { lock.unlock() }
-        guard callerGeneration == generation, !tombstoned.contains(id) else { return }
+        return idGenerations[id] ?? 0
+    }
+
+    /// Records `status` for `id`, UNLESS `generation` no longer matches (a
+    /// session boundary happened) OR `idGeneration` no longer matches THIS
+    /// id's current one (the id has since been deleted - and possibly
+    /// reused by a different credential) - both checked, and the write
+    /// applied, under this one lock, so neither a concurrent `remove(_:)`
+    /// nor a concurrent `clear()` can land in between a caller's own check
+    /// and this write (review finding - see `idGenerations`'s and
+    /// `generation`'s doc comments).
+    func set(_ id: Int64, _ status: CredentialStatus, generation callerGeneration: Int, idGeneration callerIdGeneration: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard callerGeneration == generation, (idGenerations[id] ?? 0) == callerIdGeneration else { return }
         statuses[id] = status
     }
 
-    /// Drop everything not in `ids` - a credential that has been deleted
-    /// should not keep a stale status alive. Also un-tombstones any id that
-    /// IS in `ids`: SQLite/the credential store can reuse a deleted id for an
-    /// unrelated, later credential, and that credential's own evaluations
-    /// must not be refused forever by a tombstone left over from the id's
-    /// previous occupant.
+    /// Drop every status not in `ids` - a credential that has been deleted
+    /// should not keep a stale status alive. Deliberately does NOT touch
+    /// `idGenerations` (review finding): a reused id's new occupant is
+    /// recognised by capturing a FRESH `currentIdGeneration(_:)` for its own
+    /// evaluation, which already reads the post-`remove(_:)` value - nothing
+    /// needs to be "forgiven" here the way un-tombstoning used to, and
+    /// forgetting a removed id's generation here would let a stale write
+    /// from its PREVIOUS occupant match again.
     func retain(_ ids: Set<Int64>) {
         lock.lock()
         defer { lock.unlock() }
         statuses = statuses.filter { ids.contains($0.key) }
-        tombstoned.subtract(ids)
     }
 
     /// Drop one id - for `deleteCredential(_:)`, so an id SQLite/the
@@ -902,23 +942,26 @@ final class CredentialStatusCache: @unchecked Sendable {
     /// account") never reads back a status that belonged to whatever used
     /// to have this id, AND so an evaluation of the just-deleted credential
     /// that is still in flight cannot resurrect one for it afterward - see
-    /// `tombstoned`'s doc comment.
+    /// `idGenerations`'s doc comment.
     func remove(_ id: Int64) {
         lock.lock()
         defer { lock.unlock() }
         statuses.removeValue(forKey: id)
-        tombstoned.insert(id)
+        idGenerations[id, default: 0] += 1
     }
 
-    /// All held statuses, e.g. after a logout. Clears tombstones too: a new
-    /// account's credentials can legitimately reuse any id a previous
-    /// account's did. Bumps `generation`, so a write from an evaluation that
-    /// started before this call can never land after it (review finding).
+    /// All held statuses, e.g. after a logout. Clears per-id generations
+    /// too: a new account's credentials can legitimately reuse any id a
+    /// previous account's did, and the new account's own evaluations must
+    /// not be refused by generations left over from the previous account -
+    /// `generation`'s own bump below is what actually guards the session
+    /// boundary; resetting `idGenerations` here is safe riding on top of it,
+    /// not a substitute for it.
     func clear() {
         lock.lock()
         defer { lock.unlock() }
         generation += 1
         statuses.removeAll()
-        tombstoned.removeAll()
+        idGenerations.removeAll()
     }
 }

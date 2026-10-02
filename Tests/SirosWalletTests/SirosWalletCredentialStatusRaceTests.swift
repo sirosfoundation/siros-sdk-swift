@@ -146,38 +146,77 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
     /// `remove(_:)` - deletion can complete in the gap between that check
     /// and the write itself, which a separate async lookup cannot ever
     /// close no matter how late it runs. `CredentialStatusCache` now refuses
-    /// a `set` for any id `remove` has tombstoned, checked under the SAME
-    /// lock as the write - this exercises that guarantee directly, without
+    /// a `set` whose captured `idGeneration` no longer matches the id's
+    /// current one once `remove` has bumped it, checked under the SAME lock
+    /// as the write - this exercises that guarantee directly, without
     /// needing to reproduce the exact thread interleaving.
-    func testCacheRefusesASetForATombstonedIdEvenWithNoInterveningCheck() {
+    func testCacheRefusesASetForARemovedIdEvenWithNoInterveningCheck() {
         let cache = CredentialStatusCache()
         let generation = cache.currentGeneration()
-        cache.set(7, .valid, generation: generation)
+        let idGeneration = cache.currentIdGeneration(7)
+        cache.set(7, .valid, generation: generation, idGeneration: idGeneration)
         XCTAssertEqual(cache.get(7), .valid)
 
         cache.remove(7) // simulates deleteCredential(_:) completing concurrently
         // simulates the in-flight evaluation's write landing after it, still
-        // carrying the generation it captured BEFORE the remove above:
-        cache.set(7, .revoked, generation: generation)
+        // carrying the generation/idGeneration it captured BEFORE the
+        // remove above:
+        cache.set(7, .revoked, generation: generation, idGeneration: idGeneration)
         XCTAssertEqual(
             cache.get(7), .valid,
-            "a set for a tombstoned id must be refused outright, not merely overwritten by a later remove"
+            "a set captured before remove(_:) must be refused outright, not merely overwritten by a later remove"
         )
     }
 
     /// A reused id (the credential store assigning a deleted id to a new,
-    /// unrelated credential) must not be refused forever - `retain(_:)` is
-    /// what `refreshCredentialStatuses()` calls with every currently-held id,
-    /// and an id back in that set must un-tombstone.
-    func testCacheAcceptsWritesAgainOnceRetainSeesTheIdReturn() {
+    /// unrelated credential) must not be refused forever - a FRESH
+    /// `currentIdGeneration(_:)`, captured after the reuse, must match and
+    /// let the new occupant's own evaluation write succeed.
+    func testCacheAcceptsAFreshWriteForAReusedId() {
         let cache = CredentialStatusCache()
         cache.remove(9)
-        cache.set(9, .revoked, generation: cache.currentGeneration())
-        XCTAssertEqual(cache.get(9), .valid, "still tombstoned - the reused credential has not been seen yet")
+        let staleIdGeneration = cache.currentIdGeneration(9) - 1 // id 9's generation before the remove above
+        cache.set(9, .revoked, generation: cache.currentGeneration(), idGeneration: staleIdGeneration)
+        XCTAssertEqual(cache.get(9), .valid, "a write captured before the remove must still be refused")
 
+        cache.retain([9]) // the reused credential is now part of a normal refresh
+        cache.set(9, .revoked, generation: cache.currentGeneration(), idGeneration: cache.currentIdGeneration(9))
+        XCTAssertEqual(cache.get(9), .revoked, "a FRESH write, captured after the reuse, must succeed")
+    }
+
+    /// Regression (review finding, sharper than the removed-id case above):
+    /// a STALE write captured for credential A, BEFORE A was deleted and
+    /// this id reused by credential B, must be refused even AFTER B has
+    /// legitimately taken over the id (`retain(_:)` has seen it) - not only
+    /// while the id sits freshly removed. A plain "has this id ever been
+    /// removed" flag cannot tell A's write apart from B's own fresh one for
+    /// the SAME id once B is established; the per-id generation does, since
+    /// B's own write captures the CURRENT value (already bumped past A's) -
+    /// this is the exact "A is still evaluating, A is deleted, B reuses the
+    /// id, B's refresh lands before A's stale write" sequence described.
+    func testCacheRefusesAStaleWriteFromAPreviousOccupantEvenAfterIdReuse() {
+        let cache = CredentialStatusCache()
+        // Credential A's (slow, still in-flight) evaluation starts here,
+        // capturing id 9's generation.
+        let staleIdGeneration = cache.currentIdGeneration(9)
+        let generation = cache.currentGeneration()
+
+        // A is deleted; id 9 is reused by credential B, and a normal
+        // refreshCredentialStatuses() retain(_:) sees it as currently held.
+        cache.remove(9)
         cache.retain([9])
-        cache.set(9, .revoked, generation: cache.currentGeneration())
-        XCTAssertEqual(cache.get(9), .revoked, "un-tombstoned once retain saw id 9 as currently held again")
+
+        // B's own, legitimate write - captured AFTER the above, so it reads
+        // the CURRENT (post-remove) generation.
+        cache.set(9, .valid, generation: generation, idGeneration: cache.currentIdGeneration(9))
+        XCTAssertEqual(cache.get(9), .valid, "sanity: B's own fresh write succeeds")
+
+        // A's STALE write, captured BEFORE any of the above, finally lands.
+        cache.set(9, .revoked, generation: generation, idGeneration: staleIdGeneration)
+        XCTAssertEqual(
+            cache.get(9), .valid,
+            "A's stale write must be refused even though id 9 has been legitimately reused by B"
+        )
     }
 
     /// Regression (review finding): a caller capturing "is this still the
@@ -190,12 +229,13 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
     func testCacheRefusesASetFromAnOlderGenerationEvenWithNoInterveningCheck() {
         let cache = CredentialStatusCache()
         let staleGeneration = cache.currentGeneration()
+        let staleIdGeneration = cache.currentIdGeneration(7)
 
         cache.clear() // simulates endSessionLocally() completing concurrently
 
         // simulates the in-flight evaluation's write landing after it, still
         // carrying the generation it captured BEFORE the clear above:
-        cache.set(7, .revoked, generation: staleGeneration)
+        cache.set(7, .revoked, generation: staleGeneration, idGeneration: staleIdGeneration)
         XCTAssertEqual(
             cache.get(7), .valid,
             "a set from a superseded generation must be refused, not resurrect a cleared session's entry"
@@ -203,7 +243,7 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
 
         // A write using the CURRENT generation must still succeed - this
         // isn't a permanently broken cache, only a stale write is refused.
-        cache.set(7, .revoked, generation: cache.currentGeneration())
+        cache.set(7, .revoked, generation: cache.currentGeneration(), idGeneration: cache.currentIdGeneration(7))
         XCTAssertEqual(cache.get(7), .revoked)
     }
 
@@ -225,7 +265,11 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
 
         // Simulates id 77's PREVIOUS occupant having cached a real, usable
         // result before being deleted and this id reused.
-        wallet.credentialStatusCache.set(77, .revoked, generation: wallet.credentialStatusCache.currentGeneration())
+        wallet.credentialStatusCache.set(
+            77, .revoked,
+            generation: wallet.credentialStatusCache.currentGeneration(),
+            idGeneration: wallet.credentialStatusCache.currentIdGeneration(77)
+        )
         XCTAssertEqual(wallet.cachedCredentialStatus(of: 77), .revoked, "sanity: the stale entry is actually there")
 
         let status = await wallet.credentialStatus(of: credential)

@@ -1231,6 +1231,24 @@ public final class SirosWallet: @unchecked Sendable {
         Task { await evaluator.clearCache() }
     }
 
+    /// ``clearCredentialStatusCaches()``, but AWAITED rather than fired
+    /// fire-and-forget (review finding): that version is safe for `logout()`/
+    /// `destroy()` - both public, synchronous APIs this SDK cannot change the
+    /// signature of - because a human-paced, deliberate action (the user
+    /// manually logging back in) always follows, not a race-prone
+    /// programmatic retry. `reloginAfterCutOff` is different: it is a SELF-
+    /// DRIVEN re-login that calls `login()` itself moments later, with no
+    /// human pacing gap, so the fire-and-forget version's race - a new
+    /// session's `refreshCredentialStatuses()` reaching the evaluator before
+    /// its unawaited clear completes, serving the superseded session's
+    /// cached Status List Token - is real there in a way it is not for a
+    /// human re-logging in by hand. Any caller that is already `async` and
+    /// about to start a new session right after should use this instead.
+    func clearCredentialStatusCachesAwaited() async {
+        credentialStatusCache.clear()
+        await credentialStatusEvaluator.clearCache()
+    }
+
     /// Everything `logout()` does except ending the server session: drop the
     /// engine, the WMP peer, the API client, the cached tokens, the keystore
     /// and the account-scoped session, and end this session's generation.
