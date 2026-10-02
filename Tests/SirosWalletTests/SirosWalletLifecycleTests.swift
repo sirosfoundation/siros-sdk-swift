@@ -683,6 +683,45 @@ final class SirosWalletLifecycleTests: XCTestCase {
         XCTAssertEqual(loginAttempts(), 0, "no login is attempted for a session that is already gone")
     }
 
+    /// Regression (review finding): `reloginAfterCutOff` performed its own,
+    /// separate teardown that skipped `clearCredentialStatusCaches()`
+    /// entirely - unlike `endSessionLocally()`'s teardown, which already
+    /// cleared it. A cut-off's own likely CAUSE is a revocation, so a
+    /// self-driven re-login reusing a prior session's cached status/Status
+    /// List Token would be the worst possible time to serve a stale one.
+    ///
+    /// Forces the SAME early-abandon path
+    /// `testReloginAbandonsWhenTheSessionItReplacedIsAlreadyGone` does
+    /// (rather than letting the re-login reach `login()`) so this test
+    /// actually isolates `reloginAfterCutOff`'s OWN direct teardown: a
+    /// first attempt using `refusingAuthServer` to let `login()` fail
+    /// passed even without the fix, because that failure routes through
+    /// `handleLifecycleRefusal` -> `endSessionLocally()`, which already
+    /// clears both caches on an entirely different path - proving nothing
+    /// about the teardown this finding is actually about. The clearing
+    /// happens before the abandon check, so it still runs here.
+    func testReloginAfterCutOffClearsTheCredentialStatusCaches() async throws {
+        let wallet = makeWallet(registry: seededRegistry())
+        wallet.setState(.ready(userId: "user-1", displayName: "Alice", credentials: []))
+        let generation = try XCTUnwrap(wallet.beginSelfDrivenRelogin())
+
+        wallet.credentialStatusCache.set(42, .revoked, generation: wallet.credentialStatusCache.currentGeneration())
+        XCTAssertEqual(wallet.cachedCredentialStatus(of: 42), .revoked, "sanity: the stale entry is actually there")
+
+        // What logout()/destroy() do to the generation, landing while the
+        // re-login is between claiming the signal and reaching login() -
+        // same technique as testReloginAbandonsWhenTheSessionItReplacedIsAlreadyGone,
+        // which this borrows specifically to make login() unreachable.
+        wallet.bumpSessionGeneration()
+        await wallet.reloginAfterCutOff(replacing: generation)
+        wallet.endSelfDrivenRelogin()
+
+        XCTAssertEqual(
+            wallet.cachedCredentialStatus(of: 42), .valid,
+            "a cut-off-triggered re-login must not leave the superseded session's cached status behind"
+        )
+    }
+
     // MARK: - This device
 
     /// The facade marks the row that is this installation by comparing the

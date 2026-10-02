@@ -1203,6 +1203,34 @@ public final class SirosWallet: @unchecked Sendable {
         setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
     }
 
+    /// Drops every credential-status cache so neither survives a session
+    /// boundary (review finding): shared by every teardown path that ends or
+    /// replaces a session, not just `endSessionLocally()` - `reloginAfterCutOff`
+    /// used to perform its own, separate teardown that skipped this entirely,
+    /// so a cut-off-triggered self-driven re-login could reuse a prior
+    /// session's no-TTL Status List Token cache and miss a revocation
+    /// published since.
+    ///
+    /// Account-scoped, like the session itself: without this,
+    /// `cachedCredentialStatus(of:)` could answer with the PREVIOUS account's
+    /// status - or a deleted credential's - until the next account's own
+    /// `refreshCredentialStatuses()` happens to overwrite the same id.
+    /// `credentialStatusCache` only holds the last-computed UI-facing result,
+    /// but `credentialStatusEvaluator`'s own `TokenStatusListClient` caches
+    /// the fetched Status List Tokens those results came from - with no ttl
+    /// (or a long one), a cached token can survive this boundary and be
+    /// reused for the next account's credentials. An in-flight evaluation
+    /// from the ending session could otherwise also repopulate
+    /// `credentialStatusCache` right after this clears it, so both are
+    /// cleared together, in the same place, rather than relying on whatever
+    /// engine/task cancellation the caller already did to have stopped
+    /// everything that could still be running one.
+    func clearCredentialStatusCaches() {
+        credentialStatusCache.clear()
+        let evaluator = credentialStatusEvaluator
+        Task { await evaluator.clearCache() }
+    }
+
     /// Everything `logout()` does except ending the server session: drop the
     /// engine, the WMP peer, the API client, the cached tokens, the keystore
     /// and the account-scoped session, and end this session's generation.
@@ -1230,26 +1258,7 @@ public final class SirosWallet: @unchecked Sendable {
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()
-        // Account-scoped, like the session itself (review finding): without
-        // this, cachedCredentialStatus(of:) could answer with the PREVIOUS
-        // account's status - or a deleted credential's - until the next
-        // account's own refreshCredentialStatuses() happens to overwrite the
-        // same id.
-        credentialStatusCache.clear()
-        // Same account-scoping problem, one layer deeper (review finding):
-        // credentialStatusCache only holds the last-computed UI-facing
-        // result, but credentialStatusEvaluator's own TokenStatusListClient
-        // caches the fetched Status List Tokens those results came from -
-        // with no ttl (or a long one), a cached token can survive logout and
-        // be reused for the next account's credentials, missing a
-        // revocation published after it was fetched. An in-flight
-        // evaluation from the ending session could otherwise also
-        // repopulate credentialStatusCache right after this clears it, so
-        // both are cleared together, in the same place, rather than relying
-        // on cancelEngineTasks() above to have already stopped everything
-        // that could still be running one.
-        let evaluator = credentialStatusEvaluator
-        Task { await evaluator.clearCache() }
+        clearCredentialStatusCaches()
         // The WIA cache is wallet-wide but the instance key it attests is
         // account-scoped, so a WIA kept across a logout would answer
         // `thisInstanceId` (and `wallet_instance_id`) with the PREVIOUS

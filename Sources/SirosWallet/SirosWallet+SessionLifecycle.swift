@@ -74,6 +74,13 @@ extension SirosWallet {
         // credentials are still signable. A successful login() unlocks it
         // again as part of its normal path.
         keystore.lock()
+        // Same account/session-boundary reasoning as `endSessionLocally()`
+        // (review finding: this teardown used to skip it entirely) - a
+        // cut-off is exactly the kind of event whose own likely CAUSE is a
+        // revocation, so serving a stale cached status or Status List Token
+        // through the replacement session would be the worst possible time
+        // to get this wrong.
+        clearCredentialStatusCaches()
         // The teardown above awaits the WMP peer's shutdown, and the caller
         // may have logged out or destroyed the wallet in the meantime. Logging
         // back in then would resurrect a session the user explicitly ended -
