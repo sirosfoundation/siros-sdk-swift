@@ -185,8 +185,12 @@ extension SirosWallet {
         // though the session generation never changed. `idGeneration` is
         // what tells A's write apart from B's for the exact same id; see
         // `CredentialStatusCache.idGenerations`'s doc comment.
-        let cacheGeneration = credentialStatusCache.currentGeneration()
-        let idGeneration = credentialStatusCache.currentIdGeneration(credential.id)
+        // Captured together, under one lock acquisition, not as two
+        // separate calls (review finding): see
+        // `CredentialStatusCache.currentGenerations(for:)`'s doc comment for
+        // why two separate reads - even back to back - are not atomic with
+        // each other.
+        let (cacheGeneration, idGeneration) = credentialStatusCache.currentGenerations(for: credential.id)
 
         // Shared by every return path below, so the parse-failure case is
         // guarded exactly the same way as the normal evaluation (review
@@ -888,23 +892,45 @@ final class CredentialStatusCache: @unchecked Sendable {
         return statuses[id] ?? .valid
     }
 
-    /// The cache's current generation, to capture BEFORE a (potentially
-    /// slow, real-network) evaluation starts and pass back into
-    /// `set(_:_:generation:idGeneration:)` once it finishes.
+    /// The cache's current generation alone - only for a caller (`clear()`'s
+    /// own tests) that is not about to evaluate a specific credential and so
+    /// has no id to pair it with. A real evaluation must use
+    /// ``currentGenerations(for:)`` instead - see its own doc comment for
+    /// why two separate calls, even back to back, are not equivalent.
     func currentGeneration() -> Int {
         lock.lock()
         defer { lock.unlock() }
         return generation
     }
 
-    /// `id`'s current occupancy generation, to capture alongside
-    /// `currentGeneration()` at the same moment, before starting an
-    /// evaluation for it. Defaults to 0 for an id `remove(_:)` has never
-    /// been called for.
+    /// `id`'s current occupancy generation - direct access for callers (this
+    /// file's own non-vacuousness checks) that need to inspect it without
+    /// going through a full evaluation. Prefer ``currentGenerations(for:)``
+    /// when capturing a value to pass into `set` later. Defaults to 0 for an
+    /// id `remove(_:)` has never been called for.
     func currentIdGeneration(_ id: Int64) -> Int {
         lock.lock()
         defer { lock.unlock() }
         return idGenerations[id] ?? 0
+    }
+
+    /// Both the cache's overall generation AND `id`'s own occupancy
+    /// generation, captured together under ONE lock acquisition (review
+    /// finding): `currentGeneration()` and `currentIdGeneration(_:)` called
+    /// SEPARATELY - even back to back, with no other work between them -
+    /// are not atomic WITH each other. A `remove(id)` (deleting credential A)
+    /// followed by the id being reused (credential B) landing in the gap
+    /// between those two separate calls would hand credential A's
+    /// evaluation B's NEW `idGeneration` paired with whichever overall
+    /// `generation` happened to be read - A's eventual write would then
+    /// match at write time (nothing changed since THIS capture) and
+    /// overwrite B's cache entry with A's stale result. One lock acquisition
+    /// for both reads closes that gap the same way folding the write's own
+    /// checks into `set` itself already closed the equivalent gap there.
+    func currentGenerations(for id: Int64) -> (generation: Int, idGeneration: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (generation, idGenerations[id] ?? 0)
     }
 
     /// Records `status` for `id`, UNLESS `generation` no longer matches (a

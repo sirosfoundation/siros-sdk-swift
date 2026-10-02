@@ -197,9 +197,9 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
     func testCacheRefusesAStaleWriteFromAPreviousOccupantEvenAfterIdReuse() {
         let cache = CredentialStatusCache()
         // Credential A's (slow, still in-flight) evaluation starts here,
-        // capturing id 9's generation.
-        let staleIdGeneration = cache.currentIdGeneration(9)
-        let generation = cache.currentGeneration()
+        // capturing id 9's generation together with the overall one, under
+        // one lock acquisition - the way a real evaluation does.
+        let (generation, staleIdGeneration) = cache.currentGenerations(for: 9)
 
         // A is deleted; id 9 is reused by credential B, and a normal
         // refreshCredentialStatuses() retain(_:) sees it as currently held.
@@ -208,7 +208,8 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
 
         // B's own, legitimate write - captured AFTER the above, so it reads
         // the CURRENT (post-remove) generation.
-        cache.set(9, .valid, generation: generation, idGeneration: cache.currentIdGeneration(9))
+        let (currentGeneration, currentIdGeneration) = cache.currentGenerations(for: 9)
+        cache.set(9, .valid, generation: currentGeneration, idGeneration: currentIdGeneration)
         XCTAssertEqual(cache.get(9), .valid, "sanity: B's own fresh write succeeds")
 
         // A's STALE write, captured BEFORE any of the above, finally lands.
@@ -217,6 +218,28 @@ final class SirosWalletCredentialStatusRaceTests: XCTestCase {
             cache.get(9), .valid,
             "A's stale write must be refused even though id 9 has been legitimately reused by B"
         )
+    }
+
+    /// Regression (review finding): `currentGeneration()` and
+    /// `currentIdGeneration(_:)` called as two SEPARATE calls - even back to
+    /// back, with nothing else running between them in a single-threaded
+    /// test - are not atomic with each other in real, concurrent use: a
+    /// delete-and-reuse landing in the gap between them could hand one
+    /// evaluation the OLD overall generation paired with the NEW id
+    /// occupant's generation (or vice versa). `currentGenerations(for:)`
+    /// closes that by reading both under one lock acquisition - this proves
+    /// its contract (it agrees with the two individual accessors when
+    /// nothing concurrent is mutating the cache); the atomicity itself is a
+    /// true multi-threaded race no single-threaded test can force
+    /// deterministically, the same as the other hard-to-reproduce
+    /// interleavings already disclosed elsewhere in this file.
+    func testCurrentGenerationsCapturesBothValuesTogether() {
+        let cache = CredentialStatusCache()
+        cache.remove(5) // bumps id 5's generation once, from its default 0
+        let (generation, idGeneration) = cache.currentGenerations(for: 5)
+        XCTAssertEqual(generation, cache.currentGeneration())
+        XCTAssertEqual(idGeneration, cache.currentIdGeneration(5))
+        XCTAssertEqual(idGeneration, 1)
     }
 
     /// Regression (review finding): a caller capturing "is this still the
