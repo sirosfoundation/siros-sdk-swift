@@ -118,8 +118,24 @@ public enum CredentialValidity {
     }
 
     private static func parseEpochSeconds(_ value: Any?) -> Date? {
-        guard let seconds = (value as? NSNumber)?.doubleValue else { return nil }
-        return Date(timeIntervalSince1970: seconds)
+        guard let number = value as? NSNumber, !isBoolean(number) else { return nil }
+        return Date(timeIntervalSince1970: number.doubleValue)
+    }
+
+    /// Whether `number` is actually a JSON boolean (review finding):
+    /// `JSONSerialization` bridges `true`/`false` to `NSNumber` too (as
+    /// `__NSCFBoolean` on Darwin, likewise on Linux), so `{"nbf":true}`
+    /// casts to `NSNumber` and `.doubleValue` reads it as `1.0` - a bogus
+    /// but successfully-parsed epoch second, rather than the malformed
+    /// value it actually is. `as? Bool` is NOT a reliable test for this - it
+    /// ALSO succeeds for an ordinary `NSNumber(0)`/`NSNumber(1)`, which are
+    /// legitimate epoch seconds. `objCType` is: `"c"` is the ObjC type
+    /// encoding for `BOOL` (a signed char), and is the one `JSONSerialization`
+    /// gives a parsed JSON boolean specifically - confirmed empirically
+    /// against a parsed JSON integer `0`/`1`, which get a numeric-width
+    /// encoding ("i"/"q"/etc.) instead, never "c".
+    private static func isBoolean(_ number: NSNumber) -> Bool {
+        String(cString: number.objCType) == "c"
     }
 }
 

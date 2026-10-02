@@ -109,6 +109,29 @@ final class CredentialStatusTests: XCTestCase {
         XCTAssertNil(CredentialValidity.extract(from: claims(#"{"validUntil":"whenever"}"#)).validUntil)
     }
 
+    /// Regression (review finding): `JSONSerialization` bridges a JSON
+    /// boolean to `NSNumber` too, so `{"nbf":true}` previously cast
+    /// successfully and `.doubleValue` read it as `1.0` - a bogus but
+    /// successfully-parsed epoch second (1970-01-01T00:00:01Z), rather than
+    /// the malformed, ignored value a non-numeric `nbf`/`exp` already is.
+    /// With no other bound, that made the credential `.valid` instead of
+    /// correctly having no lower bound at all.
+    func testABooleanNbfOrExpIsIgnoredRatherThanParsedAsEpochOneOrZero() {
+        let trueWindow = CredentialValidity.extract(from: claims(#"{"nbf":true,"exp":true}"#))
+        XCTAssertNil(trueWindow.validFrom)
+        XCTAssertNil(trueWindow.validUntil)
+
+        let falseWindow = CredentialValidity.extract(from: claims(#"{"nbf":false,"exp":false}"#))
+        XCTAssertNil(falseWindow.validFrom)
+        XCTAssertNil(falseWindow.validUntil)
+
+        // Sanity: genuine integer epoch seconds that happen to equal 0/1
+        // must still parse - this isn't about rejecting small numbers.
+        let realWindow = CredentialValidity.extract(from: claims(#"{"nbf":0,"iat":1}"#))
+        XCTAssertEqual(realWindow.validFrom, Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(realWindow.signed, Date(timeIntervalSince1970: 1))
+    }
+
     func testNoBoundsMeansValidIndefinitely() {
         XCTAssertEqual(
             CredentialValidity.check(CredentialValidity.extract(from: claims("{}")), now: now),

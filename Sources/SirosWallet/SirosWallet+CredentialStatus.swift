@@ -632,15 +632,22 @@ private final class ResumeGate: @unchecked Sendable {
 /// thread `URLSession` calls the delegate back on, not inside a `Task`.
 func hostResolvesToOnlyPublicAddressesBlocking(_ host: String) -> Bool {
     let semaphore = DispatchSemaphore(value: 0)
-    // Defaults to BLOCKED (review finding - see the async sibling's
-    // matching comment): if `wait` below times out, this initial value is
-    // what gets returned, since the lookup never got to overwrite it.
     let box = ResultBox(false)
     DispatchQueue.global(qos: .utility).async {
         box.value = resolveHostBlocking(host)
         semaphore.signal()
     }
-    _ = semaphore.wait(timeout: .now() + hostResolutionTimeout)
+    // Blocked on timeout (review finding, sharper than a mere policy call -
+    // this was also an actual data race): on `.timedOut`, the background
+    // lookup can still be RUNNING and can still write to `box.value` after
+    // this point - reading it unsynchronized with that write, as the
+    // previous version did regardless of the wait outcome, is a genuine
+    // race on top of being the wrong policy anyway. Returning here, without
+    // touching `box` at all, avoids both: `box.value` is read ONLY after a
+    // `.success` wait, where `signal()` (called right after the write, in
+    // program order, on the lookup's own thread) establishes the
+    // happens-before edge that makes the read safe.
+    guard semaphore.wait(timeout: .now() + hostResolutionTimeout) == .success else { return false }
     return box.value
 }
 

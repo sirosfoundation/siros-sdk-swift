@@ -270,6 +270,40 @@ final class IssuerSigningKeyResolutionTests: XCTestCase {
         )
     }
 
+    // MARK: - hostResolvesToOnlyPublicAddressesBlocking (the redirect delegate's sibling)
+
+    func testBlockingVariantRejectsALoopbackHostname() {
+        XCTAssertFalse(hostResolvesToOnlyPublicAddressesBlocking("localhost"))
+    }
+
+    func testBlockingVariantDoesNotTreatACleanResolutionFailureAsBlocked() {
+        hostResolutionTimeout = 10 // same reasoning as the async version's test
+        XCTAssertTrue(hostResolvesToOnlyPublicAddressesBlocking("this-host-does-not-exist.invalid"))
+    }
+
+    /// Regression (review finding): after the semaphore times out, the
+    /// background lookup can still be RUNNING and can still write to its
+    /// result box after that point - reading the box unconditionally, as an
+    /// earlier version of this function did, was a genuine data race on top
+    /// of being the wrong policy (the async sibling's equivalent finding).
+    /// Forces the timeout branch deterministically, the same way the async
+    /// version's equivalent test does.
+    ///
+    /// Honest limit: this proves the function returns `false` on a forced
+    /// timeout, which the FIX does unconditionally - but since the box's own
+    /// initial value is already `false`, this test cannot distinguish the
+    /// fix from the earlier, racy "read the box regardless" version UNLESS
+    /// the background write actually lands in the narrow window between the
+    /// timeout firing and the (fixed code's) early return - a genuine data
+    /// race that no single-threaded, deterministic test can force to
+    /// manifest reliably. Tried reverting to the old unconditional read and
+    /// confirmed this test still passes, for exactly that reason - recorded
+    /// here rather than claimed as proof it isn't.
+    func testBlockingVariantIsTreatedAsBlockedOnTimeoutNotWhateverTheRaceLeavesBehind() {
+        hostResolutionTimeout = 0.000_001
+        XCTAssertFalse(hostResolvesToOnlyPublicAddressesBlocking("issuer.example"))
+    }
+
     func testOrdinaryPublicAddressesAndHostnamesAreStillFetched() {
         XCTAssertTrue(isPublicFetchAllowed(URL(string: "https://issuer.example/list")!))
         // A real public IP literal (documentation-safe TEST-NET-3 analogue
