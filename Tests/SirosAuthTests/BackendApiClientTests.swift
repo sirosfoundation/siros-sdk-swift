@@ -44,6 +44,39 @@ final class BackendApiClientTests: XCTestCase {
         XCTAssertEqual(body["subject_type"] as? String, "key")
     }
 
+    /// `resolveDid` is `resolveKey` plus extracting `context.trust_metadata`
+    /// for callers (DIIP's `DidResolutionDelegate`) that just want the
+    /// document, not the raw AuthZEN envelope.
+    func testResolveDidReturnsDocumentWhenDecisionIsTrue() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"decision":true,"context":{"trust_metadata":{"id":"did:web:issuer.example.com"}}}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        let document = try await client.resolveDid("did:web:issuer.example.com")
+
+        XCTAssertEqual(document?["id"] as? String, "did:web:issuer.example.com")
+    }
+
+    /// Regression (mirrors `resolveDidKeyMaterial`'s own fail-closed check,
+    /// see `SirosWalletTrustResolutionTests.testHandleTrustEvaluationFailsClosedWhenResolveDecisionIsNotTrue`):
+    /// `/v1/resolve` is itself an AuthZEN evaluation, and `context` is
+    /// populated independently of `decision` - a denied response can still
+    /// carry a `trust_metadata` document. `resolveDid` must not hand that
+    /// document to a caller (DIIP's `DidResolver`) that has no other
+    /// decision check of its own, or an unauthorized subject's DID document
+    /// would be trusted exactly as if go-trust had approved it.
+    func testResolveDidReturnsNilWhenDecisionIsNotTrue() async throws {
+        let server = MockHttpServer()
+        server.enqueue(#"{"decision":false,"context":{"trust_metadata":{"id":"did:web:issuer.example.com"}}}"#)
+        let client = BackendApiClient(baseUrl: "https://api.example.com", tenantId: "default", httpFn: server.httpFunction)
+        client.setAppToken("t")
+
+        let document = try await client.resolveDid("did:web:issuer.example.com")
+
+        XCTAssertNil(document, "a denied resolution must never be treated as a resolved DID document")
+    }
+
     // MARK: - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319)
 
     private func bodyJSON(_ req: MockHttpServer.RecordedRequest) throws -> [String: Any] {

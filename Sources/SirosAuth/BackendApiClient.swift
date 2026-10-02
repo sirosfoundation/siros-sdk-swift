@@ -181,6 +181,39 @@ public final class BackendApiClient: @unchecked Sendable {
         return try await post("/v1/resolve", body: body)
     }
 
+    /// Resolve a DID to its DID document, for callers - `Did.swift`'s
+    /// `DidResolutionDelegate`, which `SirosWallet` backs with this - that
+    /// just want the document rather than the raw AuthZEN envelope
+    /// `resolveKey` returns.
+    ///
+    /// DID method resolution is a trust decision: which document is
+    /// authoritative for an identifier. That belongs to the deployment's
+    /// trust registry, not to each wallet's own idea of which hosts to
+    /// believe, so the wallet asks rather than fetches. `did:jwk` is the one
+    /// exception and never gets here - it carries its own key and resolves
+    /// offline (see `DidResolver.resolve`).
+    ///
+    /// Built on `resolveKey`, not a second `/v1/resolve` call: `/v1/resolve`
+    /// is itself an AuthZEN evaluation, not a plain lookup, so a denied
+    /// response (`decision: false`) can still carry `trust_metadata`
+    /// (`context` is populated independently of the decision) - skipping
+    /// this check would extract and use a denied subject's key material,
+    /// exactly the gap `resolveDidKeyMaterial` closes for the verifier path.
+    /// go-wallet-backend's own ResolveDID path rejects `decision == false`
+    /// the same way.
+    ///
+    /// - Returns: the DID document, or nil if the backend could not resolve
+    ///   it, or the resolution was not explicitly decided `true`.
+    public func resolveDid(_ did: String) async throws -> [String: Any]? {
+        let response = try await resolveKey(subjectId: did)
+        guard response["decision"] as? Bool == true,
+              let context = response["context"] as? [String: Any],
+              let document = context["trust_metadata"] as? [String: Any],
+              document["id"] != nil
+        else { return nil }
+        return document
+    }
+
     /// GET /verifier/all — list registered verifiers
     public func getVerifiers() async throws -> [String: Any] {
         try await get("/verifier/all")
