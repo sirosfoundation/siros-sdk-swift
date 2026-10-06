@@ -145,7 +145,7 @@ public final class FaceTecIDVProvider: @unchecked Sendable, IdentityVerification
         // generic over FaceTecSDKInstance makes the compiler reference
         // `_OBJC_CLASS_$_FaceTecSDKInstance`, which FaceTec's xcframework does not
         // export. Plain, non-generic use resolves.
-        var sdkInstanceBox: FaceTecSDKInstance?
+        let holder = FaceTecInstanceHolder()
         let deviceKey = config.deviceKeyIdentifier
         // FaceTec calls back exactly once; the guard keeps a surprise second call
         // from resuming the continuation twice (a crash).
@@ -155,22 +155,27 @@ public final class FaceTecIDVProvider: @unchecked Sendable, IdentityVerification
                 deviceKeyIdentifier: deviceKey,
                 sessionRequestProcessor: processor,
                 completion: FaceTecInitializeCallbackBox(
+                    // These may arrive on any thread. The holder is lock-protected,
+                    // and the error path hops to the main actor before touching
+                    // `FaceTec.sdk`.
                     onSuccess: { sdkInstance in
                         guard once.claim() else { return }
-                        sdkInstanceBox = sdkInstance
+                        holder.instance = sdkInstance
                         continuation.resume()
                     },
                     onError: { error in
                         guard once.claim() else { return }
-                        continuation.resume(throwing: IDVError.providerError(
-                            code: "initialization_failed",
-                            message: "FaceTec SDK could not be initialized: \(FaceTec.sdk.description(for: error))"
-                        ))
+                        Task { @MainActor in
+                            continuation.resume(throwing: IDVError.providerError(
+                                code: "initialization_failed",
+                                message: "FaceTec SDK could not be initialized: \(FaceTec.sdk.description(for: error))"
+                            ))
+                        }
                     }
                 )
             )
         }
-        guard let sdkInstance = sdkInstanceBox else {
+        guard let sdkInstance = holder.instance else {
             throw IDVError.providerError(code: "initialization_failed", message: "FaceTec SDK could not be initialized")
         }
 
@@ -284,6 +289,19 @@ private final class FaceTecSessionRequestRelayProcessor: NSObject, FaceTecSessio
         case .unknownInternalError: return .unknownInternalError
         @unknown default: return nil
         }
+    }
+}
+
+/// Hands the initialized SDK instance from FaceTec's callback to the awaiting
+/// session. A plain, non-generic holder (see the comment where it is used), safe
+/// to set from whichever thread FaceTec calls back on.
+private final class FaceTecInstanceHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: FaceTecSDKInstance?
+
+    var instance: FaceTecSDKInstance? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
     }
 }
 

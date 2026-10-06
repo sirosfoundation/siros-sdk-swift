@@ -42,4 +42,12 @@ final class IdvErrorMessageTests: XCTestCase {
 
         XCTAssertEqual(WalletViewModel.idvErrorMessage(for: error), "[a_future_code] something new")
     }
+
+    func testUnresolvedDeviceKeyPlaceholderIsNotAKey() {
+        XCTAssertEqual(WalletViewModel.deviceKeyIdentifier(fromInfoValue: "$(FACETEC_DEVICE_KEY_IDENTIFIER)"), "")
+        XCTAssertEqual(WalletViewModel.deviceKeyIdentifier(fromInfoValue: "  "), "")
+        XCTAssertEqual(WalletViewModel.deviceKeyIdentifier(fromInfoValue: nil), "")
+        XCTAssertEqual(WalletViewModel.deviceKeyIdentifier(fromInfoValue: 7), "")
+        XCTAssertEqual(WalletViewModel.deviceKeyIdentifier(fromInfoValue: " dev-key "), "dev-key")
+    }
 }

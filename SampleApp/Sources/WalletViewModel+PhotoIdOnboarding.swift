@@ -74,7 +74,16 @@ extension WalletViewModel {
     /// FaceTec device key identifier from the app's Info.plist (set from the
     /// `FACETEC_DEVICE_KEY_IDENTIFIER` build setting); empty when not configured.
     static var faceTecDeviceKeyIdentifier: String {
-        Bundle.main.object(forInfoDictionaryKey: "FaceTecDeviceKeyIdentifier") as? String ?? ""
+        deviceKeyIdentifier(fromInfoValue: Bundle.main.object(forInfoDictionaryKey: "FaceTecDeviceKeyIdentifier"))
+    }
+
+    /// An Info.plist value is a real key only if it is a non-blank string that is
+    /// not an unresolved `$(BUILD_SETTING)` placeholder, which Xcode leaves in
+    /// the built plist when the build setting is not defined.
+    static func deviceKeyIdentifier(fromInfoValue value: Any?) -> String {
+        guard let key = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.hasPrefix("$(") else { return "" }
+        return key
     }
 
     /// The user-facing, localized text for an IDV failure, keyed by its
