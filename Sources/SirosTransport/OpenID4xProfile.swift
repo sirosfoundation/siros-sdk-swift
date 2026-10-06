@@ -187,6 +187,12 @@ public struct TransactionData: Codable, Sendable {
     }
 }
 
+/// An error that names the WMP flow-error code it should be reported with
+/// (for example `invalid_transaction_data`); any other error is `SIGN_ERROR`.
+public protocol WmpErrorCodeProviding {
+    var wmpErrorCode: String? { get }
+}
+
 public struct SignSubFlowParams: Codable, Sendable {
     public var action: String
     public var nonce: String
@@ -511,7 +517,8 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
             let result = try await handler(flowId, signParams)
             await sendSignResponse(flowId: flowId, result: result)
         } catch {
-            await sendFlowError(flowId: flowId, code: "SIGN_ERROR", message: error.localizedDescription)
+            let code = (error as? WmpErrorCodeProviding)?.wmpErrorCode ?? "SIGN_ERROR"
+            await sendFlowError(flowId: flowId, code: code, message: error.localizedDescription)
         }
     }
 

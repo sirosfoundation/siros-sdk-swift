@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosTransport
 
 /// Base error type for the SIROS SDK.
 ///
@@ -202,5 +203,12 @@ extension SirosError: LocalizedError {
             return "No refresh_token stored for batch \(batchId) - it may not be renewable, or was already renewed"
         case .transactionData(let error): return error.userFacingDescription
         }
+    }
+}
+
+extension SirosError: WmpErrorCodeProviding {
+    public var wmpErrorCode: String? {
+        if case .transactionData(let error) = self { return error.verifierErrorCode }
+        return nil
     }
 }

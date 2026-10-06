@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosTransport
 
 /// Why EC TS12 payment-SCA `transaction_data` was refused or declined.
 ///
@@ -63,4 +64,8 @@ public struct TransactionDataError: Error, Sendable, Equatable, CustomStringConv
         detail.isEmpty ? "transaction_data refused: \(reason.rawValue)"
             : "transaction_data refused: \(reason.rawValue) (\(detail))"
     }
+}
+
+extension TransactionDataError: WmpErrorCodeProviding {
+    public var wmpErrorCode: String? { verifierErrorCode }
 }
