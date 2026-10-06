@@ -93,9 +93,27 @@ final class TransactionDataRefusalTests: XCTestCase {
         let sender = Sender()
         await wallet.handleSignRequest(engine: sender, msg: try engineMessage(transactionData: td))
         XCTAssertTrue(keystore.calls.isEmpty, "nothing is signed")
-        XCTAssertTrue(sender.sent.isEmpty, "no sign response is sent")
+        XCTAssertEqual(sender.sent.count, 1, "the engine is answered at once, with an empty response")
+        XCTAssertNil(sender.sent.first?.vpToken)
+        XCTAssertEqual(sender.sent.first?.messageId, "m1", "correlated to the request")
         XCTAssertEqual(listener.errors.count, 1)
         XCTAssertTrue(listener.errors[0].hasPrefix("invalid_transaction_data"), listener.errors[0])
+    }
+
+    func testEngineRefusesAnExplicitNullMember() async throws {
+        let (wallet, keystore, listener) = try await makeWallet()
+        let sender = Sender()
+        await wallet.handleSignRequest(engine: sender, msg: try engineMessage(transactionData: "null"))
+        XCTAssertTrue(keystore.calls.isEmpty)
+        XCTAssertNil(sender.sent.first?.vpToken)
+        XCTAssertTrue(listener.errors.first?.hasPrefix("invalid_transaction_data") ?? false)
+    }
+
+    func testWmpRefusesAnExplicitNullMember() async throws {
+        let (wallet, keystore, _) = try await makeWallet()
+        do { _ = try await wallet.handleWmpSignRequest(flowId: "f1", params: try wmpParams(transactionData: "null")); XCTFail() }
+        catch let error as WmpErrorCodeProviding { XCTAssertEqual(error.wmpErrorCode, "invalid_transaction_data") }
+        XCTAssertTrue(keystore.calls.isEmpty)
     }
 
     func testEngineAnswersAsBeforeWithoutTransactionData() async throws {

@@ -193,6 +193,59 @@ public protocol WmpErrorCodeProviding {
     var wmpErrorCode: String? { get }
 }
 
+/// The `transaction_data` member of a sign request with its PRESENCE kept: an
+/// absent member, an explicit `null` and an empty array are different things,
+/// and a request that names the member at all must never be answered as if it
+/// did not.
+public struct TransactionDataMember: Codable, Sendable {
+    public var entries: [TransactionData]?
+    /// The member was present and `null`.
+    public var isExplicitNull: Bool
+
+    public init(entries: [TransactionData]? = nil, isExplicitNull: Bool = false) {
+        self.entries = entries
+        self.isExplicitNull = isExplicitNull
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() {
+            self.init(entries: nil, isExplicitNull: true)
+        } else {
+            self.init(entries: try c.decode([TransactionData].self), isExplicitNull: false)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        if let entries { try c.encode(entries) } else { try c.encodeNil() }
+    }
+
+    /// Whether a request carrying this member asks for TS12 handling:
+    /// anything but absent or an empty array (an explicit null included).
+    public var requestsTransactionHandling: Bool { isExplicitNull || !(entries ?? []).isEmpty }
+}
+
+extension KeyedDecodingContainer {
+    /// An absent key decodes as an absent member rather than an error.
+    func decode(_ type: TransactionDataMember.Type, forKey key: Key) throws -> TransactionDataMember {
+        guard contains(key) else { return TransactionDataMember() }
+        return try TransactionDataMember(from: try superDecoder(forKey: key))
+    }
+}
+
+extension KeyedEncodingContainer {
+    /// An absent member is omitted, never written as `null`.
+    mutating func encode(_ value: TransactionDataMember, forKey key: Key) throws {
+        guard value.entries != nil || value.isExplicitNull else { return }
+        try encodeValue(value, forKey: key)
+    }
+
+    private mutating func encodeValue(_ value: TransactionDataMember, forKey key: Key) throws {
+        if let entries = value.entries { try encode(entries, forKey: key) } else { try encodeNil(forKey: key) }
+    }
+}
+
 public struct SignSubFlowParams: Codable, Sendable {
     public var action: String
     public var nonce: String
@@ -200,7 +253,12 @@ public struct SignSubFlowParams: Codable, Sendable {
     public var proofType: String?
     public var parentFlowId: String?
     public var count: Int?
-    public var transactionData: [TransactionData]?
+    /// The member with its presence kept (see `TransactionDataMember`).
+    public var transactionDataMember = TransactionDataMember()
+    public var transactionData: [TransactionData]? {
+        get { transactionDataMember.entries }
+        set { transactionDataMember = TransactionDataMember(entries: newValue) }
+    }
     /// OID4VP `response_mode` of the request (go-wmp `SignSubFlowParams`).
     public var responseMode: String?
     /// Which credential answers which DCQL query id (go-wmp v0.6.0).
@@ -225,7 +283,7 @@ public struct SignSubFlowParams: Codable, Sendable {
         case action, nonce, audience, count, issuer, htm, htu, ath
         case proofType = "proof_type"
         case parentFlowId = "parent_flow_id"
-        case transactionData = "transaction_data"
+        case transactionDataMember = "transaction_data"
         case responseMode = "response_mode"
         case credentialsToInclude = "credentials_to_include"
         case verifierSessionId = "verifier_session_id"
@@ -257,7 +315,7 @@ public struct SignSubFlowParams: Codable, Sendable {
         self.proofType = proofType
         self.parentFlowId = parentFlowId
         self.count = count
-        self.transactionData = transactionData
+        self.transactionDataMember = TransactionDataMember(entries: transactionData)
         self.responseMode = responseMode
         self.credentialsToInclude = credentialsToInclude
         self.verifierSessionId = verifierSessionId
@@ -283,7 +341,7 @@ public struct SignSubFlowParams: Codable, Sendable {
         proofType = try c.decodeIfPresent(String.self, forKey: .proofType)
         parentFlowId = try c.decodeIfPresent(String.self, forKey: .parentFlowId)
         count = try c.decodeIfPresent(Int.self, forKey: .count)
-        transactionData = try c.decodeIfPresent([TransactionData].self, forKey: .transactionData)
+        transactionDataMember = try c.decode(TransactionDataMember.self, forKey: .transactionDataMember)
         responseMode = try c.decodeIfPresent(String.self, forKey: .responseMode)
         credentialsToInclude = try c.decodeIfPresent([CredentialRef].self, forKey: .credentialsToInclude)
         verifierSessionId = try c.decodeIfPresent(String.self, forKey: .verifierSessionId)

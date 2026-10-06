@@ -57,6 +57,29 @@ final class TransactionDataWireTests: XCTestCase {
         XCTAssertEqual(p.transactionData?.first?.hashesAlg, ["sha-512"])
     }
 
+    /// Presence is kept: absent, null and empty are different.
+    func testTransactionDataMemberPresenceIsPreserved() throws {
+        func engine(_ extra: String) throws -> SignRequestParams {
+            try JSONDecoder().decode(SignRequestParams.self, from: Data(#"{"audience":"a"\#(extra)}"#.utf8))
+        }
+        func wmp(_ extra: String) throws -> SignSubFlowParams {
+            try JSONDecoder().decode(SignSubFlowParams.self, from: Data(#"{"action":"sign_presentation"\#(extra)}"#.utf8))
+        }
+        XCTAssertFalse(try engine("").transactionDataMember.requestsTransactionHandling)
+        XCTAssertFalse(try engine(#","transaction_data":[]"#).transactionDataMember.requestsTransactionHandling)
+        XCTAssertTrue(try engine(#","transaction_data":null"#).transactionDataMember.isExplicitNull)
+        XCTAssertTrue(try engine(#","transaction_data":null"#).transactionDataMember.requestsTransactionHandling)
+        XCTAssertTrue(try engine(#","transaction_data":[{"type":"t"}]"#).transactionDataMember.requestsTransactionHandling)
+        XCTAssertFalse(try wmp("").transactionDataMember.requestsTransactionHandling)
+        XCTAssertTrue(try wmp(#","transaction_data":null"#).transactionDataMember.requestsTransactionHandling)
+        XCTAssertFalse(try wmp(#","transaction_data":[]"#).transactionDataMember.requestsTransactionHandling)
+        // Encoding keeps it too: absent is omitted, null stays null.
+        let absent = String(decoding: try JSONEncoder().encode(try engine("")), as: UTF8.self)
+        XCTAssertFalse(absent.contains("transaction_data"))
+        let null = String(decoding: try JSONEncoder().encode(try engine(#","transaction_data":null"#)), as: UTF8.self)
+        XCTAssertTrue(null.contains(#""transaction_data":null"#))
+    }
+
     func testSignRequestWithoutTransactionDataIsUnchanged() throws {
         let p = try JSONDecoder().decode(SignRequestParams.self, from: Data(#"{"audience":"a","nonce":"n"}"#.utf8))
         XCTAssertNil(p.transactionData)

@@ -619,7 +619,12 @@ public struct SignRequestParams: Codable, Sendable {
     /// OID4VP `transaction_data` entries (EC TS12) as the engine relays them:
     /// each carries `raw`, the verifier's base64url string, which is the only
     /// valid hash input. Absent for requests without transaction data.
-    public var transactionData: [TransactionData]?
+    /// The member with its presence kept (see `TransactionDataMember`).
+    public var transactionDataMember = TransactionDataMember()
+    public var transactionData: [TransactionData]? {
+        get { transactionDataMember.entries }
+        set { transactionDataMember = TransactionDataMember(entries: newValue) }
+    }
     /// OID4VP `response_mode` of the request; echoed in the KB-JWT of an SCA
     /// presentation (TS12 section 3.6).
     public var responseMode: String?
@@ -656,7 +661,7 @@ public struct SignRequestParams: Codable, Sendable {
         case credentialsToInclude = "credentials_to_include"
         case responseUri = "response_uri"
         case verifierJwkThumbprint = "verifier_jwk_thumbprint"
-        case transactionData = "transaction_data"
+        case transactionDataMember = "transaction_data"
         case responseMode = "response_mode"
         case reissuanceKid = "reissuance_kid"
         case verifierSessionId = "verifier_session_id"

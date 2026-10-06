@@ -433,7 +433,7 @@ extension SirosWallet {
             // EC TS12 is not processed yet (it needs the pipeline of a later
             // change): refuse before anything else rather than answer without
             // the hashes and without showing the user the transaction.
-            try Self.refuseTransactionData(params.transactionData)
+            try Self.refuseTransactionData(params.transactionDataMember)
             // Same defense-in-depth audience check as the legacy engine
             // transport's handleSignRequest - this transport previously
             // skipped it entirely, so a WMP-relayed sign_presentation was
@@ -799,7 +799,7 @@ extension SirosWallet {
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
             case "sign_presentation":
-                try Self.refuseTransactionData(msg.params.transactionData)
+                try Self.refuseTransactionData(msg.params.transactionDataMember)
                 let nonce = msg.params.nonce ?? ""
                 let audience = msg.params.audience ?? ""
                 let credsToInclude = msg.params.credentialsToInclude
@@ -894,6 +894,9 @@ extension SirosWallet {
             logger.error("Error handling sign request: \(error.localizedDescription)")
             #endif
             if case SirosError.transactionData(let refusal) = error {
+                // Answer at once rather than leave the engine waiting out its
+                // sign timeout (an empty response makes it fail the flow).
+                engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
                 // Verifier error code first, so the app can act on it.
                 reportSignFailure(flowId: msg.flowId, message: "\(refusal.verifierErrorCode): \(refusal.userFacingDescription)")
             } else {
@@ -905,8 +908,8 @@ extension SirosWallet {
     /// Refuses a presentation request that carries `transaction_data`: this
     /// SDK cannot process it yet, and answering without the transaction hashes
     /// (and without the user seeing the transaction) is never acceptable.
-    static func refuseTransactionData(_ transactionData: [TransactionData]?) throws {
-        guard let transactionData, !transactionData.isEmpty else { return }
+    static func refuseTransactionData(_ member: TransactionDataMember) throws {
+        guard member.requestsTransactionHandling else { return }
         throw SirosError.transactionData(TransactionDataError(
             .disabled, detail: "sign_presentation carries transaction_data and TS12 handling is not in effect"
         ))
