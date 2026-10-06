@@ -75,6 +75,9 @@ targets:
         NSBluetoothAlwaysUsageDescription: "Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader."
         NSFaceIDUsageDescription: "Face ID is used to authenticate and protect your credentials."
         NFCReaderUsageDescription: "NFC is used to communicate with a security key for FIDO2 authentication."
+        # Empty unless the build sets it; without it (or without the FaceTec
+        # xcframework) Scan Physical ID reports itself unavailable.
+        FaceTecDeviceKeyIdentifier: "$(FACETEC_DEVICE_KEY_IDENTIFIER)"
         ITSAppUsesNonExemptEncryption: false
 
   SirosSampleAppTests:

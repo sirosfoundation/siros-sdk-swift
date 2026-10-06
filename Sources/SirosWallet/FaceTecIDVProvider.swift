@@ -4,173 +4,277 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(CoreNFC) && os(iOS)
+import CoreNFC
+#endif
 #if canImport(FaceTecSDK)
 import FaceTecSDK
 #endif
 
-/// FaceTec biometric capture delegate.
+/// Identity verification with the FaceTec **10** SDK and facetec-api.
 ///
-/// Implements ``BiometricCaptureDelegate`` by wrapping the FaceTec mobile SDK
-/// using the FaceScanProcessor/IDScanProcessor pattern. The captured biometric
-/// data (faceScan, auditTrailImages) is passed to ``RemoteIDVClient`` which
-/// uploads it to the IDV backend for server-side processing.
+/// Runs FaceTec's 3D liveness, document scan (with NFC chip read) and 3D:2D
+/// photo match as one session. Every request blob of the session goes to
+/// facetec-api's `/process-request`, which proxies it to FaceTec Server and,
+/// once the match succeeds and the document's chip was authenticated, issues a
+/// credential: the session's ``IDVResult`` carries that credential offer.
 ///
-/// When FaceTecSDK is not linked, all methods throw ``IDVError/unavailable``.
-public final class FaceTecCaptureDelegate: @unchecked Sendable, BiometricCaptureDelegate {
+/// ```swift
+/// let provider = FaceTecIDVProvider(config: FaceTecIDVConfig(
+///     processRequestUrl: URL(string: "https://idv.example.com/v1/process-request")!,
+///     authToken: "Bearer \(token)",
+///     deviceKeyIdentifier: "<from FaceTec>"
+/// ))
+/// try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: vc)
+/// ```
+///
+/// ## What facetec-api requires of its clients (v0.16.0)
+///
+/// - The **same `externalDatabaseRefID` on every `/process-request` of one
+///   FaceTec session**. facetec-api records FaceTec Server's liveness verdict
+///   under it and refuses the final result with `liveness_failed` unless that
+///   session's liveness was proven; a request without the ID is refused too.
+///   The provider mints one ID per session (one `FaceTecSessionRelay` per
+///   ``startVerification(presentingViewController:)`` call), so a retry inside
+///   FaceTec's UI keeps it and a new scan gets a fresh one.
+/// - A liveness proof is single-use and expires (15 minutes by default), so a
+///   refused or abandoned session cannot be resumed: start a new one.
+/// - Every request of a session must reach the same facetec-api instance
+///   (sticky routing, or a single instance).
+///
+/// ## App requirements
+///
+/// - The FaceTec iOS SDK 10 xcframework linked into the app. This package has
+///   no dependency on it (it is distributed privately); without it
+///   ``isAvailable()`` is `false` and ``startVerification(presentingViewController:)``
+///   throws ``IDVError/unavailable(reason:)``.
+/// - `NSCameraUsageDescription`, and for the chip read the "NFC Tag Reading"
+///   capability with `NFCReaderUsageDescription` and the ISO 7816 application
+///   identifiers FaceTec documents.
+///
+/// ## Errors
+///
+/// - ``IDVError/cancelled``: the user left the face or ID scan.
+/// - ``IDVError/documentChipNotVerified(reason:message:)``: facetec-api refused
+///   because the document's chip was not read and authenticated (`nfc_*`).
+/// - ``IDVError/livenessFailed(message:)``, ``IDVError/verificationFailed(message:)``:
+///   liveness, face match, policy or unreadable-document refusals.
+/// - ``IDVError/providerError(code:message:)``: any other refusal code
+///   (`chip_untrusted`, `document_expired`, `session_expired`, `issuance_failed`,
+///   `internal_error`, ...) or FaceTec status, with the code kept.
+/// - ``IDVError/networkError(underlying:)``: facetec-api could not be reached
+///   during the session.
+/// - ``IDVError/unavailable(reason:)``: no FaceTec SDK, no device key
+///   identifier, no camera permission, or (with ``FaceTecIDVConfig/requireNfc``)
+///   a device that cannot read NFC.
+public final class FaceTecIDVProvider: @unchecked Sendable, IdentityVerificationProvider {
+
+    private let config: FaceTecIDVConfig
+    private let client: FaceTecProcessRequestClient
+    private let configureSession: (@MainActor @Sendable () -> Void)?
+
+    /// - Parameters:
+    ///   - config: Where facetec-api is and which FaceTec device key to use.
+    ///   - configureSession: Called on the main actor once FaceTec has
+    ///     initialized and before the session starts: the place for
+    ///     `FaceTec.sdk.setCustomization(...)` and string localization, which
+    ///     FaceTec only accepts after initialization.
+    public init(config: FaceTecIDVConfig, configureSession: (@MainActor @Sendable () -> Void)? = nil) {
+        self.config = config
+        self.client = FaceTecProcessRequestClient(config: config)
+        self.configureSession = configureSession
+    }
 
     public var name: String { "FaceTec" }
 
-    public init() {}
-
+    /// Whether a FaceTec 10 SDK is linked and a device key identifier is set.
     public func isAvailable() async -> Bool {
-        #if canImport(FaceTecSDK)
-        return FaceTec.sdk.getStatus() == .initialized
+        #if canImport(FaceTecSDK) && canImport(UIKit)
+        return !config.deviceKeyIdentifier.isEmpty
         #else
         return false
         #endif
     }
 
-    public func captureLiveness(presentingViewController: Any, sessionToken: String) async throws -> [String: Any] {
+    public func startVerification(presentingViewController: Any) async throws -> IDVResult {
         #if canImport(FaceTecSDK) && canImport(UIKit)
+        guard !config.deviceKeyIdentifier.isEmpty else {
+            throw IDVError.unavailable(reason: "no FaceTec device key identifier configured")
+        }
         guard let viewController = presentingViewController as? UIViewController else {
             throw IDVError.unavailable(reason: "presentingViewController must be a UIViewController")
         }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let processor = LivenessSessionProcessor(
-                sessionToken: sessionToken,
-                continuation: continuation
-            )
-            DispatchQueue.main.async {
-                let sessionVC = FaceTec.sdk.createSessionVC(
-                    faceScanProcessorDelegate: processor,
-                    sessionToken: sessionToken
-                )
-                viewController.present(sessionVC, animated: true)
-            }
+        if config.requireNfc, !Self.isNFCReadingAvailable {
+            throw IDVError.unavailable(reason: "this device cannot read NFC, which reading the document's chip requires")
         }
+        return try await runSession(presenting: viewController)
         #else
-        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add FaceTecSDK.xcframework to your app target.")
+        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add the FaceTec 10 xcframework to your app target.")
         #endif
     }
 
-    public func captureDocument(presentingViewController: Any, sessionToken: String, livenessSessionId: String) async throws -> [String: Any] {
-        #if canImport(FaceTecSDK) && canImport(UIKit)
-        guard let viewController = presentingViewController as? UIViewController else {
-            throw IDVError.unavailable(reason: "presentingViewController must be a UIViewController")
-        }
+    #if canImport(FaceTecSDK) && canImport(UIKit)
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let processor = DocumentScanProcessor(
-                sessionToken: sessionToken,
-                livenessSessionId: livenessSessionId,
-                continuation: continuation
-            )
-            DispatchQueue.main.async {
-                let sessionVC = FaceTec.sdk.createSessionVC(
-                    idScanProcessorDelegate: processor,
-                    sessionToken: sessionToken
-                )
-                viewController.present(sessionVC, animated: true)
-            }
-        }
+    private static var isNFCReadingAvailable: Bool {
+        #if canImport(CoreNFC) && os(iOS)
+        return NFCTagReaderSession.readingAvailable
         #else
-        throw IDVError.unavailable(reason: "FaceTec SDK not linked. Add FaceTecSDK.xcframework to your app target.")
+        return false
         #endif
     }
+
+    @MainActor
+    private func runSession(presenting viewController: UIViewController) async throws -> IDVResult {
+        let client = self.client
+        let relay = FaceTecSessionRelay { blob, refID in
+            try await client.post(requestBlob: blob, externalDatabaseRefID: refID)
+        }
+        let exit = FaceTecSessionExit()
+        let processor = FaceTecSessionRequestRelayProcessor(relay: relay, exit: exit)
+
+        // Not a `CheckedContinuation<FaceTecSDKInstance, Error>`: specializing a
+        // generic over FaceTecSDKInstance makes the compiler reference
+        // `_OBJC_CLASS_$_FaceTecSDKInstance`, which FaceTec's xcframework does not
+        // export. Plain, non-generic use resolves.
+        var sdkInstanceBox: FaceTecSDKInstance?
+        let deviceKey = config.deviceKeyIdentifier
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            FaceTec.sdk.initializeWithSessionRequest(
+                deviceKeyIdentifier: deviceKey,
+                sessionRequestProcessor: processor,
+                completion: FaceTecInitializeCallbackBox(
+                    onSuccess: { sdkInstance in
+                        sdkInstanceBox = sdkInstance
+                        continuation.resume()
+                    },
+                    onError: { error in
+                        continuation.resume(throwing: IDVError.providerError(
+                            code: "initialization_failed",
+                            message: "FaceTec SDK could not be initialized: \(FaceTec.sdk.description(for: error))"
+                        ))
+                    }
+                )
+            )
+        }
+        guard let sdkInstance = sdkInstanceBox else {
+            throw IDVError.providerError(code: "initialization_failed", message: "FaceTec SDK could not be initialized")
+        }
+
+        // FaceTec accepts customization only after initialization succeeded;
+        // earlier it crashes inside the SDK.
+        configureSession?()
+
+        let sessionViewController = sdkInstance.start3DLivenessThen3D2DPhotoIDMatch(with: processor)
+        viewController.present(sessionViewController, animated: true)
+
+        return try sessionOutcome(status: await exit.wait(), relay: relay)
+    }
+
+    #endif
 }
 
-// MARK: - FaceTec Session Processors
+/// A one-shot hand-off of the session's end status from FaceTec's exit
+/// callback to the awaiting provider. Whichever of ``fire(_:)`` and ``wait()``
+/// comes first, the other still sees the value, so a session that exits before
+/// the provider starts waiting is not lost.
+final class FaceTecSessionExit: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    private var value: FaceTecSessionEnd?
+    private var waiter: CheckedContinuation<FaceTecSessionEnd?, Never>?
+
+    func fire(_ end: FaceTecSessionEnd?) {
+        lock.lock()
+        if fired { lock.unlock(); return }
+        fired = true
+        value = end
+        let waiting = waiter
+        waiter = nil
+        lock.unlock()
+        waiting?.resume(returning: end)
+    }
+
+    func wait() async -> FaceTecSessionEnd? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<FaceTecSessionEnd?, Never>) in
+            lock.lock()
+            if fired {
+                let result = value
+                lock.unlock()
+                continuation.resume(returning: result)
+            } else {
+                waiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+}
 
 #if canImport(FaceTecSDK) && canImport(UIKit)
 
-/// Handles FaceTec liveness (FaceScan) capture via the FaceScanProcessor delegate.
-private final class LivenessSessionProcessor: NSObject, FaceTecFaceScanProcessorDelegate {
-    private let sessionToken: String
-    private var continuation: CheckedContinuation<[String: Any], Error>?
+/// FaceTec's `FaceTecSessionRequestProcessor` for one session, delegating to a
+/// ``FaceTecSessionRelay``.
+///
+/// Per FaceTec's integration contract, `onSessionRequest` only performs the
+/// network call and the minimum bookkeeping needed to hand its result back to
+/// the SDK. Request and response blobs are never logged.
+private final class FaceTecSessionRequestRelayProcessor: NSObject, FaceTecSessionRequestProcessor, @unchecked Sendable {
+    private let relay: FaceTecSessionRelay
+    private let exit: FaceTecSessionExit
 
-    init(sessionToken: String, continuation: CheckedContinuation<[String: Any], Error>) {
-        self.sessionToken = sessionToken
-        self.continuation = continuation
-        super.init()
+    init(relay: FaceTecSessionRelay, exit: FaceTecSessionExit) {
+        self.relay = relay
+        self.exit = exit
     }
 
-    func processSessionWhileFaceTecSDKWaits(
-        sessionResult: FaceTecSessionResult,
-        faceScanResultCallback: FaceTecFaceScanResultCallback
-    ) {
-        guard sessionResult.status == .sessionCompletedSuccessfully else {
-            let reason = "FaceTec liveness session ended with status: \(sessionResult.status.rawValue)"
-            continuation?.resume(throwing: IDVError.cancelled(reason: reason))
-            continuation = nil
-            faceScanResultCallback.onFaceScanResultCancel()
-            return
+    func onSessionRequest(sessionRequestBlob: String, sessionRequestCallback: FaceTecSessionRequestProcessorCallback) {
+        // FaceTec expects every call back into the callback on the main thread
+        // (its own sample pins the URLSession delegate queue to .main).
+        // `await` resumes on an arbitrary executor, so hop back explicitly.
+        Task { @MainActor in
+            if let responseBlob = await relay.onSessionRequest(sessionRequestBlob) {
+                sessionRequestCallback.processResponse(responseBlob)
+            } else {
+                sessionRequestCallback.abortOnCatastrophicError()
+            }
         }
-
-        // Extract biometric data for upload to IDV backend
-        let payload: [String: Any] = [
-            "faceScan": sessionResult.faceScanBase64 ?? "",
-            "auditTrailImage": sessionResult.auditTrailCompressedBase64?.first ?? "",
-            "lowQualityAuditTrailImage": sessionResult.lowQualityAuditTrailCompressedBase64?.first ?? "",
-            "sessionId": sessionResult.sessionId ?? "",
-        ]
-
-        continuation?.resume(returning: payload)
-        continuation = nil
-        // Signal SDK we're done (server-side processing happens via RemoteIDVClient)
-        faceScanResultCallback.onFaceScanGoToNextStep(scanResultBlob: "")
     }
 
-    func onFaceTecSDKCompletelyDone() {
-        if let cont = continuation {
-            cont.resume(throwing: IDVError.cancelled(reason: "FaceTec liveness session dismissed by user"))
-            continuation = nil
+    func onFaceTecExit(sessionResult: FaceTecSessionResult) {
+        exit.fire(Self.end(of: sessionResult.sessionStatus))
+    }
+
+    private static func end(of status: FaceTecSessionStatus) -> FaceTecSessionEnd? {
+        switch status {
+        case .sessionCompleted: return .sessionCompleted
+        case .requestAborted: return .requestAborted
+        case .userCancelledFaceScan: return .userCancelledFaceScan
+        case .userCancelledIDScan: return .userCancelledIdScan
+        case .lockedOut: return .lockedOut
+        case .cameraError: return .cameraError
+        case .cameraPermissionsDenied: return .cameraPermissionsDenied
+        case .unknownInternalError: return .unknownInternalError
+        @unknown default: return nil
         }
     }
 }
 
-/// Handles FaceTec document (ID scan) capture via the IDScanProcessor delegate.
-private final class DocumentScanProcessor: NSObject, FaceTecIDScanProcessorDelegate {
-    private let sessionToken: String
-    private let livenessSessionId: String
-    private var continuation: CheckedContinuation<[String: Any], Error>?
+/// Bridges FaceTec's `FaceTecInitializeCallback` delegate protocol to a pair of
+/// closures so `initializeWithSessionRequest` can be awaited.
+private final class FaceTecInitializeCallbackBox: NSObject, FaceTecInitializeCallback {
+    private let onSuccess: (FaceTecSDKInstance) -> Void
+    private let onError: (FaceTecInitializationError) -> Void
 
-    init(sessionToken: String, livenessSessionId: String, continuation: CheckedContinuation<[String: Any], Error>) {
-        self.sessionToken = sessionToken
-        self.livenessSessionId = livenessSessionId
-        self.continuation = continuation
-        super.init()
+    init(onSuccess: @escaping (FaceTecSDKInstance) -> Void, onError: @escaping (FaceTecInitializationError) -> Void) {
+        self.onSuccess = onSuccess
+        self.onError = onError
     }
 
-    func processIDScanWhileFaceTecSDKWaits(
-        idScanResult: FaceTecIDScanResult,
-        idScanResultCallback: FaceTecIDScanResultCallback
-    ) {
-        guard idScanResult.status == .success else {
-            let reason = "FaceTec ID scan ended with status: \(idScanResult.status.rawValue)"
-            continuation?.resume(throwing: IDVError.cancelled(reason: reason))
-            continuation = nil
-            idScanResultCallback.onIDScanResultCancel()
-            return
-        }
-
-        let payload: [String: Any] = [
-            "idScanFrontImage": idScanResult.frontImagesCompressedBase64?.first ?? "",
-            "idScanBackImage": idScanResult.backImagesCompressedBase64?.first ?? "",
-            "livenessSessionId": livenessSessionId,
-            "sessionId": idScanResult.sessionId ?? "",
-        ]
-
-        continuation?.resume(returning: payload)
-        continuation = nil
-        idScanResultCallback.onIDScanResultGoToNextStep(scanResultBlob: "")
+    func onFaceTecSDKInitializeSuccess(sdkInstance: FaceTecSDKInstance) {
+        onSuccess(sdkInstance)
     }
 
-    func onFaceTecSDKCompletelyDone() {
-        if let cont = continuation {
-            cont.resume(throwing: IDVError.cancelled(reason: "FaceTec ID scan dismissed by user"))
-            continuation = nil
-        }
+    func onFaceTecSDKInitializeError(error: FaceTecInitializationError) {
+        onError(error)
     }
 }
 

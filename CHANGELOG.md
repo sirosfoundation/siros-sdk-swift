@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
+  facetec-api's `/process-request`.** One FaceTec session (3D liveness,
+  document scan with NFC chip read, photo match) relays every request blob
+  to facetec-api, which issues the credential; the offer becomes the
+  `IDVResult`. Configured with `FaceTecIDVConfig(processRequestUrl:authToken:deviceKeyIdentifier:)`
+  (`requireNfc` defaults to true; `configureSession` runs after FaceTec has
+  initialized, for customization). Mirrors siros-sdk-kotlin's
+  `FaceTecIDVProvider`, and maps facetec-api's refusal codes to the same
+  `IDVError`s: `nfc_*` to `documentChipNotVerified`, `liveness_failed` to
+  `livenessFailed`, `match_failed`/`policy_rejected`/`document_unreadable` to
+  `verificationFailed`, anything else (`chip_untrusted`, `document_expired`,
+  `session_expired`, `issuance_failed`, `internal_error`, ...) to
+  `providerError` with the code kept (`errorCode` `idv_provider_<code>`).
+  The provider sends **one `externalDatabaseRefID` per FaceTec session on
+  every `/process-request`**, which facetec-api v0.16.0 requires: it refuses
+  the final result with `liveness_failed` unless that session's liveness was
+  proven under the same ID. See `docs/IDENTITY-VERIFICATION.md`.
+- The sample app uses it (device key from the `FACETEC_DEVICE_KEY_IDENTIFIER`
+  build setting) and shows a localized message per `idv_*` error code (en, sv).
 - **`IDVError.documentChipNotVerified(reason:message:)`: a refused issuance
   because the document's NFC chip was not read and authenticated.**
   facetec-api now issues nothing without an authenticated chip read
@@ -18,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only tells verified from not, so the reason there is always
   `nfc_skipped`; any other `nfc_*` code a backend sends maps the same way. Adding a case to `IDVError` breaks exhaustive `switch`es over it
   outside the SDK; add a `default` or handle the new case.
+
+### Deprecated
+- **`FaceTecCaptureDelegate`.** It is written against the FaceTec 9 API
+  (`createSessionVC` and the face-scan/ID-scan processors), which FaceTec 10
+  removed, so it cannot compile against the SDK wallet-ios-wrapper ships.
+  Use `FaceTecIDVProvider`. `RemoteIDVClient`/`RemoteIDVProvider` are
+  unchanged. Also fixes its `IDVError.cancelled(reason:)` calls, which named
+  an associated value the case does not have.
 
 ## [0.14.1] - 2026-09-29
 

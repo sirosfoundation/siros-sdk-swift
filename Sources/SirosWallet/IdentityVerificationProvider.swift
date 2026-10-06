@@ -92,8 +92,12 @@ extension IDVError: LocalizedError {
 /// ## Example
 ///
 /// ```swift
-/// let provider = FaceTecIDVProvider(apiUrl: "https://ft.example.com", deviceKey: "...")
-/// try await wallet.verifyIdentityAndIssue(provider: provider, from: viewController)
+/// let provider = FaceTecIDVProvider(config: FaceTecIDVConfig(
+///     processRequestUrl: URL(string: "https://idv.example.com/v1/process-request")!,
+///     authToken: "Bearer \(token)",
+///     deviceKeyIdentifier: "<from FaceTec>"
+/// ))
+/// try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: viewController)
 /// ```
 ///
 /// ## Thread Safety
