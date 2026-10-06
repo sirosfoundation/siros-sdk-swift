@@ -16,14 +16,14 @@ final class IdvErrorMessageTests: XCTestCase {
         let errors: [(code: String, error: IDVError)] = [
             ("liveness_failed", .livenessFailed(message: raw)),
             ("match_failed / document_unreadable / policy_rejected", .verificationFailed(message: raw)),
-            ("session_expired", .providerError(code: "session_expired", message: raw)),
+            ("session_expired", .sessionExpired(message: raw)),
             ("nfc_skipped", .documentChipNotVerified(reason: "nfc_skipped", message: raw)),
             ("nfc_not_requested", .documentChipNotVerified(reason: "nfc_not_requested", message: raw)),
             ("nfc_device_not_capable", .documentChipNotVerified(reason: "nfc_device_not_capable", message: raw)),
             ("nfc_chip_read_failed", .documentChipNotVerified(reason: "nfc_chip_read_failed", message: raw)),
             ("nfc_not_authenticated", .documentChipNotVerified(reason: "nfc_not_authenticated", message: raw)),
-            ("chip_untrusted", .providerError(code: "chip_untrusted", message: raw)),
-            ("document_expired", .providerError(code: "document_expired", message: raw)),
+            ("chip_untrusted", .chipUntrusted(message: raw)),
+            ("document_expired", .documentExpired(message: raw)),
             ("issuance_failed", .providerError(code: "issuance_failed", message: raw)),
             ("internal_error", .providerError(code: "internal_error", message: raw)),
         ]

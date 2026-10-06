@@ -127,18 +127,23 @@ extension IDVError {
     ///
     /// - `nfc_*`: the document's chip was not read and authenticated
     ///   (``documentChipNotVerified(reason:message:)``).
+    /// - `chip_untrusted`, `document_expired`, `session_expired`:
+    ///   ``chipUntrusted(message:)``, ``documentExpired(message:)``,
+    ///   ``sessionExpired(message:)``.
     /// - `liveness_failed`: ``livenessFailed(message:)``.
     /// - `match_failed`, `policy_rejected`, `document_unreadable`:
     ///   ``verificationFailed(message:)``.
-    /// - Anything else, e.g. `chip_untrusted`, `document_expired`,
-    ///   `session_expired`, `issuance_failed`, `internal_error`:
-    ///   ``providerError(code:message:)``, which keeps the code
-    ///   (`errorCode` = `idv_provider_<code>`) so an app can still explain it.
+    /// - Anything else, e.g. `issuance_failed`, `internal_error` or a code a
+    ///   newer facetec-api adds: ``providerError(code:message:)``, which keeps
+    ///   the code (`errorCode` = `idv_provider_<code>`) so an app can still
+    ///   explain it.
     init(refusalCode code: String, message: String?) {
         let text = message ?? "No credential was issued (\(code))"
+        if let typed = IDVError(typedRefusalCode: code, message: text) {
+            self = typed
+            return
+        }
         switch code {
-        case _ where code.hasPrefix("nfc_"):
-            self = .documentChipNotVerified(reason: code, message: text)
         case "liveness_failed":
             self = .livenessFailed(message: text)
         case "match_failed", "policy_rejected", "document_unreadable":

@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FaceTecIDVProvider`, and maps facetec-api's refusal codes to the same
   `IDVError`s: `nfc_*` to `documentChipNotVerified`, `liveness_failed` to
   `livenessFailed`, `match_failed`/`policy_rejected`/`document_unreadable` to
-  `verificationFailed`, anything else (`chip_untrusted`, `document_expired`,
-  `session_expired`, `issuance_failed`, `internal_error`, ...) to
-  `providerError` with the code kept (`errorCode` `idv_provider_<code>`).
+  `verificationFailed`, `chip_untrusted`/`document_expired`/`session_expired`
+  to `chipUntrusted`/`documentExpired`/`sessionExpired`, anything else
+  (`issuance_failed`, `internal_error`, ...) to `providerError` with the code
+  kept (`errorCode` `idv_provider_<code>`).
   The provider sends **one `externalDatabaseRefID` per FaceTec session on
   every `/process-request`**, which facetec-api v0.16.0 requires: it refuses
   the final result with `liveness_failed` unless that session's liveness was

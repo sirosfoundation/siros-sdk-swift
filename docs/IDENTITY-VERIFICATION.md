@@ -39,8 +39,8 @@ facetec-api reports a refusal in the process-request response as
 `FaceTecIDVProvider` maps it as below, the same way siros-sdk-kotlin does.
 
 The legacy `/v1` endpoints (`RemoteIDVClient`) answer 422 with `error_code`
-instead, and `RemoteIDVClient` only gives the `nfc_*` codes a typed error
-(`documentChipNotVerified`); any other 422 stays a `verificationFailed` (or
+instead, and `RemoteIDVClient` gives the `nfc_*`, `chip_untrusted`, `document_expired` and
+`session_expired` codes their typed error; any other 422 stays a `verificationFailed` (or
 `livenessFailed` on the liveness step) carrying the raw body.
 
 | Code | `IDVError` | `errorCode` |
@@ -48,7 +48,10 @@ instead, and `RemoteIDVClient` only gives the `nfc_*` codes a typed error
 | `liveness_failed` | `livenessFailed` | `idv_liveness_failed` |
 | `match_failed`, `policy_rejected`, `document_unreadable` | `verificationFailed` | `idv_verification_failed` |
 | `nfc_skipped`, `nfc_not_requested`, `nfc_device_not_capable`, `nfc_chip_read_failed`, `nfc_not_authenticated` | `documentChipNotVerified(reason:)` | `idv_<code>` |
-| `chip_untrusted`, `document_expired`, `session_expired`, `issuance_failed`, `internal_error`, any future code | `providerError(code:)` | `idv_provider_<code>` |
+| `chip_untrusted` | `chipUntrusted` | `idv_chip_untrusted` |
+| `document_expired` | `documentExpired` | `idv_document_expired` |
+| `session_expired` | `sessionExpired` | `idv_session_expired` |
+| `issuance_failed`, `internal_error`, any future code | `providerError(code:)` | `idv_provider_<code>` |
 | user left the face or ID scan | `cancelled` | `idv_cancelled` |
 | camera denied or broken, no NFC, no FaceTec SDK, no device key | `unavailable` | `idv_unavailable` |
 | facetec-api unreachable during the session | `networkError` | `idv_network_error` |

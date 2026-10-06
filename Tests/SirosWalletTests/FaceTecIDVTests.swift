@@ -223,8 +223,7 @@ final class FaceTecSessionOutcomeTests: XCTestCase {
         let session = await relay(answering: #"{"code":"document_expired","msg":"document has expired"}"#)
 
         XCTAssertThrowsError(try sessionOutcome(status: .sessionCompleted, relay: session)) { error in
-            guard case let IDVError.providerError(code, message) = error else { return XCTFail("got \(error)") }
-            XCTAssertEqual(code, "document_expired")
+            guard case let IDVError.documentExpired(message) = error else { return XCTFail("got \(error)") }
             XCTAssertEqual(message, "document has expired")
         }
     }
@@ -267,9 +266,9 @@ final class FaceTecSessionOutcomeTests: XCTestCase {
             ("nfc_device_not_capable", "idv_nfc_device_not_capable"),
             ("nfc_chip_read_failed", "idv_nfc_chip_read_failed"),
             ("nfc_not_authenticated", "idv_nfc_not_authenticated"),
-            ("chip_untrusted", "idv_provider_chip_untrusted"),
-            ("document_expired", "idv_provider_document_expired"),
-            ("session_expired", "idv_provider_session_expired"),
+            ("chip_untrusted", "idv_chip_untrusted"),
+            ("document_expired", "idv_document_expired"),
+            ("session_expired", "idv_session_expired"),
             ("issuance_failed", "idv_provider_issuance_failed"),
             ("internal_error", "idv_provider_internal_error"),
             ("some_future_code", "idv_provider_some_future_code"),
@@ -283,7 +282,7 @@ final class FaceTecSessionOutcomeTests: XCTestCase {
 
     func testRefusalWithoutMessageNamesTheCode() {
         XCTAssertEqual(IDVError(refusalCode: "chip_untrusted", message: nil).errorDescription,
-                       "[chip_untrusted] No credential was issued (chip_untrusted)")
+                       "No credential was issued (chip_untrusted)")
     }
 }
 
