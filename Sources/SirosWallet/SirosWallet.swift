@@ -62,7 +62,7 @@ public final class SirosWallet: @unchecked Sendable {
 
     // MARK: - EC TS12 payment SCA (`transaction_data`)
 
-    var _transactionDataEnabled: Bool
+    var transactionDataEnabledValue: Bool
 
     /// Whether the host app has registered a consent handler able to show a
     /// transaction to the user. No handler API exists yet (it arrives with the
@@ -78,8 +78,8 @@ public final class SirosWallet: @unchecked Sendable {
     /// started with. WMP offers capabilities per session, so a change takes
     /// effect on the WMP transport at the next session (reconnect).
     public var transactionDataEnabled: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _transactionDataEnabled }
-        set { lock.lock(); _transactionDataEnabled = newValue; lock.unlock() }
+        get { lock.lock(); defer { lock.unlock() }; return transactionDataEnabledValue }
+        set { lock.lock(); transactionDataEnabledValue = newValue; lock.unlock() }
     }
 
     /// Effective enablement: the flag is on AND a consent handler is
@@ -87,7 +87,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// so it behaves as disabled.
     var transactionDataEffectivelyEnabled: Bool {
         lock.lock(); defer { lock.unlock() }
-        return _transactionDataEnabled && transactionConsentHandlerRegistered
+        return transactionDataEnabledValue && transactionConsentHandlerRegistered
     }
 
     /// `flow_start.features` for a flow started now (legacy engine).
@@ -762,7 +762,7 @@ public final class SirosWallet: @unchecked Sendable {
         accountRegistry: AccountRegistry? = nil
     ) {
         self.config = config
-        self._transactionDataEnabled = config.transactionDataEnabled
+        self.transactionDataEnabledValue = config.transactionDataEnabled
         self.authProvider = authProvider
         self.sessionStore = sessionStore
 

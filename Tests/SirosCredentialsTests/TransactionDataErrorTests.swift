@@ -26,4 +26,13 @@ final class TransactionDataErrorTests: XCTestCase {
         XCTAssertEqual(error.errorCode, "transaction_data_disabled")
         XCTAssertTrue((error.errorDescription ?? "").contains("disabled"))
     }
+
+    /// `detail` is developer-only: it must not reach `localizedDescription`.
+    func testDeveloperDetailDoesNotReachTheLocalizedDescription() {
+        let error = SirosError.transactionData(TransactionDataError(.schemaViolation, detail: "payload/amount: expected number"))
+        XCTAssertFalse(error.localizedDescription.contains("payload/amount"))
+        XCTAssertFalse((error.errorDescription ?? "").contains("expected number"))
+        XCTAssertTrue(error.localizedDescription.contains("schemaViolation"))
+        XCTAssertTrue(TransactionDataError(.schemaViolation, detail: "payload/amount").description.contains("payload/amount"), "diagnostics keep it")
+    }
 }

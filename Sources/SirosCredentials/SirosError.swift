@@ -200,7 +200,7 @@ extension SirosError: LocalizedError {
         case .backendApi(let code, let message, _): return "\(code): \(message)"
         case .renewalUnavailable(let batchId):
             return "No refresh_token stored for batch \(batchId) - it may not be renewable, or was already renewed"
-        case .transactionData(let error): return error.description
+        case .transactionData(let error): return error.userFacingDescription
         }
     }
 }

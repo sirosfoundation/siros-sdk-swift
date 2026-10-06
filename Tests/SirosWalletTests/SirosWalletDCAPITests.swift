@@ -458,6 +458,55 @@ final class SirosWalletDCAPITests: XCTestCase {
         }
     }
 
+    /// The signed (JAR) variant carries `transaction_data` in the JWT payload,
+    /// a separate extraction path from the unsigned variant's object: it must
+    /// be refused too, whatever shape the member has, before the verifier is
+    /// trusted or anything is signed.
+    func testHandleDCAPIRequestSignedRequestWithTransactionDataIsRefusedNotIgnored() async throws {
+        for (label, value) in [("array", ["abc"] as Any), ("null", NSNull()), ("string", "abc" as Any), ("number", 5 as Any), ("empty array", [] as [String] as Any)] {
+            let store = InMemoryCredentialStore()
+            await store.save(makeCredential(id: 1, format: "dc+sd-jwt", raw: "issuer.payload.sig~d~", name: "Diploma", vct: "urn:example:vct"))
+            let keystore = FakeKeystoreManager()
+            let capture = RequestCapture()
+            let wallet = makeWallet(store: store, keystore: keystore, capture: capture)
+
+            let key = P256.Signing.PrivateKey()
+            let jwt = try signTestJwt(
+                privateKey: key,
+                headerJwkPublicKey: key.publicKey,
+                claims: [
+                    "client_id": "https://relying-party.example",
+                    "nonce": "dc-nonce-signed",
+                    "response_mode": "dc_api",
+                    "transaction_data": value,
+                    "dcql_query": ["credentials": [["id": "q", "format": "dc+sd-jwt"]]],
+                ]
+            )
+            let requestJson = wrapDCAPIRequest(protocolIdentifier: "openid4vp-v1-signed", data: ["request": jwt])
+
+            let parsed = try DCAPIRequestParser.parse(requestJson)
+            XCTAssertTrue(parsed.hasTransactionData, "signed variant, \(label)")
+
+            do {
+                _ = try await wallet.handleDCAPIRequest(rawRequestJson: requestJson, origin: "https://relying-party.example")
+                XCTFail("must refuse (\(label))")
+            } catch SirosError.transactionData(let error) {
+                XCTAssertEqual(error.reason, .disabled, label)
+                XCTAssertEqual(error.verifierErrorCode, "invalid_transaction_data", label)
+            }
+            XCTAssertTrue(keystore.signVpTokenCalls.isEmpty, "nothing is signed (\(label))")
+            XCTAssertNil(capture.lastBody, "the verifier is not even trust-evaluated (\(label))")
+        }
+    }
+
+    func testSignedRequestWithoutTransactionDataIsNotMarkedAsCarryingIt() throws {
+        let key = P256.Signing.PrivateKey()
+        let jwt = try signTestJwt(privateKey: key, headerJwkPublicKey: key.publicKey, claims: ["nonce": "n"])
+        let parsed = try DCAPIRequestParser.parse(wrapDCAPIRequest(protocolIdentifier: "openid4vp-v1-signed", data: ["request": jwt]))
+        XCTAssertFalse(parsed.hasTransactionData)
+        XCTAssertNil(parsed.transactionData)
+    }
+
     // MARK: - Test-side JOSE helpers
     //
     // This SDK has no JOSE library dependency, so both building a signed

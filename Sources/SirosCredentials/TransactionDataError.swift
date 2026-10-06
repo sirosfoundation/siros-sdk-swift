@@ -55,6 +55,10 @@ public struct TransactionDataError: Error, Sendable, Equatable, CustomStringConv
     /// Machine-readable code for app i18n (`SirosError.errorCode`).
     public var errorCode: String { "transaction_data_\(reason.rawValue)" }
 
+    /// What may reach a user-visible error: the reason only. `detail` is
+    /// developer-facing and is left to `description`.
+    public var userFacingDescription: String { "transaction_data refused: \(reason.rawValue)" }
+
     public var description: String {
         detail.isEmpty ? "transaction_data refused: \(reason.rawValue)"
             : "transaction_data refused: \(reason.rawValue) (\(detail))"

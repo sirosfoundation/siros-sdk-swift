@@ -178,7 +178,8 @@ public struct FlowStartMessage: Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case type, `protocol`, offer, vct, timestamp, features
+        case type, `protocol`, offer, vct, timestamp
+        case features
         case credentialOfferUri = "credential_offer_uri"
         case requestUri = "request_uri"
         case requestUriRef = "request_uri_ref"
