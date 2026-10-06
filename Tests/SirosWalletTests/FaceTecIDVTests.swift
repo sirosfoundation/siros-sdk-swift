@@ -182,6 +182,18 @@ final class FaceTecSessionRelayTests: XCTestCase {
         XCTAssertEqual(session.transactionId, "tx")
     }
 
+    func testTransportFailureIsReadableThroughTheIdvError() async {
+        let session = relay(FakeFacetecApi([(503, "echoed SECRET-BLOB")]))
+        _ = await session.onSessionRequest("SECRET-BLOB")
+
+        XCTAssertThrowsError(try sessionOutcome(status: .requestAborted, relay: session)) { error in
+            XCTAssertEqual(
+                (error as? IDVError)?.errorDescription,
+                "Network error during IDV: process-request failed with HTTP 503"
+            )
+        }
+    }
+
     func testTransportFailureAbortsTheSessionAndKeepsTheCause() async {
         let api = FakeFacetecApi([(503, "")])
         let session = relay(api)

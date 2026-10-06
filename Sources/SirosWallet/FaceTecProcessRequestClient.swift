@@ -23,11 +23,15 @@ struct ProcessRequestResponse: Sendable, Equatable {
 /// Why a process-request call could not be used. The messages deliberately
 /// leave out the response body: it can echo request data, and these errors end
 /// up in logs.
-enum ProcessRequestFailure: Error, Equatable, CustomStringConvertible {
+enum ProcessRequestFailure: Error, Sendable, Equatable, CustomStringConvertible, LocalizedError {
     case httpStatus(Int)
     case notJson
     case noResponseBlob
     case notHttp
+
+    /// `localizedDescription` (what `IDVError.networkError` shows) reads this;
+    /// without it a Swift error reports a generic "operation could not be completed".
+    var errorDescription: String? { description }
 
     var description: String {
         switch self {
