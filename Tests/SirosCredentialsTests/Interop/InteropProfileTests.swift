@@ -40,11 +40,16 @@ final class InteropProfileTests: XCTestCase {
         XCTAssertEqual(HolderBinding.negotiate(["did"]), .didJwk)
     }
 
-    func testTheEmbeddedKeyWinsWhenAnIssuerAcceptsBoth() {
-        // Either is interoperable by the issuer's own declaration, and the
-        // embedded key needs no DID resolution anywhere in the chain.
-        XCTAssertEqual(HolderBinding.negotiate(["did:jwk", "jwk"]), .embeddedJwk)
-        XCTAssertEqual(HolderBinding.negotiate(["jwk", "did:jwk"]), .embeddedJwk)
+    func testDidJwkWinsWhenAnIssuerAcceptsBoth() {
+        // A wallet that only ever speaks DIIP has no configured profile at
+        // all - it sends did:jwk whenever an issuer accepts it, since that
+        // is what DIIP requires. Converging on that (rather than preferring
+        // the embedded key, which used to make DIIP unreachable against any
+        // issuer that also advertises jwk) is converging on the wider DIIP
+        // ecosystem's actual behavior, and costs the issuer nothing extra -
+        // did:jwk is self-certifying, no network resolution needed.
+        XCTAssertEqual(HolderBinding.negotiate(["did:jwk", "jwk"]), .didJwk)
+        XCTAssertEqual(HolderBinding.negotiate(["jwk", "did:jwk"]), .didJwk)
     }
 
     func testCaseAndWhitespaceInAdvertisedMethodsDoNotDefeatTheMatch() {
@@ -109,7 +114,7 @@ final class InteropProfileTests: XCTestCase {
         // And the substring trap: "jwk" must be matched as a whole value, not
         // found inside "did:jwk".
         XCTAssertEqual(HolderBinding.negotiate(["did:jwk"]), .didJwk)
-        XCTAssertEqual(HolderBinding.negotiate(["jwk", "did:jwk"]), .embeddedJwk)
+        XCTAssertEqual(HolderBinding.negotiate(["jwk", "did:jwk"]), .didJwk)
         // A DID method that is not did:jwk names nothing this Holder can use.
         XCTAssertNil(HolderBinding.negotiate(["did:key"]))
     }

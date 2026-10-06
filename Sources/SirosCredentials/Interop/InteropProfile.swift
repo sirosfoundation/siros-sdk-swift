@@ -96,9 +96,21 @@ public enum HolderBinding: Sendable, Equatable {
     /// than being configured. A HAIP Issuer advertises `jwk`; a DIIP Issuer
     /// advertises `did:jwk` (or a bare `did`, meaning any DID method).
     ///
-    /// `jwk` wins when an Issuer advertises both. Either is interoperable by
-    /// the Issuer's own declaration, and the embedded key is the form that
-    /// needs no DID resolution anywhere in the chain.
+    /// `did:jwk` wins when an Issuer advertises both (changed from preferring
+    /// `jwk` - see sirosfoundation/siros-sdk-swift#147's review discussion).
+    /// A wallet that only ever speaks DIIP has no "configured profile" at
+    /// all - it emits did:jwk whenever an Issuer accepts it, because that is
+    /// what DIIP requires. Converging on that is converging on the wider
+    /// DIIP ecosystem's actual behavior, not a SIROS-specific tie-break;
+    /// it also costs an Issuer nothing extra, since did:jwk is
+    /// self-certifying and needs no network DID resolution. The reverse
+    /// rule (`jwk` always wins) made `interopProfile = .diip` practically
+    /// unreachable against any Issuer that also advertises `jwk` - every
+    /// SIROS Issuer - leaving the per-issuer `holderBinding` override as the
+    /// only way DIIP ever activated. A caller that needs a guaranteed
+    /// embedded-key proof regardless of what the Issuer advertises (e.g.
+    /// HAIP conformance testing) still has that explicit per-call override;
+    /// this only changes what the *default* negotiation picks.
     ///
     /// Returns nil when the Issuer advertises nothing usable - it said nothing
     /// about binding at all, or named only methods this wallet cannot produce
@@ -110,11 +122,11 @@ public enum HolderBinding: Sendable, Equatable {
         let methods = Set(
             advertisedMethods.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
         )
-        if methods.contains("jwk") { return .embeddedJwk }
         // `did` on its own means "any DID method"; DIIP names `did:jwk`.
         // Another DID method is not a match: did:jwk is the only one a Holder
         // key can be published under here.
         if methods.contains("did") || methods.contains("did:jwk") { return .didJwk }
+        if methods.contains("jwk") { return .embeddedJwk }
         return nil
     }
 }
