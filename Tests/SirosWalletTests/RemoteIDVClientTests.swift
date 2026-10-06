@@ -66,6 +66,28 @@ final class RemoteIDVClientTests: XCTestCase {
         }
     }
 
+    func testChipUntrustedDocumentExpiredAndSessionExpiredHaveTheirOwnErrors() {
+        let expected: [(code: String, errorCode: String)] = [
+            ("chip_untrusted", "idv_chip_untrusted"),
+            ("document_expired", "idv_document_expired"),
+            ("session_expired", "idv_session_expired"),
+        ]
+        for (code, errorCode) in expected {
+            let error = RemoteIDVClient.idvError(
+                for422ErrorCode: code, errorMessage: "the reason", responseBody: "{}", fallback: fallback
+            )
+
+            XCTAssertEqual(error.errorCode, errorCode, code)
+            XCTAssertEqual(error.errorDescription, "the reason", code)
+            switch (code, error) {
+            case ("chip_untrusted", .chipUntrusted), ("document_expired", .documentExpired), ("session_expired", .sessionExpired):
+                break
+            default:
+                XCTFail("\(code): wrong case \(error)")
+            }
+        }
+    }
+
     // MARK: - Through the real transport
 
     /// Posts `payload` to a loopback server answering `status` with `body`
@@ -139,5 +161,31 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case .networkError = error else {
             return XCTFail("expected networkError, got \(error)")
         }
+    }
+
+    /// facetec-api v0.16.0 refuses an expired document on `/v1/id-scan` too.
+    func testSubmitDocumentMapsDocumentExpired() async throws {
+        let error = try await thrownError(
+            status: 422,
+            body: #"{"error":"document has expired","error_code":"document_expired"}"#
+        ) { _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"]) }
+
+        guard case let .documentExpired(message) = error else {
+            return XCTFail("expected documentExpired, got \(error)")
+        }
+        XCTAssertEqual(message, "document has expired")
+        XCTAssertEqual(error.errorCode, "idv_document_expired")
+    }
+
+    func testSubmitDocumentMapsSessionExpired() async throws {
+        let error = try await thrownError(
+            status: 422,
+            body: #"{"error":"liveness session expired or not found","error_code":"session_expired"}"#
+        ) { _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"]) }
+
+        guard case .sessionExpired = error else {
+            return XCTFail("expected sessionExpired, got \(error)")
+        }
+        XCTAssertEqual(error.errorCode, "idv_session_expired")
     }
 }

@@ -45,6 +45,19 @@ public enum IDVError: Error, Sendable {
     /// `nfc_chip_read_failed` and `nfc_not_authenticated` as well, and any
     /// `nfc_*` code a backend sends maps here.
     case documentChipNotVerified(reason: String, message: String)
+    /// The backend refused to issue because the document's chip data could not
+    /// be verified against a trusted document signer (facetec-api's
+    /// `chip_untrusted`, from its trust PDP). Retrying with the same document
+    /// will not help; the user needs another one.
+    case chipUntrusted(message: String)
+    /// The backend refused to issue because the document has expired or its
+    /// expiry date could not be read as unexpired (facetec-api's
+    /// `document_expired`). The user needs a valid document.
+    case documentExpired(message: String)
+    /// The backend no longer has the verification session: it expired or was
+    /// already used (facetec-api's `session_expired`). The user has to start
+    /// the verification again.
+    case sessionExpired(message: String)
     /// Provider-specific error.
     case providerError(code: String, message: String)
 
@@ -57,6 +70,9 @@ public enum IDVError: Error, Sendable {
         case .verificationFailed: return "idv_verification_failed"
         case .networkError: return "idv_network_error"
         case .documentChipNotVerified(let reason, _): return "idv_\(reason)"
+        case .chipUntrusted: return "idv_chip_untrusted"
+        case .documentExpired: return "idv_document_expired"
+        case .sessionExpired: return "idv_session_expired"
         case .providerError(let code, _): return "idv_provider_\(code)"
         }
     }
@@ -71,6 +87,9 @@ extension IDVError: LocalizedError {
         case .verificationFailed(let message): return message
         case .networkError(let underlying): return "Network error during IDV: \(underlying.localizedDescription)"
         case .documentChipNotVerified(_, let message): return message
+        case .chipUntrusted(let message): return message
+        case .documentExpired(let message): return message
+        case .sessionExpired(let message): return message
         case .providerError(let code, let message): return "[\(code)] \(message)"
         }
     }
@@ -126,4 +145,22 @@ public protocol IdentityVerificationProvider: AnyObject, Sendable {
     /// - Throws: ``IDVError`` on failure or cancellation.
     /// - Returns: An ``IDVResult`` containing the credential offer URI.
     func startVerification(presentingViewController: Any) async throws -> IDVResult
+}
+
+extension IDVError {
+    /// The typed error for a refusal code that has its own case, or `nil` for
+    /// any other code (the caller then decides what a code without a case
+    /// becomes). `nfc_*` is ``documentChipNotVerified(reason:message:)``;
+    /// `chip_untrusted`, `document_expired` and `session_expired` are
+    /// ``chipUntrusted(message:)``, ``documentExpired(message:)`` and
+    /// ``sessionExpired(message:)``.
+    init?(typedRefusalCode code: String, message: String) {
+        switch code {
+        case _ where code.hasPrefix("nfc_"): self = .documentChipNotVerified(reason: code, message: message)
+        case "chip_untrusted": self = .chipUntrusted(message: message)
+        case "document_expired": self = .documentExpired(message: message)
+        case "session_expired": self = .sessionExpired(message: message)
+        default: return nil
+        }
+    }
 }

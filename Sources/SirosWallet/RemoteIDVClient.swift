@@ -101,19 +101,25 @@ public final class RemoteIDVClient: @unchecked Sendable {
     }
 
     /// Maps a 422 from the IDV backend to an ``IDVError``. The backend's error
-    /// body is `{"error": "<message>", "error_code": "<code>"}`: an `nfc_*` code
-    /// means the document's chip was not read and authenticated
-    /// (``IDVError/documentChipNotVerified(reason:message:)``); anything else
-    /// goes to the step's own `fallback`, with the raw body as before.
+    /// body is `{"error": "<message>", "error_code": "<code>"}`. A code that has
+    /// its own error becomes that error: `nfc_*` means the document's chip was
+    /// not read and authenticated
+    /// (``IDVError/documentChipNotVerified(reason:message:)``), and
+    /// `chip_untrusted`, `document_expired` and `session_expired` are
+    /// ``IDVError/chipUntrusted(message:)``, ``IDVError/documentExpired(message:)``
+    /// and ``IDVError/sessionExpired(message:)``. Anything else goes to the
+    /// step's own `fallback`, with the raw body as before.
     static func idvError(
         for422ErrorCode errorCode: String?,
         errorMessage: String?,
         responseBody: String,
         fallback: (String) -> IDVError
     ) -> IDVError {
-        if let errorCode, errorCode.hasPrefix("nfc_") {
+        if let errorCode {
             let message = errorMessage.flatMap { $0.isEmpty ? nil : $0 } ?? responseBody
-            return .documentChipNotVerified(reason: errorCode, message: message)
+            if let error = IDVError(typedRefusalCode: errorCode, message: message) {
+                return error
+            }
         }
         return fallback(responseBody)
     }

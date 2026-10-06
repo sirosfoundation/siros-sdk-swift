@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only tells verified from not, so the reason there is always
   `nfc_skipped`; any other `nfc_*` code a backend sends maps the same way. Adding a case to `IDVError` breaks exhaustive `switch`es over it
   outside the SDK; add a `default` or handle the new case.
+- **`IDVError.chipUntrusted`, `.documentExpired` and `.sessionExpired`:
+  facetec-api's `chip_untrusted`, `document_expired` and `session_expired`
+  refusals** (facetec-api v0.15.0 / v0.16.0), with `errorCode`s
+  `idv_chip_untrusted`, `idv_document_expired` and `idv_session_expired`,
+  mapped from a 422 by `RemoteIDVClient` like the `nfc_*` codes. They were
+  a generic `verificationFailed` carrying the raw body. Same names as
+  siros-sdk-kotlin.
 
 ### Deprecated
 - **`FaceTecCaptureDelegate`.** It is written against the FaceTec 9 API
