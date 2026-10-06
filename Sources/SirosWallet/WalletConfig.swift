@@ -52,6 +52,13 @@ public struct WalletConfig: Sendable {
     /// of the legacy engine protocol. Requires go-wallet-backend with WMP support.
     public var useWmpProtocol: Bool
 
+    /// Initial value of ``SirosWallet/transactionDataEnabled`` (EC TS12
+    /// payment SCA). Default `false`. A runtime setting, not a build flag:
+    /// the wallet exposes the live value and a change applies to flows
+    /// started afterwards. Even when `true`, TS12 handling is effective only
+    /// once a consent handler is registered.
+    public var transactionDataEnabled: Bool
+
     /// Every WSCD plugin the host app has a ready `KeystoreManager` instance
     /// for, keyed by plugin ID (`"softkey"` / `"r2ps"` / `"fido2"` today -
     /// see `WscdPluginCapabilities`), each with its own platform transport
@@ -172,6 +179,7 @@ public struct WalletConfig: Sendable {
         urlRewriter: (@Sendable (String) -> String)? = nil,
         requireUserAuth: Bool = true,
         useWmpProtocol: Bool = false,
+        transactionDataEnabled: Bool = false,
         availableKeystores: [String: KeystoreManager]? = nil,
         defaultWscdMapping: [String: String]? = nil,
         requestWscdChoice: RequestWscdChoice? = nil,
@@ -192,6 +200,7 @@ public struct WalletConfig: Sendable {
         self.urlRewriter = urlRewriter
         self.requireUserAuth = requireUserAuth
         self.useWmpProtocol = useWmpProtocol
+        self.transactionDataEnabled = transactionDataEnabled
         self.availableKeystores = availableKeystores
         self.defaultWscdMapping = defaultWscdMapping
         self.requestWscdChoice = requestWscdChoice

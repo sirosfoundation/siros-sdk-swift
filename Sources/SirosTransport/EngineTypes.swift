@@ -126,6 +126,11 @@ public struct FlowStartMessage: Codable, Sendable {
     /// `sign_client_auth` of the renewal so this wallet signs with that same
     /// key. Takes precedence over `dpopJwk`.
     public var dpopKeyId: String?
+    /// Optional protocol features this client supports for this flow, e.g.
+    /// `["transaction_data.v1"]` (EC TS12 payment SCA). Omitted entirely
+    /// unless non-empty: the backend refuses `transaction_data` for a client
+    /// that did not declare support.
+    public var features: [String]?
     public var timestamp: String?
 
     public init(
@@ -147,6 +152,7 @@ public struct FlowStartMessage: Codable, Sendable {
         reissuanceKid: String? = nil,
         dpopJwk: String? = nil,
         dpopKeyId: String? = nil,
+        features: [String]? = nil,
         timestamp: String? = nil
     ) {
         self.type = type
@@ -167,11 +173,12 @@ public struct FlowStartMessage: Codable, Sendable {
         self.reissuanceKid = reissuanceKid
         self.dpopJwk = dpopJwk
         self.dpopKeyId = dpopKeyId
+        self.features = (features?.isEmpty ?? true) ? nil : features
         self.timestamp = timestamp
     }
 
     enum CodingKeys: String, CodingKey {
-        case type, `protocol`, offer, vct, timestamp
+        case type, `protocol`, offer, vct, timestamp, features
         case credentialOfferUri = "credential_offer_uri"
         case requestUri = "request_uri"
         case requestUriRef = "request_uri_ref"
@@ -608,6 +615,13 @@ public struct SignRequestParams: Codable, Sendable {
     public var credentialsToInclude: [CredentialRef]?
     public var responseUri: String?
     public var verifierJwkThumbprint: String?
+    /// OID4VP `transaction_data` entries (EC TS12) as the engine relays them:
+    /// each carries `raw`, the verifier's base64url string, which is the only
+    /// valid hash input. Absent for requests without transaction data.
+    public var transactionData: [TransactionData]?
+    /// OID4VP `response_mode` of the request; echoed in the KB-JWT of an SCA
+    /// presentation (TS12 section 3.6).
+    public var responseMode: String?
     /// When set (a renewal's continuity proof), the client should sign the
     /// `generate_proof` response with this existing kid instead of a fresh
     /// key - see `FlowStartMessage.reissuanceKid`'s doc comment.
@@ -641,6 +655,8 @@ public struct SignRequestParams: Codable, Sendable {
         case credentialsToInclude = "credentials_to_include"
         case responseUri = "response_uri"
         case verifierJwkThumbprint = "verifier_jwk_thumbprint"
+        case transactionData = "transaction_data"
+        case responseMode = "response_mode"
         case reissuanceKid = "reissuance_kid"
         case verifierSessionId = "verifier_session_id"
         case dpopNonce = "dpop_nonce"

@@ -141,7 +141,11 @@ extension SirosWallet {
             }
         ))
         peer.use(profile)
-        try await peer.connect(authToken: appToken)
+        // Offered per session: a flag flip applies from the next session.
+        try await peer.connect(
+            authToken: appToken,
+            capabilitiesOffered: transactionDataWmpCapabilities
+        )
         lock.lock(); wmpPeer = peer; lock.unlock()
 
         #if canImport(os)

@@ -124,16 +124,66 @@ public struct VPTokenResult: Codable, Sendable {
     }
 }
 
+/// One `transaction_data` entry as the orchestrator relays it (legacy engine
+/// `sign_request.params.transaction_data[]` and the WMP sign sub-flow; go-wmp
+/// `openid4x.TransactionData`).
+///
+/// `raw` is the verifier's base64url string exactly as sent: the ONLY valid
+/// hash input (OpenID4VP 1.0 Appendix B). Every other member is the
+/// orchestrator's decoded hint and must never be trusted over `raw`.
 public struct TransactionData: Codable, Sendable {
     public var type: String
     public var params: AnyCodable?
     public var credentialIds: [String]?
     public var hashAlgorithm: String?
+    /// The base64url string exactly as the verifier sent it.
+    public var raw: String?
+    /// The decoded `payload` object (TS12 section 3.2 step 4).
+    public var payload: AnyCodable?
+    /// The request's `transaction_data_hashes_alg`: an array in OpenID4VP 1.0
+    /// Appendix B; a bare string is tolerated on input.
+    public var hashesAlg: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case type, params
+        case type, params, raw, payload
         case credentialIds = "credential_ids"
         case hashAlgorithm = "hash_alg"
+        case hashesAlg = "transaction_data_hashes_alg"
+    }
+
+    public init(
+        type: String,
+        params: AnyCodable? = nil,
+        credentialIds: [String]? = nil,
+        hashAlgorithm: String? = nil,
+        raw: String? = nil,
+        payload: AnyCodable? = nil,
+        hashesAlg: [String]? = nil
+    ) {
+        self.type = type
+        self.params = params
+        self.credentialIds = credentialIds
+        self.hashAlgorithm = hashAlgorithm
+        self.raw = raw
+        self.payload = payload
+        self.hashesAlg = hashesAlg
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        params = try c.decodeIfPresent(AnyCodable.self, forKey: .params)
+        credentialIds = try c.decodeIfPresent([String].self, forKey: .credentialIds)
+        hashAlgorithm = try c.decodeIfPresent(String.self, forKey: .hashAlgorithm)
+        raw = try c.decodeIfPresent(String.self, forKey: .raw)
+        payload = try c.decodeIfPresent(AnyCodable.self, forKey: .payload)
+        if let list = try? c.decodeIfPresent([String].self, forKey: .hashesAlg) {
+            hashesAlg = list
+        } else if let single = try? c.decodeIfPresent(String.self, forKey: .hashesAlg) {
+            hashesAlg = [single]
+        } else {
+            hashesAlg = nil
+        }
     }
 }
 
@@ -145,6 +195,12 @@ public struct SignSubFlowParams: Codable, Sendable {
     public var parentFlowId: String?
     public var count: Int?
     public var transactionData: [TransactionData]?
+    /// OID4VP `response_mode` of the request (go-wmp `SignSubFlowParams`).
+    public var responseMode: String?
+    /// Which credential answers which DCQL query id (go-wmp v0.6.0).
+    public var credentialsToInclude: [CredentialRef]?
+    /// The verifier-assigned session id (go-wmp v0.6.0).
+    public var verifierSessionId: String?
     /// PoP/proof `iss` (the flow's OAuth client_id) for `request_attestation`
     /// and `sign_client_auth`.
     public var issuer: String?
@@ -164,6 +220,9 @@ public struct SignSubFlowParams: Codable, Sendable {
         case proofType = "proof_type"
         case parentFlowId = "parent_flow_id"
         case transactionData = "transaction_data"
+        case responseMode = "response_mode"
+        case credentialsToInclude = "credentials_to_include"
+        case verifierSessionId = "verifier_session_id"
         case dpopNonce = "dpop_nonce"
         case keyId = "key_id"
     }
@@ -176,6 +235,9 @@ public struct SignSubFlowParams: Codable, Sendable {
         parentFlowId: String? = nil,
         count: Int? = nil,
         transactionData: [TransactionData]? = nil,
+        responseMode: String? = nil,
+        credentialsToInclude: [CredentialRef]? = nil,
+        verifierSessionId: String? = nil,
         issuer: String? = nil,
         htm: String? = nil,
         htu: String? = nil,
@@ -190,6 +252,9 @@ public struct SignSubFlowParams: Codable, Sendable {
         self.parentFlowId = parentFlowId
         self.count = count
         self.transactionData = transactionData
+        self.responseMode = responseMode
+        self.credentialsToInclude = credentialsToInclude
+        self.verifierSessionId = verifierSessionId
         self.issuer = issuer
         self.htm = htm
         self.htu = htu
@@ -213,6 +278,9 @@ public struct SignSubFlowParams: Codable, Sendable {
         parentFlowId = try c.decodeIfPresent(String.self, forKey: .parentFlowId)
         count = try c.decodeIfPresent(Int.self, forKey: .count)
         transactionData = try c.decodeIfPresent([TransactionData].self, forKey: .transactionData)
+        responseMode = try c.decodeIfPresent(String.self, forKey: .responseMode)
+        credentialsToInclude = try c.decodeIfPresent([CredentialRef].self, forKey: .credentialsToInclude)
+        verifierSessionId = try c.decodeIfPresent(String.self, forKey: .verifierSessionId)
         issuer = try c.decodeIfPresent(String.self, forKey: .issuer)
         htm = try c.decodeIfPresent(String.self, forKey: .htm)
         htu = try c.decodeIfPresent(String.self, forKey: .htu)

@@ -54,6 +54,16 @@ extension SirosWallet {
     ///   no credential in the wallet is eligible to satisfy it.
     public func handleDCAPIRequest(rawRequestJson: String, origin: String) async throws -> DCAPIPresentationResult {
         let request = try DCAPIRequestParser.parse(rawRequestJson)
+        // EC TS12: a request carrying `transaction_data` must never be
+        // answered as if it did not. The pipeline that can honour it is not
+        // implemented yet, so refuse before anything is matched or signed
+        // (OpenID4VP error `invalid_transaction_data`).
+        if request.hasTransactionData {
+            throw SirosError.transactionData(TransactionDataError(
+                .disabled,
+                detail: "DC API request carries transaction_data and this wallet cannot process it"
+            ))
+        }
         let trustResult = try await resolveDCAPITrust(request: request, origin: origin)
 
         let allCreds = await credentialStore.getAll()

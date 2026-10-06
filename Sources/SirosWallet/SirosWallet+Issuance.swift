@@ -934,7 +934,11 @@ extension SirosWallet {
             throw SirosError.wallet(message: "Not connected")
         }
         try await ensureEngineConnected(engine)
-        engine.startPresentation(requestUri: requestUri)
+        // Snapshot at flow start: a flag flip applies to the next flow only.
+        engine.startPresentation(
+            requestUri: requestUri,
+            features: transactionDataEngineFeatures
+        )
     }
 }
 
