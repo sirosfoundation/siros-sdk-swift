@@ -78,7 +78,7 @@ extension WalletViewModel {
     }
 
     /// The user-facing, localized text for an IDV failure, keyed by its
-    /// `errorCode` (`idv_nfc_skipped`, `idv_provider_chip_untrusted`, ...) in
+    /// `errorCode` (`idv_nfc_skipped`, `idv_chip_untrusted`, `idv_provider_internal_error`, ...) in
     /// `idv.errors.*`. `IDVError` is not a `SirosError`, so it needs its own
     /// lookup. Falls back to the error's own description for a code with no
     /// entry, e.g. one a newer facetec-api introduces.

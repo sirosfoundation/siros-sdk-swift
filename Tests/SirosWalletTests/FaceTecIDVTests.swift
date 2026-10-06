@@ -319,6 +319,17 @@ final class FaceTecSessionExitTests: XCTestCase {
     }
 }
 
+final class ResumeOnceTests: XCTestCase {
+
+    func testOnlyTheFirstClaimGetsThrough() {
+        let once = ResumeOnce()
+
+        XCTAssertTrue(once.claim())
+        XCTAssertFalse(once.claim())
+        XCTAssertFalse(once.claim())
+    }
+}
+
 final class FaceTecIDVProviderAvailabilityTests: XCTestCase {
 
     #if !canImport(FaceTecSDK)
@@ -338,4 +349,24 @@ final class FaceTecIDVProviderAvailabilityTests: XCTestCase {
         }
     }
     #endif
+}
+
+@available(*, deprecated)
+final class FaceTecCaptureDelegateTests: XCTestCase {
+
+    /// The FaceTec 9 delegate is retired: it must say so rather than pretend.
+    func testDeprecatedDelegateIsNeverAvailable() async {
+        let delegate = FaceTecCaptureDelegate()
+
+        let available = await delegate.isAvailable()
+        XCTAssertFalse(available)
+        do {
+            _ = try await delegate.captureLiveness(presentingViewController: "vc", sessionToken: "t")
+            XCTFail("expected unavailable")
+        } catch let error as IDVError {
+            XCTAssertEqual(error.errorCode, "idv_unavailable")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
 }

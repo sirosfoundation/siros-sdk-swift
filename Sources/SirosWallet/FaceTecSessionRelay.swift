@@ -119,37 +119,3 @@ func sessionOutcome(status: FaceTecSessionEnd?, relay: FaceTecSessionRelay) thro
         throw IDVError.providerError(code: "no_session_result", message: "FaceTec returned no session result")
     }
 }
-
-extension IDVError {
-    /// Maps facetec-api's `credentialIssueErrorCode` (or a legacy `/v1` body's
-    /// `error_code`) to an ``IDVError``. Same mapping as siros-sdk-kotlin's
-    /// `refusalToException`, so both SDKs report the same `errorCode`.
-    ///
-    /// - `nfc_*`: the document's chip was not read and authenticated
-    ///   (``documentChipNotVerified(reason:message:)``).
-    /// - `chip_untrusted`, `document_expired`, `session_expired`:
-    ///   ``chipUntrusted(message:)``, ``documentExpired(message:)``,
-    ///   ``sessionExpired(message:)``.
-    /// - `liveness_failed`: ``livenessFailed(message:)``.
-    /// - `match_failed`, `policy_rejected`, `document_unreadable`:
-    ///   ``verificationFailed(message:)``.
-    /// - Anything else, e.g. `issuance_failed`, `internal_error` or a code a
-    ///   newer facetec-api adds: ``providerError(code:message:)``, which keeps
-    ///   the code (`errorCode` = `idv_provider_<code>`) so an app can still
-    ///   explain it.
-    init(refusalCode code: String, message: String?) {
-        let text = message ?? "No credential was issued (\(code))"
-        if let typed = IDVError(typedRefusalCode: code, message: text) {
-            self = typed
-            return
-        }
-        switch code {
-        case "liveness_failed":
-            self = .livenessFailed(message: text)
-        case "match_failed", "policy_rejected", "document_unreadable":
-            self = .verificationFailed(message: text)
-        default:
-            self = .providerError(code: code, message: text)
-        }
-    }
-}

@@ -43,7 +43,7 @@ final class RemoteIDVClientTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "raw body")
     }
 
-    func testOtherCodeKeepsStepErrorAndRawBody() {
+    func testPolicyRejectedBecomesVerificationFailedWithTheBackendMessage() {
         let body = #"{"error":"scan rejected by policy","error_code":"policy_rejected"}"#
         let error = RemoteIDVClient.idvError(
             for422ErrorCode: "policy_rejected", errorMessage: "scan rejected by policy", responseBody: body, fallback: fallback
@@ -52,8 +52,17 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case let .verificationFailed(message) = error else {
             return XCTFail("expected verificationFailed, got \(error)")
         }
-        XCTAssertEqual(message, body)
+        XCTAssertEqual(message, "scan rejected by policy")
         XCTAssertEqual(error.errorCode, "idv_verification_failed")
+    }
+
+    func testCodeWithoutOwnErrorBecomesProviderError() {
+        let error = RemoteIDVClient.idvError(
+            for422ErrorCode: "issuance_failed", errorMessage: "credential issuance failed", responseBody: "{}", fallback: fallback
+        )
+
+        XCTAssertEqual(error.errorCode, "idv_provider_issuance_failed")
+        XCTAssertEqual(error.errorDescription, "[issuance_failed] credential issuance failed")
     }
 
     func testBodyWithoutCodeKeepsStepError() {
@@ -128,7 +137,7 @@ final class RemoteIDVClientTests: XCTestCase {
         XCTAssertEqual(error.errorCode, "idv_nfc_skipped")
     }
 
-    func testSubmitDocumentKeepsVerificationFailedForOtherCodes() async throws {
+    func testSubmitDocumentMapsPolicyRejection() async throws {
         let body = #"{"error":"scan rejected by policy","error_code":"policy_rejected"}"#
         let error = try await thrownError(status: 422, body: body) {
             _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"])
@@ -137,10 +146,10 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case let .verificationFailed(message) = error else {
             return XCTFail("expected verificationFailed, got \(error)")
         }
-        XCTAssertEqual(message, body)
+        XCTAssertEqual(message, "scan rejected by policy")
     }
 
-    func testSubmitBiometricKeepsLivenessFailed() async throws {
+    func testSubmitBiometricMapsLivenessFailed() async throws {
         let body = #"{"error":"liveness check did not pass","error_code":"liveness_failed"}"#
         let error = try await thrownError(status: 422, body: body) {
             _ = try await $0.submitBiometric(payload: ["faceScan": "x"])
@@ -149,7 +158,21 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case let .livenessFailed(message) = error else {
             return XCTFail("expected livenessFailed, got \(error)")
         }
-        XCTAssertEqual(message, body)
+        XCTAssertEqual(message, "liveness check did not pass")
+    }
+
+    /// A 422 body without an `error_code` (an older backend) keeps the step's
+    /// own error and the raw body.
+    func testSubmitStepsKeepTheirOwnErrorForABodyWithoutCode() async throws {
+        let document = try await thrownError(status: 422, body: "plain text") {
+            _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"])
+        }
+        let liveness = try await thrownError(status: 422, body: "plain text") {
+            _ = try await $0.submitBiometric(payload: ["faceScan": "x"])
+        }
+
+        guard case .verificationFailed("plain text") = document else { return XCTFail("got \(document)") }
+        guard case .livenessFailed("plain text") = liveness else { return XCTFail("got \(liveness)") }
     }
 
     func testNon422StaysANetworkError() async throws {

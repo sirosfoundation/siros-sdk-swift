@@ -74,7 +74,14 @@ targets:
         NSCameraUsageDescription: "Camera is used to scan QR codes and for identity verification via 3D liveness detection."
         NSBluetoothAlwaysUsageDescription: "Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader."
         NSFaceIDUsageDescription: "Face ID is used to authenticate and protect your credentials."
-        NFCReaderUsageDescription: "NFC is used to communicate with a security key for FIDO2 authentication."
+        NFCReaderUsageDescription: "NFC is used to communicate with a security key for FIDO2 authentication and to read the chip in your passport or ID card."
+        # The application identifiers FaceTec's chip read selects (eMRTD LDS1,
+        # an eID application, and FaceTec's catch-all). Without them iOS refuses
+        # the ISO 7816 session. Same list as wallet-ios-wrapper.
+        com.apple.developer.nfc.readersession.iso7816.select-identifiers:
+          - A0000002471001
+          - A0000002472001
+          - "00000000000000"
         # Empty unless the build sets it; without it (or without the FaceTec
         # xcframework) Scan Physical ID reports itself unavailable.
         FaceTecDeviceKeyIdentifier: "$(FACETEC_DEVICE_KEY_IDENTIFIER)"

@@ -148,19 +148,40 @@ public protocol IdentityVerificationProvider: AnyObject, Sendable {
 }
 
 extension IDVError {
-    /// The typed error for a refusal code that has its own case, or `nil` for
-    /// any other code (the caller then decides what a code without a case
-    /// becomes). `nfc_*` is ``documentChipNotVerified(reason:message:)``;
-    /// `chip_untrusted`, `document_expired` and `session_expired` are
-    /// ``chipUntrusted(message:)``, ``documentExpired(message:)`` and
-    /// ``sessionExpired(message:)``.
-    init?(typedRefusalCode code: String, message: String) {
+    /// Maps a refusal code from facetec-api (`credentialIssueErrorCode` from
+    /// `/process-request`, or `error_code` of a legacy `/v1` 422) to an
+    /// ``IDVError``. Same mapping as siros-sdk-kotlin, so both SDKs report the
+    /// same `errorCode`.
+    ///
+    /// - `nfc_*`: the document's chip was not read and authenticated
+    ///   (``documentChipNotVerified(reason:message:)``).
+    /// - `chip_untrusted`, `document_expired`, `session_expired`:
+    ///   ``chipUntrusted(message:)``, ``documentExpired(message:)``,
+    ///   ``sessionExpired(message:)``.
+    /// - `liveness_failed`: ``livenessFailed(message:)``.
+    /// - `match_failed`, `policy_rejected`, `document_unreadable`:
+    ///   ``verificationFailed(message:)``.
+    /// - Anything else, e.g. `issuance_failed`, `internal_error` or a code a
+    ///   newer facetec-api adds: ``providerError(code:message:)``, which keeps
+    ///   the code (`errorCode` = `idv_provider_<code>`) so an app can still
+    ///   explain it.
+    init(refusalCode code: String, message: String?) {
+        let text = message ?? "No credential was issued (\(code))"
         switch code {
-        case _ where code.hasPrefix("nfc_"): self = .documentChipNotVerified(reason: code, message: message)
-        case "chip_untrusted": self = .chipUntrusted(message: message)
-        case "document_expired": self = .documentExpired(message: message)
-        case "session_expired": self = .sessionExpired(message: message)
-        default: return nil
+        case _ where code.hasPrefix("nfc_"):
+            self = .documentChipNotVerified(reason: code, message: text)
+        case "chip_untrusted":
+            self = .chipUntrusted(message: text)
+        case "document_expired":
+            self = .documentExpired(message: text)
+        case "session_expired":
+            self = .sessionExpired(message: text)
+        case "liveness_failed":
+            self = .livenessFailed(message: text)
+        case "match_failed", "policy_rejected", "document_unreadable":
+            self = .verificationFailed(message: text)
+        default:
+            self = .providerError(code: code, message: text)
         }
     }
 }

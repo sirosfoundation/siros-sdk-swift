@@ -42,6 +42,12 @@ import FaceTecSDK
 /// - Every request of a session must reach the same facetec-api instance
 ///   (sticky routing, or a single instance).
 ///
+/// ## Cancellation
+///
+/// Cancelling the Swift `Task` that awaits ``startVerification(presentingViewController:)``
+/// does not close FaceTec's UI: the call returns once the user (or FaceTec)
+/// ends the session.
+///
 /// ## App requirements
 ///
 /// - The FaceTec iOS SDK 10 xcframework linked into the app. This package has
@@ -141,16 +147,21 @@ public final class FaceTecIDVProvider: @unchecked Sendable, IdentityVerification
         // export. Plain, non-generic use resolves.
         var sdkInstanceBox: FaceTecSDKInstance?
         let deviceKey = config.deviceKeyIdentifier
+        // FaceTec calls back exactly once; the guard keeps a surprise second call
+        // from resuming the continuation twice (a crash).
+        let once = ResumeOnce()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             FaceTec.sdk.initializeWithSessionRequest(
                 deviceKeyIdentifier: deviceKey,
                 sessionRequestProcessor: processor,
                 completion: FaceTecInitializeCallbackBox(
                     onSuccess: { sdkInstance in
+                        guard once.claim() else { return }
                         sdkInstanceBox = sdkInstance
                         continuation.resume()
                     },
                     onError: { error in
+                        guard once.claim() else { return }
                         continuation.resume(throwing: IDVError.providerError(
                             code: "initialization_failed",
                             message: "FaceTec SDK could not be initialized: \(FaceTec.sdk.description(for: error))"
@@ -174,6 +185,21 @@ public final class FaceTecIDVProvider: @unchecked Sendable, IdentityVerification
     }
 
     #endif
+}
+
+/// Lets exactly one of several callers through.
+final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    /// `true` for the first call, `false` for every later one.
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
+    }
 }
 
 /// A one-shot hand-off of the session's end status from FaceTec's exit

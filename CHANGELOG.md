@@ -43,16 +43,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusals** (facetec-api v0.15.0 / v0.16.0), with `errorCode`s
   `idv_chip_untrusted`, `idv_document_expired` and `idv_session_expired`,
   mapped from a 422 by `RemoteIDVClient` like the `nfc_*` codes. They were
-  a generic `verificationFailed` carrying the raw body. Same names as
-  siros-sdk-kotlin.
+  a generic `verificationFailed` carrying the raw body. Every 422 that carries
+  an `error_code` now goes through one table (`IDVError(refusalCode:message:)`):
+  `liveness_failed` is `livenessFailed`, `match_failed`/`policy_rejected`/
+  `document_unreadable` are `verificationFailed`, any other code is
+  `providerError` with the code kept, all with the backend's `error` text as
+  the message instead of the raw JSON body. A body without a code is unchanged.
 
 ### Deprecated
 - **`FaceTecCaptureDelegate`.** It is written against the FaceTec 9 API
   (`createSessionVC` and the face-scan/ID-scan processors), which FaceTec 10
   removed, so it cannot compile against the SDK wallet-ios-wrapper ships.
-  Use `FaceTecIDVProvider`. `RemoteIDVClient`/`RemoteIDVProvider` are
-  unchanged. Also fixes its `IDVError.cancelled(reason:)` calls, which named
-  an associated value the case does not have.
+  Use `FaceTecIDVProvider`. Its FaceTec 9 code is removed: it never compiled
+  with FaceTec linked (it called `IDVError.cancelled(reason:)`, which has no
+  associated value) and, with FaceTec 10 linked, it broke the whole package
+  build. It now always throws `IDVError.unavailable`. `RemoteIDVProvider`
+  is unchanged.
 
 ## [0.14.1] - 2026-09-29
 
