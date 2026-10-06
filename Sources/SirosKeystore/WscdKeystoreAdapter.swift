@@ -1,25 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
-
-/// Transaction data item for TS12 payment SCA.
-///
-/// Each item represents one entry from the `transaction_data` array in an
-/// OID4VP authorization request. The `rawJson` is the canonical JSON
-/// serialization used for hashing into `transaction_data_hashes`.
-public struct TransactionDataItem: Sendable {
-    /// Transaction type (e.g. "payment", "login_risk", "account_access", "e_mandate").
-    public let type: String
-    /// Canonical JSON serialization of this transaction data item.
-    public let rawJson: String
-
-    public init(type: String, rawJson: String) {
-        self.type = type
-        self.rawJson = rawJson
-    }
-}
 
 /// Adapts a `Signer` (e.g. backed by WSCD/UniFFI bindings) into the
 /// full `KeystoreManager` protocol expected by `SirosWallet`.
@@ -354,14 +338,15 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         )
     }
 
-    /// Extended VP token signing with transaction data (Phase I: TS12 payment SCA).
+    /// VP token signing with EC TS12 payment-SCA claims (see
+    /// ``KeystoreManager/signVpToken(credential:disclosedClaims:nonce:audience:transactionData:kid:)``).
     public func signVpToken(
         credential: String,
         disclosedClaims: [String]?,
         nonce: String,
         audience: String,
-        transactionData: [TransactionDataItem]?,
-        kid: String? = nil
+        transactionData: TransactionDataBinding?,
+        kid: String?
     ) async throws -> String {
         try checkUnlocked()
         let keys = try await signer.listKeys()
@@ -409,24 +394,17 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
             "sd_hash": sdHash,
         ]
 
-        // Include amr from WSCD security properties (E7: TS12 compliance)
-        if let props = try? await signer.securityProperties(keyId: key.keyId),
-           !props.amr.isEmpty {
+        if let binding = transactionData {
+            // EC TS12 (section 3.6): hashes over the verifier's raw strings,
+            // a string algorithm, a fresh jti, the request's response_mode and
+            // the two-category amr. Throws instead of producing claims a
+            // verifier would have to reject. This replaces the RFC 8176
+            // `amr` below: TS12 requires the object form.
+            for (name, value) in try binding.kbJwtClaims() { kbClaimsDict[name] = value }
+        } else if let props = try? await signer.securityProperties(keyId: key.keyId),
+                  !props.amr.isEmpty {
+            // Include amr from WSCD security properties (E7)
             kbClaimsDict["amr"] = props.amr
-        }
-
-        // Phase I: Transaction data hashes (TS12 payment SCA)
-        if let txData = transactionData, !txData.isEmpty {
-            let hashes = try txData.map { item -> String in
-                guard let jsonData = item.rawJson.data(using: .utf8) else {
-                    throw KeystoreError.cryptoError("Failed to encode transaction data as UTF-8")
-                }
-                let digest = SHA256.hash(data: jsonData)
-                return EncryptedContainer.base64UrlEncode(Data(digest))
-            }
-            kbClaimsDict["transaction_data_hashes"] = hashes
-            kbClaimsDict["transaction_data_hashes_alg"] = "sha-256"
-            kbClaimsDict["jti"] = UUID().uuidString.lowercased()
         }
 
         let kbClaims = JwtHelpers.jsonBase64Url(kbClaimsDict)
