@@ -230,7 +230,15 @@ let package = Package(
         ),
         .testTarget(
             name: "SirosWalletTests",
-            dependencies: ["SirosWallet"],
+            dependencies: [
+                "SirosWallet",
+                // Needed to build a realistic mdoc StoredCredential fixture
+                // for SirosWalletCredentialStatusRaceTests (a claims-free
+                // MSO - neither validityInfo nor status - the one shape
+                // `credentialStatus(of:)`'s own parsing can produce nil
+                // claims for).
+                .product(name: "SwiftCBOR", package: "SwiftCBOR"),
+            ],
             path: "Tests/SirosWalletTests"
         ),
     ]

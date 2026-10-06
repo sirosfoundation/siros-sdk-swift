@@ -75,6 +75,7 @@ struct CredentialsView: View {
                 // so there's nothing further to wrap it in here.
                 CredentialStack(
                     entries: entries,
+                    credentialStatuses: viewModel.credentialStatuses,
                     onCredentialClick: { viewModel.openCredentialDetail($0) },
                     onCredentialLongClick: { actionMenuFor = $0 },
                     onRenewCredential: { viewModel.renewCredential($0) }

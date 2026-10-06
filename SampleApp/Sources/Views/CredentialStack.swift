@@ -82,6 +82,13 @@ func credentialStackCardTestTag(_ batchId: Int64) -> String {
 /// recognizer instead.
 struct CredentialStack: View {
     let entries: [CredentialWithInstances]
+    /// Keyed on `StoredCredential.id`, mirroring `WalletViewModel.credentialStatuses`
+    /// - threaded through to each stacked `CredentialCardView` so the ribbon it
+    /// computes from `credentialStatus` (see that view's doc comment) still shows
+    /// once a credential's card is in the deck rather than a standalone row.
+    /// Defaults to empty so call sites that don't track status (tests, previews)
+    /// don't have to pass one.
+    var credentialStatuses: [Int64: CredentialStatus] = [:]
     let onCredentialClick: (StoredCredential) -> Void
     let onCredentialLongClick: (StoredCredential) -> Void
     let onRenewCredential: (StoredCredential) -> Void
@@ -172,7 +179,8 @@ struct CredentialStack: View {
                                 credential: entry.credential,
                                 instances: entry.instances,
                                 onClick: nil,
-                                onRenewClick: { onRenewCredential(entry.credential) }
+                                onRenewClick: { onRenewCredential(entry.credential) },
+                                credentialStatus: credentialStatuses[entry.credential.id]
                             )
                             .frame(width: proxy.size.width, height: cardHeight)
                             // Collapses every leaf accessibility element inside
