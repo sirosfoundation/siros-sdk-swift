@@ -167,6 +167,6 @@ final class BuiltInSchemaTests: XCTestCase {
         XCTAssertEqual(try outcome("urn:eudi:sca:emandate:1", good), .valid)
         let bad = #"{"transaction_id":"t","payment_payload":{"transaction_id":"t","currency":"EUR","amount":1}}"#
         guard case .invalid(let path, _) = try outcome("urn:eudi:sca:emandate:1", bad) else { return XCTFail("nested violation missed") }
-        XCTAssertTrue(path.hasPrefix("/payment_payload"), path)
+        XCTAssertTrue(path.hasPrefix(".payment_payload"), path)
     }
 }

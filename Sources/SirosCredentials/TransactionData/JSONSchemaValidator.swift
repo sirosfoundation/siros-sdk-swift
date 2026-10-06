@@ -183,16 +183,16 @@ public struct JSONSchemaValidator: Sendable {
         }
         for (name, sub) in properties {
             guard let value = members[name] else { continue }
-            let outcome = validate(value, sub, root: root, path: path + "/" + name, depth: depth + 1)
+            let outcome = validate(value, sub, root: root, path: path + "." + name, depth: depth + 1)
             if outcome != .valid { return outcome }
         }
         if let ap = kw["additionalProperties"] {
             for (name, value) in members where properties[name] == nil {
                 switch ap {
-                case .bool(false): return .invalid(path: path + "/" + name, reason: "additional member not allowed")
+                case .bool(false): return .invalid(path: path + "." + name, reason: "additional member not allowed")
                 case .bool(true): continue
                 default:
-                    let outcome = validate(value, ap, root: root, path: path + "/" + name, depth: depth + 1)
+                    let outcome = validate(value, ap, root: root, path: path + "." + name, depth: depth + 1)
                     if outcome != .valid { return outcome }
                 }
             }
@@ -212,7 +212,7 @@ public struct JSONSchemaValidator: Sendable {
         }
         if let itemSchema = kw["items"] {
             for (index, item) in items.enumerated() {
-                let outcome = validate(item, itemSchema, root: root, path: path + "/\(index)", depth: depth + 1)
+                let outcome = validate(item, itemSchema, root: root, path: path + "[\(index)]", depth: depth + 1)
                 if outcome != .valid { return outcome }
             }
         }
