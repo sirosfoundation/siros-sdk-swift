@@ -30,6 +30,21 @@ final class StrictJSONTests: XCTestCase {
         XCTAssertNil(JSONValue.compareNumbers(.string("1"), .int(1)))
     }
 
+    /// Beyond Decimal's precision there is no exact comparison: fail closed.
+    func testNumbersTooLongForExactComparisonAreNotComparable() throws {
+        let a = try StrictJSON.parse("1234567890123456789012345678901234567890")
+        let b = try StrictJSON.parse("1234567890123456789012345678901234567891")
+        XCTAssertNil(JSONValue.compareNumbers(a, b))
+        XCTAssertFalse(a.jsonEquals(b), "distinct 40-digit numbers must not compare equal")
+        XCTAssertFalse(a.jsonEquals(a), "an uncomparable number is never equal, not even to itself")
+        XCTAssertFalse(a.isIntegral)
+        XCTAssertNil(JSONValue.decimal("1e999999").exactNumber)
+        XCTAssertThrowsError(try StrictJSON.parse("1e999999"))
+        XCTAssertEqual(JSONValue.significantDigits("-0.00120e5"), 3)
+        // Within precision it is exact.
+        XCTAssertTrue(try StrictJSON.parse("12345678901234567890123456789012345678").jsonEquals(try StrictJSON.parse("12345678901234567890123456789012345678")))
+    }
+
     func testRefusesAmbiguousOrMalformedDocuments() {
         let bad = [
             #"{"a":1,"a":2}"#,         // duplicate key
@@ -131,6 +146,14 @@ final class JSONSchemaValidatorTests: XCTestCase {
         }
         let local = try StrictJSON.parse(#"{"properties":{"a":{"$ref":"file.json"}}}"#)
         XCTAssertEqual(validator.validate(try StrictJSON.parse(#"{"a":1}"#), against: local), .valid)
+    }
+
+    /// Branching recursion must not do exponential work inside the depth limit.
+    func testBranchingRecursiveSchemaIsStoppedByTheBudget() throws {
+        let started = Date()
+        guard case .unsupported = try check(#"{"a":1}"#, ##"{"anyOf":[{"$ref":"#"},{"$ref":"#"}]}"##) else { return XCTFail("must not be accepted") }
+        guard case .unsupported = try check(#"{"a":1}"#, ##"{"oneOf":[{"$ref":"#"},{"$ref":"#"}]}"##) else { return XCTFail() }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 
     func testSelfReferenceTerminates() throws {

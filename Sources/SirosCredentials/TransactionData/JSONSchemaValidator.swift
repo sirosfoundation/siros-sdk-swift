@@ -40,24 +40,35 @@ public struct JSONSchemaValidator: Sendable {
         self.resolveRef = resolveRef
     }
 
-    public func validate(_ instance: JSONValue, against schema: JSONValue) -> Outcome {
-        validate(instance, schema, root: schema, path: "", depth: 0)
+    /// Schema evaluations allowed for one `validate` call. A recursive schema
+    /// whose branches reference each other can otherwise do exponential work
+    /// well inside the depth limit.
+    static let evaluationBudget = 20_000
+
+    private final class Budget {
+        var remaining = JSONSchemaValidator.evaluationBudget
     }
 
-    private func validate(_ instance: JSONValue, _ schema: JSONValue, root: JSONValue, path: String, depth: Int) -> Outcome {
+    public func validate(_ instance: JSONValue, against schema: JSONValue) -> Outcome {
+        validate(instance, schema, root: schema, path: "", depth: 0, budget: Budget())
+    }
+
+    private func validate(_ instance: JSONValue, _ schema: JSONValue, root: JSONValue, path: String, depth: Int, budget: Budget) -> Outcome {
+        budget.remaining -= 1
+        guard budget.remaining >= 0 else { return .unsupported("schema evaluation budget exceeded") }
         guard depth <= Self.maxDepth else { return .unsupported("schema nesting or reference depth exceeded") }
         switch schema {
         case .bool(let allowed):
             return allowed ? .valid : .invalid(path: path, reason: "schema is false")
         case .object(let keywords):
-            return validateObjectSchema(instance, keywords, root: root, path: path, depth: depth)
+            return validateObjectSchema(instance, keywords, root: root, path: path, depth: depth, budget: budget)
         default:
             return .unsupported("a schema must be an object or boolean")
         }
     }
 
     private func validateObjectSchema(
-        _ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int
+        _ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int, budget: Budget
     ) -> Outcome {
         let known: Set<String> = [
             "type", "properties", "required", "additionalProperties", "items", "minItems", "maxItems",
@@ -75,7 +86,7 @@ public struct JSONSchemaValidator: Sendable {
 
         if let ref = kw["$ref"] {
             guard let target = resolve(ref, root: root) else { return .unsupported("unresolvable $ref") }
-            guard check(validate(instance, target.schema, root: target.root, path: path, depth: depth + 1)) else { return result }
+            guard check(validate(instance, target.schema, root: target.root, path: path, depth: depth + 1, budget: budget)) else { return result }
         }
         if let type = kw["type"] {
             guard check(checkType(instance, type, path: path)) else { return result }
@@ -91,9 +102,9 @@ public struct JSONSchemaValidator: Sendable {
         }
         guard check(checkString(instance, kw, path: path)) else { return result }
         guard check(checkNumber(instance, kw, path: path)) else { return result }
-        guard check(checkObject(instance, kw, root: root, path: path, depth: depth)) else { return result }
-        guard check(checkArray(instance, kw, root: root, path: path, depth: depth)) else { return result }
-        guard check(checkCombinators(instance, kw, root: root, path: path, depth: depth)) else { return result }
+        guard check(checkObject(instance, kw, root: root, path: path, depth: depth, budget: budget)) else { return result }
+        guard check(checkArray(instance, kw, root: root, path: path, depth: depth, budget: budget)) else { return result }
+        guard check(checkCombinators(instance, kw, root: root, path: path, depth: depth, budget: budget)) else { return result }
         return .valid
     }
 
@@ -174,7 +185,7 @@ public struct JSONSchemaValidator: Sendable {
         return .valid
     }
 
-    private func checkObject(_ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int) -> Outcome {
+    private func checkObject(_ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int, budget: Budget) -> Outcome {
         guard case .object(let members) = instance else { return .valid }
         if let req = kw["required"] {
             guard let names = req.arrayValue, names.allSatisfy({ $0.stringValue != nil }) else {
@@ -191,7 +202,7 @@ public struct JSONSchemaValidator: Sendable {
         }
         for (name, sub) in properties {
             guard let value = members[name] else { continue }
-            let outcome = validate(value, sub, root: root, path: path + "." + name, depth: depth + 1)
+            let outcome = validate(value, sub, root: root, path: path + "." + name, depth: depth + 1, budget: budget)
             if outcome != .valid { return outcome }
         }
         if let ap = kw["additionalProperties"] {
@@ -200,7 +211,7 @@ public struct JSONSchemaValidator: Sendable {
                 case .bool(false): return .invalid(path: path + "." + name, reason: "additional member not allowed")
                 case .bool(true): continue
                 default:
-                    let outcome = validate(value, ap, root: root, path: path + "." + name, depth: depth + 1)
+                    let outcome = validate(value, ap, root: root, path: path + "." + name, depth: depth + 1, budget: budget)
                     if outcome != .valid { return outcome }
                 }
             }
@@ -208,7 +219,7 @@ public struct JSONSchemaValidator: Sendable {
         return .valid
     }
 
-    private func checkArray(_ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int) -> Outcome {
+    private func checkArray(_ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int, budget: Budget) -> Outcome {
         guard case .array(let items) = instance else { return .valid }
         if let m = kw["minItems"] {
             guard case .int(let n) = m else { return .unsupported("minItems must be an integer") }
@@ -220,14 +231,14 @@ public struct JSONSchemaValidator: Sendable {
         }
         if let itemSchema = kw["items"] {
             for (index, item) in items.enumerated() {
-                let outcome = validate(item, itemSchema, root: root, path: path + "[\(index)]", depth: depth + 1)
+                let outcome = validate(item, itemSchema, root: root, path: path + "[\(index)]", depth: depth + 1, budget: budget)
                 if outcome != .valid { return outcome }
             }
         }
         return .valid
     }
 
-    private func checkCombinators(_ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int) -> Outcome {
+    private func checkCombinators(_ instance: JSONValue, _ kw: [String: JSONValue], root: JSONValue, path: String, depth: Int, budget: Budget) -> Outcome {
         func subschemas(_ key: String) -> [JSONValue]? {
             guard let v = kw[key] else { return [] }
             return v.arrayValue
@@ -236,14 +247,14 @@ public struct JSONSchemaValidator: Sendable {
             return .unsupported("allOf/anyOf/oneOf must be arrays")
         }
         for sub in all {
-            let outcome = validate(instance, sub, root: root, path: path, depth: depth + 1)
+            let outcome = validate(instance, sub, root: root, path: path, depth: depth + 1, budget: budget)
             if outcome != .valid { return outcome }
         }
         if kw["anyOf"] != nil {
             var firstUnsupported: Outcome?
             var matched = false
             for sub in any {
-                let outcome = validate(instance, sub, root: root, path: path, depth: depth + 1)
+                let outcome = validate(instance, sub, root: root, path: path, depth: depth + 1, budget: budget)
                 if outcome == .valid { matched = true; break }
                 if case .unsupported = outcome, firstUnsupported == nil { firstUnsupported = outcome }
             }
@@ -252,14 +263,14 @@ public struct JSONSchemaValidator: Sendable {
         if kw["oneOf"] != nil {
             var count = 0
             for sub in one {
-                let outcome = validate(instance, sub, root: root, path: path, depth: depth + 1)
+                let outcome = validate(instance, sub, root: root, path: path, depth: depth + 1, budget: budget)
                 if case .unsupported = outcome { return outcome }
                 if outcome == .valid { count += 1 }
             }
             if count != 1 { return .invalid(path: path, reason: "does not match exactly one of oneOf") }
         }
         if let not = kw["not"] {
-            let outcome = validate(instance, not, root: root, path: path, depth: depth + 1)
+            let outcome = validate(instance, not, root: root, path: path, depth: depth + 1, budget: budget)
             if case .unsupported = outcome { return outcome }
             if outcome == .valid { return .invalid(path: path, reason: "matches a schema it must not match") }
         }

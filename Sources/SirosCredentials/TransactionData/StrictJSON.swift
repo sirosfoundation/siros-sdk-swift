@@ -47,9 +47,21 @@ public enum JSONValue: Sendable, Equatable {
     var exactNumber: Decimal? {
         switch self {
         case .int(let i): return Decimal(i)
-        case .decimal(let text): return Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
+        case .decimal(let text):
+            // `Decimal` rounds silently beyond 38 significant digits and for
+            // out-of-range exponents; such a number is not comparable exactly.
+            guard JSONValue.significantDigits(text) <= 38,
+                  let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")), !value.isNaN else { return nil }
+            return value
         default: return nil
         }
+    }
+
+    /// Digits of the coefficient, without sign, leading zeros, decimal point or exponent.
+    static func significantDigits(_ text: String) -> Int {
+        let mantissa = text.lowercased().split(separator: "e", maxSplits: 1).first.map(String.init) ?? text
+        let digits = mantissa.filter(\.isNumber).drop(while: { $0 == "0" })
+        return digits.count
     }
 
     var isNumber: Bool {
@@ -73,18 +85,23 @@ public enum JSONValue: Sendable, Equatable {
         }
     }
 
+    private static func order<T: Comparable>(_ x: T, _ y: T) -> ComparisonResult {
+        if x < y { return .orderedAscending }
+        return x == y ? .orderedSame : .orderedDescending
+    }
+
     /// Orders two numbers: exactly when both are exact, through `Double` when
     /// either came from a lossy source. `nil` when either is not a number or
     /// cannot be compared exactly.
     static func compareNumbers(_ a: JSONValue, _ b: JSONValue) -> ComparisonResult? {
         guard a.isNumber, b.isNumber else { return nil }
-        if let x = a.exactNumber, let y = b.exactNumber { return x < y ? .orderedAscending : (x == y ? .orderedSame : .orderedDescending) }
-        if case .double = a, case .double = b, let x = a.numberValue, let y = b.numberValue {
-            return x < y ? .orderedAscending : (x == y ? .orderedSame : .orderedDescending)
-        }
-        // One side lossy, the other exact: only the lossy side's precision is available.
-        guard a.exactNumber != nil || b.exactNumber != nil, let x = a.numberValue, let y = b.numberValue else { return nil }
-        return x < y ? .orderedAscending : (x == y ? .orderedSame : .orderedDescending)
+        if let x = a.exactNumber, let y = b.exactNumber { return order(x, y) }
+        // An exact number too long for `Decimal` has no exact value to compare.
+        if case .decimal = a, a.exactNumber == nil { return nil }
+        if case .decimal = b, b.exactNumber == nil { return nil }
+        // One side lossy: only that side's precision is available.
+        guard let x = a.numberValue, let y = b.numberValue else { return nil }
+        return order(x, y)
     }
 
     /// Equality in the JSON data model: `1` equals `1.0`, exactly.

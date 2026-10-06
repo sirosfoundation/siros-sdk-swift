@@ -24,6 +24,8 @@ private final class OnceResumer<T: Sendable>: @unchecked Sendable {
 /// Unlike a task-group race this returns on time even when `operation` never
 /// finishes and ignores cancellation (a UI that never answers, a transport
 /// that never times out): the abandoned work is left to finish on its own.
+/// Callers that hand in work they do not control (metadata sources) document
+/// that it must end on cancellation, so abandoned work cannot pile up.
 func withDeadline<T: Sendable>(
     _ seconds: TimeInterval, fallback: T, _ operation: @escaping @Sendable () async -> T
 ) async -> T {

@@ -93,8 +93,12 @@ public protocol TransactionMetadataSource: Sendable {
     /// re-checks the result either way.
     func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String?
     /// Fetches a document referenced by the metadata (`schema_uri`,
-    /// `claims_uri`, `ui_labels_uri`).
-    func fetchResource(uri: String) async -> Data?
+    /// `claims_uri`, `ui_labels_uri`). An implementation must stop reading and
+    /// return `nil` once more than `maxBytes` have arrived (the limit has to
+    /// protect memory and bandwidth, not be checked afterwards), and must end
+    /// promptly when its task is cancelled: the pipeline gives up on a slow
+    /// source at its deadline but cannot stop work that ignores cancellation.
+    func fetchResource(uri: String, maxBytes: Int) async -> Data?
 }
 
 // MARK: - Result model
@@ -157,6 +161,7 @@ public struct TransactionDataPipeline: Sendable {
 
     private let source: any TransactionMetadataSource
     private let fetchTimeout: TimeInterval
+    private let requestTimeout: TimeInterval
     private let maxMetadataBytes: Int
     private let maxResourceBytes: Int
     private let maxRawEntryBytes = 64 * 1024
@@ -164,26 +169,54 @@ public struct TransactionDataPipeline: Sendable {
     public init(
         source: any TransactionMetadataSource,
         fetchTimeout: TimeInterval = 10,
+        requestTimeout: TimeInterval = 30,
         maxMetadataBytes: Int = 1024 * 1024,
         maxResourceBytes: Int = 256 * 1024
     ) {
         self.source = source
         self.fetchTimeout = fetchTimeout
+        self.requestTimeout = requestTimeout
         self.maxMetadataBytes = maxMetadataBytes
         self.maxResourceBytes = maxResourceBytes
     }
 
+    /// Work shared by the entries of one request: type metadata and referenced
+    /// documents are fetched once however many entries or credentials use them.
+    private final class RunState: @unchecked Sendable {
+        var metadata: [String: JSONValue] = [:]
+        var resources: [String: Data] = [:]
+    }
+
+    /// Hard limits on what one request may ask the wallet to check.
+    static let maxEntries = 16
+    static let maxCredentialIdsPerEntry = 8
+
     public func validate(_ request: TransactionDataRequest) async throws -> ValidatedTransactionData {
+        let outcome: Result<ValidatedTransactionData, TransactionDataError> = await withDeadline(
+            requestTimeout,
+            fallback: .failure(TransactionDataError(.metadataUnavailable, detail: "the request did not validate in time"))
+        ) {
+            do { return .success(try await self.run(request)) }
+            catch let error as TransactionDataError { return .failure(error) }
+            catch { return .failure(TransactionDataError(.invalidEntry, detail: "\(error)")) }
+        }
+        return try outcome.get()
+    }
+
+    private func run(_ request: TransactionDataRequest) async throws -> ValidatedTransactionData {
         guard !request.entries.isEmpty else {
             throw TransactionDataError(.invalidEntry, detail: "transaction_data is empty")
+        }
+        guard request.entries.count <= Self.maxEntries else {
+            throw TransactionDataError(.invalidEntry, detail: "too many transaction_data entries")
         }
         guard let responseMode = request.responseMode, !responseMode.isEmpty else {
             throw TransactionDataError(.invalidEntry, detail: "request has no response_mode, which the KB-JWT must echo")
         }
-        var metadataCache: [String: JSONValue] = [:]
+        let state = RunState()
         var validated: [ValidatedTransactionEntry] = []
         for input in request.entries {
-            validated.append(try await validateEntry(input, request: request, metadataByVct: &metadataCache))
+            validated.append(try await validateEntry(input, request: request, state: state))
         }
         return ValidatedTransactionData(entries: validated, responseMode: responseMode)
     }
@@ -193,7 +226,7 @@ public struct TransactionDataPipeline: Sendable {
     private func validateEntry(
         _ input: TransactionDataEntryInput,
         request: TransactionDataRequest,
-        metadataByVct: inout [String: JSONValue]
+        state: RunState
     ) async throws -> ValidatedTransactionEntry {
         // 1. Decode `raw` ourselves; this, never the orchestrator's hint, is the truth.
         let decoded = try decode(input.raw)
@@ -206,6 +239,9 @@ public struct TransactionDataPipeline: Sendable {
         guard let idValues = decoded["credential_ids"]?.arrayValue, !idValues.isEmpty,
               idValues.allSatisfy({ ($0.stringValue ?? "").isEmpty == false }) else {
             throw TransactionDataError(.invalidEntry, detail: "credential_ids is missing, empty or not strings")
+        }
+        guard idValues.count <= Self.maxCredentialIdsPerEntry else {
+            throw TransactionDataError(.invalidEntry, detail: "too many credential_ids")
         }
         let credentialIds = idValues.compactMap(\.stringValue)
         var bound: [TransactionDataCredential] = []
@@ -228,11 +264,11 @@ public struct TransactionDataPipeline: Sendable {
         var typeMetadata: [String: JSONValue] = [:]
         for credential in bound {
             // 4. SCA attestation.
-            let metadata = try await scaMetadata(for: credential, cache: &metadataByVct)
+            let metadata = try await scaMetadata(for: credential, state: state)
             // 5. Type support.
             let typeEntry = try typeEntry(type, in: metadata)
             // 6. Schema.
-            try await checkSchema(payload: payload, type: type, typeEntry: typeEntry, credential: credential)
+            try await checkSchema(payload: payload, type: type, typeEntry: typeEntry, credential: credential, state: state)
             if let typeEntry { typeMetadata[credential.queryId] = typeEntry }
         }
 
@@ -293,7 +329,7 @@ public struct TransactionDataPipeline: Sendable {
 
     // MARK: Metadata
 
-    private func scaMetadata(for credential: TransactionDataCredential, cache: inout [String: JSONValue]) async throws -> [String: JSONValue] {
+    private func scaMetadata(for credential: TransactionDataCredential, state: RunState) async throws -> [String: JSONValue] {
         guard let vct = credential.vct, !vct.isEmpty else {
             throw TransactionDataError(.metadataUnavailable, detail: "credential has no vct")
         }
@@ -301,7 +337,7 @@ public struct TransactionDataPipeline: Sendable {
         // Keyed by the credential's own pin too: a document accepted for one
         // credential is never handed to another that pins something else.
         let cacheKey = vct + "\u{0}" + (pin ?? "")
-        if let cached = cache[cacheKey]?.objectValue { return try requireSca(cached) }
+        if let cached = state.metadata[cacheKey]?.objectValue { return try requireSca(cached) }
         guard let text = await bounded({ await source.typeMetadataDocument(vct: vct, expectedIntegrity: pin) }),
               text.utf8.count <= maxMetadataBytes else {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata for the credential could not be obtained")
@@ -315,7 +351,7 @@ public struct TransactionDataPipeline: Sendable {
         guard object["vct"]?.stringValue == vct else {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata is for a different vct")
         }
-        cache[cacheKey] = parsed
+        state.metadata[cacheKey] = parsed
         return try requireSca(object)
     }
 
@@ -351,9 +387,9 @@ public struct TransactionDataPipeline: Sendable {
     // MARK: Schema
 
     private func checkSchema(
-        payload: JSONValue, type: String, typeEntry: JSONValue?, credential: TransactionDataCredential
+        payload: JSONValue, type: String, typeEntry: JSONValue?, credential: TransactionDataCredential, state: RunState
     ) async throws {
-        let schema = try await resolveSchema(type: type, typeEntry: typeEntry, credential: credential)
+        let schema = try await resolveSchema(type: type, typeEntry: typeEntry, credential: credential, state: state)
         let validator = JSONSchemaValidator(resolveRef: { TransactionDataBuiltIns.schema(forReference: $0) })
         switch validator.validate(payload, against: schema) {
         case .valid: return
@@ -365,7 +401,7 @@ public struct TransactionDataPipeline: Sendable {
     }
 
     private func resolveSchema(
-        type: String, typeEntry: JSONValue?, credential: TransactionDataCredential
+        type: String, typeEntry: JSONValue?, credential: TransactionDataCredential, state: RunState
     ) async throws -> JSONValue {
         guard let entry = typeEntry?.objectValue else {
             guard let builtIn = TransactionDataBuiltIns.schema(forType: type) else {
@@ -395,7 +431,13 @@ public struct TransactionDataPipeline: Sendable {
             }
             if let builtIn = TransactionDataBuiltIns.schema(forType: uri) { return builtIn }
             let pin = credential.integrityClaims["transaction_data_types['\(type)'].schema_uri#integrity"]
-            guard let data = await bounded({ await source.fetchResource(uri: uri) }), data.count <= maxResourceBytes else {
+            let limit = maxResourceBytes
+            let fetched: Data?
+            if let known = state.resources[uri] { fetched = known } else {
+                fetched = await bounded({ await source.fetchResource(uri: uri, maxBytes: 1) })
+                if let fetched { state.resources[uri] = fetched }
+            }
+            guard let data = fetched, data.count <= maxResourceBytes else {
                 throw TransactionDataError(.metadataUnavailable, detail: "schema_uri could not be fetched")
             }
             if let pin, !Integrity.matches(data, pin) {

@@ -16,6 +16,8 @@ private final class FakeSource: TransactionMetadataSource, @unchecked Sendable {
     var resources: [String: Data] = [:]
     var delayNanos: UInt64 = 0
     private let lock = NSLock()
+    private var _resourceFetches: [(uri: String, maxBytes: Int)] = []
+    var resourceFetches: [(uri: String, maxBytes: Int)] { lock.lock(); defer { lock.unlock() }; return _resourceFetches }
     private var _expectedIntegrities: [String?] = []
     var expectedIntegrities: [String?] { lock.lock(); defer { lock.unlock() }; return _expectedIntegrities }
 
@@ -25,7 +27,10 @@ private final class FakeSource: TransactionMetadataSource, @unchecked Sendable {
         return documents[vct]
     }
 
-    func fetchResource(uri: String) async -> Data? { resources[uri] }
+    func fetchResource(uri: String, maxBytes: Int) async -> Data? {
+        lock.lock(); _resourceFetches.append((uri, maxBytes)); lock.unlock()
+        return resources[uri]
+    }
 }
 
 final class TransactionDataPipelineTests: XCTestCase {
@@ -232,7 +237,7 @@ final class TransactionDataPipelineTests: XCTestCase {
                 await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
                 return nil
             }
-            func fetchResource(uri: String) async -> Data? { nil }
+            func fetchResource(uri: String, maxBytes: Int) async -> Data? { nil }
         }
         let started = Date()
         do {
@@ -267,6 +272,40 @@ final class TransactionDataPipelineTests: XCTestCase {
         let hint = TransactionDataHint(type: payment, credentialIds: ["pay"],
                                        payload: try? StrictJSON.parse(#"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":9007199254740992}"#))
         await expectRefusal(.inconsistentWithOrchestrator, request([.init(raw: big, hint: hint)]))
+    }
+
+    func testASchemaUriIsFetchedOncePerRequestWithTheByteLimit() async throws {
+        let schema = #"{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}"#
+        let types = #"{"https://std.example/trx":{"schema_uri":"https://std.example/s.json"}}"#
+        let s = source(metadata(types: types))
+        s.resources["https://std.example/s.json"] = Data(schema.utf8)
+        let e = entry(type: "https://std.example/trx", ids: #"["pay","other"]"#, payload: #"{"n":3}"#)
+        let creds = [credential(), TransactionDataCredential(queryId: "other", format: "dc+sd-jwt", vct: vct)]
+        _ = try await TransactionDataPipeline(source: s, maxResourceBytes: 1234).validate(request([.init(raw: e), .init(raw: e)], credentials: creds))
+        XCTAssertEqual(s.resourceFetches.count, 1, "four checks, one fetch")
+        XCTAssertEqual(s.resourceFetches.first?.maxBytes, 1234, "the limit is handed to the source")
+    }
+
+    func testRequestLimitsAreEnforced() async {
+        let many = (0..<17).map { _ in TransactionDataEntryInput(raw: entry()) }
+        await expectRefusal(.invalidEntry, request(many))
+        let ids = "[" + (0..<9).map { "\"c\($0)\"" }.joined(separator: ",") + "]"
+        await expectRefusal(.invalidEntry, request([.init(raw: entry(ids: ids))]))
+    }
+
+    func testTheWholeRequestHasADeadline() async {
+        let slow = source()
+        slow.delayNanos = 400_000_000        // each lookup is within its own limit...
+        let two = [TransactionDataCredential(queryId: "pay", format: "dc+sd-jwt", vct: vct),
+                   TransactionDataCredential(queryId: "x", format: "dc+sd-jwt", vct: vct + "2")]
+        slow.documents[vct + "2"] = metadata(vct: vct + "2")
+        let e = entry(ids: #"["pay","x"]"#)
+        let started = Date()
+        do {
+            _ = try await TransactionDataPipeline(source: slow, fetchTimeout: 5, requestTimeout: 0.5).validate(request([.init(raw: e)], credentials: two))
+            XCTFail("expected refusal")
+        } catch let error as TransactionDataError { XCTAssertEqual(error.reason, .metadataUnavailable) } catch { XCTFail("\(error)") }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3, "...but together they exceed the request deadline")
     }
 
     func testOversizedMetadataIsRefused() async throws {
