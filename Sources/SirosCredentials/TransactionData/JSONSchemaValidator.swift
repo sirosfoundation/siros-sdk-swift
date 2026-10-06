@@ -109,7 +109,11 @@ public struct JSONSchemaValidator: Sendable {
             }
             return (node, root)
         }
-        guard !r.contains("://"), let external = resolveRef(r) else { return nil }
+        // Only a bare file name reaches the resolver: anything with a scheme, a
+        // host (`//host/...`) or a path never does, so no reference can name a
+        // network location from here.
+        guard r.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil,
+              let external = resolveRef(r) else { return nil }
         return (external, external)
     }
 
@@ -127,8 +131,8 @@ public struct JSONSchemaValidator: Sendable {
     private func matches(_ v: JSONValue, _ name: String) -> Bool {
         switch (name, v) {
         case ("null", .null), ("boolean", .bool), ("object", .object), ("array", .array), ("string", .string): return true
-        case ("number", .int), ("number", .double), ("integer", .int): return true
-        case ("integer", .double(let d)): return d.rounded() == d
+        case ("number", _): return v.isNumber
+        case ("integer", _): return v.isIntegral
         default: return false
         }
     }
@@ -155,13 +159,17 @@ public struct JSONSchemaValidator: Sendable {
     }
 
     private func checkNumber(_ instance: JSONValue, _ kw: [String: JSONValue], path: String) -> Outcome {
-        guard let n = instance.numberValue else { return .valid }
-        for (key, bad) in [("minimum", { (n: Double, l: Double) in n < l }), ("maximum", { n, l in n > l }),
-                           ("exclusiveMinimum", { n, l in n <= l }), ("exclusiveMaximum", { n, l in n >= l })] {
-            if let limitValue = kw[key] {
-                guard let limit = limitValue.numberValue else { return .unsupported("\(key) must be a number") }
-                if bad(n, limit) { return .invalid(path: path, reason: "violates \(key)") }
-            }
+        guard instance.isNumber else { return .valid }
+        let violations: [(String, (ComparisonResult) -> Bool)] = [
+            ("minimum", { $0 == .orderedAscending }), ("maximum", { $0 == .orderedDescending }),
+            ("exclusiveMinimum", { $0 != .orderedDescending }), ("exclusiveMaximum", { $0 != .orderedAscending }),
+        ]
+        for (key, violated) in violations {
+            guard let limit = kw[key] else { continue }
+            guard limit.isNumber else { return .unsupported("\(key) must be a number") }
+            // Not comparable exactly: fail closed rather than let it through.
+            guard let order = JSONValue.compareNumbers(instance, limit) else { return .invalid(path: path, reason: "cannot be compared with \(key)") }
+            if violated(order) { return .invalid(path: path, reason: "violates \(key)") }
         }
         return .valid
     }

@@ -13,9 +13,21 @@ final class StrictJSONTests: XCTestCase {
     func testParsesAllValueKinds() throws {
         let v = try StrictJSON.parse(#"{"a":[1,2.5,-3,true,false,null,"xå\n😀"],"b":{}}"#)
         XCTAssertEqual(v["a"]?.arrayValue?[0], .int(1))
-        XCTAssertEqual(v["a"]?.arrayValue?[1], .double(2.5))
+        XCTAssertEqual(v["a"]?.arrayValue?[1], .decimal("2.5"))
         XCTAssertEqual(v["a"]?.arrayValue?[2], .int(-3))
         XCTAssertEqual(v["a"]?.arrayValue?[6], .string("x\u{e5}\n\u{1F600}"))
+    }
+
+    /// Numbers are compared exactly, never through binary floating point.
+    func testNumberComparisonIsExact() throws {
+        let a = try StrictJSON.parse("9007199254740992")
+        let b = try StrictJSON.parse("9007199254740993")
+        XCTAssertFalse(a.jsonEquals(b), "distinct integers above 2^53 stay distinct")
+        XCTAssertFalse(try StrictJSON.parse("0.1").jsonEquals(try StrictJSON.parse("0.10000000000000001")))
+        XCTAssertTrue(try StrictJSON.parse("0.5").jsonEquals(try StrictJSON.parse("0.50")))
+        XCTAssertEqual(try StrictJSON.parse("9223372036854775808"), .decimal("9223372036854775808"), "beyond Int64 keeps its text")
+        XCTAssertEqual(JSONValue.compareNumbers(a, b), .orderedAscending)
+        XCTAssertNil(JSONValue.compareNumbers(.string("1"), .int(1)))
     }
 
     func testRefusesAmbiguousOrMalformedDocuments() {
@@ -35,7 +47,9 @@ final class StrictJSONTests: XCTestCase {
 
     func testNumbersKeepTheirKind() throws {
         XCTAssertEqual(try StrictJSON.parse("1"), .int(1))
-        XCTAssertEqual(try StrictJSON.parse("1.0"), .double(1))
+        XCTAssertEqual(try StrictJSON.parse("1.0"), .decimal("1.0"), "kept as written")
+        XCTAssertTrue(JSONValue.int(1).jsonEquals(.decimal("1.0")))
+        XCTAssertTrue(JSONValue.int(100).jsonEquals(try StrictJSON.parse("1e2")))
         XCTAssertTrue(JSONValue.int(1).jsonEquals(.double(1)))
         XCTAssertFalse(JSONValue.bool(true).jsonEquals(.int(1)))
     }
@@ -66,6 +80,16 @@ final class JSONSchemaValidatorTests: XCTestCase {
         XCTAssertEqual(try check(#""😀""#, #"{"maxLength":1}"#), .valid)
         guard case .invalid = try check("5", #"{"maximum":4}"#) else { return XCTFail() }
         guard case .invalid = try check("4", #"{"exclusiveMaximum":4}"#) else { return XCTFail() }
+    }
+
+    func testIntegerAndBoundChecksAreExact() throws {
+        XCTAssertEqual(try check("2.0", #"{"type":"integer"}"#), .valid)
+        XCTAssertEqual(try check("1e2", #"{"type":"integer"}"#), .valid)
+        guard case .invalid = try check("2.5", #"{"type":"integer"}"#) else { return XCTFail() }
+        XCTAssertEqual(try check("0.1", #"{"type":"number","minimum":0.1}"#), .valid)
+        guard case .invalid = try check("9007199254740993", #"{"maximum":9007199254740992}"#) else { return XCTFail("exact bound") }
+        guard case .invalid = try check("9007199254740993", #"{"const":9007199254740992}"#) else { return XCTFail("exact const") }
+        guard case .invalid = try check("9007199254740993", #"{"enum":[9007199254740992]}"#) else { return XCTFail("exact enum") }
     }
 
     func testEnumConstAndCombinators() throws {
@@ -100,6 +124,11 @@ final class JSONSchemaValidatorTests: XCTestCase {
         let validator = JSONSchemaValidator(resolveRef: { _ in .bool(true) })
         let schema = try StrictJSON.parse(#"{"properties":{"a":{"$ref":"https://evil.example/s.json"}}}"#)
         guard case .unsupported = validator.validate(try StrictJSON.parse(#"{"a":1}"#), against: schema) else { return XCTFail() }
+        // Anything with a scheme, a host or a path is never passed on.
+        for ref in ["//evil.example/s.json", "file:///etc/passwd", "urn:x:y", "mailto:a@b", "a/b.json", "../s.json", "/abs.json", "s.json?x=1", "s.json#frag"] {
+            let schema = try StrictJSON.parse(#"{"properties":{"a":{"$ref":"\#(ref)"}}}"#)
+            guard case .unsupported = validator.validate(try StrictJSON.parse(#"{"a":1}"#), against: schema) else { return XCTFail(ref) }
+        }
         let local = try StrictJSON.parse(#"{"properties":{"a":{"$ref":"file.json"}}}"#)
         XCTAssertEqual(validator.validate(try StrictJSON.parse(#"{"a":1}"#), against: local), .valid)
     }

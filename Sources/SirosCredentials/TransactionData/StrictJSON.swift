@@ -13,7 +13,13 @@ public enum JSONValue: Sendable, Equatable {
     case null
     case bool(Bool)
     case int(Int64)
+    /// A number from a lossy source (the orchestrator's decoded hint). A
+    /// number parsed from a document is never a `double`: see `decimal`.
     case double(Double)
+    /// A number that is not an `Int64`, kept as the exact text it was written
+    /// with, so display and comparison never go through binary floating point
+    /// (`0.10000000000000001` and `0.1` are different numbers here).
+    case decimal(String)
     case string(String)
     case array([JSONValue])
     case object([String: JSONValue])
@@ -25,16 +31,63 @@ public enum JSONValue: Sendable, Equatable {
 
     public subscript(key: String) -> JSONValue? { objectValue?[key] }
 
-    /// Numeric value of an `.int` or `.double`, `nil` otherwise.
+    /// Numeric value as a `Double` (lossy), `nil` for a non-number.
     public var numberValue: Double? {
         switch self {
         case .int(let i): return Double(i)
         case .double(let d): return d
+        case .decimal(let text): return Double(text)
         default: return nil
         }
     }
 
-    /// Equality in the JSON data model: `1` equals `1.0`.
+    /// The exact value of an `.int` or `.decimal`; `nil` for anything else
+    /// (including a `.decimal` too long for `Decimal`, which then never
+    /// compares equal to or ordered against anything: fail closed).
+    var exactNumber: Decimal? {
+        switch self {
+        case .int(let i): return Decimal(i)
+        case .decimal(let text): return Decimal(string: text, locale: Locale(identifier: "en_US_POSIX"))
+        default: return nil
+        }
+    }
+
+    var isNumber: Bool {
+        switch self {
+        case .int, .double, .decimal: return true
+        default: return false
+        }
+    }
+
+    /// Whether this number has no fractional part (JSON Schema `integer`).
+    var isIntegral: Bool {
+        switch self {
+        case .int: return true
+        case .double(let d): return d.rounded() == d
+        case .decimal:
+            guard var exact = exactNumber else { return false }
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &exact, 0, .plain)
+            return rounded == exact
+        default: return false
+        }
+    }
+
+    /// Orders two numbers: exactly when both are exact, through `Double` when
+    /// either came from a lossy source. `nil` when either is not a number or
+    /// cannot be compared exactly.
+    static func compareNumbers(_ a: JSONValue, _ b: JSONValue) -> ComparisonResult? {
+        guard a.isNumber, b.isNumber else { return nil }
+        if let x = a.exactNumber, let y = b.exactNumber { return x < y ? .orderedAscending : (x == y ? .orderedSame : .orderedDescending) }
+        if case .double = a, case .double = b, let x = a.numberValue, let y = b.numberValue {
+            return x < y ? .orderedAscending : (x == y ? .orderedSame : .orderedDescending)
+        }
+        // One side lossy, the other exact: only the lossy side's precision is available.
+        guard a.exactNumber != nil || b.exactNumber != nil, let x = a.numberValue, let y = b.numberValue else { return nil }
+        return x < y ? .orderedAscending : (x == y ? .orderedSame : .orderedDescending)
+    }
+
+    /// Equality in the JSON data model: `1` equals `1.0`, exactly.
     public func jsonEquals(_ other: JSONValue) -> Bool {
         switch (self, other) {
         case (.null, .null): return true
@@ -45,8 +98,7 @@ public enum JSONValue: Sendable, Equatable {
         case (.object(let a), .object(let b)):
             return a.count == b.count && a.allSatisfy { k, v in b[k].map { v.jsonEquals($0) } ?? false }
         default:
-            if let a = numberValue, let b = other.numberValue { return a == b }
-            return false
+            return JSONValue.compareNumbers(self, other) == .orderedSame
         }
     }
 }
@@ -156,6 +208,29 @@ public enum StrictJSON {
             return value
         }
 
+        static let simpleEscapes: [UInt8: UInt8] = [
+            UInt8(ascii: "\""): 0x22, UInt8(ascii: "\\"): 0x5C, UInt8(ascii: "/"): 0x2F, UInt8(ascii: "b"): 0x08,
+            UInt8(ascii: "f"): 0x0C, UInt8(ascii: "n"): 0x0A, UInt8(ascii: "r"): 0x0D, UInt8(ascii: "t"): 0x09,
+        ]
+
+        /// The scalar of a `\u` escape (the `\u` already consumed), joining a surrogate pair.
+        mutating func parseUnicodeEscape() throws -> [UInt8] {
+            var code = try parseHex4()
+            if (0xD800...0xDBFF).contains(code) {
+                guard pos + 2 <= bytes.count, bytes[pos] == UInt8(ascii: "\\"), bytes[pos + 1] == UInt8(ascii: "u") else {
+                    throw fail("lone surrogate")
+                }
+                pos += 2
+                let low = try parseHex4()
+                guard (0xDC00...0xDFFF).contains(low) else { throw fail("lone surrogate") }
+                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+            } else if (0xDC00...0xDFFF).contains(code) {
+                throw fail("lone surrogate")
+            }
+            guard let scalar = UnicodeScalar(code) else { throw fail("bad \\u escape") }
+            return Array(String(Character(scalar)).utf8)
+        }
+
         mutating func parseString() throws -> String {
             pos += 1
             var out = [UInt8]()
@@ -164,36 +239,17 @@ public enum StrictJSON {
                 let b = bytes[pos]
                 if b == UInt8(ascii: "\"") { pos += 1; break }
                 if b < 0x20 { throw fail("control character in string") }
-                if b != UInt8(ascii: "\\") { out.append(b); pos += 1; continue }
                 pos += 1
+                if b != UInt8(ascii: "\\") { out.append(b); continue }
                 guard pos < bytes.count else { throw fail("bad escape") }
                 let e = bytes[pos]
                 pos += 1
-                switch e {
-                case UInt8(ascii: "\""): out.append(0x22)
-                case UInt8(ascii: "\\"): out.append(0x5C)
-                case UInt8(ascii: "/"): out.append(0x2F)
-                case UInt8(ascii: "b"): out.append(0x08)
-                case UInt8(ascii: "f"): out.append(0x0C)
-                case UInt8(ascii: "n"): out.append(0x0A)
-                case UInt8(ascii: "r"): out.append(0x0D)
-                case UInt8(ascii: "t"): out.append(0x09)
-                case UInt8(ascii: "u"):
-                    var code = try parseHex4()
-                    if (0xD800...0xDBFF).contains(code) {
-                        guard pos + 2 <= bytes.count, bytes[pos] == UInt8(ascii: "\\"), bytes[pos + 1] == UInt8(ascii: "u") else {
-                            throw fail("lone surrogate")
-                        }
-                        pos += 2
-                        let low = try parseHex4()
-                        guard (0xDC00...0xDFFF).contains(low) else { throw fail("lone surrogate") }
-                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
-                    } else if (0xDC00...0xDFFF).contains(code) {
-                        throw fail("lone surrogate")
-                    }
-                    guard let scalar = UnicodeScalar(code) else { throw fail("bad \\u escape") }
-                    out.append(contentsOf: Array(String(Character(scalar)).utf8))
-                default: throw fail("bad escape")
+                if let simple = Self.simpleEscapes[e] {
+                    out.append(simple)
+                } else if e == UInt8(ascii: "u") {
+                    out.append(contentsOf: try parseUnicodeEscape())
+                } else {
+                    throw fail("bad escape")
                 }
             }
             guard let s = String(bytes: out, encoding: .utf8) else { throw fail("invalid UTF-8 in string") }
@@ -229,7 +285,7 @@ public enum StrictJSON {
             let text = String(decoding: bytes[start..<pos], as: UTF8.self)
             if isInt, let i = Int64(text) { return .int(i) }
             guard let d = Double(text), d.isFinite else { throw fail("number out of range") }
-            return .double(d)
+            return .decimal(text)
         }
     }
 }

@@ -180,10 +180,10 @@ public struct TransactionDataPipeline: Sendable {
         guard let responseMode = request.responseMode, !responseMode.isEmpty else {
             throw TransactionDataError(.invalidEntry, detail: "request has no response_mode, which the KB-JWT must echo")
         }
-        var metadataByVct: [String: JSONValue] = [:]
+        var metadataCache: [String: JSONValue] = [:]
         var validated: [ValidatedTransactionEntry] = []
         for input in request.entries {
-            validated.append(try await validateEntry(input, request: request, metadataByVct: &metadataByVct))
+            validated.append(try await validateEntry(input, request: request, metadataByVct: &metadataCache))
         }
         return ValidatedTransactionData(entries: validated, responseMode: responseMode)
     }
@@ -297,8 +297,11 @@ public struct TransactionDataPipeline: Sendable {
         guard let vct = credential.vct, !vct.isEmpty else {
             throw TransactionDataError(.metadataUnavailable, detail: "credential has no vct")
         }
-        if let cached = cache[vct]?.objectValue { return try requireSca(cached) }
         let pin = credential.integrityClaims["vct#integrity"]
+        // Keyed by the credential's own pin too: a document accepted for one
+        // credential is never handed to another that pins something else.
+        let cacheKey = vct + "\u{0}" + (pin ?? "")
+        if let cached = cache[cacheKey]?.objectValue { return try requireSca(cached) }
         guard let text = await bounded({ await source.typeMetadataDocument(vct: vct, expectedIntegrity: pin) }),
               text.utf8.count <= maxMetadataBytes else {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata for the credential could not be obtained")
@@ -312,7 +315,7 @@ public struct TransactionDataPipeline: Sendable {
         guard object["vct"]?.stringValue == vct else {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata is for a different vct")
         }
-        cache[vct] = parsed
+        cache[cacheKey] = parsed
         return try requireSca(object)
     }
 
@@ -409,17 +412,7 @@ public struct TransactionDataPipeline: Sendable {
 
     /// Runs `operation`, giving up (nil) after `fetchTimeout`.
     private func bounded<T: Sendable>(_ operation: @escaping @Sendable () async -> T?) async -> T? {
-        let timeout = fetchTimeout
-        return await withTaskGroup(of: T?.self) { group in
-            group.addTask { await operation() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(max(timeout, 0) * 1_000_000_000))
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
+        await withDeadline(fetchTimeout, fallback: nil, operation)
     }
 }
 

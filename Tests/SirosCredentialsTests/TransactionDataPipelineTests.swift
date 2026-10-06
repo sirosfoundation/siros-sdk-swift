@@ -225,6 +225,50 @@ final class TransactionDataPipelineTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
     }
 
+    /// A source that never answers and ignores cancellation must still not hold validation past its time limit.
+    func testAHungNonCancellableSourceStillTimesOut() async {
+        final class Hung: TransactionMetadataSource, @unchecked Sendable {
+            func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String? {
+                await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+                return nil
+            }
+            func fetchResource(uri: String) async -> Data? { nil }
+        }
+        let started = Date()
+        do {
+            _ = try await TransactionDataPipeline(source: Hung(), fetchTimeout: 0.2).validate(request([.init(raw: entry())]))
+            XCTFail("expected refusal")
+        } catch let e as TransactionDataError { XCTAssertEqual(e.reason, .metadataUnavailable) } catch { XCTFail("\(error)") }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+    }
+
+    /// Metadata accepted for one credential must not skip another credential's pin.
+    func testAMetadataDocumentIsCheckedAgainstEveryBoundCredentialsOwnPin() async throws {
+        let doc = metadata()
+        let good = "sha256-" + Data(SHA256.hash(data: Data(doc.utf8))).base64EncodedString()
+        let s = source(doc)
+        let two = [TransactionDataCredential(queryId: "pay", format: "dc+sd-jwt", vct: vct, integrityClaims: ["vct#integrity": good]),
+                   TransactionDataCredential(queryId: "other", format: "dc+sd-jwt", vct: vct, integrityClaims: ["vct#integrity": "sha256-AAAA"])]
+        let e = entry(ids: #"["pay","other"]"#)
+        await expectRefusal(.metadataUnavailable, request([.init(raw: e)], credentials: two), source: s)
+        // The other way round, and an unpinned credential first.
+        await expectRefusal(.metadataUnavailable, request([.init(raw: e)], credentials: [
+            TransactionDataCredential(queryId: "pay", format: "dc+sd-jwt", vct: vct),
+            TransactionDataCredential(queryId: "other", format: "dc+sd-jwt", vct: vct, integrityClaims: ["vct#integrity": "sha256-AAAA"]),
+        ]), source: s)
+        // Both correctly pinned is fine.
+        let ok = [TransactionDataCredential(queryId: "pay", format: "dc+sd-jwt", vct: vct, integrityClaims: ["vct#integrity": good]),
+                  TransactionDataCredential(queryId: "other", format: "dc+sd-jwt", vct: vct, integrityClaims: ["vct#integrity": good])]
+        _ = try await TransactionDataPipeline(source: s).validate(request([.init(raw: e)], credentials: ok))
+    }
+
+    func testHintNumbersAreComparedExactly() async {
+        let big = raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":9007199254740993}}"#)
+        let hint = TransactionDataHint(type: payment, credentialIds: ["pay"],
+                                       payload: try? StrictJSON.parse(#"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":9007199254740992}"#))
+        await expectRefusal(.inconsistentWithOrchestrator, request([.init(raw: big, hint: hint)]))
+    }
+
     func testOversizedMetadataIsRefused() async throws {
         let big = metadata().dropLast() + #","pad":"\#(String(repeating: "x", count: 2000))"}"#
         let s = source(String(big))
@@ -394,7 +438,7 @@ final class TransactionDataPipelineTests: XCTestCase {
         ))
         let input = TransactionDataEntryInput(wire)
         XCTAssertEqual(input.raw, e)
-        XCTAssertEqual(input.hint?.payload?["amount"], .double(49.99))
+        XCTAssertEqual(input.hint?.payload?["amount"], .double(49.99), "a lossy hint stays lossy")
         XCTAssertEqual(input.hint?.payload?["t"], .bool(true))
         XCTAssertEqual(input.hint?.payload?["n"], .null)
         // A wire entry with no raw cannot be hashed: refused.
