@@ -91,6 +91,17 @@ final class ExtensionTransactionLogStoreTests: XCTestCase {
     }
 
     /// A pruning failure leaves records beyond capacity: the host is told.
+    /// The account can change between the check and the keystore executing the write: the record is taken back out.
+    func testARecordWrittenAcrossAnAccountChangeIsTakenBackOut() async throws {
+        let ext = FakeExtensionStore()
+        final class Gate: @unchecked Sendable { var calls = 0 }
+        let gate = Gate()
+        let store = ExtensionTransactionLogStore(store: ext, writesAllowed: { gate.calls += 1; return gate.calls == 1 })   // allowed before the write, gone after
+        do { try await store.append([entry(1)]); XCTFail("must report the record as not stored") } catch is TransactionLogError {}
+        let keys = await ext.extensionEntries(namespace: ExtensionTransactionLogStore.namespace).keys
+        XCTAssertTrue(keys.isEmpty, "the record did not stay in the new account's container")
+    }
+
     func testAFailedPruneIsSurfaced() async throws {
         let ext = FakeExtensionStore()
         let store = ExtensionTransactionLogStore(store: ext, capacity: 1)

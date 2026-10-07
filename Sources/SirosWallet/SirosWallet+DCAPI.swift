@@ -82,10 +82,20 @@ extension SirosWallet {
         // uses the bare origin.
         let audience = "origin:\(origin)"
         let (encryptionJwk, encryptionThumbprint) = try dcapiResolveEncryption(request: request)
-        let scaPlan = try await dcapiTransactionPlan(
-            request: request, selection: selection, allCreds: allCreds,
-            verifier: Self.transactionVerifierLabel(trust: trustResult, fallback: origin, origin: origin)
-        )
+        // The account this request belongs to is fixed here. The consent wait is a tracked task, so a
+        // logout cancels it; and the scope is rechecked after consent and again after signing.
+        let accountGeneration = currentAccountGeneration()
+        let verifierLabel = Self.transactionVerifierLabel(trust: trustResult, fallback: origin, origin: origin)
+        // (A request without `transaction_data` takes none of this: its behaviour is unchanged.)
+        let scaPlan: ScaPlan? = request.hasTransactionData
+            ? try await trackedTransaction(flowId: "dc-api-\(UUID().uuidString)") {
+                try await self.dcapiTransactionPlan(request: request, selection: selection, allCreds: allCreds, verifier: verifierLabel)
+            }
+            : nil
+        do { if scaPlan != nil { try requireSameAccount(accountGeneration) } } catch {
+            if !(error is CancellationError) { await scaPlan?.plan.complete(signed: false) }
+            throw error
+        }
 
         let finalResponseJson: String
         do {
@@ -100,6 +110,8 @@ extension SirosWallet {
                 transactionBindings: scaPlan?.bindings ?? [:],
                 transactionKids: scaPlan?.kids ?? [:]
             )
+            // After the final signing await: nothing is returned for an ended request or another account.
+            if scaPlan != nil { try requireSameAccount(accountGeneration) }
             var vpTokenObj: [String: Any] = [:]
             for queryId in queryIdOrder {
                 vpTokenObj[queryId] = tokensByQueryId[queryId] ?? []
@@ -110,7 +122,7 @@ extension SirosWallet {
                 encryptionJwk: encryptionJwk
             )
         } catch {
-            await scaPlan?.plan.complete(signed: false)
+            if !(error is CancellationError) { await scaPlan?.plan.complete(signed: false) }
             throw error
         }
         // The user's consent is recorded now that the presentation exists.

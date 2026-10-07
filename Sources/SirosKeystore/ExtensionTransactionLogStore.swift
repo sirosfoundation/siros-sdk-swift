@@ -46,6 +46,14 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
                 failed += 1
                 continue
             }
+            // `writesAllowed` is checked before an asynchronous write that the keystore executes later,
+            // so an account change can land in between. Check again once it has run and take the record
+            // back out of a container that is no longer this store's (best effort: the removal is itself
+            // such a write; the record stays in this store's own session memory).
+            if !(writesAllowed?() ?? true) {
+                _ = try? await store.removeExtensionEntry(namespace: Self.namespace, key: entry.id)
+                failed += 1
+            }
         }
         var pruneFailures = 0
         var persistFailure: Error?

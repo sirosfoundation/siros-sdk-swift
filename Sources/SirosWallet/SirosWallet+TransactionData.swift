@@ -157,6 +157,9 @@ extension SirosWallet {
     func transactionLogStoreInstance() -> any TransactionLogStore {
         lock.lock(); defer { lock.unlock() }
         if let existing = transactionLogStoreStorage { return existing }
+        // With no account unlocked there is no container to write to, and a default store created now
+        // would be reused by whichever account unlocks next: hand out a throwaway store, uncached.
+        if keystore is ExtensionStore, !keystore.isUnlocked { return InMemoryTransactionLogStore() }
         transactionLogStoreIsDefault = true
         let created: any TransactionLogStore
         if let extensions = keystore as? ExtensionStore {
@@ -267,15 +270,14 @@ extension SirosWallet {
     /// `persistAndSyncKeystore`, which only logs it).
     func persistKeystoreOrThrow(generation: Int) async throws {
         guard keystore.isUnlocked else { throw TransactionLogError("the container is locked") }
-        try await keystorePersistMutex.withLock {
-            // The wait for the lock can span a logout and the next login: the container to export
-            // must still be the account the record was written for.
-            guard currentAccountGeneration() == generation, keystore.isUnlocked else {
-                throw TransactionLogError("the account changed before the container was exported")
-            }
-            let container = try await keystore.exportEncryptedContainer()
-            sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
-            try await syncPrivateDataToBackend()
+        try await exportAndSyncKeystore(generation: generation)
+    }
+
+    /// Throws when the operation was cancelled or the account it started under is no longer the active one.
+    func requireSameAccount(_ generation: Int) throws {
+        try Task.checkCancellation()
+        guard currentAccountGeneration() == generation else {
+            throw SirosError.wallet(message: "The account changed while the request was being handled")
         }
     }
 
@@ -340,13 +342,14 @@ extension SirosWallet {
                 let pluginId = kid.flatMap { id in keys.first(where: { $0.keyId == id })?.pluginId }
                 factorContexts[queryId] = AuthenticationFactorContext(keyStorage: properties?.keyStorage ?? [], pluginId: pluginId, keyId: kid)
             }
+            var context = TransactionDataContext(
+                verifier: verifier, requestSigned: requestSigned, locale: transactionDataLocale,
+                credentialNames: names, factorContexts: factorContexts, disclosedClaims: selection.disclosed,
+                requireEveryCredentialBound: requireEveryCredentialBound
+            )
+            context.additionalAttributes = selection.additional
             let plan = try await makeTransactionDataService().process(
-                TransactionDataRequest(entries: entries, responseMode: responseMode, credentials: credentials),
-                context: TransactionDataContext(
-                    verifier: verifier, requestSigned: requestSigned, locale: transactionDataLocale,
-                    credentialNames: names, factorContexts: factorContexts, disclosedClaims: selection.disclosed,
-                    requireEveryCredentialBound: requireEveryCredentialBound, additionalAttributes: selection.additional
-                )
+                TransactionDataRequest(entries: entries, responseMode: responseMode, credentials: credentials), context: context
             )
             // What was validated and shown must be what is signed: refuse if a
             // credential changed or went away while the user was deciding.
@@ -473,10 +476,11 @@ extension SirosWallet {
                     kid: plan.kid(for: item.queryId, fallback: item.cred.kid)
                 ))
             }
+            try Task.checkCancellation()   // after the final signing await: an ended flow gets no token and no record
             await plan.plan.complete(signed: true)
             return SignSubFlowResult(vpToken: parts.joined(separator: "\n"))
         } catch {
-            await plan.plan.complete(signed: false)
+            if !Task.isCancelled && !(error is CancellationError) { await plan.plan.complete(signed: false) }
             throw error
         }
     }

@@ -33,6 +33,18 @@ public enum IDVError: Error, Sendable {
     case verificationFailed(message: String)
     /// Network or backend error.
     case networkError(underlying: Error)
+    /// The backend refused to issue because the document's NFC chip was not
+    /// read and authenticated, which facetec-api requires for every credential
+    /// (sirosfoundation/facetec-api#65). `reason` is the backend's `nfc_*` code
+    /// and ``errorCode`` is `idv_<reason>`.
+    ///
+    /// Through ``RemoteIDVClient`` (facetec-api's `/v1/id-scan`) the reason is
+    /// always `nfc_skipped`: that path only learns whether the chip was
+    /// verified, not why it was not. facetec-api's `/process-request` flow
+    /// distinguishes `nfc_not_requested`, `nfc_device_not_capable`,
+    /// `nfc_chip_read_failed` and `nfc_not_authenticated` as well, and any
+    /// `nfc_*` code a backend sends maps here.
+    case documentChipNotVerified(reason: String, message: String)
     /// Provider-specific error.
     case providerError(code: String, message: String)
 
@@ -44,6 +56,7 @@ public enum IDVError: Error, Sendable {
         case .livenessFailed: return "idv_liveness_failed"
         case .verificationFailed: return "idv_verification_failed"
         case .networkError: return "idv_network_error"
+        case .documentChipNotVerified(let reason, _): return "idv_\(reason)"
         case .providerError(let code, _): return "idv_provider_\(code)"
         }
     }
@@ -57,6 +70,7 @@ extension IDVError: LocalizedError {
         case .livenessFailed(let message): return message
         case .verificationFailed(let message): return message
         case .networkError(let underlying): return "Network error during IDV: \(underlying.localizedDescription)"
+        case .documentChipNotVerified(_, let message): return message
         case .providerError(let code, let message): return "[\(code)] \(message)"
         }
     }

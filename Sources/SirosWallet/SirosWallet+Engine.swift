@@ -775,8 +775,12 @@ extension SirosWallet {
                             transactionKid: scaPlan?.kid(for: ref.credentialQueryId, fallback: nil)
                         ))
                     }
+                    // A signer need not observe cancellation: recheck after the FINAL signing await,
+                    // so an ended flow's token is never sent and its consent never recorded.
+                    try Task.checkCancellation()
                     } catch {
-                        await Self.shielded { await scaPlan?.plan.complete(signed: false) }
+                        // A cancelled request is not a signing failure and is not logged as one.
+                        if !Task.isCancelled && !(error is CancellationError) { await Self.shielded { await scaPlan?.plan.complete(signed: false) } }
                         throw error
                     }
                     let vpToken = vpParts.joined(separator: "\n")
