@@ -860,10 +860,41 @@ final class TransactionDataEndToEndTests: XCTestCase {
 
     // MARK: - WMP
 
-    private func wmpParams(transactionData: String? = nil, refs: String = #"[{"credential_query_id":"pay","credential_id":"1"}]"#) throws -> SignSubFlowParams {
+    private func wmpParams(nonce: String = "n-1", audience audienceOverride: String? = nil, transactionData: String? = nil, refs: String = #"[{"credential_query_id":"pay","credential_id":"1"}]"#) throws -> SignSubFlowParams {
         let td = transactionData ?? #"[{"raw":"\#(raw)","type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":\#(payload),"transaction_data_hashes_alg":["sha-256"]}]"#
-        let json = #"{"action":"sign_presentation","nonce":"n-1","audience":"\#(audience)","response_mode":"direct_post.jwt","credentials_to_include":\#(refs),"transaction_data":\#(td)}"#
+        let json = #"{"action":"sign_presentation","nonce":"\#(nonce)","audience":"\#(audienceOverride ?? audience)","response_mode":"direct_post.jwt","credentials_to_include":\#(refs),"transaction_data":\#(td)}"#
         return try JSONDecoder().decode(SignSubFlowParams.self, from: Data(json.utf8))
+    }
+
+    /// Without a replay challenge or a verifier binding nothing is signed (engine and WMP).
+    func testAnEmptyNonceOrAudienceRefusesTheTransaction() async throws {
+        for extra in [",\"nonce\":\"\"", ",\"audience\":\"\""] {
+            let f = try await fixture()
+            let sender = Sender()
+            await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage(extra: extra))
+            XCTAssertNil(sender.sent.last?.vpToken, "engine \(extra)")
+            XCTAssertEqual(f.keystore.scaCalls, 0, "engine \(extra)")
+            XCTAssertTrue(f.consent.requests.isEmpty, "refused before the user is asked: \(extra)")
+        }
+        for (nonce, aud) in [("", nil), ("n-1", Optional(""))] as [(String, String?)] {
+            let f = try await fixture()
+            do { _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams(nonce: nonce, audience: aud)); XCTFail("must refuse") }
+            catch SirosError.transactionData(let e) { XCTAssertEqual(e.reason, .invalidEntry) }
+            XCTAssertEqual(f.keystore.scaCalls, 0)
+            XCTAssertTrue(f.consent.requests.isEmpty)
+        }
+    }
+
+    /// A credential that will be presented is never listed in the consent without a name.
+    func testEveryCredentialInTheConsentHasAName() {
+        func cred(_ md: CredentialMetadata?, format: String = "dc+sd-jwt") -> StoredCredential {
+            StoredCredential(id: 9, format: format, raw: "x", metadata: md, batchId: 9, instanceId: 0)
+        }
+        XCTAssertEqual(SirosWallet.consentDisplayName(cred(CredentialMetadata(name: "Visa card", vct: "v", doctype: nil))), "Visa card")
+        XCTAssertEqual(SirosWallet.consentDisplayName(cred(CredentialMetadata(name: nil, vct: "https://v.example/t", doctype: nil))), "https://v.example/t")
+        XCTAssertEqual(SirosWallet.consentDisplayName(cred(CredentialMetadata(name: "", vct: nil, doctype: "org.iso.18013.5.1.mDL"), format: "mso_mdoc")), "org.iso.18013.5.1.mDL")
+        XCTAssertEqual(SirosWallet.consentDisplayName(cred(nil, format: "mso_mdoc")), "mso_mdoc")
+        XCTAssertEqual(SirosWallet.consentDisplayName(cred(CredentialMetadata(name: "A\u{202E}B\nC", vct: nil, doctype: nil))), "A\u{FFFD}B\u{FFFD}C", "neutralised")
     }
 
     func testWmpProducesAContractKbJwt() async throws {

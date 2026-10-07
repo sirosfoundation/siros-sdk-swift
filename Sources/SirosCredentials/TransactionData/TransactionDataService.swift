@@ -110,7 +110,6 @@ public final class TransactionDataService: @unchecked Sendable {
             return context.credentialNames[queryId] ?? request.credentials.first(where: { $0.queryId == queryId })?.vct ?? ""
         }
         let note = MetadataAuthenticationNote()
-        defer { note.emitIfNeeded() }
         do {
             let pipeline = TransactionDataPipeline(source: source, fetchTimeout: fetchTimeout)
             let validated = try await pipeline.validate(request, note: note)
@@ -135,6 +134,10 @@ public final class TransactionDataService: @unchecked Sendable {
                 return TransactionConsentAttributes(credentialName: label(credential.queryId), claims: context.disclosedClaims[credential.queryId] ?? [])
             } + context.additionalAttributes
             // Every string the user is shown must be safe, whoever supplied it.
+            // A blank verifier cannot identify who is asking: refuse before anything is shown.
+            guard !context.verifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw TransactionDataError(.invalidEntry, detail: "the verifier identity is empty")
+            }
             try TextSafety.require(context.verifier, maxLength: 200, what: "the verifier name")
             for text in attributes.flatMap({ [$0.credentialName] + $0.claims }) + [label(firstQueryId)] {
                 try TextSafety.require(text, maxLength: 200, what: "an attribute or credential name")
@@ -145,6 +148,8 @@ public final class TransactionDataService: @unchecked Sendable {
                 validated: validated, request: request, verifier: context.verifier, credentialName: label(firstQueryId),
                 requestSigned: context.requestSigned, locale: context.locale, attributes: attributes
             )
+            // The metadata was used to build what the user is about to be shown: warn once if it was unpinned.
+            note.emitIfNeeded()
             let answer = await askUser(handler, model)
             // The wallet's own task being cancelled is not the user declining.
             try Task.checkCancellation()
