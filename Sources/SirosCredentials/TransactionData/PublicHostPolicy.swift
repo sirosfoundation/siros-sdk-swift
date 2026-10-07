@@ -1,7 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
-#if canImport(Glibc)
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
 import Glibc
 #endif
 
@@ -111,7 +113,11 @@ public enum PublicHostPolicy {
             DispatchQueue.global().async {
                 var hints = addrinfo()
                 hints.ai_family = AF_UNSPEC
+                #if canImport(Darwin)
+                hints.ai_socktype = SOCK_STREAM
+                #else
                 hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+                #endif
                 var result: UnsafeMutablePointer<addrinfo>?
                 guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else {
                     continuation.resume(returning: [])
