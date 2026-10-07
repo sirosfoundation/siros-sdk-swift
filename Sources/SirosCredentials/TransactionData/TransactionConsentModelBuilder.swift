@@ -51,9 +51,11 @@ struct TransactionConsentModelBuilder: Sendable {
             for text in [ui["transaction_title"], ui["security_hint"], ui["denial_action_label"], ui["affirmative_action_label"]] {
                 try TextSafety.require(text, maxLength: 250, what: "a label")
             }
+            let typeName = TransactionDataBuiltIns.displayName(forType: entry.type)
+            try TextSafety.require(typeName, maxLength: 200, what: "the transaction type name")
             entries.append(TransactionConsentEntry(
                 title: ui["transaction_title"],
-                typeName: TransactionDataBuiltIns.displayName(forType: entry.type),
+                typeName: typeName,
                 fields: fields,
                 affirmativeLabel: try requireLabel(ui["affirmative_action_label"]),
                 denialLabel: ui["denial_action_label"],

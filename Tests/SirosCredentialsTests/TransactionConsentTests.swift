@@ -284,6 +284,34 @@ final class TransactionConsentTests: XCTestCase {
         await expectRefusal(.invalidEntry, service(source(metadata(claims: c)), handler: Handler(.yes)))
     }
 
+    // MARK: every displayed string is checked, whoever supplied it
+
+    func testVerifierCredentialAndAttributeNamesAreCheckedToo() async {
+        let unsafe = "Shop\u{202E}AB"
+        func refuse(_ ctx: TransactionDataContext, _ what: String, line: UInt = #line) async {
+            let h = Handler(.yes)
+            do { _ = try await service(source(), handler: h).process(request(), context: ctx); XCTFail(what, line: line) }
+            catch let e as TransactionDataError { XCTAssertEqual(e.reason, .invalidEntry, what, line: line) } catch { XCTFail("\(error)", line: line) }
+            XCTAssertTrue(h.seen.isEmpty, what, line: line)
+        }
+        await refuse(TransactionDataContext(verifier: unsafe, locale: "en", credentialNames: ["pay": "Visa"]), "verifier")
+        await refuse(TransactionDataContext(verifier: "v", locale: "en", credentialNames: ["pay": unsafe]), "credential name")
+        await refuse(TransactionDataContext(verifier: "v", locale: "en", credentialNames: ["pay": "Visa"], disclosedClaims: ["pay": ["given\nname"]]), "claim name")
+        await refuse(TransactionDataContext(verifier: String(repeating: "v", count: 201), locale: "en"), "over-long verifier")
+    }
+
+    func testACustomTypeNameIsChecked() async {
+        let types = #"{"https://std.example/t\u202E":{"schema":{"type":"object"},"claims":[],"ui_labels":{"affirmative_action_label":[{"lang":"en","value":"OK"}]}}}"#
+        let s = Source()
+        s.documents[vct] = #"{"vct":"\#(vct)","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":\#(types)}"#
+        let e = raw(#"{"type":"https://std.example/t\u202E","credential_ids":["pay"],"payload":{}}"#)
+        let h = Handler(.yes)
+        let svc = service(s, handler: h)
+        do { _ = try await svc.process(request([e]), context: context()); XCTFail("must refuse") }
+        catch let err as TransactionDataError { XCTAssertEqual(err.reason, .invalidEntry) } catch { XCTFail("\(error)") }
+        XCTAssertTrue(h.seen.isEmpty)
+    }
+
     // MARK: display floor for built-in types
 
     /// Whatever the metadata says, what is paid, in what currency, and to whom is shown at level 2 or higher.
@@ -631,8 +659,12 @@ final class TransactionConsentTests: XCTestCase {
 
     func testLogNeverCarriesThePayloadBeyondTheNamedFields() async throws {
         let log = InMemoryTransactionLogStore()
-        _ = try await service(source(), handler: Handler(.yes), log: log).process(request(), context: context())
-        let encoded = String(decoding: try JSONEncoder().encode(await log.entries()), as: UTF8.self)
+        let plan = try await service(source(), handler: Handler(.yes), log: log).process(request(), context: context())
+        await plan.complete(signed: true)    // the record is written only now
+        let entries = await log.entries()
+        XCTAssertEqual(entries.count, 1, "there is something to inspect")
+        let encoded = String(decoding: try JSONEncoder().encode(entries), as: UTF8.self)
+        XCTAssertTrue(encoded.contains("tx-1"), "the named fields are there")
         for secret in ["49.99", "SE1", "EUR"] { XCTAssertFalse(encoded.contains(secret), secret) }
     }
 

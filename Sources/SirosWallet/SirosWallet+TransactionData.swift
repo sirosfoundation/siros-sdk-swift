@@ -102,23 +102,31 @@ extension SirosWallet {
     /// through the hardened fetcher. With a pin the first document that hashes
     /// to it wins.
     func fetchTypeMetadata(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? {
-        func acceptable(_ text: String?) -> String? {
-            guard let text, text.utf8.count <= maxBytes else { return nil }
-            if let expectedIntegrity, !Integrity.matches(Data(text.utf8), expectedIntegrity) { return nil }
-            return text
+        // The pin is checked over the downloaded BYTES, before any decoding (decoding
+        // can drop a leading BOM, which would then hash differently).
+        func acceptable(_ data: Data?) -> String? {
+            guard let data, data.count <= maxBytes else { return nil }
+            if let expectedIntegrity, !Integrity.matches(data, expectedIntegrity) { return nil }
+            return String(data: data, encoding: .utf8)
         }
-        var components = URLComponents(string: resolvedRegistryUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/type-metadata")
-        components?.queryItems = [URLQueryItem(name: "vct", value: vct)]
-        if let registry = components?.url,
-           let data = await SecureDocumentFetcher().fetch(registry, maxBytes: maxBytes, headers: await registryHeaders(), ownBackend: true),
-           let found = acceptable(String(data: data, encoding: .utf8)) { return found }
+        if let base = URL(string: resolvedRegistryUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))),
+           var components = URLComponents(url: base.appendingPathComponent("type-metadata"), resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(name: "vct", value: vct)]
+            if let registry = components.url,
+               let found = acceptable(await SecureDocumentFetcher().fetch(registry, maxBytes: maxBytes, headers: await registryHeaders(), ownBackend: true)) {
+                return found
+            }
+        }
         guard let url = URL(string: vct), url.scheme?.lowercased() == "https", let host = url.host else { return nil }
         let path = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
         guard !path.isEmpty else { return nil }
-        let port = url.port.map { ":\($0)" } ?? ""
-        guard let wellKnown = URL(string: "https://\(host)\(port)/.well-known/vct/\(path)"),
-              let data = await transactionResourceGet(wellKnown, maxBytes) else { return nil }
-        return acceptable(String(data: data, encoding: .utf8))
+        var origin = URLComponents()
+        origin.scheme = "https"
+        origin.host = host
+        origin.port = url.port
+        guard let originUrl = origin.url else { return nil }
+        let wellKnown = originUrl.appendingPathComponent(".well-known").appendingPathComponent("vct").appendingPathComponent(path)
+        return acceptable(await transactionResourceGet(wellKnown, maxBytes))
     }
 
     /// The transaction log (EC TS12 section 5.3), newest first: one record
@@ -151,7 +159,7 @@ extension SirosWallet {
         if let extensions = keystore as? ExtensionStore {
             let generation = transactionLogGeneration
             created = ExtensionTransactionLogStore(store: extensions, persisted: { [weak self] in
-                await self?.persistAndSyncKeystore()
+                try await self?.persistKeystoreOrThrow()
             }, writesAllowed: { [weak self] in
                 guard let self else { return false }
                 self.lock.lock(); defer { self.lock.unlock() }
@@ -222,6 +230,15 @@ extension SirosWallet {
         return value
     }
 
+    /// Exports the container and syncs it, REPORTING failure (unlike
+    /// `persistAndSyncKeystore`, which only logs it).
+    func persistKeystoreOrThrow() async throws {
+        guard keystore.isUnlocked else { throw TransactionLogError("the container is locked") }
+        let container = try await keystore.exportEncryptedContainer()
+        sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
+        try await syncPrivateDataToBackend()
+    }
+
     /// Tells the host a transaction-log write did not reach durable storage.
     func reportTransactionLogFailure() {
         lock.lock(); let listener = eventListener; lock.unlock()
@@ -282,8 +299,11 @@ extension SirosWallet {
             // credential changed or went away while the user was deciding.
             let current = await credentialStore.getAll()
             for (_, cred) in selected where current.first(where: { $0.id == cred.id }) != cred {
-                await plan.complete(signed: false)
-                throw TransactionDataError(.invalidEntry, detail: "a credential changed while the transaction was being confirmed")
+                // One record, with the real reason; the caller must not log it again.
+                await plan.complete(signed: false, refusal: .invalidEntry)
+                var changed = TransactionDataError(.invalidEntry, detail: "a credential changed while the transaction was being confirmed")
+                changed.alreadyLogged = true
+                throw changed
             }
             return ScaPlan(plan: plan, kids: kids)
         } catch let error as TransactionDataError {

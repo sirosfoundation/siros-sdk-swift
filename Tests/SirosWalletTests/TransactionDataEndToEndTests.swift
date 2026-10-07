@@ -526,8 +526,23 @@ final class TransactionDataEndToEndTests: XCTestCase {
         catch SirosError.transactionData(let e) { XCTAssertEqual(e.reason, .invalidEntry) }
         XCTAssertEqual(f.keystore.scaCalls, 0)
         let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.count, 1, "one record for one attempt")
         XCTAssertEqual(log.first?.outcome, .refused)
-        XCTAssertFalse(log.contains { $0.outcome == .consented })
+        XCTAssertEqual(log.first?.reason, "invalidEntry", "the real reason, not signingFailed")
+    }
+
+    /// The integrity pin covers the downloaded BYTES: a leading BOM must not be dropped before hashing.
+    func testTheMetadataPinCoversTheDownloadedBytesIncludingABom() async throws {
+        let f = try await fixture()
+        let body = Data([0xEF, 0xBB, 0xBF]) + Data(#"{"vct":"https://issuer.example/card"}"#.utf8)
+        f.wallet.transactionResourceGet = { _, _ in body }
+        func sri(_ d: Data) -> String { "sha256-" + Data(SHA256.hash(data: d)).base64EncodedString() }
+        let withoutBom = sri(body.dropFirst(3))
+        let withBom = sri(body)
+        let rejected = await f.wallet.fetchTypeMetadata(vct: "https://issuer.example/card", expectedIntegrity: withoutBom, maxBytes: 10_000)
+        XCTAssertNil(rejected, "a pin over the BOM-less text must not accept the BOM-prefixed download")
+        let accepted = await f.wallet.fetchTypeMetadata(vct: "https://issuer.example/card", expectedIntegrity: withBom, maxBytes: 10_000)
+        XCTAssertNotNil(accepted)
     }
 
     func testConsentIsLoggedOnlyAfterSigningSucceeds() async throws {

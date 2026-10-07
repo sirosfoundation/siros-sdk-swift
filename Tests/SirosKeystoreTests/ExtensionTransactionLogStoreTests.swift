@@ -113,6 +113,53 @@ final class ExtensionTransactionLogStoreTests: XCTestCase {
         XCTAssertEqual(keys, ["e1"], "the late record never reached the container")
     }
 
+    /// A newer record whose write failed (session-only) must not push durable history out.
+    func testASessionOnlyRecordNeverEvictsDurableHistory() async throws {
+        let ext = FakeExtensionStore()
+        let store = ExtensionTransactionLogStore(store: ext, capacity: 1)
+        try await store.append([entry(1)])
+        ext.locked = true
+        do { try await store.append([entry(2)]) } catch {}       // kept in memory only
+        ext.locked = false
+        try await store.append([entry(3)])                        // capacity 1: e1 and e3 are durable, e2 is not
+        let keys = Set(await ext.extensionEntries(namespace: ExtensionTransactionLogStore.namespace).keys)
+        XCTAssertEqual(keys, ["e3"], "retention is decided from what is durable: e1 is the oldest durable record, e2 never counted")
+        let again = ExtensionTransactionLogStore(store: ext, capacity: 1)
+        let ids = await again.entries().map(\.id)
+        XCTAssertEqual(ids, ["e3"])
+    }
+
+    func testAPersistFailureIsSurfacedAndTheCallbackIsNotRunForAGoneAccount() async throws {
+        struct SyncFailed: Error {}
+        let ext = FakeExtensionStore()
+        let failing = ExtensionTransactionLogStore(store: ext, persisted: { throw SyncFailed() })
+        do { try await failing.append([entry(1)]); XCTFail() }
+        catch let e as TransactionLogError { XCTAssertTrue(e.detail.contains("could not be saved")) }
+
+        final class State: @unchecked Sendable { var open = true; var exported = 0; var checks = 0 }
+        let state = State()
+        let store = ExtensionTransactionLogStore(
+            store: FakeExtensionStore(),
+            persisted: { state.exported += 1 },
+            writesAllowed: { state.checks += 1; return state.checks <= 1 }   // allowed for the write, gone by the export
+        )
+        do { try await store.append([entry(1)]); XCTFail() } catch is TransactionLogError {}
+        XCTAssertEqual(state.exported, 0, "never exports a container that is no longer this account's")
+    }
+
+    func testPruningRechecksTheAccountBeforeEveryRemoval() async throws {
+        final class Gate: @unchecked Sendable { var calls = 0 }
+        let gate = Gate()
+        let ext = FakeExtensionStore()
+        let seed = ExtensionTransactionLogStore(store: ext)
+        try await seed.append([entry(1), entry(2), entry(3)])
+        // The account is gone by the time pruning wants to remove anything.
+        let store = ExtensionTransactionLogStore(store: ext, capacity: 1, writesAllowed: { gate.calls += 1; return gate.calls <= 1 })
+        do { try await store.append([entry(4)]); XCTFail() } catch is TransactionLogError {}
+        let keys = Set(await ext.extensionEntries(namespace: ExtensionTransactionLogStore.namespace).keys)
+        XCTAssertTrue(keys.isSuperset(of: ["e1", "e2", "e3"]), "nothing was removed from a container that is not ours: \(keys)")
+    }
+
     func testUndecodableEntriesAreIgnoredAndNeverDeleted() async throws {
         let ext = FakeExtensionStore()
         try await ext.setExtensionEntry(namespace: ExtensionTransactionLogStore.namespace, key: "junk", value: "not json")

@@ -166,5 +166,7 @@ public extension WalletEventListener {
     }
     func onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
     func onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}
-    func onTransactionLogFailure() {}
+    func onTransactionLogFailure() {
+        // No-op by default: implementers override to tell the user a record was not stored.
+    }
 }

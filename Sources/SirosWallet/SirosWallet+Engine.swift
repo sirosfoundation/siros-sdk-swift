@@ -636,12 +636,15 @@ extension SirosWallet {
                     // A transaction waits for the user. That must not hold up the
                     // engine's other requests (issuance proofs, client auth,
                     // attestation), which are handled in order on this loop.
+                    // The lock is held across creation AND registration, so the task's own
+                    // removal (it takes the same lock) can never run before it is registered.
                     let id = UUID()
-                    let task = Task { [weak self] in
+                    self.lock.lock()
+                    self.transactionTasks[id] = Task { [weak self] in
                         await self?.handleSignRequest(engine: engine, msg: msg)
                         self?.lock.lock(); self?.transactionTasks.removeValue(forKey: id); self?.lock.unlock()
                     }
-                    self.lock.lock(); self.transactionTasks[id] = task; self.lock.unlock()
+                    self.lock.unlock()
                 } else {
                     await self.handleSignRequest(engine: engine, msg: msg)
                 }
