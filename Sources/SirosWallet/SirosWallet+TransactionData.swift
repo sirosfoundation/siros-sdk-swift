@@ -53,7 +53,11 @@ final class GenerationBoundLogStore: TransactionLogStore, @unchecked Sendable {
     }
 
     func entries() async -> [TransactionLogEntry] {
-        current() == generation ? await inner.entries() : []
+        guard current() == generation else { return [] }
+        let read = await inner.entries()
+        // The account can switch while the read is suspended and the shared keystore then exposes the next
+        // account's records: hand back nothing unless it is still the account this store belongs to.
+        return current() == generation ? read : []
     }
 }
 
