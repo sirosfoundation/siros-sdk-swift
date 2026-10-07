@@ -160,9 +160,12 @@ public struct JSONSchemaValidator: Sendable {
             if Int64(length) > n { return .invalid(path: path, reason: "longer than maxLength") }
         }
         if let p = kw["pattern"] {
-            guard let pattern = p.stringValue, let regex = try? NSRegularExpression(pattern: pattern) else {
-                return .unsupported("pattern is not a usable regular expression")
+            guard let pattern = p.stringValue, RegexSafety.isSafe(pattern),
+                  let regex = try? NSRegularExpression(pattern: pattern) else {
+                return .unsupported("pattern is not a usable, bounded regular expression")
             }
+            // A bounded input too: matching cost grows with the string.
+            guard s.utf8.count <= RegexSafety.maxInputBytes else { return .invalid(path: path, reason: "too long to match a pattern") }
             let range = NSRange(s.startIndex..., in: s)
             if regex.firstMatch(in: s, range: range) == nil { return .invalid(path: path, reason: "does not match pattern") }
         }
@@ -275,5 +278,75 @@ public struct JSONSchemaValidator: Sendable {
             if outcome == .valid { return .invalid(path: path, reason: "matches a schema it must not match") }
         }
         return .valid
+    }
+}
+
+/// A conservative gate on schema `pattern`s, which come from an issuer-controlled
+/// document and run on the wallet. `NSRegularExpression` has no time limit, so
+/// patterns that can backtrack catastrophically are refused rather than run:
+/// a quantified group whose body itself contains a quantifier or an
+/// alternation (`(a+)+`, `(a|aa)*`), back-references, lookaround, and
+/// over-long patterns. Plain classes, anchors and bounded repeats pass.
+enum RegexSafety {
+    static let maxPatternLength = 256
+    static let maxInputBytes = 4096
+
+    static func isSafe(_ pattern: String) -> Bool {
+        guard pattern.utf8.count <= maxPatternLength else { return false }
+        let chars = Array(pattern)
+        // Back-references and lookaround are refused outright.
+        if pattern.contains("(?=") || pattern.contains("(?!") || pattern.contains("(?<=") || pattern.contains("(?<!") { return false }
+        var i = 0
+        var stack: [Int] = []          // start indices of open groups
+        var escaped = false
+        var inClass = false
+        func isQuantifier(at index: Int) -> Bool {
+            guard index < chars.count else { return false }
+            switch chars[index] {
+            case "+", "*": return true
+            case "{":
+                // {n,} or {n,m} with m > 1 repeats; {n} / {0,1} is bounded and harmless.
+                guard let close = chars[index...].firstIndex(of: "}") else { return false }
+                let body = String(chars[(index + 1)..<close])
+                if body.contains(",") {
+                    let upper = body.split(separator: ",", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+                    return upper.isEmpty || (Int(upper) ?? 2) > 1
+                }
+                return (Int(body) ?? 2) > 1
+            default: return false
+            }
+        }
+        while i < chars.count {
+            let c = chars[i]
+            if escaped {
+                if c.isNumber && c != "0" { return false }   // back-reference
+                escaped = false
+            } else if c == "\\" {
+                escaped = true
+            } else if inClass {
+                if c == "]" { inClass = false }
+            } else if c == "[" {
+                inClass = true
+            } else if c == "(" {
+                stack.append(i)
+            } else if c == ")" {
+                guard let start = stack.popLast() else { return false }
+                if isQuantifier(at: i + 1) {
+                    let body = chars[(start + 1)..<i]
+                    var bodyEscaped = false
+                    var bodyInClass = false
+                    for (offset, b) in body.enumerated() {
+                        let position = start + 1 + offset
+                        if bodyEscaped { bodyEscaped = false; continue }
+                        if b == "\\" { bodyEscaped = true; continue }
+                        if bodyInClass { if b == "]" { bodyInClass = false }; continue }
+                        if b == "[" { bodyInClass = true; continue }
+                        if b == "|" || b == "(" || isQuantifier(at: position) { return false }
+                    }
+                }
+            }
+            i += 1
+        }
+        return stack.isEmpty
     }
 }

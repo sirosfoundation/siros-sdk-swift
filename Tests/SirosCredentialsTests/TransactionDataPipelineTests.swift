@@ -21,7 +21,7 @@ private final class FakeSource: TransactionMetadataSource, @unchecked Sendable {
     private var _expectedIntegrities: [String?] = []
     var expectedIntegrities: [String?] { lock.lock(); defer { lock.unlock() }; return _expectedIntegrities }
 
-    func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String? {
+    func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? {
         lock.lock(); _expectedIntegrities.append(expectedIntegrity); lock.unlock()
         if delayNanos > 0 { try? await Task.sleep(nanoseconds: delayNanos) }
         return documents[vct]
@@ -233,7 +233,7 @@ final class TransactionDataPipelineTests: XCTestCase {
     /// A source that never answers and ignores cancellation must still not hold validation past its time limit.
     func testAHungNonCancellableSourceStillTimesOut() async {
         final class Hung: TransactionMetadataSource, @unchecked Sendable {
-            func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String? {
+            func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? {
                 await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
                 return nil
             }

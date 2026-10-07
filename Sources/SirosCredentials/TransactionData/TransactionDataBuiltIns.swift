@@ -18,6 +18,21 @@ public enum TransactionDataBuiltIns {
 
     public static let types: Set<String> = [paymentType, loginRiskType, accountAccessType, emandateType]
 
+    /// Payload members of a built-in type that decide what the user approves
+    /// (what is paid, to whom, what action). Whatever the attestation's
+    /// (unauthenticated) metadata says, these are never displayed below level 2.
+    public static func displayFloorPaths(forType type: String) -> [[String]] {
+        let payee = [["payee", "name"], ["payee", "id"]]
+        switch type {
+        case paymentType: return [["amount"], ["currency"]] + payee
+        case loginRiskType: return [["action"]]
+        case emandateType:
+            return [["purpose"], ["payment_payload", "amount"], ["payment_payload", "currency"],
+                    ["payment_payload", "payee", "name"], ["payment_payload", "payee", "id"]]
+        default: return []
+        }
+    }
+
     /// The payload schema of a built-in type, parsed once.
     public static func schema(forType type: String) -> JSONValue? {
         schemas[type]

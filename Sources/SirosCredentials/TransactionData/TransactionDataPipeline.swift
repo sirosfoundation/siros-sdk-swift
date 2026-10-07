@@ -89,9 +89,10 @@ public struct TransactionDataRequest: Sendable, Equatable {
 public protocol TransactionMetadataSource: Sendable {
     /// The raw SD-JWT VC Type Metadata document for `vct`. When
     /// `expectedIntegrity` is non-nil the source should prefer a document
-    /// hashing to it (see `VctmFetcher.fetchDocument`); the pipeline
-    /// re-checks the result either way.
-    func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String?
+    /// hashing to it; the pipeline re-checks the result either way. The same
+    /// size and cancellation rules as `fetchResource` apply: type metadata is
+    /// fetched from issuer-influenced locations too.
+    func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String?
     /// Fetches a document referenced by the metadata (`schema_uri`,
     /// `claims_uri`, `ui_labels_uri`). An implementation must stop reading and
     /// return `nil` once more than `maxBytes` have arrived (the limit has to
@@ -183,6 +184,8 @@ public struct TransactionDataPipeline: Sendable {
     /// Work shared by the entries of one request: type metadata and referenced
     /// documents are fetched once however many entries or credentials use them.
     private final class RunState: @unchecked Sendable {
+        let note: MetadataAuthenticationNote
+        init(note: MetadataAuthenticationNote) { self.note = note }
         var metadata: [String: JSONValue] = [:]
         var resources: [String: Data] = [:]
     }
@@ -192,18 +195,26 @@ public struct TransactionDataPipeline: Sendable {
     static let maxCredentialIdsPerEntry = 8
 
     public func validate(_ request: TransactionDataRequest) async throws -> ValidatedTransactionData {
+        let note = MetadataAuthenticationNote()
+        defer { note.emitIfNeeded() }
+        return try await validate(request, note: note)
+    }
+
+    /// As `validate(_:)`, recording unpinned metadata in `note` for the caller
+    /// to report once for the whole validation (see `TransactionDataService`).
+    func validate(_ request: TransactionDataRequest, note: MetadataAuthenticationNote) async throws -> ValidatedTransactionData {
         let outcome: Result<ValidatedTransactionData, TransactionDataError> = await withDeadline(
             requestTimeout,
             fallback: .failure(TransactionDataError(.metadataUnavailable, detail: "the request did not validate in time"))
         ) {
-            do { return .success(try await self.run(request)) }
+            do { return .success(try await self.run(request, note: note)) }
             catch let error as TransactionDataError { return .failure(error) }
             catch { return .failure(TransactionDataError(.invalidEntry, detail: "\(error)")) }
         }
         return try outcome.get()
     }
 
-    private func run(_ request: TransactionDataRequest) async throws -> ValidatedTransactionData {
+    private func run(_ request: TransactionDataRequest, note: MetadataAuthenticationNote) async throws -> ValidatedTransactionData {
         guard !request.entries.isEmpty else {
             throw TransactionDataError(.invalidEntry, detail: "transaction_data is empty")
         }
@@ -213,7 +224,7 @@ public struct TransactionDataPipeline: Sendable {
         guard let responseMode = request.responseMode, !responseMode.isEmpty else {
             throw TransactionDataError(.invalidEntry, detail: "request has no response_mode, which the KB-JWT must echo")
         }
-        let state = RunState()
+        let state = RunState(note: note)
         var validated: [ValidatedTransactionEntry] = []
         for input in request.entries {
             validated.append(try await validateEntry(input, request: request, state: state))
@@ -334,11 +345,13 @@ public struct TransactionDataPipeline: Sendable {
             throw TransactionDataError(.metadataUnavailable, detail: "credential has no vct")
         }
         let pin = credential.integrityClaims["vct#integrity"]
+        if pin == nil { state.note.noteUnpinned() }
         // Keyed by the credential's own pin too: a document accepted for one
         // credential is never handed to another that pins something else.
         let cacheKey = vct + "\u{0}" + (pin ?? "")
         if let cached = state.metadata[cacheKey]?.objectValue { return try requireSca(cached) }
-        guard let text = await bounded({ await source.typeMetadataDocument(vct: vct, expectedIntegrity: pin) }),
+        let metadataLimit = maxMetadataBytes
+        guard let text = await bounded({ await source.typeMetadataDocument(vct: vct, expectedIntegrity: pin, maxBytes: metadataLimit) }),
               text.utf8.count <= maxMetadataBytes else {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata for the credential could not be obtained")
         }
@@ -431,6 +444,7 @@ public struct TransactionDataPipeline: Sendable {
             }
             if let builtIn = TransactionDataBuiltIns.schema(forType: uri) { return builtIn }
             let pin = credential.integrityClaims["transaction_data_types['\(type)'].schema_uri#integrity"]
+            if pin == nil { state.note.noteUnpinned() }
             let limit = maxResourceBytes
             let fetched: Data?
             if let known = state.resources[uri] { fetched = known } else {
@@ -470,5 +484,31 @@ extension JSONValue {
         case .array(let a): self = .array(a.map(JSONValue.init))
         case .null_: self = .null
         }
+    }
+}
+
+extension TransactionDataCredential {
+    /// The `...#integrity` claims of an SD-JWT VC's issuer-signed payload
+    /// (name to SRI string). A claim of that name whose value is not a
+    /// non-empty string (null, object, array, number, empty) is a REFUSAL,
+    /// never "no pin": a malformed pin must not silently turn into an
+    /// unauthenticated document. An unreadable credential refuses too.
+    public static func integrityClaims(ofSdJwt raw: String) throws -> [String: String] {
+        guard let jwt = raw.split(separator: "~", omittingEmptySubsequences: false).first else {
+            throw TransactionDataError(.metadataUnavailable, detail: "credential is not an SD-JWT")
+        }
+        let parts = jwt.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, let bytes = TransactionDataHashing.base64UrlDecode(String(parts[1])),
+              let payload = (try? StrictJSON.parse(bytes))?.objectValue else {
+            throw TransactionDataError(.metadataUnavailable, detail: "credential payload cannot be read")
+        }
+        var claims: [String: String] = [:]
+        for (name, value) in payload where name.hasSuffix("#integrity") {
+            guard let text = value.stringValue, !text.isEmpty else {
+                throw TransactionDataError(.metadataUnavailable, detail: "an integrity claim is malformed")
+            }
+            claims[name] = text
+        }
+        return claims
     }
 }
