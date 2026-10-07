@@ -24,9 +24,8 @@ public struct TransactionDataContext: Sendable {
 
     public init(verifier: String, requestSigned: Bool? = nil, locale: String,
                 credentialNames: [String: String] = [:], factorContexts: [String: AuthenticationFactorContext] = [:],
-                disclosedClaims: [String: [String]] = [:], requireEveryCredentialBound: Bool = false,
-                additionalAttributes: [TransactionConsentAttributes] = []) {
-        self.additionalAttributes = additionalAttributes
+                disclosedClaims: [String: [String]] = [:], requireEveryCredentialBound: Bool = false) {
+        self.additionalAttributes = []
         self.verifier = verifier
         self.requestSigned = requestSigned
         self.locale = locale

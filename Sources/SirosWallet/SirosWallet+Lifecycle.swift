@@ -320,6 +320,12 @@ extension SirosWallet {
     // cross-file-extension-access reason as `keystore` above.
     func syncPrivateDataToBackend() async throws {
         lock.lock(); let client = apiClient; lock.unlock()
+        try await syncPrivateDataToBackend(using: client)
+    }
+
+    /// Syncs through `client`, captured by the caller when its operation STARTED, so a logout and a
+    /// new login in between can never make this write through the next account's client.
+    func syncPrivateDataToBackend(using client: BackendApiClient?) async throws {
         guard let client else { return }
         guard let containerJson = sessionStore.privateDataJwe else { return }
         do {
@@ -346,19 +352,34 @@ extension SirosWallet {
 
     func persistAndSyncKeystore() async {
         guard keystore.isUnlocked else { return }
-        let generation = currentAccountGeneration()
         do {
-            try await keystorePersistMutex.withLock {
-                // The wait can span a logout and another account's login: do not export theirs.
-                guard currentAccountGeneration() == generation, keystore.isUnlocked else { return }
-                let container = try await keystore.exportEncryptedContainer()
-                sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
-                try await syncPrivateDataToBackend()
-            }
+            try await exportAndSyncKeystore(generation: currentAccountGeneration())
         } catch {
             #if canImport(os)
             logger.error("Failed to persist keystore: \(error.localizedDescription)")
             #endif
+        }
+    }
+
+    /// Exports the container and syncs it, one operation at a time. The account scope (generation)
+    /// and the API client are captured when the operation STARTS, under the mutex; the account is
+    /// revalidated immediately after the awaited export, before anything is assigned or sent, and
+    /// the sync goes through the captured client. A logout and re-login during the export therefore
+    /// writes nothing into the next session. Residual: the sync's own network call, once started,
+    /// cannot be recalled; it carries the old account's container through the old account's client.
+    func exportAndSyncKeystore(generation: Int) async throws {
+        try await keystorePersistMutex.withLock {
+            lock.lock()
+            let client = apiClient
+            let sameAccount = transactionLogGeneration == generation
+            lock.unlock()
+            guard sameAccount, keystore.isUnlocked else { throw TransactionLogError("the account changed before the container was exported") }
+            let container = try await keystore.exportEncryptedContainer()
+            guard currentAccountGeneration() == generation, keystore.isUnlocked else {
+                throw TransactionLogError("the account changed while the container was being exported")
+            }
+            sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
+            try await syncPrivateDataToBackend(using: client)
         }
     }
 

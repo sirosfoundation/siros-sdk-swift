@@ -59,6 +59,8 @@ private final class SigningKeystore: KeystoreManager, @unchecked Sendable {
     var failSigning = false
     var keys: [KeyInfo] = [KeyInfo(keyId: "k1", algorithm: "ES256", pluginId: "r2ps")]
     private(set) var signingKids: [String?] = []
+    /// Runs inside the signing call (to cancel the caller while a signer that ignores cancellation works).
+    var duringSigning: (@Sendable () -> Void)?
     struct NotImplemented: Error {}
     struct SigningFailed: Error {}
 
@@ -86,13 +88,15 @@ private final class SigningKeystore: KeystoreManager, @unchecked Sendable {
         events?.add("sign")
         signingKids.append(kid)
         if failSigning { throw SigningFailed() }
+        defer { duringSigning?() }
         return try await adapter.signVpToken(credential: credential, disclosedClaims: disclosedClaims, nonce: nonce,
                                              audience: audience, transactionData: transactionData, kid: kid)
     }
 
     func signMdocPresentationForDCAPI(credentialBytes: Data, disclosedClaims: [String]?, nonce: String, origin: String,
                                       encryptionPublicJwkThumbprint: String?, kid: String?) async throws -> Data { throw NotImplemented() }
-    func exportEncryptedContainer() async throws -> Data { Data() }
+    var duringExport: (@Sendable () -> Void)?
+    func exportEncryptedContainer() async throws -> Data { duringExport?(); return Data() }
     func listKeys() -> [KeyInfo] { keys }
     func saveCredential(id: Int64, json: String) async throws {}
     func getCredential(id: Int64) async throws -> String? { nil }
@@ -696,6 +700,17 @@ final class TransactionDataEndToEndTests: XCTestCase {
         catch let error as TransactionLogError { XCTAssertTrue(error.detail.contains("account changed")) }
     }
 
+    /// A logout and re-login DURING the awaited export must not let the old container reach the new session.
+    func testAnAccountChangeDuringTheExportWritesNothing() async throws {
+        let f = try await fixture()
+        let generation = f.wallet.currentAccountGeneration()
+        f.wallet.sessionStore.privateDataJwe = nil
+        f.keystore.duringExport = { [weak wallet = f.wallet] in wallet?.resetDefaultTransactionLogStore() }
+        do { try await f.wallet.exportAndSyncKeystore(generation: generation); XCTFail("expected a refusal") }
+        catch let error as TransactionLogError { XCTAssertTrue(error.detail.contains("while the container was being exported")) }
+        XCTAssertNil(f.wallet.sessionStore.privateDataJwe, "the old container was not assigned to the new session")
+    }
+
     func testTheKeystorePersistMutexSerializes() async throws {
         let mutex = AsyncMutex()
         final class Probe: @unchecked Sendable {
@@ -741,6 +756,22 @@ final class TransactionDataEndToEndTests: XCTestCase {
         await task.value
         XCTAssertTrue(f.listener.errors.isEmpty, "no failure reported for a cancelled request: \(f.listener.errors)")
         XCTAssertNil(sender.sent.last?.vpToken, "nothing was signed for a cancelled request")
+    }
+
+    /// A signer that ignores cancellation still cannot get a token sent, or a consent recorded, for an ended flow.
+    func testACancellationDuringTheFinalSigningSendsNothingAndRecordsNothing() async throws {
+        let f = try await fixture()
+        final class Holder: @unchecked Sendable { var task: Task<Void, Never>? }
+        let holder = Holder()
+        f.keystore.duringSigning = { holder.task?.cancel() }
+        let sender = Sender()
+        let msg = try engineMessage(flow: "ended")
+        let task = Task { await f.wallet.handleSignRequest(engine: sender, msg: msg) }
+        holder.task = task
+        await task.value
+        XCTAssertNil(sender.sent.last?.vpToken, "no token for an ended flow")
+        let log = await f.wallet.transactionLog()
+        XCTAssertTrue(log.isEmpty, "no consent recorded for an ended flow: \(log.map(\.outcome))")
     }
 
     func testTeardownCancelsConsentFlowsInProgress() async throws {
