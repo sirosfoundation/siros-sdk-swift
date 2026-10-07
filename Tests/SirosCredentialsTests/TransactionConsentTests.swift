@@ -752,10 +752,15 @@ final class TransactionConsentTests: XCTestCase {
     }
 
     func testRefusalLoggingDoesNotDecodeWhatValidationWouldNotAccept() {
-        let huge = String(repeating: "A", count: 100_000)
-        let fields = TransactionLogFields(raw: huge)
+        // A VALID document padded past the pipeline's bound: it would decode, so only the bound stops it.
+        let padded = raw(#"{"type":"urn:eudi:sca:payment:1","payload":{"transaction_id":"x"}}"# + String(repeating: " ", count: 70_000))
+        XCTAssertGreaterThan(padded.utf8.count, 64 * 1024)
+        let okFields = TransactionLogFields(raw: raw(#"{"type":"urn:eudi:sca:payment:1","payload":{"transaction_id":"x"}}"#))
+        XCTAssertEqual(okFields.transactionId, "x", "the same document without padding is read")
+        let fields = TransactionLogFields(raw: padded)
         XCTAssertNil(fields.transactionId)
         XCTAssertNil(fields.typeName)
+        let huge = padded
         let rec = TransactionLogEntry.records(rawEntries: [huge], verifier: "v", credentialLabel: { _ in "" }, outcome: .refused, reason: "invalidEntry")
         XCTAssertEqual(rec.count, 1)
     }
