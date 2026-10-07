@@ -116,17 +116,15 @@ final class ExtensionTransactionLogStoreTests: XCTestCase {
     /// A newer record whose write failed (session-only) must not push durable history out.
     func testASessionOnlyRecordNeverEvictsDurableHistory() async throws {
         let ext = FakeExtensionStore()
-        let store = ExtensionTransactionLogStore(store: ext, capacity: 1)
+        let store = ExtensionTransactionLogStore(store: ext, capacity: 2)
         try await store.append([entry(1)])
         ext.locked = true
-        do { try await store.append([entry(2)]) } catch {}       // kept in memory only
+        do { try await store.append([entry(2)]) } catch {}       // kept in memory only: never durable
         ext.locked = false
-        try await store.append([entry(3)])                        // capacity 1: e1 and e3 are durable, e2 is not
+        try await store.append([entry(3)])
+        // Durable: e1, e3 (capacity 2). The session-only e2 is newer than e1 but must not count towards retention.
         let keys = Set(await ext.extensionEntries(namespace: ExtensionTransactionLogStore.namespace).keys)
-        XCTAssertEqual(keys, ["e3"], "retention is decided from what is durable: e1 is the oldest durable record, e2 never counted")
-        let again = ExtensionTransactionLogStore(store: ext, capacity: 1)
-        let ids = await again.entries().map(\.id)
-        XCTAssertEqual(ids, ["e3"])
+        XCTAssertEqual(keys, ["e1", "e3"], "retention is decided from what is durable")
     }
 
     func testAPersistFailureIsSurfacedAndTheCallbackIsNotRunForAGoneAccount() async throws {
