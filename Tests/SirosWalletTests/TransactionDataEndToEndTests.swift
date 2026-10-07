@@ -803,6 +803,23 @@ final class TransactionDataEndToEndTests: XCTestCase {
         await plan.plan.complete(signed: false)
     }
 
+    /// A read that straddles an account switch returns nothing rather than the next account's records.
+    func testALogReadAcrossAnAccountSwitchReturnsNothing() async {
+        final class Gen: @unchecked Sendable { let l = NSLock(); var value = 0; func bump() { l.lock(); value += 1; l.unlock() }; var now: Int { l.lock(); defer { l.unlock() }; return value } }
+        let gen = Gen()
+        struct SwitchingStore: TransactionLogStore {
+            let onRead: @Sendable () -> Void
+            func append(_ entries: [TransactionLogEntry]) async throws {}
+            func entries() async -> [TransactionLogEntry] {
+                onRead()   // the account switches during the read
+                return [TransactionLogEntry(subject: TransactionLogSubject(transactionId: "NEXT-ACCOUNT", typeName: nil), verifier: "v", credential: "c", outcome: .consented)]
+            }
+        }
+        let bound = GenerationBoundLogStore(SwitchingStore(onRead: { gen.bump() }), generation: 0, current: { gen.now })
+        let read = await bound.entries()
+        XCTAssertTrue(read.isEmpty)
+    }
+
     func testTeardownCancelsConsentFlowsInProgress() async throws {
         let f = try await fixture()
         let task = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
