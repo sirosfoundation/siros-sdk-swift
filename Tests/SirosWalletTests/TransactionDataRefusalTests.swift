@@ -116,6 +116,21 @@ final class TransactionDataRefusalTests: XCTestCase {
         XCTAssertTrue(keystore.calls.isEmpty)
     }
 
+    /// A malformed member would otherwise fail to decode and be dropped without any answer.
+    func testMalformedMembersAreRefusedOnBothTransports() async throws {
+        for bad in ["5", "[{}]", #"{"a":1}"#, #"[{"raw":"x"}]"#] {
+            let (wallet, keystore, listener) = try await makeWallet()
+            let sender = Sender()
+            await wallet.handleSignRequest(engine: sender, msg: try engineMessage(transactionData: bad))
+            XCTAssertTrue(keystore.calls.isEmpty, bad)
+            XCTAssertEqual(sender.sent.count, 1, "answered at once: \(bad)")
+            XCTAssertNil(sender.sent.first?.vpToken, bad)
+            XCTAssertTrue(listener.errors.first?.hasPrefix("invalid_transaction_data") ?? false, bad)
+            do { _ = try await wallet.handleWmpSignRequest(flowId: "f1", params: try wmpParams(transactionData: bad)); XCTFail(bad) }
+            catch let error as WmpErrorCodeProviding { XCTAssertEqual(error.wmpErrorCode, "invalid_transaction_data", bad) }
+        }
+    }
+
     func testEngineAnswersAsBeforeWithoutTransactionData() async throws {
         for member in [nil, "[]"] {
             let (wallet, keystore, listener) = try await makeWallet()

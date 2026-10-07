@@ -70,6 +70,13 @@ final class TransactionDataWireTests: XCTestCase {
         XCTAssertTrue(try engine(#","transaction_data":null"#).transactionDataMember.isExplicitNull)
         XCTAssertTrue(try engine(#","transaction_data":null"#).transactionDataMember.requestsTransactionHandling)
         XCTAssertTrue(try engine(#","transaction_data":[{"type":"t"}]"#).transactionDataMember.requestsTransactionHandling)
+        // Malformed-but-present is a rejectable state, never absence, and decoding does not throw.
+        for bad in ["5", #""text""#, "true", #"{"a":1}"#, "[{}]", #"[{"raw":"x"}]"#, "[1]", #"[{"type":5}]"#] {
+            XCTAssertTrue(try engine(#","transaction_data":\#(bad)"#).transactionDataMember.isMalformed, bad)
+            XCTAssertTrue(try engine(#","transaction_data":\#(bad)"#).transactionDataMember.requestsTransactionHandling, bad)
+            XCTAssertTrue(try wmp(#","transaction_data":\#(bad)"#).transactionDataMember.requestsTransactionHandling, bad)
+        }
+        XCTAssertFalse(try engine("").transactionDataMember.isMalformed)
         XCTAssertFalse(try wmp("").transactionDataMember.requestsTransactionHandling)
         XCTAssertTrue(try wmp(#","transaction_data":null"#).transactionDataMember.requestsTransactionHandling)
         XCTAssertFalse(try wmp(#","transaction_data":[]"#).transactionDataMember.requestsTransactionHandling)
