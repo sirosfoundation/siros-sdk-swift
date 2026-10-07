@@ -419,6 +419,14 @@ extension SirosWallet {
         return fallback
     }
 
+    /// One credential of a WMP transaction presentation, resolved before anything is signed.
+    struct WmpSigningItem {
+        let cred: StoredCredential
+        let ref: CredentialRef
+        let binding: TransactionDataBinding
+        let queryId: String
+    }
+
     /// What an orchestrated request is bound to: who is shown as asking, and the KB-JWT's replay challenge and audience.
     struct ScaRequestContext {
         let verifier: String
@@ -506,7 +514,7 @@ extension SirosWallet {
         do {
             // Resolve every reference first: nothing is signed unless all of them
             // are bound to the transaction.
-            var toSign: [(cred: StoredCredential, ref: CredentialRef, binding: TransactionDataBinding, queryId: String)] = []
+            var toSign: [WmpSigningItem] = []
             for ref in params.credentialsToInclude ?? [] {
                 guard let queryId = ref.credentialQueryId, let binding = plan.bindings[queryId],
                       let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }) else {
@@ -514,7 +522,7 @@ extension SirosWallet {
                         .invalidEntry, detail: "every credential in a WMP transaction presentation must be bound to the transaction"
                     ))
                 }
-                toSign.append((cred, ref, binding, queryId))
+                toSign.append(WmpSigningItem(cred: cred, ref: ref, binding: binding, queryId: queryId))
             }
             var parts: [String] = []
             for item in toSign {
