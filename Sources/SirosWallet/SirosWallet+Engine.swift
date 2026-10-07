@@ -436,7 +436,7 @@ extension SirosWallet {
             // skipped it entirely, so a WMP-relayed sign_presentation was
             // never checked against the trust result computed for this flow.
             try validateAudience(flowId: flowId, audience: params.audience)
-            if !(params.transactionData ?? []).isEmpty {
+            if params.transactionDataMember.requestsTransactionHandling {
                 return try await wmpTransactionPresentation(flowId: flowId, params: params)
             }
             // NOTE (pre-existing, separate gap - not addressed by this
