@@ -491,8 +491,7 @@ extension SirosWallet {
         verifier: String
     ) async throws -> ScaPlan? {
         guard request.hasTransactionData, let strings = request.transactionData else { return nil }
-        var selected: [String: StoredCredential] = [:]
-        var disclosed: [String: [String]] = [:]
+        var sca = ScaSelection()
         // A query the transaction is bound to answers with exactly one credential; an
         // unbound query may answer with several (DC API presents an array per query).
         let boundQueries = TransactionDataPipeline.boundQueryIds(rawEntries: strings)
@@ -500,27 +499,26 @@ extension SirosWallet {
             guard let cred = allCreds.first(where: { $0.id == id }) else { continue }
             let queryId = selection.matchResultByCredentialId[id]?.queryId ?? "_default"
             let claims = selection.matchResultByCredentialId[id]?.requestedClaims.compactMap(\.last) ?? []
-            if selected[queryId] != nil {
+            if sca.credentials[queryId] != nil {
                 guard !boundQueries.contains(queryId) else {
                     let refusal = TransactionDataError(.invalidEntry, detail: "more than one credential answers a query the transaction is bound to")
                     await logPreparatoryRefusal(refusal, rawEntries: strings, verifier: verifier)
                     throw SirosError.transactionData(refusal)
                 }
-                disclosed[queryId, default: []].append(contentsOf: claims.filter { !(disclosed[queryId] ?? []).contains($0) })
+                sca.additional.append(TransactionConsentAttributes(credentialName: cred.metadata?.name ?? "", claims: claims))
                 continue
             }
-            selected[queryId] = cred
-            disclosed[queryId] = claims
+            sca.credentials[queryId] = cred
+            sca.disclosed[queryId] = claims
         }
         do {
             return try await processTransactionData(
                 entries: strings.map { TransactionDataEntryInput(raw: $0) },
                 responseMode: request.responseMode,
-                selected: selected,
+                selection: sca,
                 verifier: verifier,
                 // The signed variant's JWS was verified by the parser.
-                requestSigned: request.keyMaterial != nil,
-                disclosedClaims: disclosed
+                requestSigned: request.keyMaterial != nil
             )
         } catch let error as TransactionDataError {
             throw SirosError.transactionData(error)

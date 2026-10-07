@@ -328,6 +328,8 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertNotNil(sender.sent.first?.vpToken, "one bound credential plus two for an unbound query is a valid combined presentation: \(f.listener.errors)")
         XCTAssertEqual(f.keystore.scaCalls, 1, "only the bound credential carries the transaction")
         XCTAssertEqual(f.keystore.plainCalls, 2)
+        let shown = try XCTUnwrap(f.consent.requests.first)
+        XCTAssertEqual(Set(shown.attributes.map(\.credentialName)), ["Visa card", "Other 2", "Other 3"], "every presented credential is named in the consent")
     }
 
     /// What the user is shown and what is logged is the evaluated identity, not the protocol audience.
@@ -685,6 +687,15 @@ final class TransactionDataEndToEndTests: XCTestCase {
     }
 
     /// Overlapping persists run one at a time, in order.
+    /// A persist queued for an earlier account must not export the next account's container.
+    func testAPersistForAnEarlierAccountGenerationIsRefused() async throws {
+        let f = try await fixture()
+        let stale = f.wallet.currentAccountGeneration()
+        f.wallet.resetDefaultTransactionLogStore()      // logout: the generation moves on
+        do { try await f.wallet.persistKeystoreOrThrow(generation: stale); XCTFail("expected a refusal") }
+        catch let error as TransactionLogError { XCTAssertTrue(error.detail.contains("account changed")) }
+    }
+
     func testTheKeystorePersistMutexSerializes() async throws {
         let mutex = AsyncMutex()
         final class Probe: @unchecked Sendable {

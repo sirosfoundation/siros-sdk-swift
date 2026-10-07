@@ -60,19 +60,18 @@ public final class SirosWallet: @unchecked Sendable {
     var _state: WalletState = .disconnected()
     var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
-    // EC TS12 payment SCA (`transaction_data`): state here, behaviour in
-    // `SirosWallet+TransactionDataFlag.swift`.
+    // EC TS12 payment SCA (`transaction_data`): state here, behaviour in `SirosWallet+TransactionData*.swift`.
     var transactionDataEnabledValue: Bool
     var transactionConsentHandlerStorage: (any TransactionConsentHandler)?
     var transactionLogStoreStorage: (any TransactionLogStore)?
     var authenticationFactorsProviderStorage: any AuthenticationFactorsProvider = InterimAuthenticationFactorsProvider()
-    // Enablement records per flow / WMP session, consent flows in progress, log-store bookkeeping
-    // (see `SirosWallet+TransactionData.swift`).
+    // Enablement records per flow / WMP session, consent flows in progress, log-store bookkeeping.
     var legacyFlowSnapshotQueue: [(effective: Bool, at: Date)] = []
     var legacyFlowSnapshots: [String: Bool] = [:]
     var wmpSessionSnapshot = false
     var transactionTasks: [UUID: (flowId: String, cancel: @Sendable () -> Void)] = [:]
-    var transactionLogStoreIsDefault = false, transactionLogGeneration = 0
+    var transactionLogStoreIsDefault = false
+    var transactionLogGeneration = 0
     let keystorePersistMutex = AsyncMutex()
     var transactionDataLocaleStorage: String = Locale.preferredLanguages.first ?? "en"
     var transactionDataConsentTimeout: TimeInterval = TransactionDataService.defaultConsentTimeout

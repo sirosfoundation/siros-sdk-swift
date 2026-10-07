@@ -736,7 +736,7 @@ extension SirosWallet {
                 // cannot be honoured.
                 let scaPlan = try await orchestratedTransactionPlan(
                     transactionData: msg.params.transactionDataMember, responseMode: msg.params.responseMode,
-                    refs: credsToInclude, allCreds: allCredsForTransaction, audience: audience,
+                    refs: credsToInclude, allCreds: allCredsForTransaction,
                     flowId: msg.flowId, viaWmp: false,
                     verifier: Self.transactionVerifierLabel(trust: evaluated, fallback: audience)
                 )

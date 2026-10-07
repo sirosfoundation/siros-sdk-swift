@@ -137,7 +137,8 @@ final class TransactionDataHardeningTests: XCTestCase {
         for bad in [#"{"minLength":"x"}"#, #"{"maxItems":-1}"#, #"{"required":"a"}"#, #"{"properties":[1]}"#, #"{"enum":"a"}"#, #"{"minimum":"1"}"#,
                     #"{"type":5}"#, #"{"anyOf":{}}"#, #"{"pattern":5}"#,
                     #"{"allOf":[]}"#, #"{"oneOf":[]}"#, #"{"anyOf":[5]}"#, #"{"additionalProperties":5}"#, #"{"items":5}"#, #"{"not":5}"#,
-                    #"{"properties":{"a":5}}"#, #"{"$ref":5}"#, #"{"items":[{}]}"#] {
+                    #"{"properties":{"a":5}}"#, #"{"$ref":5}"#, #"{"items":[{}]}"#,
+                    #"{"enum":[]}"#, #"{"not":{"enum":[]}}"#, #"{"type":[]}"#, #"{"not":{"type":[]}}"#] {
             guard case .unsupported = try outcome("1", bad) else { return XCTFail("\(bad) must be refused even for a number") }
             guard case .unsupported = try outcome(#""text""#, bad) else { return XCTFail(bad) }
         }

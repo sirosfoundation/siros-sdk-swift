@@ -18,10 +18,15 @@ public struct TransactionDataContext: Sendable {
     /// Whether every credential of the request must be bound to a transaction
     /// (a transport that cannot present an unbound credential, such as WMP).
     public var requireEveryCredentialBound: Bool
+    /// Further credentials presented for a query the transaction is NOT bound to (a query may answer
+    /// with several credentials): each is shown with its own name and claims.
+    public var additionalAttributes: [TransactionConsentAttributes]
 
     public init(verifier: String, requestSigned: Bool? = nil, locale: String,
                 credentialNames: [String: String] = [:], factorContexts: [String: AuthenticationFactorContext] = [:],
-                disclosedClaims: [String: [String]] = [:], requireEveryCredentialBound: Bool = false) {
+                disclosedClaims: [String: [String]] = [:], requireEveryCredentialBound: Bool = false,
+                additionalAttributes: [TransactionConsentAttributes] = []) {
+        self.additionalAttributes = additionalAttributes
         self.verifier = verifier
         self.requestSigned = requestSigned
         self.locale = locale
@@ -129,7 +134,7 @@ public final class TransactionDataService: @unchecked Sendable {
             let attributes: [TransactionConsentAttributes] = request.credentials.compactMap { credential in
                 guard boundQueryIds.contains(credential.queryId) || context.disclosedClaims[credential.queryId] != nil else { return nil }
                 return TransactionConsentAttributes(credentialName: label(credential.queryId), claims: context.disclosedClaims[credential.queryId] ?? [])
-            }
+            } + context.additionalAttributes
             // Every string the user is shown must be safe, whoever supplied it.
             try TextSafety.require(context.verifier, maxLength: 200, what: "the verifier name")
             for text in attributes.flatMap({ [$0.credentialName] + $0.claims }) + [label(firstQueryId)] {
@@ -175,6 +180,9 @@ public final class TransactionDataService: @unchecked Sendable {
                 do { try await log.append(records) } catch { onLogFailure?(error) }
             }
         } catch let error as TransactionDataError {
+            // A cancelled request (logout, flow ended) can surface as a refusal from a deadline path:
+            // it is not a refusal and must not be logged as one.
+            try Task.checkCancellation()
             let declined = error.reason == .declined
             let records = TransactionLogEntry.records(
                 rawEntries: raws, verifier: context.verifier, credentialLabel: label,

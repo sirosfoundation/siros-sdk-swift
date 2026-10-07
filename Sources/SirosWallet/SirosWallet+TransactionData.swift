@@ -121,7 +121,7 @@ extension SirosWallet {
             }
         }
         guard let url = URL(string: vct), url.scheme?.lowercased() == "https", let host = url.host else { return nil }
-        let path = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
+        let path = String(url.path.drop(while: { $0.asciiValue == 47 }))   // the leading slashes
         guard !path.isEmpty else { return nil }
         var origin = URLComponents()
         origin.scheme = "https"
@@ -162,7 +162,7 @@ extension SirosWallet {
         if let extensions = keystore as? ExtensionStore {
             let generation = transactionLogGeneration
             created = ExtensionTransactionLogStore(store: extensions, persisted: { [weak self] in
-                try await self?.persistKeystoreOrThrow()
+                try await self?.persistKeystoreOrThrow(generation: generation)
             }, writesAllowed: { [weak self] in
                 guard let self else { return false }
                 self.lock.lock(); defer { self.lock.unlock() }
@@ -265,13 +265,23 @@ extension SirosWallet {
 
     /// Exports the container and syncs it, REPORTING failure (unlike
     /// `persistAndSyncKeystore`, which only logs it).
-    func persistKeystoreOrThrow() async throws {
+    func persistKeystoreOrThrow(generation: Int) async throws {
         guard keystore.isUnlocked else { throw TransactionLogError("the container is locked") }
         try await keystorePersistMutex.withLock {
+            // The wait for the lock can span a logout and the next login: the container to export
+            // must still be the account the record was written for.
+            guard currentAccountGeneration() == generation, keystore.isUnlocked else {
+                throw TransactionLogError("the account changed before the container was exported")
+            }
             let container = try await keystore.exportEncryptedContainer()
             sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
             try await syncPrivateDataToBackend()
         }
+    }
+
+    func currentAccountGeneration() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return transactionLogGeneration
     }
 
     /// Tells the host a transaction-log write did not reach durable storage.
@@ -290,18 +300,26 @@ extension SirosWallet {
         do { try await transactionLogStoreInstance().append(records) } catch { reportTransactionLogFailure() }
     }
 
+    /// The credentials chosen to answer a request: one per query id (`credentials`, which the
+    /// transaction is validated against), the claims each discloses, and any further credentials
+    /// of a query the transaction is NOT bound to, kept apart so consent can name each of them.
+    struct ScaSelection {
+        var credentials: [String: StoredCredential] = [:]
+        var disclosed: [String: [String]] = [:]
+        var additional: [TransactionConsentAttributes] = []
+    }
+
     /// Runs the TS12 sequence for a presentation and returns the plan to sign.
-    /// `selected` maps each answering query id to the stored credential chosen
-    /// for it. Throws `SirosError.transactionData`.
+    /// Throws `SirosError.transactionData`.
     func processTransactionData(
         entries: [TransactionDataEntryInput],
         responseMode: String?,
-        selected: [String: StoredCredential],
+        selection: ScaSelection,
         verifier: String,
         requestSigned: Bool?,
-        disclosedClaims: [String: [String]] = [:],
         requireEveryCredentialBound: Bool = false
     ) async throws -> ScaPlan {
+        let selected = selection.credentials
         do {
             var credentials: [TransactionDataCredential] = []
             var names: [String: String] = [:]
@@ -326,8 +344,8 @@ extension SirosWallet {
                 TransactionDataRequest(entries: entries, responseMode: responseMode, credentials: credentials),
                 context: TransactionDataContext(
                     verifier: verifier, requestSigned: requestSigned, locale: transactionDataLocale,
-                    credentialNames: names, factorContexts: factorContexts, disclosedClaims: disclosedClaims,
-                    requireEveryCredentialBound: requireEveryCredentialBound
+                    credentialNames: names, factorContexts: factorContexts, disclosedClaims: selection.disclosed,
+                    requireEveryCredentialBound: requireEveryCredentialBound, additionalAttributes: selection.additional
                 )
             )
             // What was validated and shown must be what is signed: refuse if a
@@ -373,14 +391,10 @@ extension SirosWallet {
         responseMode: String?,
         refs: [CredentialRef]?,
         allCreds: [StoredCredential],
-        audience: String,
         flowId: String,
         viaWmp: Bool,
-        verifier verifierLabel: String? = nil
+        verifier: String
     ) async throws -> ScaPlan? {
-        // The identity shown and logged is the one trust evaluated (see `transactionVerifierLabel`);
-        // the protocol audience is only the fallback.
-        let verifier = (verifierLabel?.isEmpty == false) ? verifierLabel! : audience
         // An absent or empty member means the request carries no transaction.
         guard transactionData.requestsTransactionHandling else { return nil }
         let raws = (transactionData.entries ?? []).map { $0.raw ?? "" }
@@ -392,8 +406,7 @@ extension SirosWallet {
                 throw TransactionDataError(.disabled, detail: "transaction_data received but TS12 handling is not in effect")
             }
             // Without credentials_to_include nothing resolves and the pipeline refuses.
-            var selected: [String: StoredCredential] = [:]
-            var disclosed: [String: [String]] = [:]
+            var selection = ScaSelection()
             // Which queries are transaction-bound is decided FIRST: only those must be answered
             // by exactly one credential; an unbound query may have several.
             let boundQueries = TransactionDataPipeline.boundQueryIds(rawEntries: raws)
@@ -402,24 +415,22 @@ extension SirosWallet {
                       let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }) else {
                     throw TransactionDataError(.invalidEntry, detail: "credentials_to_include cannot be matched to DCQL queries")
                 }
-                if selected[queryId] != nil {
+                if selection.credentials[queryId] != nil {
                     guard !boundQueries.contains(queryId) else {
                         throw TransactionDataError(.invalidEntry, detail: "more than one credential answers a query the transaction is bound to")
                     }
-                    let extra = (ref.disclosedClaims ?? []).filter { !(disclosed[queryId] ?? []).contains($0) }
-                    disclosed[queryId, default: []].append(contentsOf: extra)
+                    selection.additional.append(TransactionConsentAttributes(credentialName: cred.metadata?.name ?? "", claims: ref.disclosedClaims ?? []))
                     continue
                 }
-                selected[queryId] = cred
-                disclosed[queryId] = ref.disclosedClaims ?? []
+                selection.credentials[queryId] = cred
+                selection.disclosed[queryId] = ref.disclosedClaims ?? []
             }
             return try await processTransactionData(
                 entries: entries.map(TransactionDataEntryInput.init),
                 responseMode: responseMode,
-                selected: selected,
+                selection: selection,
                 verifier: verifier,
                 requestSigned: nil,
-                disclosedClaims: disclosed,
                 requireEveryCredentialBound: viaWmp
             )
         } catch let error as TransactionDataError {
@@ -436,8 +447,8 @@ extension SirosWallet {
         let allCreds = await credentialStore.getAll()
         guard let plan = try await orchestratedTransactionPlan(
             transactionData: params.transactionDataMember, responseMode: params.responseMode,
-            refs: params.credentialsToInclude, allCreds: allCreds, audience: params.audience,
-            flowId: flowId, viaWmp: true, verifier: verifier
+            refs: params.credentialsToInclude, allCreds: allCreds,
+            flowId: flowId, viaWmp: true, verifier: verifier ?? params.audience
         ) else {
             throw SirosError.transactionData(TransactionDataError(.invalidEntry, detail: "no transaction_data"))
         }
