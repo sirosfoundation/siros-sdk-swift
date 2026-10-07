@@ -7,13 +7,17 @@ import SirosWallet
 /// Every refusal facetec-api v0.16.0 can answer with must reach the user as its
 /// own localized message, not as the backend's raw description. The errors here
 /// are the ones `FaceTecIDVProvider` produces for those codes.
+///
+/// The text is looked up through `L10n`, which does not resolve its JSON tables
+/// under every build configuration (see `UITests`), so these tests read the
+/// en/sv tables directly, like `MessageBannerTests`, instead of going through it.
 @MainActor
 final class IdvErrorMessageTests: XCTestCase {
 
     private let raw = "raw backend text"
 
-    func testEveryFacetecApiCodeHasItsOwnMessage() {
-        let errors: [(code: String, error: IDVError)] = [
+    private var errors: [(code: String, error: IDVError)] {
+        [
             ("liveness_failed", .livenessFailed(message: raw)),
             ("match_failed / document_unreadable / policy_rejected", .verificationFailed(message: raw)),
             ("session_expired", .sessionExpired(message: raw)),
@@ -26,15 +30,49 @@ final class IdvErrorMessageTests: XCTestCase {
             ("document_expired", .documentExpired(message: raw)),
             ("issuance_failed", .providerError(code: "issuance_failed", message: raw)),
             ("internal_error", .providerError(code: "internal_error", message: raw)),
+            ("cancelled", .cancelled),
+            ("unavailable", .unavailable(reason: "x")),
+            ("network_error", .networkError(underlying: URLError(.notConnectedToInternet))),
         ]
-        var seen = Set<String>()
-        for (code, error) in errors {
-            let message = WalletViewModel.idvErrorMessage(for: error)
-            XCTAssertFalse(message.hasPrefix("idv.errors."), "\(code): missing key for \(error.errorCode)")
-            XCTAssertNotEqual(message, raw, "\(code): fell through to the raw description")
-            seen.insert(message)
+    }
+
+    private func table(_ language: String) throws -> [String: Any] {
+        // SampleApp/Tests/IdvErrorMessageTests.swift -> SampleApp/Resources/i18n/<language>.json
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/i18n/\(language).json")
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    private func text(_ key: String, in table: [String: Any]) -> String? {
+        var current: Any = table
+        for segment in key.split(separator: ".") {
+            guard let next = (current as? [String: Any])?[String(segment)] else { return nil }
+            current = next
         }
-        XCTAssertEqual(seen.count, errors.count, "each error type has a distinct message")
+        return current as? String
+    }
+
+    func testEveryIdvErrorHasItsOwnKeyAndATranslation() throws {
+        let en = try table("en")
+        let sv = try table("sv")
+        var keys = Set<String>()
+        for (code, error) in errors {
+            let key = WalletViewModel.idvErrorKey(for: error)
+            keys.insert(key)
+            XCTAssertNotNil(text(key, in: en), "\(code): \(key) missing from en.json")
+            XCTAssertNotNil(text(key, in: sv), "\(code): \(key) missing from sv.json")
+        }
+        // match_failed, document_unreadable and policy_rejected share one typed
+        // error (verificationFailed), so they share a key.
+        XCTAssertEqual(keys.count, errors.count, "each error type has its own key")
+    }
+
+    func testMessageIsNeverEmpty() {
+        for (code, error) in errors {
+            XCTAssertFalse(WalletViewModel.idvErrorMessage(for: error).isEmpty, code)
+        }
     }
 
     func testUnknownCodeFallsBackToTheErrorDescription() {

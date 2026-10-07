@@ -86,18 +86,24 @@ extension WalletViewModel {
         return key
     }
 
-    /// The user-facing, localized text for an IDV failure, keyed by its
-    /// `errorCode` (`idv_nfc_skipped`, `idv_chip_untrusted`, `idv_provider_internal_error`, ...) in
-    /// `idv.errors.*`. `IDVError` is not a `SirosError`, so it needs its own
-    /// lookup. Falls back to the error's own description for a code with no
-    /// entry, e.g. one a newer facetec-api introduces.
-    static func idvErrorMessage(for error: IDVError) -> String {
+    /// The `idv.errors.*` key of the user-facing text for an IDV failure, from its
+    /// `errorCode` (`idv_nfc_skipped`, `idv_chip_untrusted`,
+    /// `idv_provider_internal_error`, ...).
+    static func idvErrorKey(for error: IDVError) -> String {
         var name = error.errorCode
         for prefix in ["idv_provider_", "idv_"] where name.hasPrefix(prefix) {
             name.removeFirst(prefix.count)
             break
         }
-        let key = "idv.errors.\(name)"
+        return "idv.errors.\(name)"
+    }
+
+    /// The user-facing, localized text for an IDV failure. `IDVError` is not a
+    /// `SirosError`, so it needs its own lookup. Falls back to the error's own
+    /// description for a code with no entry, e.g. one a newer facetec-api
+    /// introduces.
+    static func idvErrorMessage(for error: IDVError) -> String {
+        let key = idvErrorKey(for: error)
         let text = L10n.string(key)
         return text == key ? error.localizedDescription : text
     }
