@@ -544,6 +544,23 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertEqual(failLog.first?.reason, "signingFailed")
     }
 
+    func testDcApiLogsConsentOnlyOnceThePresentationExists() async throws {
+        let f = try await fixture()
+        _ = try await f.wallet.handleDCAPIRequest(rawRequestJson: dcapiRequest(transactionData: #"["\#(raw)"]"#), origin: "https://shop.example")
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.map(\.outcome), [.consented])
+    }
+
+    /// A presentation still in flight when the account changes must not write into the next account's log.
+    func testALateRecordIsNotWrittenIntoTheNextAccountsLog() async throws {
+        let f = try await fixture()
+        f.consent.whileDeciding = { [wallet = f.wallet] in wallet.resetDefaultTransactionLogStore() }   // logout during the decision
+        _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
+        let next = await f.wallet.transactionLog()
+        XCTAssertTrue(next.isEmpty, "the previous account's record did not land in the new account's log")
+        XCTAssertEqual(f.listener.logFailures, 1, "and the host is told it was not recorded")
+    }
+
     func testAUsersOwnDeclineIsNotReportedAsAnError() async throws {
         let f = try await fixture()
         f.consent.answer = false
@@ -662,6 +679,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let refs = #"[{"credential_query_id":"pay","credential_id":"1"},{"credential_query_id":"age","credential_id":"2"}]"#
         do { _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams(refs: refs)); XCTFail() } catch SirosError.transactionData {}
         XCTAssertEqual(f.keystore.scaCalls, 0, "the first credential was not signed before the later guard")
+        XCTAssertTrue(f.consent.requests.isEmpty, "refused before the user was asked, not after they consented")
     }
 
     func testWmpRefusesACombinedPresentation() async throws {
@@ -669,6 +687,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let refs = #"[{"credential_query_id":"pay","credential_id":"1"},{"credential_query_id":"age","credential_id":"2"}]"#
         do { _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams(refs: refs)); XCTFail() } catch SirosError.transactionData {}
         XCTAssertEqual(f.keystore.scaCalls, 0)
+        XCTAssertTrue(f.consent.requests.isEmpty, "refused before the user was asked, not after they consented")
     }
 
     // MARK: - DC API
