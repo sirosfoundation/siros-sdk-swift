@@ -442,14 +442,10 @@ public final class SirosWallet: @unchecked Sendable {
     public let zkProofSystemRegistry: ZkProofSystemRegistry
 
     #if os(iOS)
-    /// The one resident native ZK prover shared by every system in
-    /// `zkProofSystemRegistry` - retained here (not just handed to those
-    /// systems' initializers and otherwise forgotten) so `releaseZkProvers()`
-    /// below has something to reach. See `ZkProverResidency`'s own doc
-    /// comment for why a single resident prover, process-wide, matters at
-    /// all (a real OOM crash on a real device, in the matching Kotlin SDK,
-    /// before that type existed there).
-    private let zkProverResidency: ZkProverResidency
+    /// Retained here (not just handed to `zkProofSystemRegistry`'s systems'
+    /// initializers and otherwise forgotten) so `releaseZkProvers()` has
+    /// something to reach - see `ZkProverResidency`'s own doc comment.
+    let zkProverResidency: ZkProverResidency
     #endif
 
     /// go-wallet-backend's credential-type registry service base URL, for
@@ -852,18 +848,13 @@ public final class SirosWallet: @unchecked Sendable {
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
         #if os(iOS)
         // One residency shared by every mdoc ZK proof system constructed
-        // here, so the process holds one resident prover at a time, not
-        // one per system - see `ZkProverResidency`'s own doc comment for
-        // why (a real OOM crash on a real device, in the matching Kotlin
-        // SDK, before that type existed there).
+        // here - see `ZkProverResidency`'s own doc comment for why.
         //
-        // BbsProofSystem exists in this package (SirosCredentials) but is
-        // NOT registered here - unlike VegaProofSystem (mdoc, same
-        // residency as Longfellow), wiring it in needs a holder-state
-        // store (BbsHolderStateVault) and a WalletConfig field naming
-        // which VCTs it should handle, neither of which exists yet. This
-        // is a real, pre-existing gap (predates VegaProofSystem), left
-        // open here rather than designed as a side effect of adding Vega.
+        // BbsProofSystem (SirosCredentials) is NOT registered here - unlike
+        // VegaProofSystem, it needs a holder-state store (BbsHolderStateVault)
+        // and a WalletConfig field naming its VCTs, neither of which exists
+        // yet. A real, pre-existing gap (predates Vega), not a side effect
+        // of adding it.
         let zkProverResidency = ZkProverResidency()
         self.zkProverResidency = zkProverResidency
         self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [
@@ -1224,28 +1215,6 @@ public final class SirosWallet: @unchecked Sendable {
     // MARK: - Logout
 
     /// Disconnect, lock keystore, clear session.
-    /// Drops the resident native ZK prover (a decompressed circuit or
-    /// prover key, 100-160 MB of native memory held outside Swift's own
-    /// allocator - see `ZkProverResidency`'s doc comment) if one is
-    /// currently loaded. Mirrors the matching Kotlin SDK's
-    /// `ZkMdocPresentation.releaseProvers()`: call it when the host app
-    /// loses the foreground (e.g. from `UIApplicationDelegate
-    /// .applicationDidEnterBackground`) so this 100+ MB isn't pinned while
-    /// backgrounded - nothing else in this wallet's own lifecycle reaches
-    /// `ZkProverResidency.release()` otherwise. Also called automatically
-    /// from `endSessionLocally()`, so a logout (or a lifecycle-blocked
-    /// teardown) doesn't leave the previous account's resident prover
-    /// loaded either. A no-op on non-iOS platforms (no resident prover
-    /// exists there) and whenever nothing is currently loaded. Safe to call
-    /// from any context at any time - see `ZkProverResidency.release()`'s
-    /// own doc comment for why.
-    public func releaseZkProvers() {
-        #if os(iOS)
-        let residency = zkProverResidency
-        Task { await residency.release() }
-        #endif
-    }
-
     public func logout() {
         endSessionLocally()
         // Ending the server session too is what makes this a logout rather
