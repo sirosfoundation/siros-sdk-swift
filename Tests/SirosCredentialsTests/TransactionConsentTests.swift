@@ -1,0 +1,476 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import XCTest
+@testable import SirosCredentials
+
+private final class Source: TransactionMetadataSource, @unchecked Sendable {
+    var documents: [String: String] = [:]
+    var resources: [String: Data] = [:]
+    func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String? { documents[vct] }
+    func fetchResource(uri: String) async -> Data? { resources[uri] }
+}
+
+private final class Handler: TransactionConsentHandler, @unchecked Sendable {
+    enum Mode { case yes, no, throwing, hang }
+    var mode: Mode
+    private let lock = NSLock()
+    private var _seen: [TransactionConsentRequest] = []
+    var seen: [TransactionConsentRequest] { lock.lock(); defer { lock.unlock() }; return _seen }
+    struct Boom: Error {}
+    init(_ mode: Mode) { self.mode = mode }
+    func confirm(_ request: TransactionConsentRequest) async throws -> Bool {
+        lock.lock(); _seen.append(request); lock.unlock()
+        switch mode {
+        case .yes: return true
+        case .no: return false
+        case .throwing: throw Boom()
+        case .hang: await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in } ; return true
+        }
+    }
+}
+
+private struct FixedFactors: AuthenticationFactorsProvider {
+    var factors: [AuthenticationFactor]
+    func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor] { factors }
+}
+
+/// Display model, consent handling and logging (TS12 v1.0.1 3.1, 3.3, 5.3).
+final class TransactionConsentTests: XCTestCase {
+    private let vct = "https://pay.example/card"
+    private let twoFactors = [AuthenticationFactor(.knowledge, "other"), AuthenticationFactor(.possession, "key_in_remote_wscd")]
+
+    private func raw(_ json: String) -> String {
+        Data(json.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    private let payload = #"{"transaction_id":"tx-1","payee":{"name":"Shop AB","id":"SE1"},"currency":"EUR","amount":49.99}"#
+
+    private func paymentRaw(payload: String? = nil) -> String {
+        raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":\#(payload ?? self.payload)}"#)
+    }
+
+    private func claim(_ path: String, level: Int?, labels: [(String, String)]) -> String {
+        let display = labels.map { #"{"lang":"\#($0.0)","label":"\#($0.1)"}"# }.joined(separator: ",")
+        let vis = level.map { #","visualisation":\#($0)"# } ?? ""
+        return #"{"path":["payload",\#(path)]\#(vis),"display":[\#(display)]}"#
+    }
+
+    private func claimsJson(levelOverrides: [String: Int?] = [:], skip: Set<String> = []) -> String {
+        let all: [(String, String, Int?, [(String, String)])] = [
+            (#""amount""#, "amount", 1, [("en", "Amount"), ("sv", "Belopp")]),
+            (#""currency""#, "currency", 1, [("en", "Currency"), ("sv", "Valuta")]),
+            (#""payee","name""#, "payee.name", 2, [("en", "Payee"), ("sv", "Mottagare")]),
+            (#""payee","id""#, "payee.id", nil, [("en", "Payee ID")]),
+            (#""transaction_id""#, "transaction_id", 4, [("en", "Transaction ID")]),
+        ]
+        let items = all.filter { !skip.contains($0.1) }.map { claim($0.0, level: levelOverrides[$0.1] ?? $0.2, labels: $0.3) }
+        return "[" + items.joined(separator: ",") + "]"
+    }
+
+    private func withClaim(_ claims: String, _ extra: String) -> String {
+        String(claims.dropLast(1)) + "," + extra + "]"
+    }
+
+    private func firstLog(_ log: InMemoryTransactionLogStore) async throws -> TransactionLogEntry {
+        let all = await log.entries()
+        return try XCTUnwrap(all.first)
+    }
+
+    private let labels = #"""
+    {"affirmative_action_label":[{"lang":"en","value":"Confirm Payment"},{"lang":"sv","value":"Bekräfta betalning"}],
+     "denial_action_label":[{"lang":"en","value":"Cancel Payment"}],
+     "transaction_title":[{"lang":"en","value":"Confirm your payment"}],
+     "security_hint":[{"lang":"en","value":"Never confirm a payment you did not start."}]}
+    """#
+
+    private func metadata(claims: String? = nil, labels: String? = nil, extra: String = "", noEntry: Bool = false) -> String {
+        let entry = #"{"schema":"urn:eudi:sca:payment:1","claims":\#(claims ?? claimsJson()),"ui_labels":\#(labels ?? self.labels)\#(extra)}"#
+        let types = noEntry ? "{}" : #"{"urn:eudi:sca:payment:1":\#(entry)}"#
+        return #"{"vct":"\#(vct)","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":\#(types)}"#
+    }
+
+    private func source(_ doc: String? = nil) -> Source {
+        let s = Source()
+        s.documents[vct] = doc ?? metadata()
+        return s
+    }
+
+    private func credential(pins: [String: String] = [:]) -> TransactionDataCredential {
+        TransactionDataCredential(queryId: "pay", format: "dc+sd-jwt", vct: vct, integrityClaims: pins)
+    }
+
+    private func request(_ raws: [String]? = nil) -> TransactionDataRequest {
+        TransactionDataRequest(entries: (raws ?? [paymentRaw()]).map { TransactionDataEntryInput(raw: $0) }, responseMode: "dc_api", credentials: [credential()])
+    }
+
+    private func service(
+        _ source: Source, handler: Handler?, factors: [AuthenticationFactor]? = nil, log: InMemoryTransactionLogStore = InMemoryTransactionLogStore(),
+        timeout: TimeInterval = 5
+    ) -> TransactionDataService {
+        TransactionDataService(
+            source: source, consentHandler: handler, factorsProvider: FixedFactors(factors: factors ?? twoFactors),
+            log: log, consentTimeout: timeout, fetchTimeout: 2
+        )
+    }
+
+    private func context(signed: Bool? = nil, locale: String = "en-GB") -> TransactionDataContext {
+        TransactionDataContext(verifier: "Shop AB (verified)", requestSigned: signed, locale: locale, credentialNames: ["pay": "Visa card"])
+    }
+
+    private func expectRefusal(_ reason: TransactionDataError.Reason, _ svc: TransactionDataService, _ req: TransactionDataRequest? = nil,
+                               file: StaticString = #filePath, line: UInt = #line) async {
+        do {
+            _ = try await svc.process(req ?? request(), context: context())
+            XCTFail("expected \(reason)", file: file, line: line)
+        } catch let e as TransactionDataError {
+            XCTAssertEqual(e.reason, reason, e.description, file: file, line: line)
+        } catch { XCTFail("\(error)", file: file, line: line) }
+    }
+
+    // MARK: - Model
+
+    func testModelCarriesLabelsLevelsAndOrder() async throws {
+        let h = Handler(.yes)
+        _ = try await service(source(), handler: h).process(request(), context: context(signed: false))
+        let model = try XCTUnwrap(h.seen.first)
+        XCTAssertEqual(model.verifier, "Shop AB (verified)")
+        XCTAssertEqual(model.credentialName, "Visa card")
+        XCTAssertEqual(model.requestSigned, false)
+        XCTAssertEqual(model.locale, "en-GB")
+        let e = try XCTUnwrap(model.entries.first)
+        XCTAssertEqual(e.typeName, "Payment Confirmation")
+        XCTAssertEqual(e.title, "Confirm your payment")
+        XCTAssertEqual(e.affirmativeLabel, "Confirm Payment")
+        XCTAssertEqual(e.denialLabel, "Cancel Payment")
+        XCTAssertEqual(e.securityHint, "Never confirm a payment you did not start.")
+        // level 1 (claim order), level 2, default level 3 (no visualisation set), level 4
+        XCTAssertEqual(e.fields.map(\.label), ["Amount", "Currency", "Payee", "Payee ID", "Transaction ID"])
+        XCTAssertEqual(e.fields.map(\.level), [1, 1, 2, 3, 4])
+        XCTAssertEqual(e.fields.first?.value, "49.99")
+        XCTAssertEqual(e.fields.first?.path, ["amount"])
+        XCTAssertEqual(e.fields.first(where: { $0.label == "Payee" })?.path, ["payee", "name"])
+    }
+
+    func testUnsignedFlagIsNilWhenUnknown() async throws {
+        let h = Handler(.yes)
+        _ = try await service(source(), handler: h).process(request(), context: context(signed: nil))
+        XCTAssertNil(h.seen.first?.requestSigned)
+    }
+
+    func testLocaleSelection() async throws {
+        for (locale, amount, affirmative) in [("sv-SE", "Belopp", "Bekräfta betalning"), ("sv", "Belopp", "Bekräfta betalning"),
+                                              ("en_US", "Amount", "Confirm Payment"), ("fr", "Amount", "Confirm Payment")] {
+            let h = Handler(.yes)
+            _ = try await service(source(), handler: h).process(request(), context: context(locale: locale))
+            let e = try XCTUnwrap(h.seen.first?.entries.first)
+            XCTAssertEqual(e.fields.first?.label, amount, locale)
+            XCTAssertEqual(e.affirmativeLabel, affirmative, locale)
+        }
+    }
+
+    func testEnglishIsTheFallbackBeforeTheFirstOfferedLanguage() async throws {
+        let l = #"{"affirmative_action_label":[{"lang":"de","value":"Bestätigen"},{"lang":"en","value":"Confirm"}]}"#
+        let h = Handler(.yes)
+        _ = try await service(source(metadata(labels: l)), handler: h).process(request(), context: context(locale: "fr"))
+        XCTAssertEqual(h.seen.first?.entries.first?.affirmativeLabel, "Confirm")
+        let h2 = Handler(.yes)
+        let onlyDe = #"{"affirmative_action_label":[{"lang":"de","value":"Bestätigen"},{"lang":"nl","value":"Bevestig"}]}"#
+        _ = try await service(source(metadata(labels: onlyDe)), handler: h2).process(request(), context: context(locale: "fr"))
+        XCTAssertEqual(h2.seen.first?.entries.first?.affirmativeLabel, "Bestätigen", "the first offered when nothing matches")
+    }
+
+    func testFieldsAreOrderedByLevelNotByMetadataOrder() async throws {
+        // Metadata lists level 4, 3, 2, 1 in that order.
+        let c = "[" + [
+            claim(#""transaction_id""#, level: 4, labels: [("en", "Transaction ID")]),
+            claim(#""payee","id""#, level: nil, labels: [("en", "Payee ID")]),
+            claim(#""payee","name""#, level: 2, labels: [("en", "Payee")]),
+            claim(#""currency""#, level: 1, labels: [("en", "Currency")]),
+            claim(#""amount""#, level: 1, labels: [("en", "Amount")]),
+        ].joined(separator: ",") + "]"
+        let h = Handler(.yes)
+        _ = try await service(source(metadata(claims: c)), handler: h).process(request(), context: context())
+        let fields = try XCTUnwrap(h.seen.first?.entries.first?.fields)
+        XCTAssertEqual(fields.map(\.level), [1, 1, 2, 3, 4])
+        XCTAssertEqual(fields.map(\.label), ["Currency", "Amount", "Payee", "Payee ID", "Transaction ID"], "claim order within a level")
+    }
+
+    func testOversizedReferencedDocumentRefuses() async {
+        let entry = #"{"schema":"urn:eudi:sca:payment:1","claims_uri":"https://pay.example/c.json","ui_labels":\#(labels)}"#
+        let doc = #"{"vct":"\#(vct)","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":{"urn:eudi:sca:payment:1":\#(entry)}}"#
+        let s = source(doc)
+        let padded = String(claimsJson().dropLast(1)) + String(repeating: " ", count: 300 * 1024) + "]"
+        s.resources["https://pay.example/c.json"] = Data(padded.utf8)
+        await expectRefusal(.metadataUnavailable, service(s, handler: Handler(.yes)))
+    }
+
+    func testCommonLabelsOnlyWhenEveryEntryAgrees() {
+        func entry(_ yes: String, _ no: String?) -> TransactionConsentEntry {
+            TransactionConsentEntry(title: nil, typeName: "t", fields: [], affirmativeLabel: yes, denialLabel: no, securityHint: nil)
+        }
+        func request(_ entries: [TransactionConsentEntry]) -> TransactionConsentRequest {
+            TransactionConsentRequest(verifier: "v", credentialName: "c", entries: entries, requestSigned: nil, locale: "en")
+        }
+        let same = request([entry("Pay", "Cancel"), entry("Pay", "Cancel")])
+        XCTAssertEqual(same.commonAffirmativeLabel, "Pay")
+        XCTAssertEqual(same.commonDenialLabel, "Cancel")
+        let mixed = request([entry("Pay", "Cancel"), entry("Log in", "Cancel")])
+        XCTAssertNil(mixed.commonAffirmativeLabel, "one button must not consent to differently worded transactions under the first one's label")
+        XCTAssertEqual(mixed.commonDenialLabel, "Cancel")
+        XCTAssertNil(request([entry("Pay", "No"), entry("Pay", nil)]).commonDenialLabel)
+        XCTAssertNil(request([]).commonAffirmativeLabel)
+    }
+
+    func testDecimalsAreShownExactlyAsSent() async throws {
+        let h = Handler(.yes)
+        let p = paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":0.10000000000000001}"#)
+        _ = try await service(source(), handler: h).process(request([p]), context: context())
+        XCTAssertEqual(h.seen.first?.entries.first?.fields.first?.value, "0.10000000000000001")
+        let trailing = paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":10.50}"#)
+        let h2 = Handler(.yes)
+        _ = try await service(source(), handler: h2).process(request([trailing]), context: context())
+        XCTAssertEqual(h2.seen.first?.entries.first?.fields.first?.value, "10.50")
+    }
+
+    func testAThrowingFactorsProviderIsARefusalAndIsLogged() async throws {
+        struct Boom: Error {}
+        struct Throwing: AuthenticationFactorsProvider {
+            func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor] { throw Boom() }
+        }
+        let log = InMemoryTransactionLogStore()
+        let svc = TransactionDataService(source: source(), consentHandler: Handler(.yes), factorsProvider: Throwing(), log: log, consentTimeout: 5, fetchTimeout: 2)
+        await expectRefusal(.insufficientAuthenticationFactors, svc)
+        let entry = try await firstLog(log)
+        XCTAssertEqual(entry.reason, "insufficientAuthenticationFactors")
+    }
+
+    func testOptionalLabelsAreAbsentWhenNotProvided() async throws {
+        let h = Handler(.yes)
+        let l = #"{"affirmative_action_label":[{"lang":"en","value":"OK"}]}"#
+        _ = try await service(source(metadata(labels: l)), handler: h).process(request(), context: context())
+        let e = try XCTUnwrap(h.seen.first?.entries.first)
+        XCTAssertNil(e.title)
+        XCTAssertNil(e.denialLabel)
+        XCTAssertNil(e.securityHint, "no hint is shown unless the attestation provides one")
+    }
+
+    func testMissingRequiredLabelRefuses() async {
+        await expectRefusal(.metadataUnavailable, service(source(metadata(labels: #"{"denial_action_label":[{"lang":"en","value":"No"}]}"#)), handler: Handler(.yes)))
+        await expectRefusal(.metadataUnavailable, service(source(metadata(labels: #"{"affirmative_action_label":[]}"#)), handler: Handler(.yes)))
+    }
+
+    func testOverlongLabelsRefuse() async {
+        let long = String(repeating: "x", count: 31)
+        let l = #"{"affirmative_action_label":[{"lang":"en","value":"\#(long)"}]}"#
+        await expectRefusal(.metadataUnavailable, service(source(metadata(labels: l)), handler: Handler(.yes)))
+        let hint = String(repeating: "h", count: 251)
+        let l2 = #"{"affirmative_action_label":[{"lang":"en","value":"OK"}],"security_hint":[{"lang":"en","value":"\#(hint)"}]}"#
+        await expectRefusal(.metadataUnavailable, service(source(metadata(labels: l2)), handler: Handler(.yes)))
+    }
+
+    func testParameterWithoutALocalisedNameRefuses() async {
+        await expectRefusal(.metadataUnavailable, service(source(metadata(claims: claimsJson(skip: ["amount"]))), handler: Handler(.yes)))
+        // A claim with metadata but no display at all, at a level that must be shown.
+        let noDisplay = withClaim(claimsJson(skip: ["currency"]), #"{"path":["payload","currency"],"visualisation":1}"#)
+        await expectRefusal(.metadataUnavailable, service(source(metadata(claims: noDisplay)), handler: Handler(.yes)))
+    }
+
+    func testLevelFourParameterWithoutNameMayBeLeftOut() async throws {
+        let c = withClaim(claimsJson(skip: ["transaction_id"]), #"{"path":["payload","transaction_id"],"visualisation":4}"#)
+        let h = Handler(.yes)
+        _ = try await service(source(metadata(claims: c)), handler: h).process(request(), context: context())
+        XCTAssertFalse(try XCTUnwrap(h.seen.first?.entries.first).fields.contains { $0.path == ["transaction_id"] })
+    }
+
+    func testInvalidVisualisationRefuses() async {
+        await expectRefusal(.metadataUnavailable, service(source(metadata(claims: claimsJson(levelOverrides: ["amount": 5]))), handler: Handler(.yes)))
+    }
+
+    func testAttestationWithoutEntryForTheTypeCannotBeDisplayed() async {
+        await expectRefusal(.metadataUnavailable, service(source(metadata(noEntry: true)), handler: Handler(.yes)))
+    }
+
+    func testClaimsAndLabelsByUriWithIntegrity() async throws {
+        let claims = claimsJson()
+        let sri = { (t: String) in "sha256-" + Data(self.sha256(Data(t.utf8))).base64EncodedString() }
+        let entry = #"{"schema":"urn:eudi:sca:payment:1","claims_uri":"https://pay.example/c.json","ui_labels_uri":"https://pay.example/l.json"}"#
+        let doc = #"{"vct":"\#(vct)","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":{"urn:eudi:sca:payment:1":\#(entry)}}"#
+        let s = source(doc)
+        s.resources["https://pay.example/c.json"] = Data(claims.utf8)
+        s.resources["https://pay.example/l.json"] = Data(labels.utf8)
+        let pins = [
+            "transaction_data_types['urn:eudi:sca:payment:1'].claims_uri#integrity": sri(claims),
+            "transaction_data_types['urn:eudi:sca:payment:1'].ui_labels_uri#integrity": sri(labels),
+        ]
+        var req = request()
+        req.credentials = [credential(pins: pins)]
+        let h = Handler(.yes)
+        _ = try await service(s, handler: h).process(req, context: context())
+        XCTAssertEqual(h.seen.first?.entries.first?.affirmativeLabel, "Confirm Payment")
+        // Tampered labels no longer match the pin.
+        s.resources["https://pay.example/l.json"] = Data(labels.replacingOccurrences(of: "Confirm Payment", with: "Send all your money").utf8)
+        await expectRefusal(.metadataUnavailable, service(s, handler: Handler(.yes)), req)
+        // Unreachable resource refuses.
+        s.resources["https://pay.example/c.json"] = nil
+        await expectRefusal(.metadataUnavailable, service(s, handler: Handler(.yes)), req)
+    }
+
+    func testClaimsBothInlineAndByUriRefuses() async {
+        let doc = metadata(extra: #","claims_uri":"https://pay.example/c.json""#)
+        await expectRefusal(.metadataUnavailable, service(source(doc), handler: Handler(.yes)))
+    }
+
+    func testNumbersAreShownExactly() async throws {
+        let h = Handler(.yes)
+        let big = paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":1000000}"#)
+        _ = try await service(source(), handler: h).process(request([big]), context: context())
+        XCTAssertEqual(h.seen.first?.entries.first?.fields.first?.value, "1000000")
+        let exp = paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":1e21}"#)
+        await expectRefusal(.invalidEntry, service(source(), handler: Handler(.yes)), request([exp]))
+    }
+
+    // MARK: - Consent
+
+    func testNoHandlerRefusesAndIsLogged() async throws {
+        let log = InMemoryTransactionLogStore()
+        await expectRefusal(.noConsentHandler, service(source(), handler: nil, log: log))
+        let e = try await firstLog(log)
+        XCTAssertEqual(e.outcome, .refused)
+        XCTAssertEqual(e.reason, "noConsentHandler")
+    }
+
+    func testDeclineThrowAndTimeoutAreAllDeclinedNeverConsent() async throws {
+        for mode in [Handler.Mode.no, .throwing, .hang] {
+            let log = InMemoryTransactionLogStore()
+            let started = Date()
+            await expectRefusal(.declined, service(source(), handler: Handler(mode), log: log, timeout: 0.3))
+            XCTAssertLessThan(Date().timeIntervalSince(started), 3, "\(mode) must not hang the flow")
+            let entry = try await firstLog(log)
+            XCTAssertEqual(entry.outcome, .declined, "\(mode)")
+            XCTAssertNil(entry.reason)
+        }
+    }
+
+    func testConsentYieldsBindingsAndLogEntry() async throws {
+        let log = InMemoryTransactionLogStore()
+        let r = request()
+        let bindings = try await service(source(), handler: Handler(.yes), log: log).process(r, context: context())
+        let b = try XCTUnwrap(bindings["pay"])
+        XCTAssertEqual(b.rawEntries, [r.entries[0].raw])
+        XCTAssertEqual(b.factors, twoFactors)
+        let entry = try await firstLog(log)
+        XCTAssertEqual(entry.outcome, .consented)
+        XCTAssertEqual(entry.transactionId, "tx-1")
+        XCTAssertEqual(entry.typeName, "Payment Confirmation")
+        XCTAssertEqual(entry.entities, ["payee": "Shop AB"])
+        XCTAssertEqual(entry.verifier, "Shop AB (verified)")
+        XCTAssertEqual(entry.credential, "Visa card")
+    }
+
+    func testHandlerIsNotAskedWhenValidationFails() async {
+        let h = Handler(.yes)
+        await expectRefusal(.schemaViolation, service(source(), handler: h), request([paymentRaw(payload: #"{"transaction_id":"t"}"#)]))
+        XCTAssertTrue(h.seen.isEmpty, "the user is never asked to consent to a request that is refused")
+    }
+
+    func testInsufficientFactorsRefuseAfterConsentAndAreLogged() async throws {
+        let log = InMemoryTransactionLogStore()
+        let svc = service(source(), handler: Handler(.yes), factors: [AuthenticationFactor(.possession, "key_in_remote_wscd")], log: log)
+        await expectRefusal(.insufficientAuthenticationFactors, svc)
+        let entry = try await firstLog(log)
+        XCTAssertEqual(entry.reason, "insufficientAuthenticationFactors")
+    }
+
+    func testRefusalOfAMalformedEntryIsStillLogged() async throws {
+        let log = InMemoryTransactionLogStore()
+        await expectRefusal(.invalidEntry, service(source(), handler: Handler(.yes), log: log), request(["!!!"]))
+        let e = try await firstLog(log)
+        XCTAssertEqual(e.outcome, .refused)
+        XCTAssertNil(e.transactionId)
+    }
+
+    func testLogNeverCarriesThePayloadBeyondTheNamedFields() async throws {
+        let log = InMemoryTransactionLogStore()
+        _ = try await service(source(), handler: Handler(.yes), log: log).process(request(), context: context())
+        let encoded = String(decoding: try JSONEncoder().encode(await log.entries()), as: UTF8.self)
+        for secret in ["49.99", "SE1", "EUR"] { XCTAssertFalse(encoded.contains(secret), secret) }
+    }
+
+    // MARK: - Log entries per TS12 5.3
+
+    func testLogEntitiesPerTransactionType() {
+        func fields(_ json: String) -> TransactionLogFields { TransactionLogFields(raw: raw(json)) }
+        let pay = fields(#"{"type":"urn:eudi:sca:payment:1","payload":{"transaction_id":"a","payee":{"name":"P"},"pisp":{"legal_name":"PISP Ltd"}}}"#)
+        XCTAssertEqual(pay.entities, ["payee": "P", "pisp": "PISP Ltd"])
+        XCTAssertEqual(pay.typeName, "Payment Confirmation")
+        let login = fields(#"{"type":"urn:eudi:sca:login_risk_transaction:1","payload":{"transaction_id":"a","service":"Bank"}}"#)
+        XCTAssertEqual(login.entities, ["service": "Bank"])
+        XCTAssertEqual(login.typeName, "Login, Risk-based Authentication")
+        let access = fields(#"{"type":"urn:eudi:sca:account_access:1","payload":{"transaction_id":"a","aisp":{"legal_name":"AISP"}}}"#)
+        XCTAssertEqual(access.entities, ["aisp": "AISP"])
+        XCTAssertEqual(access.typeName, "Payment Account Information Access")
+        let mandate = fields(#"{"type":"urn:eudi:sca:emandate:1","payload":{"transaction_id":"a","payment_payload":{"payee":{"name":"M"},"pisp":{"legal_name":"X"}}}}"#)
+        XCTAssertEqual(mandate.entities, ["payee": "M", "pisp": "X"])
+        XCTAssertEqual(mandate.typeName, "E-mandate")
+        let custom = fields(#"{"type":"https://x.example/t","payload":{"transaction_id":"a","payee":{"name":"hidden"}}}"#)
+        XCTAssertEqual(custom.entities, [:])
+        XCTAssertEqual(custom.typeName, "https://x.example/t")
+        XCTAssertEqual(custom.transactionId, "a")
+    }
+
+    func testInMemoryLogIsBoundedAndNewestFirst() async {
+        let log = InMemoryTransactionLogStore(capacity: 3)
+        for i in 0..<5 {
+            await log.append([TransactionLogEntry(id: "\(i)", timestamp: Int64(i), subject: TransactionLogSubject(transactionId: "\(i)", typeName: nil), verifier: "v", credential: "c", outcome: .consented)])
+        }
+        let ids = await log.entries().map(\.id)
+        XCTAssertEqual(ids, ["4", "3", "2"])
+    }
+
+    // MARK: - Factors provider
+
+    func testInterimProviderDerivesOnlyJustifiablePossession() async throws {
+        let p = InterimAuthenticationFactorsProvider()
+        let remote = try await p.factors(for: AuthenticationFactorContext(keyStorage: ["remote_hsm"]))
+        XCTAssertEqual(remote, [AuthenticationFactor(.possession, "key_in_remote_wscd")])
+        let r2ps = try await p.factors(for: AuthenticationFactorContext(keyStorage: ["hardware"], pluginId: "r2ps"))
+        XCTAssertEqual(r2ps, [AuthenticationFactor(.possession, "key_in_remote_wscd")])
+        let fido = try await p.factors(for: AuthenticationFactorContext(keyStorage: ["hardware"], pluginId: "fido2"))
+        XCTAssertEqual(fido, [AuthenticationFactor(.possession, "key_in_local_external_wscd")])
+        for context in [AuthenticationFactorContext(keyStorage: ["software"], pluginId: "softkey"),
+                        AuthenticationFactorContext(keyStorage: ["hardware"]),
+                        AuthenticationFactorContext(keyStorage: ["trusted_execution"]), AuthenticationFactorContext()] {
+            let none = try await p.factors(for: context)
+            XCTAssertTrue(none.isEmpty, "\(context)")
+        }
+    }
+
+    func testInterimProviderAloneCannotSatisfySca() async throws {
+        let p = InterimAuthenticationFactorsProvider()
+        let f = try await p.factors(for: AuthenticationFactorContext(keyStorage: ["remote_hsm"]))
+        XCTAssertLessThan(Set(f.map(\.category)).count, 2)
+    }
+
+    func testHostSuppliedVerificationIsAddedWithoutDuplicates() async throws {
+        let p = InterimAuthenticationFactorsProvider { _ in
+            [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.inherence, "face_device")]
+        }
+        let f = try await p.factors(for: AuthenticationFactorContext(keyStorage: ["remote_hsm"]))
+        XCTAssertEqual(f, [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.inherence, "face_device")])
+    }
+
+    private func sha256(_ data: Data) -> [UInt8] {
+        #if canImport(CryptoKit)
+        return Array(CryptoKit.SHA256.hash(data: data))
+        #else
+        return Array(Crypto.SHA256.hash(data: data))
+        #endif
+    }
+}
+
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif

@@ -64,12 +64,42 @@ public final class SirosWallet: @unchecked Sendable {
 
     var transactionDataEnabledValue: Bool
 
-    /// Whether the host app has registered a consent handler able to show a
-    /// transaction to the user. No handler API exists yet (it arrives with the
-    /// consent/log/factors change), so this is `false` and TS12 handling can
-    /// never be effectively enabled: the wallet declares nothing and the DC
-    /// API path refuses. Internal so tests can exercise the declaration logic.
-    var transactionConsentHandlerRegistered: Bool = false
+    var transactionConsentHandlerStorage: (any TransactionConsentHandler)?
+    var transactionLogStoreStorage: (any TransactionLogStore)?
+    var authenticationFactorsProviderStorage: any AuthenticationFactorsProvider = InterimAuthenticationFactorsProvider()
+    /// What the flag and handler were when each flow (legacy) or the WMP
+    /// session started: a flow in progress finishes under the setting it
+    /// started with. See `SirosWallet+TransactionData.swift`.
+    var legacyFlowSnapshotQueue: [Bool] = []
+    var legacyFlowSnapshots: [String: Bool] = [:]
+    var wmpSessionSnapshot = false
+    var transactionLogStoreIsDefault = false
+    /// How documents referenced by SCA type metadata are fetched (tests replace it).
+    var transactionResourceGet: @Sendable (URL) async -> Data? = SirosWallet.unauthenticatedResourceGet
+    /// Preferred language for transaction labels (BCP 47).
+    public var transactionDataLocale: String = Locale.preferredLanguages.first ?? "en"
+    /// How long to wait for the app's consent answer before treating it as declined.
+    var transactionDataConsentTimeout: TimeInterval = 120
+
+    /// The consent handler that shows a transaction to the user (EC TS12
+    /// section 3.3). Without one the wallet cannot show the transaction, so
+    /// TS12 handling behaves as disabled: nothing is declared and requests
+    /// carrying `transaction_data` are refused.
+    public var transactionConsentHandler: (any TransactionConsentHandler)? {
+        get { lock.lock(); defer { lock.unlock() }; return transactionConsentHandlerStorage }
+        set { lock.lock(); transactionConsentHandlerStorage = newValue; lock.unlock() }
+    }
+
+    /// Whether a consent handler is registered.
+    var transactionConsentHandlerRegistered: Bool { transactionConsentHandler != nil }
+
+    /// Supplies the authentication factors applied for a presentation (TS12
+    /// `amr`). The default is conservative and cannot satisfy SCA on its own;
+    /// see ``InterimAuthenticationFactorsProvider``.
+    public var authenticationFactorsProvider: any AuthenticationFactorsProvider {
+        get { lock.lock(); defer { lock.unlock() }; return authenticationFactorsProviderStorage }
+        set { lock.lock(); authenticationFactorsProviderStorage = newValue; lock.unlock() }
+    }
 
     /// Runtime switch for EC TS12 payment-SCA `transaction_data` handling.
     /// Default `false` (`WalletConfig.transactionDataEnabled`). Readable and
@@ -87,7 +117,7 @@ public final class SirosWallet: @unchecked Sendable {
     /// so it behaves as disabled.
     var transactionDataEffectivelyEnabled: Bool {
         lock.lock(); defer { lock.unlock() }
-        return transactionDataEnabledValue && transactionConsentHandlerRegistered
+        return transactionDataEnabledValue && transactionConsentHandlerStorage != nil
     }
 
     /// `flow_start.features` for a flow started now (legacy engine).
@@ -441,6 +471,9 @@ public final class SirosWallet: @unchecked Sendable {
     // `vct#integrity` can be driven without the network. Assigned only in
     // `init` otherwise.
     var vctmFetcher: VctmFetcher
+    /// The shared type-metadata HTTP GET (see `makeTypeMetadataHttpGet`); also
+    /// used to fetch documents an SCA attestation's metadata references.
+    let typeMetadataHttpGet: @Sendable (String) async -> String?
     let mddlSchemaFetcher: MddlSchemaFetcher
     // Not `private`: `SirosWallet+Passkey.swift` reads it for the login PRF
     // candidates - same cross-file-extension-access reason as `keystore`.
@@ -811,6 +844,7 @@ public final class SirosWallet: @unchecked Sendable {
             sessionStore: sessionStore
         )
         self.vctmFetcher = VctmFetcher(httpGet: typeMetadataGet)
+        self.typeMetadataHttpGet = typeMetadataGet
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
         #if os(iOS)
@@ -1207,6 +1241,7 @@ public final class SirosWallet: @unchecked Sendable {
         if let peer { Task { try? await peer.close() } }
         cancelEngineTasks()
         keystore.lock()
+        resetDefaultTransactionLogStore()
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()

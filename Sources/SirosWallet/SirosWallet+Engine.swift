@@ -142,9 +142,10 @@ extension SirosWallet {
         ))
         peer.use(profile)
         // Offered per session: a flag flip applies from the next session.
+        let offerTransactionData = snapshotWmpSessionEnablement()
         try await peer.connect(
             authToken: appToken,
-            capabilitiesOffered: transactionDataWmpCapabilities
+            capabilitiesOffered: TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: offerTransactionData)
         )
         lock.lock(); wmpPeer = peer; lock.unlock()
 
@@ -430,15 +431,14 @@ extension SirosWallet {
             return SignSubFlowResult(proofs: proofs)
 
         case "sign_presentation":
-            // EC TS12 is not processed yet (it needs the pipeline of a later
-            // change): refuse before anything else rather than answer without
-            // the hashes and without showing the user the transaction.
-            try Self.refuseTransactionData(params.transactionDataMember)
             // Same defense-in-depth audience check as the legacy engine
             // transport's handleSignRequest - this transport previously
             // skipped it entirely, so a WMP-relayed sign_presentation was
             // never checked against the trust result computed for this flow.
             try validateAudience(flowId: flowId, audience: params.audience)
+            if !(params.transactionData ?? []).isEmpty {
+                return try await wmpTransactionPresentation(flowId: flowId, params: params)
+            }
             // NOTE (pre-existing, separate gap - not addressed by this
             // change): unlike the legacy engine transport's
             // SignRequestParams, WMP's SignSubFlowParams carries no
@@ -799,7 +799,6 @@ extension SirosWallet {
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
             case "sign_presentation":
-                try Self.refuseTransactionData(msg.params.transactionDataMember)
                 let nonce = msg.params.nonce ?? ""
                 let audience = msg.params.audience ?? ""
                 let credsToInclude = msg.params.credentialsToInclude
@@ -807,8 +806,18 @@ extension SirosWallet {
                 // Validate audience matches trusted verifier identity
                 try validateAudience(flowId: msg.flowId, audience: audience)
 
+                let allCredsForTransaction = await credentialStore.getAll()
+                // Empty for every request without `transaction_data`; refuses
+                // before anything is signed when the request carries it but
+                // cannot be honoured.
+                let transactionBindings = try await orchestratedTransactionBindings(
+                    transactionData: msg.params.transactionData, responseMode: msg.params.responseMode,
+                    refs: credsToInclude, allCreds: allCredsForTransaction, audience: audience,
+                    flowId: msg.flowId, viaWmp: false
+                )
+
                 if let credsToInclude, !credsToInclude.isEmpty {
-                    let allCreds = await credentialStore.getAll()
+                    let allCreds = allCredsForTransaction
                     // Cached by handleCredentialSelection ("credential_selection"
                     // step - the real, live path for redirect-flow/haip-vp://
                     // presentations) or handleMatchRequest (legacy match_request
@@ -833,7 +842,8 @@ extension SirosWallet {
                             matchResult: matchResult,
                             nonce: nonce,
                             audience: audience,
-                            msg: msg
+                            msg: msg,
+                            transactionData: ref.credentialQueryId.flatMap { transactionBindings[$0] }
                         ))
                     }
                     let vpToken = vpParts.joined(separator: "\n")
@@ -895,24 +905,15 @@ extension SirosWallet {
             #endif
             if case SirosError.transactionData(let refusal) = error {
                 // Answer at once rather than leave the engine waiting out its
-                // sign timeout (an empty response makes it fail the flow).
+                // sign timeout; an empty response makes it fail the flow. The
+                // engine protocol has no field for `invalid_transaction_data`
+                // / `access_denied`, so the code reaches the app in the message.
                 engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
-                // Verifier error code first, so the app can act on it.
                 reportSignFailure(flowId: msg.flowId, message: "\(refusal.verifierErrorCode): \(refusal.userFacingDescription)")
             } else {
                 reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
             }
         }
-    }
-
-    /// Refuses a presentation request that carries `transaction_data`: this
-    /// SDK cannot process it yet, and answering without the transaction hashes
-    /// (and without the user seeing the transaction) is never acceptable.
-    static func refuseTransactionData(_ member: TransactionDataMember) throws {
-        guard member.requestsTransactionHandling else { return }
-        throw SirosError.transactionData(TransactionDataError(
-            .disabled, detail: "sign_presentation carries transaction_data and TS12 handling is not in effect"
-        ))
     }
 
     /// Builds a single credential's VP-token part - ZK-wrapped mdoc, plain
@@ -932,8 +933,13 @@ extension SirosWallet {
         matchResult: CredentialMatcher.MatchResult?,
         nonce: String,
         audience: String,
-        msg: SignRequestMessage
+        msg: SignRequestMessage,
+        transactionData: TransactionDataBinding? = nil
     ) async throws -> String {
+        if transactionData != nil, cred.format == "mso_mdoc" || matchResult?.format.map(CredentialUtils.isZkpFormat) == true {
+            // The pipeline refuses non-SD-JWT credentials before this point.
+            throw SirosError.transactionData(TransactionDataError(.unsupportedFormat))
+        }
         if let format = matchResult?.format, CredentialUtils.isZkpFormat(format) {
             // ZK-wrapped mDoc presentation - see handleDCAPIRequest's
             // identical branch, which this mirrors for the WS-engine/
@@ -1025,6 +1031,16 @@ extension SirosWallet {
                 .replacingOccurrences(of: "=", with: "")
         } else {
             // SD-JWT VP token with KB-JWT
+            if let transactionData {
+                return try await keystore.signVpToken(
+                    credential: cred.raw,
+                    disclosedClaims: ref.disclosedClaims,
+                    nonce: nonce,
+                    audience: audience,
+                    transactionData: transactionData,
+                    kid: cred.kid
+                )
+            }
             return try await keystore.signVpToken(
                 credential: cred.raw,
                 disclosedClaims: ref.disclosedClaims,

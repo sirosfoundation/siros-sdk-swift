@@ -74,6 +74,7 @@ extension SirosWallet {
         // credentials are still signable. A successful login() unlocks it
         // again as part of its normal path.
         keystore.lock()
+        resetDefaultTransactionLogStore()
         // The teardown above awaits the WMP peer's shutdown, and the caller
         // may have logged out or destroyed the wallet in the meantime. Logging
         // back in then would resurrect a session the user explicitly ended -

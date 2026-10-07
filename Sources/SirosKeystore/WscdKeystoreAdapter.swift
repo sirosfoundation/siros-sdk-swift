@@ -509,7 +509,7 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         Task.detached { [signer, box] in
             let signerKeys = (try? await signer.listKeys()) ?? []
             box.pointee = signerKeys.map {
-                KeyInfo(keyId: $0.keyId, algorithm: $0.algorithm)
+                KeyInfo(keyId: $0.keyId, algorithm: $0.algorithm, pluginId: $0.pluginId)
             }
             semaphore.signal()
         }

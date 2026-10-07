@@ -55,14 +55,21 @@ extension SirosWallet {
     public func handleDCAPIRequest(rawRequestJson: String, origin: String) async throws -> DCAPIPresentationResult {
         let request = try DCAPIRequestParser.parse(rawRequestJson)
         // EC TS12: a request carrying `transaction_data` must never be
-        // answered as if it did not. The pipeline that can honour it is not
-        // implemented yet, so refuse before anything is matched or signed
-        // (OpenID4VP error `invalid_transaction_data`).
+        // answered as if it did not. Unless TS12 handling is in effect (flag
+        // on and a consent handler registered) it is refused before anything
+        // is matched or signed (OpenID4VP error `invalid_transaction_data`).
         if request.hasTransactionData {
-            throw SirosError.transactionData(TransactionDataError(
-                .disabled,
-                detail: "DC API request carries transaction_data and this wallet cannot process it"
-            ))
+            guard transactionDataEffectivelyEnabled else {
+                throw SirosError.transactionData(TransactionDataError(
+                    .disabled,
+                    detail: "DC API request carries transaction_data and TS12 handling is not in effect"
+                ))
+            }
+            guard let strings = request.transactionData else {
+                throw SirosError.transactionData(TransactionDataError(
+                    .invalidEntry, detail: "transaction_data is not an array of strings"
+                ))
+            }
         }
         let trustResult = try await resolveDCAPITrust(request: request, origin: origin)
 
@@ -76,6 +83,10 @@ extension SirosWallet {
         // uses the bare origin.
         let audience = "origin:\(origin)"
         let (encryptionJwk, encryptionThumbprint) = try dcapiResolveEncryption(request: request)
+        let transactionBindings = try await dcapiTransactionBindings(
+            request: request, selection: selection, allCreds: allCreds,
+            verifier: trustResult.entityName ?? origin
+        )
 
         let (tokensByQueryId, queryIdOrder) = try await dcapiSignTokens(
             selectedIds: selectedIds,
@@ -84,7 +95,8 @@ extension SirosWallet {
             origin: origin,
             audience: audience,
             request: request,
-            encryptionThumbprint: encryptionThumbprint
+            encryptionThumbprint: encryptionThumbprint,
+            transactionBindings: transactionBindings
         )
         var vpTokenObj: [String: Any] = [:]
         for queryId in queryIdOrder {
@@ -302,7 +314,8 @@ extension SirosWallet {
         origin: String,
         audience: String,
         request: DCAPIRequest,
-        encryptionThumbprint: String?
+        encryptionThumbprint: String?,
+        transactionBindings: [String: TransactionDataBinding] = [:]
     ) async throws -> (tokensByQueryId: [String: [String]], queryIdOrder: [String]) {
         // Per OpenID4VP 1.0 (#response_parameters), vp_token's value for each
         // DCQL query id MUST be a JSON array of one or more Presentations -
@@ -331,7 +344,8 @@ extension SirosWallet {
                 origin: origin,
                 audience: audience,
                 request: request,
-                encryptionThumbprint: encryptionThumbprint
+                encryptionThumbprint: encryptionThumbprint,
+                transactionData: transactionBindings[queryId]
             )
 
             if tokensByQueryId[queryId] == nil {
@@ -353,8 +367,13 @@ extension SirosWallet {
         origin: String,
         audience: String,
         request: DCAPIRequest,
-        encryptionThumbprint: String?
+        encryptionThumbprint: String?,
+        transactionData: TransactionDataBinding? = nil
     ) async throws -> String {
+        if transactionData != nil, cred.format == "mso_mdoc" || matchResult?.format.map(CredentialUtils.isZkpFormat) == true {
+            // The pipeline refuses non-SD-JWT credentials before this point.
+            throw SirosError.transactionData(TransactionDataError(.unsupportedFormat))
+        }
         if let format = matchResult?.format, CredentialUtils.isZkpFormat(format) {
             // ZK-wrapped mDoc presentation - see the shared
             // `buildZkPresentationToken` helper's doc comment.
@@ -432,6 +451,16 @@ extension SirosWallet {
             )
             return Self.b64UrlEncode(deviceResponse)
         } else {
+            if let transactionData {
+                return try await keystore.signVpToken(
+                    credential: cred.raw,
+                    disclosedClaims: disclosedClaims,
+                    nonce: request.nonce,
+                    audience: audience,
+                    transactionData: transactionData,
+                    kid: cred.kid
+                )
+            }
             return try await keystore.signVpToken(
                 credential: cred.raw,
                 disclosedClaims: disclosedClaims,
@@ -439,6 +468,41 @@ extension SirosWallet {
                 audience: audience,
                 kid: cred.kid
             )
+        }
+    }
+
+    /// The TS12 bindings by DCQL query id for a DC API request carrying
+    /// `transaction_data`; empty when it carries none. Runs the whole TS12
+    /// sequence (validation, consent, factors, logging) before anything is signed.
+    private func dcapiTransactionBindings(
+        request: DCAPIRequest,
+        selection: DCAPISelection,
+        allCreds: [StoredCredential],
+        verifier: String
+    ) async throws -> [String: TransactionDataBinding] {
+        guard request.hasTransactionData, let strings = request.transactionData else { return [:] }
+        var selected: [String: StoredCredential] = [:]
+        for id in selection.selectedIds {
+            guard let cred = allCreds.first(where: { $0.id == id }) else { continue }
+            let queryId = selection.matchResultByCredentialId[id]?.queryId ?? "_default"
+            guard selected[queryId] == nil else {
+                throw SirosError.transactionData(TransactionDataError(
+                    .invalidEntry, detail: "more than one credential answers a query a transaction may be bound to"
+                ))
+            }
+            selected[queryId] = cred
+        }
+        do {
+            return try await processTransactionData(
+                entries: strings.map { TransactionDataEntryInput(raw: $0) },
+                responseMode: request.responseMode,
+                selected: selected,
+                verifier: verifier,
+                // The signed variant's JWS was verified by the parser.
+                requestSigned: request.keyMaterial != nil
+            )
+        } catch let error as TransactionDataError {
+            throw SirosError.transactionData(error)
         }
     }
 
