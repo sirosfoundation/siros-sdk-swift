@@ -267,6 +267,23 @@ final class TransactionDataPipelineTests: XCTestCase {
         _ = try await TransactionDataPipeline(source: s).validate(request([.init(raw: e)], credentials: ok))
     }
 
+    /// A hint that differs from raw only beyond binary floating point is still a disagreement.
+    func testAHintThatDiffersOnlyInTheLastDigitsIsRefused() async throws {
+        let rawEntry = raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":0.10000000000000001}}"#)
+        let sameDouble = TransactionDataHint(type: payment, credentialIds: ["pay"], payload: TransactionDataEntryInput(
+            TransactionData(type: payment, credentialIds: ["pay"], payload: .object_([
+                "transaction_id": .string("t"), "payee": .object_(["name": .string("S"), "id": .string("1")]), "currency": .string("EUR"), "amount": .double(0.1),
+            ]))).hint?.payload)
+        await expectRefusal(.inconsistentWithOrchestrator, request([.init(raw: rawEntry, hint: sameDouble)]))
+        // The honest hint (the same number) is accepted.
+        let honestRaw = raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":49.99}}"#)
+        let honest = TransactionDataEntryInput(TransactionData(type: payment, credentialIds: ["pay"], payload: .object_([
+            "transaction_id": .string("t"), "payee": .object_(["name": .string("S"), "id": .string("1")]), "currency": .string("EUR"), "amount": .double(49.99),
+        ])))
+        let ok = TransactionDataEntryInput(raw: honestRaw, hint: honest.hint)
+        _ = try await TransactionDataPipeline(source: source()).validate(request([ok]))
+    }
+
     func testHintNumbersAreComparedExactly() async {
         let big = raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":9007199254740993}}"#)
         let hint = TransactionDataHint(type: payment, credentialIds: ["pay"],
@@ -477,7 +494,7 @@ final class TransactionDataPipelineTests: XCTestCase {
         ))
         let input = TransactionDataEntryInput(wire)
         XCTAssertEqual(input.raw, e)
-        XCTAssertEqual(input.hint?.payload?["amount"], .double(49.99), "a lossy hint stays lossy")
+        XCTAssertEqual(input.hint?.payload?["amount"], .decimal("49.99"), "a hint number is kept as its decimal text")
         XCTAssertEqual(input.hint?.payload?["t"], .bool(true))
         XCTAssertEqual(input.hint?.payload?["n"], .null)
         // A wire entry with no raw cannot be hashed: refused.
