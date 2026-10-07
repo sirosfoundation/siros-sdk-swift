@@ -96,10 +96,12 @@ public final class FaceTecIDVProvider: @unchecked Sendable, IdentityVerification
 
     public var name: String { "FaceTec" }
 
-    /// Whether a FaceTec 10 SDK is linked and a device key identifier is set.
+    /// Whether a FaceTec 10 SDK is linked, a device key identifier is set and,
+    /// with ``FaceTecIDVConfig/requireNfc``, the device can read NFC: the same
+    /// conditions ``startVerification(presentingViewController:)`` checks first.
     public func isAvailable() async -> Bool {
         #if canImport(FaceTecSDK) && canImport(UIKit)
-        return !config.deviceKeyIdentifier.isEmpty
+        return !config.deviceKeyIdentifier.isEmpty && (!config.requireNfc || Self.isNFCReadingAvailable)
         #else
         return false
         #endif
