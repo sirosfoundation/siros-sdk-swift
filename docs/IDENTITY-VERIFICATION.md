@@ -20,6 +20,26 @@ The FaceTec iOS SDK is distributed privately, so this package does not depend
 on it: link the xcframework into your app. Without it `isAvailable()` is
 `false` and `startVerification` throws `IDVError.unavailable`.
 
+### How the xcframework is picked up
+
+The provider's FaceTec code is behind `#if canImport(FaceTecSDK)`, evaluated
+while Xcode compiles the `SirosWallet` package target. Link
+`FaceTecSDK.xcframework` (production: from SIROS's private repositories; the
+wallet-ios-wrapper carries the development build) to the **host app target**
+and build with Xcode / `xcodebuild`: the framework is then on the package
+target's search path and the provider is compiled in. Nothing in
+`Package.swift` is needed, and none is possible while the SDK is distributed
+privately.
+
+Verified on Xcode 26.6 with a minimal app target that depends on this package
+as a local package and embeds `FaceTecSDKForDevelopment.xcframework`
+(iOS Simulator build): the compiled `FaceTecIDVProvider` object references
+`FaceTecSDK` symbols; the same app without the xcframework has none and the
+provider reports itself unavailable. To check your own integration, build
+the app and run `nm` on `FaceTecIDVProvider.o` in the build's intermediates,
+looking for `FaceTecSDK` symbols. A bare `swift build` of this package never
+has the framework, so it always builds the unavailable variant.
+
 ## What facetec-api expects of a client
 
 Checked against facetec-api v0.16.0.
