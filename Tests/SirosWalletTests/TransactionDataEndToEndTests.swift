@@ -794,6 +794,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let stored = await f.store.getAll()
         let pay = try XCTUnwrap(stored.first)
         let mdoc = StoredCredential(id: 7, format: "mso_mdoc", raw: "not-an-sd-jwt", metadata: CredentialMetadata(name: nil, vct: nil, doctype: "org.iso.18013.5.1.mDL"), batchId: 7, instanceId: 0)
+        await f.store.save(mdoc)       // presented credentials must exist in the store (the post-consent recheck compares them)
         var selection = SirosWallet.ScaSelection()
         selection.credentials = ["pay": pay, "other": mdoc]
         let plan = try await f.wallet.processTransactionData(
@@ -835,6 +836,29 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let log = await f.wallet.transactionLog()
         XCTAssertEqual(log.count, 1, "one refusal record per request: \(log.map(\.reason))")
         XCTAssertEqual(log.first?.outcome, .refused)
+    }
+
+    /// A further credential of an unbound query that is deleted or replaced during consent refuses the transaction too.
+    func testAnExtraPresentedCredentialIsRecheckedAfterConsent() async throws {
+        let f = try await fixture()
+        let stored = await f.store.getAll()
+        let pay = try XCTUnwrap(stored.first)
+        let extra = StoredCredential(id: 8, format: "dc+sd-jwt", raw: pay.raw, metadata: pay.metadata, batchId: 8, instanceId: 0)
+        await f.store.save(extra)
+        f.consent.whileDeciding = { await f.store.delete(8) }      // deleted while the user decides
+        var selection = SirosWallet.ScaSelection()
+        selection.credentials = ["pay": pay]
+        selection.extraCredentials = [extra]
+        do {
+            _ = try await f.wallet.processTransactionData(
+                entries: [TransactionDataEntryInput(raw: raw)], responseMode: "direct_post.jwt", selection: selection, verifier: "Shop", requestSigned: nil
+            )
+            XCTFail("expected a refusal")
+        } catch let error as TransactionDataError {
+            XCTAssertEqual(error.reason, .invalidEntry)
+        } catch SirosError.transactionData(let error) {
+            XCTAssertEqual(error.reason, .invalidEntry)
+        }
     }
 
     func testTeardownCancelsConsentFlowsInProgress() async throws {
