@@ -80,6 +80,9 @@ public final class SecureDocumentFetcher: @unchecked Sendable {
         } else {
             guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
         }
+        // A resolver that ignores cancellation can return after the deadline released the caller: do not
+        // go on to open a connection for a request nobody is waiting for any more.
+        guard !Task.isCancelled else { return nil }
         let config = Self.makeConfiguration(timeout: timeout)
         configure?(config)
         let delegate = FetchDelegate(maxBytes: maxBytes)

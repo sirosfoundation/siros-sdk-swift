@@ -107,6 +107,19 @@ final class JSONSchemaValidatorTests: XCTestCase {
         guard case .invalid = try check("9007199254740993", #"{"enum":[9007199254740992]}"#) else { return XCTFail("exact enum") }
     }
 
+    /// RFC 6901: a `~` not followed by 0 or 1 is a malformed pointer, unsupported even under `not`.
+    func testMalformedJsonPointerTokensAreUnsupported() throws {
+        // The $defs keys are the literal malformed tokens, so a lenient resolver WOULD find them.
+        for token in ["a~", "a~2b", "~x"] {
+            for schema in [##"{"$defs":{"\##(token)":{"type":"string"}},"$ref":"#/$defs/\##(token)"}"##,
+                           ##"{"$defs":{"\##(token)":{"type":"string"}},"not":{"$ref":"#/$defs/\##(token)"}}"##] {
+                guard case .unsupported = try check(#""text""#, schema) else { return XCTFail("\(schema)") }
+            }
+        }
+        let ok = ##"{"$defs":{"a/b":{"type":"string"},"a~b":{"type":"string"}},"properties":{"x":{"$ref":"#/$defs/a~1b"},"y":{"$ref":"#/$defs/a~0b"}}}"##
+        XCTAssertEqual(try check(#"{"x":"s","y":"t"}"#, ok), .valid)
+    }
+
     /// An undecidable integer/bound check is refused, and a `not` cannot turn it into acceptance.
     func testUndecidableNumberChecksAreUnsupportedNotInvalid() throws {
         let big = "1234567890123456789012345678901234567890"

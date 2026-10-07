@@ -245,4 +245,20 @@ final class PublicHostPolicyTests: XCTestCase {
         let unresolvable = await PublicHostPolicy.isAllowed(host: "nope.example.org", resolver: { _ in [] })
         XCTAssertFalse(unresolvable)
     }
+
+    /// A resolver that ignores cancellation and answers after the deadline must not lead to a request.
+    func testALateResolverAnswerStartsNoRequest() async throws {
+        final class Started: @unchecked Sendable { let l = NSLock(); var n = 0; func bump() { l.lock(); n += 1; l.unlock() } }
+        let started = Started()
+        let slow: PublicHostPolicy.Resolver = { _ in
+            await withCheckedContinuation { (c: CheckedContinuation<[String], Never>) in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) { c.resume(returning: ["93.184.216.34"]) }
+            }
+        }
+        let fetcher = SecureDocumentFetcher(timeout: 0.1, resolver: slow, configure: { _ in started.bump() })
+        let result = await fetcher.fetch(URL(string: "https://docs.example.com/a.json")!, maxBytes: 100)
+        XCTAssertNil(result)
+        try await Task.sleep(nanoseconds: 800_000_000)
+        XCTAssertEqual(started.n, 0, "no session was configured, so no request started")
+    }
 }

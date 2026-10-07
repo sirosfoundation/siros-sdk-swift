@@ -151,6 +151,11 @@ public struct JSONSchemaValidator: Sendable {
         if r.hasPrefix("#/") {
             var node = root
             for raw in r.dropFirst(2).split(separator: "/", omittingEmptySubsequences: false) {
+                // RFC 6901: `~` must be followed by `0` or `1`; anything else is a malformed pointer.
+                let chars = Array(raw)
+                for (i, c) in chars.enumerated() where c == "~" {
+                    guard i + 1 < chars.count, chars[i + 1] == "0" || chars[i + 1] == "1" else { return nil }
+                }
                 let token = String(raw).replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~")
                 guard let next = node[token] else { return nil }
                 node = next

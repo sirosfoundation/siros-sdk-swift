@@ -220,11 +220,43 @@ final class TransactionDataHardeningTests: XCTestCase {
             // ... including when the validation is then refused.
             _ = try? await TransactionDataPipeline(source: source()).validate(request([entry(#"{"transaction_id":"TX-9f3c-UNIQUE"}"#)]))
         }
-        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines.count, 1, "the refused validation warns about nothing")
         let all = lines.joined(separator: "\n") + TransactionDataDiagnostics.unpinnedMessage
         for secret in ["secret-bank", "platinum", "TX-9f3c", "Zebra", "DE-UNIQUE", "98765", "EUR", "https://", entry(), "urn:eudi", "pay"] {
             XCTAssertFalse(all.contains(secret), "leaked: \(secret)")
         }
+    }
+
+    /// A validation that ends in a refusal used no metadata to a decision: no warning.
+    func testARefusedValidationDoesNotWarn() async {
+        let lines = await captureWarnings {
+            _ = try? await TransactionDataPipeline(source: source()).validate(request([raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":{}}"#)]))
+        }
+        XCTAssertTrue(lines.isEmpty, "\(lines)")
+    }
+
+    /// Two credentials whose (vct, pin) pairs would collide in a delimiter-joined key must not share a cached document.
+    func testTheMetadataCacheKeyCannotCollideAcrossVctAndPin() async {
+        let vctA = "a\u{0}b"
+        let docA = #"{"vct":"a\u0000b","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":{"urn:eudi:sca:payment:1":{"schema":"urn:eudi:sca:payment:1"}}}"#
+        final class ByVct: TransactionMetadataSource, @unchecked Sendable {
+            let docs: [String: String]
+            init(_ d: [String: String]) { docs = d }
+            func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? { docs[vct] }
+            func fetchResource(uri: String, maxBytes: Int) async -> Data? { nil }
+        }
+        let src = ByVct([vctA: docA, "a": docA])   // "a" returns a document that is for ANOTHER vct
+        let req = TransactionDataRequest(
+            entries: [TransactionDataEntryInput(raw: raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["one","two"],"payload":\#(payload)}"#))],
+            responseMode: "dc_api",
+            credentials: [
+                TransactionDataCredential(queryId: "one", format: "dc+sd-jwt", vct: vctA, integrityClaims: [:]),
+                TransactionDataCredential(queryId: "two", format: "dc+sd-jwt", vct: "a", integrityClaims: ["vct#integrity": "b\u{0}"]),
+            ]
+        )
+        do { _ = try await TransactionDataPipeline(source: src).validate(req); XCTFail("the second credential must be checked on its own, not served from the first's cache entry") }
+        catch let e as TransactionDataError { XCTAssertEqual(e.reason, .metadataUnavailable) }
+        catch { XCTFail("\(error)") }
     }
 
     func testAnUnpinnedReferencedDocumentAlsoWarnsOnce() async throws {
