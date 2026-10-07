@@ -675,7 +675,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
     func testWmpSignsNothingWhenALaterReferenceIsNotBound() async throws {
         let f = try await fixture()
         let store = try XCTUnwrap(f.wallet.credentialStore as? InMemoryCredentialStore)
-        await store.save(StoredCredential(id: 2, format: "dc+sd-jwt", raw: "a.b.c~", metadata: CredentialMetadata(name: "Age", vct: "urn:age", doctype: nil), batchId: 2, instanceId: 0))
+        await store.save(StoredCredential(id: 2, format: "dc+sd-jwt", raw: "e30.e30.c2ln~", metadata: CredentialMetadata(name: "Age", vct: "urn:age", doctype: nil), batchId: 2, instanceId: 0))
         let refs = #"[{"credential_query_id":"pay","credential_id":"1"},{"credential_query_id":"age","credential_id":"2"}]"#
         do { _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams(refs: refs)); XCTFail() } catch SirosError.transactionData {}
         XCTAssertEqual(f.keystore.scaCalls, 0, "the first credential was not signed before the later guard")
