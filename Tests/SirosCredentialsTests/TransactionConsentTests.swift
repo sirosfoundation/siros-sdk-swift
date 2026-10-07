@@ -588,6 +588,15 @@ final class TransactionConsentTests: XCTestCase {
         XCTAssertEqual(all.first?.reason, "signingFailed")
     }
 
+    func testACallerMayRecordTheRealRefusalReason() async throws {
+        let log = InMemoryTransactionLogStore()
+        let plan = try await service(source(), handler: Handler(.yes), log: log).process(request(), context: context())
+        await plan.complete(signed: false, refusal: .invalidEntry)
+        let all = await log.entries()
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.reason, "invalidEntry")
+    }
+
     func testTheWalletsOwnCancellationIsNotADeclineAndIsNotLoggedAsOne() async throws {
         let log = InMemoryTransactionLogStore()
         let svc = service(source(), handler: Handler(.yes), log: log)
