@@ -244,17 +244,19 @@ struct TransactionLogRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: icon)
-                Text(entry.typeName ?? L10n.string("transactionLog.unknownType")).font(.body.weight(.medium))
+                // Text from a request is neutralised again at render: an entry read back from storage
+                // did not necessarily go through the SDK's sanitising initialiser.
+                Text(entry.typeName.map(TransactionLogEntry.displaySafe) ?? L10n.string("transactionLog.unknownType")).font(.body.weight(.medium)).lineLimit(2)
                 Spacer()
                 Text(L10n.string("transactionLog.outcome.\(entry.outcome.rawValue)")).font(.caption)
             }
             if let id = entry.transactionId {
-                Text(L10n.string("transactionLog.transactionId", id)).font(.caption)
+                Text(L10n.string("transactionLog.transactionId", TransactionLogEntry.displaySafe(id))).font(.caption).lineLimit(2)
             }
             ForEach(entry.entities.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
-                Text("\(L10n.string("transactionLog.entity.\(key)")): \(value)").font(.caption)
+                Text("\(L10n.string("transactionLog.entity.\(key)")): \(TransactionLogEntry.displaySafe(value))").font(.caption).lineLimit(2)
             }
-            Text(entry.verifier).font(.caption).foregroundColor(SirosTheme.onSurfaceVariant)
+            Text(TransactionLogEntry.displaySafe(entry.verifier)).font(.caption).lineLimit(2).foregroundColor(SirosTheme.onSurfaceVariant)
             if let reason = entry.reason {
                 Text(L10n.string("transactionLog.reasons.\(reason)")).font(.caption).foregroundColor(SirosTheme.error)
             }
