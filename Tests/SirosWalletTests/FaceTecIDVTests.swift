@@ -266,7 +266,9 @@ final class FaceTecSessionOutcomeTests: XCTestCase {
     }
 
     /// Every code facetec-api v0.16.0 returns to clients, and the typed error each
-    /// becomes. Kept equal to siros-sdk-kotlin's `refusalToException`.
+    /// becomes. siros-sdk-kotlin's `refusalToException` is the same except for
+    /// `chip_untrusted`, `document_expired` and `session_expired`, which it does
+    /// not give dedicated errors yet.
     func testEveryFacetecApiCodeMapsToATypedError() {
         let expected: [(code: String, errorCode: String)] = [
             ("liveness_failed", "idv_liveness_failed"),

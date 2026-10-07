@@ -150,8 +150,9 @@ public protocol IdentityVerificationProvider: AnyObject, Sendable {
 extension IDVError {
     /// Maps a refusal code from facetec-api (`credentialIssueErrorCode` from
     /// `/process-request`, or `error_code` of a legacy `/v1` 422) to an
-    /// ``IDVError``. Same mapping as siros-sdk-kotlin, so both SDKs report the
-    /// same `errorCode`.
+    /// ``IDVError``. siros-sdk-kotlin maps the
+    /// same way except that it does not yet have dedicated errors for
+    /// `chip_untrusted`, `document_expired` and `session_expired`.
     ///
     /// - `nfc_*`: the document's chip was not read and authenticated
     ///   (``documentChipNotVerified(reason:message:)``).

@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to facetec-api, which issues the credential; the offer becomes the
   `IDVResult`. Configured with `FaceTecIDVConfig(processRequestUrl:authToken:deviceKeyIdentifier:)`
   (`requireNfc` defaults to true; `configureSession` runs after FaceTec has
-  initialized, for customization). Mirrors siros-sdk-kotlin's
-  `FaceTecIDVProvider`, and maps facetec-api's refusal codes to the same
+  initialized, for customization). Follows siros-sdk-kotlin's
+  `FaceTecIDVProvider` (same flow and config names; Kotlin has no dedicated
+  errors yet for `chip_untrusted`, `document_expired` and `session_expired`,
+  which it reports as `ProviderError`). It maps facetec-api's refusal codes to
   `IDVError`s: `nfc_*` to `documentChipNotVerified`, `liveness_failed` to
   `livenessFailed`, `match_failed`/`policy_rejected`/`document_unreadable` to
   `verificationFailed`, `chip_untrusted`/`document_expired`/`session_expired`
