@@ -177,11 +177,23 @@ final class TransactionDataLifecycleTests: XCTestCase {
         for _ in 0..<200 where vm.pendingTransactionConsent?.id == earlier.id { try await Task.sleep(nanoseconds: 10_000_000) }
         _ = await first.value
         let current = try XCTUnwrap(vm.pendingTransactionConsent)
-        vm.dismissTransactionConsent(ifCurrent: earlier.id)      // the earlier sheet's late dismissal callback
+        earlier.respond(false)      // the earlier sheet's late dismissal callback
         XCTAssertEqual(vm.pendingTransactionConsent?.id, current.id, "the newer prompt is untouched")
         current.respond(true)
         let answer = await second.value
         XCTAssertTrue(answer)
+    }
+
+    /// An interactive dismissal clears the sheet binding before `onDisappear` runs; the sheet's own response must still decline.
+    func testDismissingAfterTheBindingWasClearedStillDeclines() async throws {
+        let vm = WalletViewModel()
+        let request = Task { await vm.requestTransactionConsent(TransactionDataSettingsTests.sampleRequest()) }
+        for _ in 0..<200 where vm.pendingTransactionConsent == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        let pending = try XCTUnwrap(vm.pendingTransactionConsent)
+        vm.pendingTransactionConsent = nil          // what SwiftUI does on a swipe, before onDisappear
+        pending.respond(false)                      // what the sheet's onDisappear does
+        let answer = await request.value
+        XCTAssertFalse(answer)
     }
 
     func testEndingTheSessionClearsTheLogAndTheScreen() {

@@ -43,14 +43,6 @@ extension WalletViewModel {
         transactionConsentBox = nil
     }
 
-    /// Declines the pending transaction if its sheet is dismissed without an
-    /// answer (for example swiped away) - but only that prompt: a stale
-    /// callback for an earlier one does nothing.
-    func dismissTransactionConsent(ifCurrent id: UUID) {
-        guard pendingTransactionConsent?.id == id else { return }
-        dismissTransactionConsent()
-    }
-
     /// Declines whatever prompt is pending.
     func dismissTransactionConsent() {
         pendingTransactionConsent = nil

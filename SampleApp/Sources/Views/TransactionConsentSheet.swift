@@ -107,9 +107,11 @@ struct TransactionConsentSheet: View {
             }
             .navigationTitle(L10n.string("transactionConsent.title"))
             .navigationBarTitleDisplayMode(.inline)
-            // The decline is bound to THIS prompt by its id: a stale dismissal of an
-            // earlier sheet can never answer a newer one.
-            .onDisappear { viewModel.dismissTransactionConsent(ifCurrent: pending.id) }
+            // SwiftUI clears the `.sheet(item:)` binding BEFORE this runs on an interactive
+            // dismissal, so the view model's current prompt cannot be consulted. Answer
+            // through THIS sheet's own response instead: it is bound to its own box, a
+            // second answer is a no-op, and a stale callback cannot touch a newer prompt.
+            .onDisappear { pending.respond(false) }
         }
     }
 
