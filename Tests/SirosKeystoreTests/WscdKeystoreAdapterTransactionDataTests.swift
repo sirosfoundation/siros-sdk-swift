@@ -83,6 +83,20 @@ final class WscdKeystoreAdapterTransactionDataTests: XCTestCase {
         XCTAssertNotEqual(c["jti"] as? String, again["jti"] as? String, "jti is fresh per presentation")
     }
 
+    /// The pre-TS12 overload still compiles: items are refused, none/empty signs a plain presentation.
+    @available(*, deprecated)
+    func testTheDeprecatedItemOverloadRefusesItemsAndSignsPlainWithout() async throws {
+        let signer = CountingSigner()
+        let a = try await adapter(signer)
+        let items = [TransactionDataItem(type: "payment", rawJson: "{}")]
+        do {
+            _ = try await a.signVpToken(credential: credential, disclosedClaims: nil, nonce: "n", audience: "a", transactionData: items, kid: nil)
+            XCTFail("expected a refusal")
+        } catch is KeystoreError {}
+        let plain = try await a.signVpToken(credential: credential, disclosedClaims: nil, nonce: "n", audience: "a", transactionData: [TransactionDataItem](), kid: nil)
+        XCTAssertNil(try kbClaims(plain)["transaction_data_hashes"])
+    }
+
     func testScaWithSha384() async throws {
         let a = try await adapter(CountingSigner())
         let binding = TransactionDataBinding(rawEntries: raws, hashAlgorithm: "sha-384", responseMode: "dc_api", factors: twoFactors)

@@ -132,7 +132,8 @@ public struct ValidatedTransactionData: Sendable, Equatable {
     /// Decision recorded in the contract (plan item B8, pending an interop
     /// test): a credential's KB-JWT carries the hashes of the entries bound to
     /// it, not of all entries.
-    public func binding(forQueryId queryId: String, factors: [AuthenticationFactor]) throws -> TransactionDataBinding? {
+    /// `package` access: a binding signs its factors into the `amr` claim, so it is built only by the SDK, from factors its provider verified.
+    package func binding(forQueryId queryId: String, factors: [AuthenticationFactor]) throws -> TransactionDataBinding? {
         let mine = entries.filter { $0.credentialIds.contains(queryId) }
         guard let first = mine.first else { return nil }
         // One algorithm per KB-JWT: the first the verifier offered for the

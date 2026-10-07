@@ -72,12 +72,16 @@ public enum JSONValue: Sendable, Equatable {
     }
 
     /// Whether this number has no fractional part (JSON Schema `integer`).
-    var isIntegral: Bool {
+    var isIntegral: Bool { integrality ?? false }
+
+    /// Three-valued: `nil` when integrality cannot be decided exactly (an exact
+    /// number too long for `Decimal`), which a caller must not turn into "no".
+    var integrality: Bool? {
         switch self {
         case .int: return true
         case .double(let d): return d.rounded() == d
         case .decimal:
-            guard var exact = exactNumber else { return false }
+            guard var exact = exactNumber else { return nil }
             var rounded = Decimal()
             NSDecimalRound(&rounded, &exact, 0, .plain)
             return rounded == exact
