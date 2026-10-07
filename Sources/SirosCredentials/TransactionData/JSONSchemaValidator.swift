@@ -127,7 +127,7 @@ public struct JSONSchemaValidator: Sendable {
         if let v = kw["pattern"], v.stringValue == nil { return "pattern must be a string" }
         if let v = kw["required"], v.arrayValue?.allSatisfy({ $0.stringValue != nil }) != true { return "required must be an array of strings" }
         if let v = kw["properties"], v.objectValue == nil { return "properties must be an object" }
-        if let v = kw["enum"], v.arrayValue == nil { return "enum must be an array" }
+        if let v = kw["enum"], v.arrayValue?.isEmpty != false { return "enum must be a non-empty array" }
         func isSchema(_ v: JSONValue) -> Bool { if case .bool = v { return true }; return v.objectValue != nil }
         for key in ["allOf", "anyOf", "oneOf"] {
             guard let v = kw[key] else { continue }
@@ -139,8 +139,8 @@ public struct JSONSchemaValidator: Sendable {
         if let v = kw["properties"]?.objectValue, !v.values.allSatisfy(isSchema) { return "every property must be a schema" }
         if let v = kw["$ref"], v.stringValue == nil { return "$ref must be a string" }
         if let v = kw["type"] {
-            let ok = v.stringValue != nil || v.arrayValue?.allSatisfy { $0.stringValue != nil } == true
-            if !ok { return "type must be a string or array of strings" }
+            let ok = v.stringValue != nil || (v.arrayValue?.isEmpty == false && v.arrayValue?.allSatisfy { $0.stringValue != nil } == true)
+            if !ok { return "type must be a string or a non-empty array of strings" }
         }
         return nil
     }
