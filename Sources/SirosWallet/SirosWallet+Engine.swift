@@ -655,6 +655,9 @@ extension SirosWallet {
                         self?.lock.lock(); self?.transactionTasks.removeValue(forKey: id); self?.lock.unlock()
                     }
                     self.transactionTasks[id] = (flowId: msg.flowId, cancel: { task.cancel() })
+                    // A flow that ended between the claim above and this registration has had its record
+                    // removed by the terminal handler (which found nothing to cancel): cancel the task now.
+                    if self.legacyFlowSnapshots[msg.flowId] == nil { task.cancel() }
                     self.lock.unlock()
                 } else {
                     await self.handleSignRequest(engine: engine, msg: msg)

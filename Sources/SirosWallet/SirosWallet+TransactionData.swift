@@ -217,17 +217,27 @@ extension SirosWallet {
 
     /// Runs `body` as a task a flow error/completion, logout or peer teardown can cancel.
     func trackedTransaction<T: Sendable>(flowId: String, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
+        let epoch = currentTaskEpoch()
         let task = Task { try await body() }
-        let id = registerTransactionTask(flowId: flowId) { task.cancel() }
+        let id = registerTransactionTask(flowId: flowId, epoch: epoch) { task.cancel() }
         defer { unregisterTransactionTask(id) }
         return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
-    private func registerTransactionTask(flowId: String, cancel: @escaping @Sendable () -> Void) -> UUID {
+    /// Registers a cancellable task. If a teardown (logout, destroy) ran between the task's creation and
+    /// now, `epoch` no longer matches: the registry was already cleared, so the task is cancelled here
+    /// instead of being left running unregistered.
+    func registerTransactionTask(flowId: String, epoch: Int, cancel: @escaping @Sendable () -> Void) -> UUID {
         let id = UUID()
-        lock.lock(); transactionTasks[id] = (flowId: flowId, cancel: cancel); lock.unlock()
+        lock.lock()
+        let tornDown = transactionTaskEpoch != epoch
+        if !tornDown { transactionTasks[id] = (flowId: flowId, cancel: cancel) }
+        lock.unlock()
+        if tornDown { cancel() }
         return id
     }
+
+    func currentTaskEpoch() -> Int { lock.lock(); defer { lock.unlock() }; return transactionTaskEpoch }
 
     private func unregisterTransactionTask(_ id: UUID) {
         lock.lock(); transactionTasks.removeValue(forKey: id); lock.unlock()
@@ -328,10 +338,13 @@ extension SirosWallet {
             var factorContexts: [String: AuthenticationFactorContext] = [:]
             var kids: [String: String] = [:]
             for (queryId, cred) in selected.sorted(by: { $0.key < $1.key }) {
-                // A malformed `...#integrity` claim refuses here (never reads as "no pin").
+                // A malformed `...#integrity` claim refuses here (never reads as "no pin"). Only an SD-JWT VC has such
+                // claims to read: an unbound mdoc (or other) credential in a combined presentation has none, and
+                // the core refuses it itself if the transaction IS bound to it.
+                let isSdJwt = cred.format == "dc+sd-jwt" || cred.format == "vc+sd-jwt"
                 credentials.append(TransactionDataCredential(
                     queryId: queryId, format: cred.format, vct: cred.metadata?.vct,
-                    integrityClaims: try TransactionDataCredential.integrityClaims(ofSdJwt: cred.raw)
+                    integrityClaims: isSdJwt ? try TransactionDataCredential.integrityClaims(ofSdJwt: cred.raw) : [:]
                 ))
                 names[queryId] = Self.consentDisplayName(cred)
                 // The key is resolved ONCE, here, and the same one is signed with.

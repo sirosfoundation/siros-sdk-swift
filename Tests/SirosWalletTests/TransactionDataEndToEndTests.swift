@@ -775,6 +775,34 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertTrue(log.isEmpty, "no consent recorded for an ended flow: \(log.map(\.outcome))")
     }
 
+    /// A task whose creation preceded a teardown is cancelled at registration instead of being left running unregistered.
+    func testATaskRegisteredAfterATeardownIsCancelledNotLeftRunning() async throws {
+        let f = try await fixture()
+        let epoch = f.wallet.currentTaskEpoch()
+        f.wallet.cancelEngineTasks()                       // logout between the task's creation and its registration
+        final class Flag: @unchecked Sendable { let l = NSLock(); var on = false; func set() { l.lock(); on = true; l.unlock() } }
+        let cancelled = Flag()
+        _ = f.wallet.registerTransactionTask(flowId: "late", epoch: epoch, cancel: { cancelled.set() })
+        XCTAssertTrue(cancelled.on)
+        f.wallet.lock.lock(); let registered = f.wallet.transactionTasks.count; f.wallet.lock.unlock()
+        XCTAssertEqual(registered, 0, "nothing was left registered")
+    }
+
+    /// An unbound credential of another format in a combined presentation does not stop the transaction.
+    func testAnUnboundMdocCredentialDoesNotRefuseTheTransaction() async throws {
+        let f = try await fixture()
+        let pay = try XCTUnwrap(await f.store.getAll().first)
+        let mdoc = StoredCredential(id: 7, format: "mso_mdoc", raw: "not-an-sd-jwt", metadata: CredentialMetadata(name: nil, vct: nil, doctype: "org.iso.18013.5.1.mDL"), batchId: 7, instanceId: 0)
+        var selection = SirosWallet.ScaSelection()
+        selection.credentials = ["pay": pay, "other": mdoc]
+        let plan = try await f.wallet.processTransactionData(
+            entries: [TransactionDataEntryInput(raw: raw)], responseMode: "direct_post.jwt", selection: selection, verifier: "Shop", requestSigned: nil
+        )
+        XCTAssertNotNil(plan.bindings["pay"])
+        XCTAssertNil(plan.bindings["other"])
+        await plan.plan.complete(signed: false)
+    }
+
     func testTeardownCancelsConsentFlowsInProgress() async throws {
         let f = try await fixture()
         let task = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
