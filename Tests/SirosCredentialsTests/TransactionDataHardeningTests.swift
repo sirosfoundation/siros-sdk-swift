@@ -65,6 +65,17 @@ final class TransactionDataHardeningTests: XCTestCase {
         }
     }
 
+    /// An issuer schema's bare file-name `$ref` never resolves to a bundled document of the same name.
+    func testACustomSchemaCannotReferenceABundledSchemaByFileName() async {
+        let s = Source()
+        let types = #"{"https://x.example/t":{"schema":{"$ref":"ts12-urn-eudi-sca-payment-1-data-model.json"}}}"#
+        s.documents[vct] = #"{"vct":"\#(vct)","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":\#(types)}"#
+        let e = raw(#"{"type":"https://x.example/t","credential_ids":["pay"],"payload":{"transaction_id":"tx-1","payee":{"name":"Shop AB","id":"SE1"},"currency":"EUR","amount":49.99}}"#)
+        do { _ = try await TransactionDataPipeline(source: s).validate(request([e])); XCTFail("must refuse") }
+        catch let err as TransactionDataError { XCTAssertEqual(err.reason, .schemaViolation) }
+        catch { XCTFail("\(error)") }
+    }
+
     func testSchemaOutcomesSurfaceAsSchemaViolation() async {
         let s = Source()
         let types = #"{"https://x.example/t":{"schema":{"type":"object","properties":{"a":{"pattern":"(a+)+$"}}}}}"#
