@@ -13,6 +13,13 @@ struct TransactionConsentModelBuilder: Sendable {
     let fetchTimeout: TimeInterval
     let maxResourceBytes: Int
     let note: MetadataAuthenticationNote
+    /// One builder serves one validation: every referenced document is fetched once
+    /// (several entries naming the same `claims_uri` or `ui_labels_uri` share the download), and
+    /// all fetching together shares one deadline of one and a half times the per-fetch timeout, so the time
+    /// the user waits before the prompt does not grow with the number of entries.
+    private let startedAt = Date()
+    private let cache = FetchedResources()
+    private var totalBudget: TimeInterval { fetchTimeout * 1.5 }
 
     /// Maximum string lengths from section 3.3.3.
     static let maxLengths = ["affirmative_action_label": 30, "denial_action_label": 30,
@@ -92,7 +99,16 @@ struct TransactionConsentModelBuilder: Sendable {
             }
             let source = self.source
             let limit = maxResourceBytes
-            let data: Data? = await withDeadline(fetchTimeout, fallback: nil) { await source.fetchResource(uri: uri, maxBytes: limit) }
+            let remaining = totalBudget - Date().timeIntervalSince(startedAt)
+            let data: Data?
+            if let cached = cache.get(uri) {
+                data = cached
+            } else if remaining <= 0 {
+                data = nil
+            } else {
+                data = await withDeadline(min(fetchTimeout, remaining), fallback: nil) { await source.fetchResource(uri: uri, maxBytes: limit) }
+                if let data { cache.set(uri, data) }
+            }
             guard let data, data.count <= maxResourceBytes else {
                 throw TransactionDataError(.metadataUnavailable, detail: "\(name) URI could not be fetched")
             }
@@ -265,10 +281,35 @@ enum TextSafety {
         return true
     }
 
+    /// `text` with every scalar `isSafe` would refuse (controls, newlines, bidirectional and other
+    /// format characters, private-use and unassigned code points) replaced by U+FFFD, so
+    /// verifier-supplied text can be shown or logged without spoofing the line it sits on.
+    static func neutralized(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .unassigned, .surrogate:
+                out.append("\u{FFFD}")
+            default:
+                out.append(scalar)
+            }
+        }
+        return String(out)
+    }
+
     static func require(_ text: String?, maxLength: Int, what: String) throws {
         guard let text else { return }
         guard isSafe(text, maxLength: maxLength) else {
             throw TransactionDataError(.invalidEntry, detail: "\(what) cannot be displayed safely")
         }
     }
+}
+
+
+/// The documents one validation has already fetched, by URI.
+final class FetchedResources: @unchecked Sendable {
+    private let lock = NSLock()
+    private var documents: [String: Data] = [:]
+    func get(_ uri: String) -> Data? { lock.lock(); defer { lock.unlock() }; return documents[uri] }
+    func set(_ uri: String, _ data: Data) { lock.lock(); documents[uri] = data; lock.unlock() }
 }

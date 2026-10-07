@@ -312,6 +312,46 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertEqual(f.keystore.scaCalls, 0)
     }
 
+    /// Only the transaction-bound query is limited to one credential: an unbound query may have several.
+    func testAnUnboundQueryMayAnswerWithSeveralCredentials() async throws {
+        let f = try await fixture()
+        let jwtPayload = b64(#"{"vct":"\#(vct)"}"#)
+        for id in [2, 3] as [Int64] {
+            await f.store.save(StoredCredential(
+                id: id, format: "dc+sd-jwt", raw: "eyJhbGciOiJFUzI1NiJ9.\(jwtPayload).c2ln~", metadata: CredentialMetadata(name: "Other \(id)", vct: vct, doctype: nil),
+                batchId: id, instanceId: 0
+            ))
+        }
+        let refs = #"[{"credential_query_id":"pay","credential_id":"1"},{"credential_query_id":"other","credential_id":"2"},{"credential_query_id":"other","credential_id":"3"}]"#
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage(refs: refs))
+        XCTAssertNotNil(sender.sent.first?.vpToken, "one bound credential plus two for an unbound query is a valid combined presentation: \(f.listener.errors)")
+        XCTAssertEqual(f.keystore.scaCalls, 1, "only the bound credential carries the transaction")
+        XCTAssertEqual(f.keystore.plainCalls, 2)
+    }
+
+    /// What the user is shown and what is logged is the evaluated identity, not the protocol audience.
+    func testTheShownAndLoggedVerifierIsTheEvaluatedIdentity() async throws {
+        let f = try await fixture()
+        f.wallet.lock.lock()
+        f.wallet.lastTrustResults["f1"] = TrustResult(trusted: true, entityName: "Shop AB (verified)", identifier: audience)
+        f.wallet.lock.unlock()
+        await f.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage())
+        XCTAssertEqual(f.consent.requests.first?.verifier, "Shop AB (verified)")
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.first?.verifier, "Shop AB (verified)")
+    }
+
+    func testTheVerifierLabelFallsBackHonestly() {
+        let named = TrustResult(trusted: true, entityName: "Shop AB", identifier: "client.example")
+        XCTAssertEqual(SirosWallet.transactionVerifierLabel(trust: named, fallback: "o", origin: "https://o.example"), "Shop AB")
+        let unnamed = TrustResult(trusted: true, identifier: "client.example")
+        XCTAssertEqual(SirosWallet.transactionVerifierLabel(trust: unnamed, fallback: "o", origin: "https://o.example"),
+                       "client.example (via https://o.example)", "a verified client_id that differs from the origin names both")
+        XCTAssertEqual(SirosWallet.transactionVerifierLabel(trust: TrustResult(trusted: true, identifier: "https://o.example"), fallback: "o", origin: "https://o.example"), "https://o.example")
+        XCTAssertEqual(SirosWallet.transactionVerifierLabel(trust: nil, fallback: "aud"), "aud")
+    }
+
     func testEngineRefusesInsufficientFactors() async throws {
         let f = try await fixture()
         f.wallet.authenticationFactorsProvider = InterimAuthenticationFactorsProvider()

@@ -48,14 +48,19 @@ public struct TransactionLogEntry: Codable, Sendable, Equatable, Identifiable {
     ) {
         self.id = id
         self.timestamp = timestamp
-        self.transactionId = subject.transactionId.map { Self.capped($0, Self.maxFieldLength) }
-        self.typeName = subject.typeName.map { Self.capped($0, Self.maxFieldLength) }
-        self.entities = Dictionary(uniqueKeysWithValues: subject.entities.prefix(8).map { ($0.key, Self.capped($0.value, Self.maxFieldLength)) })
-        self.verifier = Self.capped(verifier, Self.maxFieldLength)
-        self.credential = Self.capped(credential, Self.maxFieldLength)
+        self.transactionId = subject.transactionId.map { Self.capped(Self.displaySafe($0), Self.maxFieldLength) }
+        self.typeName = subject.typeName.map { Self.capped(Self.displaySafe($0), Self.maxFieldLength) }
+        self.entities = Dictionary(uniqueKeysWithValues: subject.entities.prefix(8).map { ($0.key, Self.capped(Self.displaySafe($0.value), Self.maxFieldLength)) })
+        self.verifier = Self.capped(Self.displaySafe(verifier), Self.maxFieldLength)
+        self.credential = Self.capped(Self.displaySafe(credential), Self.maxFieldLength)
         self.outcome = outcome
         self.reason = reason
     }
+
+    /// Text taken from a request (a custom type URI, a payee name, ...) with every control,
+    /// newline, bidirectional or other format character replaced by U+FFFD. Applied when an entry
+    /// is created; a UI should apply it again when it renders an entry read back from storage.
+    public static func displaySafe(_ text: String) -> String { TextSafety.neutralized(text) }
 
     /// Each logged field is capped: the values come from the verifier and an
     /// unbounded one could flood the log. A cut value ends in a marker.
