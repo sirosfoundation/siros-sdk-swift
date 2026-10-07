@@ -640,10 +640,10 @@ extension SirosWallet {
                     // removal (it takes the same lock) can never run before it is registered.
                     let id = UUID()
                     self.lock.lock()
-                    self.transactionTasks[id] = Task { [weak self] in
+                    self.transactionTasks[id] = (flowId: msg.flowId, task: Task { [weak self] in
                         await self?.handleSignRequest(engine: engine, msg: msg)
                         self?.lock.lock(); self?.transactionTasks.removeValue(forKey: id); self?.lock.unlock()
-                    }
+                    })
                     self.lock.unlock()
                 } else {
                     await self.handleSignRequest(engine: engine, msg: msg)
@@ -820,6 +820,10 @@ extension SirosWallet {
                 engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
             }
         } catch {
+            // Cancelled by logout/destroy or because the flow already ended: the
+            // owner of the cancellation has reset the state, so reporting a
+            // failure here would race a teardown or re-login.
+            if Task.isCancelled || error is CancellationError { return }
             #if canImport(os)
             logger.error("Error handling sign request: \(error.localizedDescription)")
             #endif
@@ -1321,8 +1325,20 @@ extension SirosWallet {
         }
     }
 
-    private func handleFlowError(msg: FlowErrorMessage) {
+    /// A transaction waiting for the user belongs to its flow: once the flow
+    /// has ended (error or completion) it must not go on to sign or record a
+    /// consented outcome for a flow that no longer exists.
+    func cancelTransactionTasks(flowId: String) {
+        lock.lock()
+        let doomed = transactionTasks.filter { $0.value.flowId == flowId }
+        for key in doomed.keys { transactionTasks.removeValue(forKey: key) }
+        lock.unlock()
+        for entry in doomed.values { entry.task.cancel() }
+    }
+
+    func handleFlowError(msg: FlowErrorMessage) {
         let fid = msg.flowId ?? "unknown"
+        cancelTransactionTasks(flowId: fid)
         lock.lock()
         let listener = eventListener
         pendingMatchResultsByFlow.removeValue(forKey: fid)

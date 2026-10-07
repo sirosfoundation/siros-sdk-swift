@@ -107,7 +107,10 @@ extension SirosWallet {
         func acceptable(_ data: Data?) -> String? {
             guard let data, data.count <= maxBytes else { return nil }
             if let expectedIntegrity, !Integrity.matches(data, expectedIntegrity) { return nil }
-            return String(data: data, encoding: .utf8)
+            // Validate, but keep the text exactly as downloaded: `String(data:encoding:)`
+            // drops a leading BOM, and the pipeline re-checks the pin over this text.
+            guard String(data: data, encoding: .utf8) != nil else { return nil }
+            return String(decoding: data, as: UTF8.self)
         }
         if let base = URL(string: resolvedRegistryUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))),
            var components = URLComponents(url: base.appendingPathComponent("type-metadata"), resolvingAgainstBaseURL: false) {
@@ -217,17 +220,24 @@ extension SirosWallet {
     /// that started without a record falls back to the live value.
     func transactionDataActive(forFlow flowId: String, viaWmp: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard transactionConsentHandlerStorage != nil else { return false }
-        if viaWmp { return wmpSessionSnapshot }
-        if let known = legacyFlowSnapshots[flowId] { return known }
-        // Records of flows that never produced a sign request go stale: drop them.
-        let horizon = Date().addingTimeInterval(-Self.snapshotLifetime)
-        legacyFlowSnapshotQueue.removeAll { $0.at < horizon }
-        let value = legacyFlowSnapshotQueue.isEmpty
-            ? transactionDataEnabledValue
-            : legacyFlowSnapshotQueue.removeFirst().effective
-        legacyFlowSnapshots[flowId] = value
-        return value
+        let handlerPresent = transactionConsentHandlerStorage != nil
+        if viaWmp { return handlerPresent && wmpSessionSnapshot }
+        // Claim (and cache) this flow's record FIRST, whether or not a handler is
+        // registered now: otherwise a flow that ran without one leaves its record
+        // in the queue for a later flow to consume.
+        let value: Bool
+        if let known = legacyFlowSnapshots[flowId] {
+            value = known
+        } else {
+            // Records of flows that never produced a sign request go stale: drop them.
+            let horizon = Date().addingTimeInterval(-Self.snapshotLifetime)
+            legacyFlowSnapshotQueue.removeAll { $0.at < horizon }
+            value = legacyFlowSnapshotQueue.isEmpty
+                ? transactionDataEnabledValue
+                : legacyFlowSnapshotQueue.removeFirst().effective
+            legacyFlowSnapshots[flowId] = value
+        }
+        return handlerPresent && value
     }
 
     /// Exports the container and syncs it, REPORTING failure (unlike
