@@ -81,7 +81,8 @@ final class TransactionDataHardeningTests: XCTestCase {
         let started = Date()
         let evil = ["(a+)+$", "(a|aa)+$", "(a*)*$", "(.*a){12}x", "^(([a-z])+.)+[A-Z]([a-z])+$", #"(a)\1+"#, "(?=a)a", String(repeating: "a", count: 300),
                     "^" + String(repeating: "(aa|aaaa)", count: 24) + "$", "^(ab|cd)$", "^(a)(b)(c)(d)(e)(f)(g)(h)(i)$",
-                    "^(a?){30}a{30}$", "a*a*a*b", "a?a?a?a?a?a?a?aaaaaaa", "^(abc)?x$", "(a){2,}(b)+"]
+                    "^(a?){30}a{30}$", "a*a*a*b", "a?a?a?a?a?a?a?aaaaaaa", "^(abc)?x$", "(a){2,}(b)+",
+                    "^a{0,64}a{0,64}a{0,64}a{0,64}a{0,64}a{0,64}b$", "^a{0,9}a{0,9}a{0,9}b$"]
         for pattern in evil {
             let schema = try StrictJSON.parse(#"{"pattern":"\#(pattern.replacingOccurrences(of: "\\", with: "\\\\"))"}"#)
             let outcome = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 40) + "!"), against: schema)

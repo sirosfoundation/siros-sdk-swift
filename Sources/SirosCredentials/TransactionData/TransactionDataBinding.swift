@@ -44,7 +44,8 @@ public struct TransactionDataBinding: Sendable, Equatable {
     /// Factors applied for THIS operation.
     public let factors: [AuthenticationFactor]
 
-    public init(rawEntries: [String], hashAlgorithm: String, responseMode: String, factors: [AuthenticationFactor]) {
+    /// `package` access on purpose: a binding signs its `factors` into the `amr` claim, so only the SDK's own pipeline (which takes them from a verified provider) may build one; an application cannot mint an SCA claim by constructing it.
+    package init(rawEntries: [String], hashAlgorithm: String, responseMode: String, factors: [AuthenticationFactor]) {
         self.rawEntries = rawEntries
         self.hashAlgorithm = hashAlgorithm
         self.responseMode = responseMode
