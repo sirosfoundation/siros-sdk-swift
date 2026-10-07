@@ -543,6 +543,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertNil(rejected, "a pin over the BOM-less text must not accept the BOM-prefixed download")
         let accepted = await f.wallet.fetchTypeMetadata(vct: "https://issuer.example/card", expectedIntegrity: withBom, maxBytes: 10_000)
         XCTAssertNotNil(accepted)
+        XCTAssertEqual(accepted?.unicodeScalars.first, "\u{FEFF}", "the text is returned as downloaded, BOM included, so the pipeline's re-check of the pin holds")
     }
 
     func testConsentIsLoggedOnlyAfterSigningSucceeds() async throws {
