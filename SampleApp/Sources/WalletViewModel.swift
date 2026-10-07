@@ -1099,7 +1099,8 @@ final class WalletViewModel: ObservableObject {
     }
     #endif
 
-    private func rebuildWalletIfNeeded() {
+    /// Internal (not private) so the unit tests can build the wallet without a real login.
+    func rebuildWalletIfNeeded() {
         // Rebuild if wallet doesn't exist or is in Disconnected/Error state
         let needsRebuild: Bool
         if wallet == nil {

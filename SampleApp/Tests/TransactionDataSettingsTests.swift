@@ -56,7 +56,8 @@ final class TransactionDataSettingsTests: XCTestCase {
 
     func testToggleAppliesToTheWalletAtRuntime() throws {
         let vm = WalletViewModel()
-        let wallet = try XCTUnwrap(vm.wallet, "the view model builds a wallet at launch")
+        vm.rebuildWalletIfNeeded()          // a wallet exists only after a login/registration builds one
+        let wallet = try XCTUnwrap(vm.wallet)
         XCTAssertFalse(wallet.transactionDataEnabled)
         vm.transactionDataEnabled = true
         XCTAssertTrue(wallet.transactionDataEnabled)
@@ -157,6 +158,7 @@ final class TransactionDataLifecycleTests: XCTestCase {
     func testALogLoadStartedBeforeLogoutDoesNotRepopulateTheNextSession() async throws {
         let vm = WalletViewModel()
         let store = DelayedLogStore()
+        vm.rebuildWalletIfNeeded()          // a wallet exists only after a login/registration builds one
         let wallet = try XCTUnwrap(vm.wallet)
         wallet.setTransactionLogStore(store)
         vm.openTransactionLog()                       // the read is now suspended
