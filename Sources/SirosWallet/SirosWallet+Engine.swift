@@ -738,7 +738,9 @@ extension SirosWallet {
                     transactionData: msg.params.transactionDataMember, responseMode: msg.params.responseMode,
                     refs: credsToInclude, allCreds: allCredsForTransaction,
                     flowId: msg.flowId, viaWmp: false,
-                    verifier: Self.transactionVerifierLabel(trust: evaluated, fallback: audience)
+                    context: ScaRequestContext(
+                        verifier: Self.transactionVerifierLabel(trust: evaluated, fallback: audience), nonce: nonce, audience: audience
+                    )
                 )
 
                 if let credsToInclude, !credsToInclude.isEmpty {

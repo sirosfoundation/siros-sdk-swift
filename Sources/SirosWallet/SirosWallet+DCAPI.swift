@@ -503,6 +503,12 @@ extension SirosWallet {
         verifier: String
     ) async throws -> ScaPlan? {
         guard request.hasTransactionData, let strings = request.transactionData else { return nil }
+        // An empty nonce would sign a KB-JWT with no replay challenge.
+        guard !request.nonce.isEmpty else {
+            let refusal = TransactionDataError(.invalidEntry, detail: "a transaction presentation needs a non-empty nonce")
+            await logPreparatoryRefusal(refusal, rawEntries: strings, verifier: verifier)
+            throw SirosError.transactionData(refusal)
+        }
         var sca = ScaSelection()
         // A query the transaction is bound to answers with exactly one credential; an
         // unbound query may answer with several (DC API presents an array per query).
@@ -517,7 +523,7 @@ extension SirosWallet {
                     await logPreparatoryRefusal(refusal, rawEntries: strings, verifier: verifier)
                     throw SirosError.transactionData(refusal)
                 }
-                sca.additional.append(TransactionConsentAttributes(credentialName: cred.metadata?.name ?? "", claims: claims))
+                sca.additional.append(TransactionConsentAttributes(credentialName: Self.consentDisplayName(cred), claims: claims))
                 continue
             }
             sca.credentials[queryId] = cred

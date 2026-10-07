@@ -333,7 +333,7 @@ extension SirosWallet {
                     queryId: queryId, format: cred.format, vct: cred.metadata?.vct,
                     integrityClaims: try TransactionDataCredential.integrityClaims(ofSdJwt: cred.raw)
                 ))
-                if let name = cred.metadata?.name { names[queryId] = name }
+                names[queryId] = Self.consentDisplayName(cred)
                 // The key is resolved ONCE, here, and the same one is signed with.
                 let keys = keystore.listKeys()
                 let kid = cred.kid ?? keys.first?.keyId
@@ -372,6 +372,17 @@ extension SirosWallet {
         }
     }
 
+    /// What a credential is called in the consent: its name, else its vct, doctype or format, so a
+    /// credential that will be presented is never listed with an empty name. Neutralised and capped,
+    /// since the fallbacks come from the credential and its issuer.
+    static func consentDisplayName(_ cred: StoredCredential) -> String {
+        for candidate in [cred.metadata?.name, cred.metadata?.vct, cred.metadata?.doctype, cred.format] {
+            let cleaned = TransactionLogEntry.displaySafe(candidate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty { return String(cleaned.prefix(200)) }
+        }
+        return "credential"
+    }
+
     /// The verifier identity the user is shown and the log records: the display name trust
     /// evaluated, else the identifier it verified, else `fallback` (what the request itself
     /// claims). For a signed DC API request whose verified `client_id` differs from the browser
@@ -385,6 +396,13 @@ extension SirosWallet {
         return fallback
     }
 
+    /// What an orchestrated request is bound to: who is shown as asking, and the KB-JWT's replay challenge and audience.
+    struct ScaRequestContext {
+        let verifier: String
+        let nonce: String
+        let audience: String
+    }
+
     /// The TS12 plan for a presentation relayed by the orchestrator (legacy
     /// engine or WMP). `nil` when the request carries no `transaction_data`. A
     /// request that does carry it is refused unless TS12 handling was in
@@ -396,14 +414,19 @@ extension SirosWallet {
         allCreds: [StoredCredential],
         flowId: String,
         viaWmp: Bool,
-        verifier: String
+        context: ScaRequestContext
     ) async throws -> ScaPlan? {
+        let verifier = context.verifier
         // An absent or empty member means the request carries no transaction.
         guard transactionData.requestsTransactionHandling else { return nil }
         let raws = (transactionData.entries ?? []).map { $0.raw ?? "" }
         do {
             guard let entries = transactionData.entries else {
                 throw TransactionDataError(.invalidEntry, detail: "transaction_data is null")
+            }
+            // Without a nonce and an audience the KB-JWT would carry no replay challenge and no verifier binding.
+            guard !context.nonce.isEmpty, !context.audience.isEmpty else {
+                throw TransactionDataError(.invalidEntry, detail: "a transaction presentation needs a non-empty nonce and audience")
             }
             guard transactionDataActive(forFlow: flowId, viaWmp: viaWmp) else {
                 throw TransactionDataError(.disabled, detail: "transaction_data received but TS12 handling is not in effect")
@@ -422,7 +445,7 @@ extension SirosWallet {
                     guard !boundQueries.contains(queryId) else {
                         throw TransactionDataError(.invalidEntry, detail: "more than one credential answers a query the transaction is bound to")
                     }
-                    selection.additional.append(TransactionConsentAttributes(credentialName: cred.metadata?.name ?? "", claims: ref.disclosedClaims ?? []))
+                    selection.additional.append(TransactionConsentAttributes(credentialName: Self.consentDisplayName(cred), claims: ref.disclosedClaims ?? []))
                     continue
                 }
                 selection.credentials[queryId] = cred
@@ -451,7 +474,8 @@ extension SirosWallet {
         guard let plan = try await orchestratedTransactionPlan(
             transactionData: params.transactionDataMember, responseMode: params.responseMode,
             refs: params.credentialsToInclude, allCreds: allCreds,
-            flowId: flowId, viaWmp: true, verifier: verifier ?? params.audience
+            flowId: flowId, viaWmp: true,
+            context: ScaRequestContext(verifier: verifier ?? params.audience, nonce: params.nonce, audience: params.audience)
         ) else {
             throw SirosError.transactionData(TransactionDataError(.invalidEntry, detail: "no transaction_data"))
         }

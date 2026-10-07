@@ -541,6 +541,18 @@ final class TransactionConsentTests: XCTestCase {
         XCTAssertTrue(entries.isEmpty, "no refusal was recorded for a cancelled request: \(entries.map(\.reason))")
     }
 
+    /// A blank verifier is refused before the user is asked, whatever else is fine.
+    func testABlankVerifierIsRefusedBeforeConsent() async {
+        for blank in ["", "   ", "\n\t "] {
+            let h = Handler(.yes)
+            do {
+                _ = try await service(source(), handler: h).process(request(), context: TransactionDataContext(verifier: blank, locale: "en-GB", credentialNames: ["pay": "Visa card"]))
+                XCTFail("must refuse")
+            } catch let e as TransactionDataError { XCTAssertEqual(e.reason, .invalidEntry) } catch { XCTFail("\(error)") }
+            XCTAssertTrue(h.seen.isEmpty, "the user was not asked")
+        }
+    }
+
     func testClaimsBothInlineAndByUriRefuses() async {
         let doc = metadata(extra: #","claims_uri":"https://pay.example/c.json""#)
         await expectRefusal(.metadataUnavailable, service(source(doc), handler: Handler(.yes)))
