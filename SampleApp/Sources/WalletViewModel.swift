@@ -215,6 +215,8 @@ final class WalletViewModel: ObservableObject {
     @Published var showTransactionLog = false
     @Published var transactionLog: [TransactionLogEntry] = []
     var transactionLogGeneration = 0
+    /// Test hook: called when a log load has finished, whether it published or discarded its result.
+    var transactionLogLoadFinished: (() -> Void)?
     var transactionConsentBox: TransactionConsentContinuationBox?
     private lazy var transactionConsentBridge = TransactionConsentBridge(viewModel: self)
     /// Non-nil while a FIDO2 ClientPin prompt (see `SampleAppAuthProvider.requestPin`)

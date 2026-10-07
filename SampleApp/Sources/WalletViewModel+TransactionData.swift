@@ -56,6 +56,7 @@ extension WalletViewModel {
         transactionLogGeneration += 1
         let generation = transactionLogGeneration
         Task {
+            defer { transactionLogLoadFinished?() }
             let entries = await wallet?.transactionLog() ?? []
             // Only publish if the session it was read for is still the active one.
             guard generation == transactionLogGeneration else { return }

@@ -111,6 +111,25 @@ final class TransactionDataSettingsTests: XCTestCase {
     }
 }
 
+/// Counts events and lets a test await the next one, so ordering never depends on elapsed time.
+final class EventSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func fire() {
+        lock.lock()
+        if waiters.isEmpty { pending += 1; lock.unlock(); return }
+        let w = waiters.removeFirst(); lock.unlock(); w.resume()
+    }
+    func wait() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if pending > 0 { pending -= 1; lock.unlock(); c.resume(); return }
+            waiters.append(c); lock.unlock()
+        }
+    }
+}
+
 @MainActor
 final class TransactionDataLifecycleTests: XCTestCase {
     func testCancellingTheAwaitingTaskWithdrawsThePromptAndDeclines() async throws {
@@ -142,70 +161,61 @@ final class TransactionDataLifecycleTests: XCTestCase {
         XCTAssertTrue(secondAnswer)
     }
 
-    /// A store whose read is held until released, to log out while the load is suspended.
-    private final class DelayedLogStore: TransactionLogStore, @unchecked Sendable {
-        private let sentinel = TransactionLogEntry(subject: TransactionLogSubject(transactionId: "SENTINEL", typeName: nil), verifier: "v", credential: "c", outcome: .consented)
-        private var continuation: CheckedContinuation<Void, Never>?
-        private let lock = NSLock()
-        private var released = false
-        func append(_ entries: [TransactionLogEntry]) async throws {}
-        func entries() async -> [TransactionLogEntry] {
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-                lock.lock()
-                if released { lock.unlock(); c.resume(); return }
-                continuation = c
-                lock.unlock()
-            }
-            return [sentinel]
-        }
-        func release() { lock.lock(); released = true; let c = continuation; continuation = nil; lock.unlock(); c?.resume() }
-    }
-
-    /// First read slow, second read fast: the slow one must not overwrite the newer result.
-    private final class TwoSpeedLogStore: TransactionLogStore, @unchecked Sendable {
+    /// A store whose FIRST read is held until released (and signals when it is suspended); later reads answer at once.
+    private final class HeldFirstReadStore: TransactionLogStore, @unchecked Sendable {
+        let firstSuspended = EventSignal()
         private let lock = NSLock()
         private var reads = 0
         private var slow: CheckedContinuation<Void, Never>?
+        private var releasedEarly = false
         private func entry(_ id: String) -> TransactionLogEntry {
             TransactionLogEntry(subject: TransactionLogSubject(transactionId: id, typeName: nil), verifier: "v", credential: "c", outcome: .consented)
         }
         func append(_ entries: [TransactionLogEntry]) async throws {}
         func entries() async -> [TransactionLogEntry] {
             lock.lock(); reads += 1; let mine = reads; lock.unlock()
-            if mine == 1 {
-                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in lock.lock(); slow = c; lock.unlock() }
-                return [entry("OLD")]
+            guard mine == 1 else { return [entry("NEW")] }
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if releasedEarly { lock.unlock(); c.resume(); return }
+                slow = c; lock.unlock()
+                firstSuspended.fire()
             }
-            return [entry("NEW")]
+            return [entry("OLD")]
         }
-        func releaseSlow() { lock.lock(); let c = slow; slow = nil; lock.unlock(); c?.resume() }
+        func releaseFirst() { lock.lock(); releasedEarly = true; let c = slow; slow = nil; lock.unlock(); c?.resume() }
     }
 
+    /// First read slow, second read fast: the slow one must not overwrite the newer result. No sleeps: the
+    /// store signals when read 1 is suspended and the view model signals when each load has finished.
     func testAnOlderLogReadDoesNotOverwriteANewerOne() async throws {
         let vm = WalletViewModel()
         vm.rebuildWalletIfNeeded()
-        let store = TwoSpeedLogStore()
+        let store = HeldFirstReadStore()
         try XCTUnwrap(vm.wallet).setTransactionLogStore(store)
-        vm.openTransactionLog()                                   // read 1: suspended
-        try await Task.sleep(nanoseconds: 100_000_000)
-        vm.openTransactionLog()                                   // read 2: finishes at once
-        try await Task.sleep(nanoseconds: 200_000_000)
-        store.releaseSlow()                                       // the older read now returns
-        try await Task.sleep(nanoseconds: 200_000_000)
+        let finished = EventSignal()
+        vm.transactionLogLoadFinished = { finished.fire() }
+        vm.openTransactionLog()                  // read 1
+        await store.firstSuspended.wait()        // ... is now suspended
+        vm.openTransactionLog()                  // read 2
+        await finished.wait()                    // read 2's load has finished (it published NEW)
+        store.releaseFirst()                     // the older read returns
+        await finished.wait()                    // ... and its load has finished too (published or discarded)
         XCTAssertEqual(vm.transactionLog.first?.transactionId, "NEW")
     }
 
     func testALogLoadStartedBeforeLogoutDoesNotRepopulateTheNextSession() async throws {
         let vm = WalletViewModel()
-        let store = DelayedLogStore()
+        let store = HeldFirstReadStore()
         vm.rebuildWalletIfNeeded()          // a wallet exists only after a login/registration builds one
-        let wallet = try XCTUnwrap(vm.wallet)
-        wallet.setTransactionLogStore(store)
-        vm.openTransactionLog()                       // the read is now suspended
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try XCTUnwrap(vm.wallet).setTransactionLogStore(store)
+        let finished = EventSignal()
+        vm.transactionLogLoadFinished = { finished.fire() }
+        vm.openTransactionLog()                       // the read suspends
+        await store.firstSuspended.wait()
         vm.disconnect()                               // the session ends while it is suspended
-        store.release()                               // the stale result now arrives
-        try await Task.sleep(nanoseconds: 300_000_000)
+        store.releaseFirst()                          // the stale result now arrives
+        await finished.wait()                         // the load has finished: published or discarded
         XCTAssertTrue(vm.transactionLog.isEmpty, "the previous session's entries were not published")
         XCTAssertFalse(vm.showTransactionLog)
     }
