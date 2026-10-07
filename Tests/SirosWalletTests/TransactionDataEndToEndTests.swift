@@ -561,6 +561,49 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertEqual(f.listener.logFailures, 1, "and the host is told it was not recorded")
     }
 
+    // MARK: start records are retired
+
+    private func plainMessage(flow: String) throws -> SignRequestMessage {
+        let json = #"{"type":"sign_request","flow_id":"\#(flow)","message_id":"m","action":"sign_presentation","params":{"audience":"\#(audience)","nonce":"n","credentials_to_include":[{"credential_query_id":"q","credential_id":"1"}]}}"#
+        return try JSONDecoder().decode(SignRequestMessage.self, from: Data(json.utf8))
+    }
+
+    /// A presentation without a transaction must not leave its start record for a later flow to claim.
+    func testAPlainPresentationConsumesItsOwnStartRecord() async throws {
+        let f = try await fixture()                       // start record: enabled
+        await f.wallet.handleSignRequest(engine: Sender(), msg: try plainMessage(flow: "plain"))
+        f.wallet.transactionDataEnabled = false
+        f.wallet.snapshotTransactionDataEnablement()      // the next flow started disabled
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage(flow: "tx"))
+        XCTAssertNil(sender.sent.last?.vpToken, "the transaction flow got its own (disabled) record, not the plain flow's leftover")
+    }
+
+    func testStaleStartRecordsAreDropped() async throws {
+        let f = try await fixture(enabled: false)
+        f.wallet.legacyFlowSnapshotQueue = [(effective: true, at: Date().addingTimeInterval(-SirosWallet.snapshotLifetime - 60))]
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage(flow: "late"))
+        XCTAssertNil(sender.sent.last?.vpToken, "an hours-old record of a flow that never signed is not applied to this one")
+    }
+
+    func testAFlowsRecordIsRemovedWhenItEnds() async throws {
+        let f = try await fixture(enabled: false)
+        await f.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage(flow: "gone"))   // refused: terminal
+        f.wallet.lock.lock(); let kept = f.wallet.legacyFlowSnapshots["gone"]; f.wallet.lock.unlock()
+        XCTAssertNil(kept)
+    }
+
+    func testTeardownCancelsConsentFlowsInProgress() async throws {
+        let f = try await fixture()
+        let task = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
+        f.wallet.lock.lock(); f.wallet.transactionTasks[UUID()] = task; f.wallet.lock.unlock()
+        f.wallet.cancelEngineTasks()
+        XCTAssertTrue(task.isCancelled)
+        f.wallet.lock.lock(); let remaining = f.wallet.transactionTasks.count; f.wallet.lock.unlock()
+        XCTAssertEqual(remaining, 0)
+    }
+
     func testAUsersOwnDeclineIsNotReportedAsAnError() async throws {
         let f = try await fixture()
         f.consent.answer = false
