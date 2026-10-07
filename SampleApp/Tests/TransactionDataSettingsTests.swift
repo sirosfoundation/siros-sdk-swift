@@ -135,12 +135,36 @@ final class TransactionDataLifecycleTests: XCTestCase {
         XCTAssertTrue(secondAnswer)
     }
 
+    /// A store whose read is held until released, to log out while the load is suspended.
+    private final class DelayedLogStore: TransactionLogStore, @unchecked Sendable {
+        private let sentinel = TransactionLogEntry(subject: TransactionLogSubject(transactionId: "SENTINEL", typeName: nil), verifier: "v", credential: "c", outcome: .consented)
+        private var continuation: CheckedContinuation<Void, Never>?
+        private let lock = NSLock()
+        private var released = false
+        func append(_ entries: [TransactionLogEntry]) async throws {}
+        func entries() async -> [TransactionLogEntry] {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if released { lock.unlock(); c.resume(); return }
+                continuation = c
+                lock.unlock()
+            }
+            return [sentinel]
+        }
+        func release() { lock.lock(); released = true; let c = continuation; continuation = nil; lock.unlock(); c?.resume() }
+    }
+
     func testALogLoadStartedBeforeLogoutDoesNotRepopulateTheNextSession() async throws {
         let vm = WalletViewModel()
-        vm.openTransactionLog()          // starts loading for this session
-        vm.disconnect()                  // the session ends before the load returns
-        try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertTrue(vm.transactionLog.isEmpty)
+        let store = DelayedLogStore()
+        let wallet = try XCTUnwrap(vm.wallet)
+        wallet.setTransactionLogStore(store)
+        vm.openTransactionLog()                       // the read is now suspended
+        try await Task.sleep(nanoseconds: 100_000_000)
+        vm.disconnect()                               // the session ends while it is suspended
+        store.release()                               // the stale result now arrives
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(vm.transactionLog.isEmpty, "the previous session's entries were not published")
         XCTAssertFalse(vm.showTransactionLog)
     }
 

@@ -47,8 +47,14 @@ final class TransactionConsentContinuationBox {
 
     /// Declines, whether or not the continuation has been installed yet.
     func cancel() {
-        lock.lock(); cancelled = true; lock.unlock()
-        resumeOnce(false)
+        // Mark and take the continuation under ONE lock, so a simultaneous confirm
+        // cannot slip in between and return consent after the deadline already won.
+        lock.lock()
+        cancelled = true
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: false)
     }
 }
 
@@ -69,6 +75,7 @@ final class TransactionConsentBridge: TransactionConsentHandler, @unchecked Send
 /// the SDK model gives them, and a warning that must be acknowledged when the
 /// request is not signed (TS12 3.1).
 struct TransactionConsentSheet: View {
+    @EnvironmentObject var viewModel: WalletViewModel
     let pending: PendingTransactionConsent
     @State private var acknowledgedUnsigned = false
 
@@ -100,6 +107,9 @@ struct TransactionConsentSheet: View {
             }
             .navigationTitle(L10n.string("transactionConsent.title"))
             .navigationBarTitleDisplayMode(.inline)
+            // The decline is bound to THIS prompt by its id: a stale dismissal of an
+            // earlier sheet can never answer a newer one.
+            .onDisappear { viewModel.dismissTransactionConsent(ifCurrent: pending.id) }
         }
     }
 
