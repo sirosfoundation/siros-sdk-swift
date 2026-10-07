@@ -448,7 +448,7 @@ public struct TransactionDataPipeline: Sendable {
             let limit = maxResourceBytes
             let fetched: Data?
             if let known = state.resources[uri] { fetched = known } else {
-                fetched = await bounded({ await source.fetchResource(uri: uri, maxBytes: 1) })
+                fetched = await bounded({ await source.fetchResource(uri: uri, maxBytes: limit) })
                 if let fetched { state.resources[uri] = fetched }
             }
             guard let data = fetched, data.count <= maxResourceBytes else {
