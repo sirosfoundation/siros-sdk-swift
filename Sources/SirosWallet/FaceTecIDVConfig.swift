@@ -14,7 +14,9 @@ public struct FaceTecIDVConfig: Sendable, CustomStringConvertible {
     /// Refuse to start on a device that cannot read NFC. facetec-api issues
     /// nothing without an authenticated read of the document's chip
     /// (sirosfoundation/facetec-api#65), so a scan on such a device can only
-    /// end in a refusal.
+    /// end in a refusal. This changes the preflight only (``FaceTecIDVProvider/isAvailable()``
+    /// and the start check): it never disables FaceTec's NFC step, so the host
+    /// still owes the NFC declarations (see ``HostAppRequirements``).
     public let requireNfc: Bool
     /// Timeout for each process-request call, in seconds. The calls carry
     /// biometric data and can take a while on FaceTec Server.

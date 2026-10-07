@@ -37,9 +37,11 @@ public enum HostAppRequirements {
         case nfc
         /// Biometric gating of key use (`LAContext`).
         case biometrics
-        /// Identity verification via the IDV module's liveness capture and,
-        /// unless `FaceTecIDVConfig.requireNfc` is turned off, the NFC read of
-        /// the document's chip.
+        /// Identity verification via the IDV module's liveness capture and the
+        /// NFC read of the document's chip. The chip-read declarations are owed
+        /// whatever `FaceTecIDVConfig.requireNfc` says: that flag only controls
+        /// the up-front "can this device read NFC" check, and FaceTec's session
+        /// can still ask for the chip.
         case identityVerification
     }
 
@@ -98,7 +100,7 @@ public enum HostAppRequirements {
         add(.identityVerification, .infoPlistKey("NSCameraUsageDescription"),
             "the IDV module's liveness capture uses the camera")
         add(.identityVerification, .infoPlistKey("NFCReaderUsageDescription"),
-            "the NFC prompt shown when the document's chip is read (FaceTecIDVConfig.requireNfc, on by default)")
+            "the NFC prompt shown when the document's chip is read (FaceTec's document scan can ask for it whatever FaceTecIDVConfig.requireNfc says)")
         add(.identityVerification, .entitlement("com.apple.developer.nfc.readersession.formats"),
             "TAG format, so NFCTagReaderSession can open an ISO 7816 session with the document's chip")
         add(.identityVerification, .infoPlistStrings(key: iso7816SelectIdentifiersKey, including: faceTecChipApplicationIdentifiers),
