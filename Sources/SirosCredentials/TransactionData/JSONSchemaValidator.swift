@@ -349,64 +349,105 @@ enum RegexSafety {
     static func isSafe(_ pattern: String) -> Bool {
         guard pattern.utf8.count <= maxPatternLength else { return false }
         if pattern.contains("(?=") || pattern.contains("(?!") || pattern.contains("(?<=") || pattern.contains("(?<!") { return false }
-        let chars = Array(pattern)
+        var scan = Scan(chars: Array(pattern))
+        return scan.run()
+    }
+
+    /// One left-to-right pass over a pattern, counting what `isSafe` limits. Split into small steps.
+    private struct Scan {
+        let chars: [Character]
         var i = 0
         var inClass = false
+        var lastWasGroupClose = false
         var openGroups = 0
         var groups = 0
         var quantifiers = 0
         var unbounded = 0
         var variable = 0
-        var lastWasGroupClose = false
-        while i < chars.count {
-            let c = chars[i]
-            var quantified = false
-            if c == "\\" {
-                guard i + 1 < chars.count else { return false }
-                if chars[i + 1].isNumber && chars[i + 1] != "0" { return false }   // back-reference
-                i += 2
-                lastWasGroupClose = false
-                continue
+
+        init(chars: [Character]) { self.chars = chars }
+
+        mutating func run() -> Bool {
+            while i < chars.count {
+                guard advance() else { return false }
             }
+            return openGroups == 0 && !inClass && groups <= RegexSafety.maxGroups && quantifiers <= RegexSafety.maxQuantifiers
+                && unbounded <= 1 && variable <= RegexSafety.maxVariableQuantifiers
+        }
+
+        private mutating func advance() -> Bool {
+            let c = chars[i]
+            if c == "\\" { return escape() }
             if inClass {
                 if c == "]" { inClass = false }
                 i += 1
-                continue
+                return true
             }
-            switch c {
-            case "[": inClass = true
-            case "|": return false
-            case "(": openGroups += 1; groups += 1
-            case ")":
-                guard openGroups > 0 else { return false }
-                openGroups -= 1
-            case "+", "*": quantified = true; quantifiers += 1; unbounded += 1; variable += 1
-            case "?":
-                // `(?:` introduces a non-capturing group; a `?` after an atom is optional; `+?` / `*?` are lazy forms.
-                let previous = i > 0 ? chars[i - 1] : " "
-                if previous == "(" || previous == "+" || previous == "*" || previous == "?" { break }
-                quantified = true
-                quantifiers += 1
-                variable += 1
-            case "{":
-                guard let close = chars[i...].firstIndex(of: "}") else { return false }
-                let body = String(chars[(i + 1)..<close])
-                let parts = body.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-                guard parts.count <= 2, let low = Int(parts[0]), low <= 64 else { return false }
-                if parts.count == 2 {
-                    if parts[1].isEmpty { unbounded += 1 }
-                    else { guard let high = Int(parts[1]), high <= 64, high >= low else { return false } }
-                    if parts[1].isEmpty || Int(parts[1]) != low { variable += 1 }
-                }
-                quantified = true
-                quantifiers += 1
-                i = close
-            default: break
-            }
+            guard let quantified = token(c) else { return false }
             if quantified && lastWasGroupClose { return false }
             lastWasGroupClose = c == ")"
             i += 1
+            return true
         }
-        return openGroups == 0 && !inClass && groups <= maxGroups && quantifiers <= maxQuantifiers && unbounded <= 1 && variable <= maxVariableQuantifiers
+
+        private mutating func escape() -> Bool {
+            guard i + 1 < chars.count else { return false }
+            if chars[i + 1].isNumber && chars[i + 1] != "0" { return false }   // back-reference
+            i += 2
+            lastWasGroupClose = false
+            return true
+        }
+
+        /// `nil` refuses the pattern; otherwise whether the token was a quantifier.
+        private mutating func token(_ c: Character) -> Bool? {
+            switch c {
+            case "[": inClass = true
+            case "|": return nil
+            case "(", ")": return group(c) ? false : nil
+            case "+", "*": count(unboundedRepeat: true); return true
+            case "?": return optional()
+            case "{": return braces()
+            default: break
+            }
+            return false
+        }
+
+        private mutating func group(_ c: Character) -> Bool {
+            if c == "(" { openGroups += 1; groups += 1; return true }
+            guard openGroups > 0 else { return false }
+            openGroups -= 1
+            return true
+        }
+
+        private mutating func count(unboundedRepeat: Bool) {
+            quantifiers += 1
+            variable += 1
+            if unboundedRepeat { unbounded += 1 }
+        }
+
+        /// `(?:` introduces a non-capturing group; a `?` after an atom is optional; `+?` / `*?` are lazy forms.
+        private mutating func optional() -> Bool {
+            let previous = i > 0 ? chars[i - 1] : " "
+            if previous == "(" || previous == "+" || previous == "*" || previous == "?" { return false }
+            count(unboundedRepeat: false)
+            return true
+        }
+
+        /// `{n}`, `{n,m}`, `{n,}` with every bound at most 64. `nil` refuses the pattern.
+        private mutating func braces() -> Bool? {
+            guard let close = chars[i...].firstIndex(of: "}") else { return nil }
+            let body = String(chars[(i + 1)..<close])
+            let parts = body.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count <= 2, let low = Int(parts[0]), low <= 64 else { return nil }
+            quantifiers += 1
+            if parts.count == 2 {
+                if parts[1].isEmpty { unbounded += 1 } else {
+                    guard let high = Int(parts[1]), high <= 64, high >= low else { return nil }
+                }
+                if parts[1].isEmpty || Int(parts[1]) != low { variable += 1 }
+            }
+            i = close
+            return true
+        }
     }
 }
