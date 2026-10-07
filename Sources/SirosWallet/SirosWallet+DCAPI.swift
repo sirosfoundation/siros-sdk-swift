@@ -54,6 +54,8 @@ extension SirosWallet {
     ///   no credential in the wallet is eligible to satisfy it.
     public func handleDCAPIRequest(rawRequestJson: String, origin: String) async throws -> DCAPIPresentationResult {
         let request = try DCAPIRequestParser.parse(rawRequestJson)
+        // The account this request belongs to is fixed BEFORE the first await (trust evaluation, credential load).
+        let accountGeneration = currentAccountGeneration()
         // EC TS12: a request carrying `transaction_data` must never be
         // answered as if it did not. Unless TS12 handling is in effect (flag
         // on and a consent handler registered) it is refused before anything
@@ -82,9 +84,9 @@ extension SirosWallet {
         // uses the bare origin.
         let audience = "origin:\(origin)"
         let (encryptionJwk, encryptionThumbprint) = try dcapiResolveEncryption(request: request)
-        // The account this request belongs to is fixed here. The consent wait is a tracked task, so a
-        // logout cancels it; and the scope is rechecked after consent and again after signing.
-        let accountGeneration = currentAccountGeneration()
+        // The consent wait is a tracked task, so a logout cancels it; the account is checked before the plan
+        // is built (the trust and credential awaits above may have spanned a switch), after consent and after signing.
+        if request.hasTransactionData { try requireSameAccount(accountGeneration) }
         let verifierLabel = Self.transactionVerifierLabel(trust: trustResult, fallback: origin, origin: origin)
         // (A request without `transaction_data` takes none of this: its behaviour is unchanged.)
         let scaPlan: ScaPlan? = request.hasTransactionData
@@ -526,6 +528,7 @@ extension SirosWallet {
                     throw SirosError.transactionData(refusal)
                 }
                 sca.additional.append(TransactionConsentAttributes(credentialName: Self.consentDisplayName(cred), claims: claims))
+                sca.extraCredentials.append(cred)
                 continue
             }
             sca.credentials[queryId] = cred

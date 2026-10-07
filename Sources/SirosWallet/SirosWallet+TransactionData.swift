@@ -319,6 +319,8 @@ extension SirosWallet {
         var credentials: [String: StoredCredential] = [:]
         var disclosed: [String: [String]] = [:]
         var additional: [TransactionConsentAttributes] = []
+        /// The further credentials themselves: they are presented too, so they are rechecked after consent like the others.
+        var extraCredentials: [StoredCredential] = []
     }
 
     /// Runs the TS12 sequence for a presentation and returns the plan to sign.
@@ -367,7 +369,7 @@ extension SirosWallet {
             // What was validated and shown must be what is signed: refuse if a
             // credential changed or went away while the user was deciding.
             let current = await credentialStore.getAll()
-            for (_, cred) in selected where current.first(where: { $0.id == cred.id }) != cred {
+            for cred in Array(selected.values) + selection.extraCredentials where current.first(where: { $0.id == cred.id }) != cred {
                 // One record, with the real reason; the caller must not log it again.
                 await plan.complete(signed: false, refusal: .invalidEntry)
                 var changed = TransactionDataError(.invalidEntry, detail: "a credential changed while the transaction was being confirmed")
@@ -459,6 +461,7 @@ extension SirosWallet {
                         throw TransactionDataError(.invalidEntry, detail: "more than one credential answers a query the transaction is bound to")
                     }
                     selection.additional.append(TransactionConsentAttributes(credentialName: Self.consentDisplayName(cred), claims: ref.disclosedClaims ?? []))
+                    selection.extraCredentials.append(cred)
                     continue
                 }
                 selection.credentials[queryId] = cred
