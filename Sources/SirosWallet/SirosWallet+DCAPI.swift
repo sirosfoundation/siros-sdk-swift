@@ -127,6 +127,8 @@ extension SirosWallet {
         }
         // The user's consent is recorded now that the presentation exists.
         await scaPlan?.plan.complete(signed: true)
+        // The awaits above can span a logout or an account switch: do not hand one account's response to another.
+        if scaPlan != nil { try requireSameAccount(accountGeneration) }
 
         var seenClaims = Set<String>()
         let requestedClaims = matchResults.flatMap { $0.requestedClaims.flatMap { $0 } }.filter { seenClaims.insert($0).inserted }
