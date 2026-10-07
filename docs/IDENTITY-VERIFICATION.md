@@ -36,7 +36,7 @@ Checked against facetec-api v0.16.0.
 
 facetec-api reports a refusal in the process-request response as
 `credentialIssueErrorCode` (message in `credentialIssueError`).
-`FaceTecIDVProvider` maps it as below. siros-sdk-kotlin maps the same way except that it has no dedicated errors yet for `chip_untrusted`, `document_expired` and `session_expired` (it reports them as `ProviderError`, `idv_provider_<code>`); aligning it is pending.
+`FaceTecIDVProvider` maps it as below. siros-sdk-kotlin maps the same way, with the same dedicated errors (`IDVException.ChipUntrusted`, `DocumentExpired`, `SessionExpired`) and `errorCode`s.
 
 The legacy `/v1` endpoints (`RemoteIDVClient`) answer 422 with `error_code`
 instead, and `RemoteIDVClient` maps it the same way (`IDVError(refusalCode:message:)`),

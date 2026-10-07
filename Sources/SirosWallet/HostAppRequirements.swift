@@ -37,7 +37,9 @@ public enum HostAppRequirements {
         case nfc
         /// Biometric gating of key use (`LAContext`).
         case biometrics
-        /// Identity verification via the IDV module's liveness capture.
+        /// Identity verification via the IDV module's liveness capture and,
+        /// unless `FaceTecIDVConfig.requireNfc` is turned off, the NFC read of
+        /// the document's chip.
         case identityVerification
     }
 
@@ -46,6 +48,9 @@ public enum HostAppRequirements {
         public enum Kind: Equatable, Sendable {
             /// An `Info.plist` key that must be present (any non-empty value).
             case infoPlistKey(String)
+            /// An `Info.plist` key holding an array of strings that must
+            /// include every listed value (the ISO 7816 select-identifiers).
+            case infoPlistStrings(key: String, including: [String])
             /// A URL scheme that must appear in some `CFBundleURLTypes` entry.
             case urlScheme(String)
             /// A code-signing entitlement. Entitlements are not readable from
@@ -58,6 +63,15 @@ public enum HostAppRequirements {
         /// Why the SDK needs it - suitable for a checklist or a log line.
         public let reason: String
     }
+
+    /// The `com.apple.developer.nfc.readersession.iso7816.select-identifiers`
+    /// key: the application identifiers `NFCTagReaderSession` may select.
+    public static let iso7816SelectIdentifiersKey = "com.apple.developer.nfc.readersession.iso7816.select-identifiers"
+
+    /// The ISO 7816 application identifiers FaceTec's document chip read
+    /// selects: eMRTD LDS1, an eID application, and FaceTec's catch-all.
+    /// Without them iOS refuses the session.
+    public static let faceTecChipApplicationIdentifiers = ["A0000002471001", "A0000002472001", "00000000000000"]
 
     /// The requirements for `features` (default: every feature).
     public static func requirements(for features: Set<Feature> = Set(Feature.allCases)) -> [Requirement] {
@@ -83,6 +97,12 @@ public enum HostAppRequirements {
             "LAContext evaluation gating keystore operations on Face ID devices")
         add(.identityVerification, .infoPlistKey("NSCameraUsageDescription"),
             "the IDV module's liveness capture uses the camera")
+        add(.identityVerification, .infoPlistKey("NFCReaderUsageDescription"),
+            "the NFC prompt shown when the document's chip is read (FaceTecIDVConfig.requireNfc, on by default)")
+        add(.identityVerification, .entitlement("com.apple.developer.nfc.readersession.formats"),
+            "TAG format, so NFCTagReaderSession can open an ISO 7816 session with the document's chip")
+        add(.identityVerification, .infoPlistStrings(key: iso7816SelectIdentifiersKey, including: faceTecChipApplicationIdentifiers),
+            "the application identifiers FaceTec's chip read selects; iOS refuses the ISO 7816 session without them")
         return out
     }
 
@@ -93,6 +113,7 @@ public enum HostAppRequirements {
             let what: String
             switch requirement.kind {
             case .infoPlistKey(let key): what = "Info.plist key \(key)"
+            case .infoPlistStrings(let key, let values): what = "Info.plist key \(key) including \(values.joined(separator: ", "))"
             case .urlScheme(let scheme): what = "CFBundleURLTypes scheme \(scheme)"
             case .entitlement(let e): what = "entitlement \(e)"
             }
@@ -129,6 +150,9 @@ public enum HostAppRequirements {
             case .infoPlistKey(let key):
                 let value = info[key] as? String
                 if value == nil || value?.isEmpty == true { findings.append(Finding(requirement: requirement)) }
+            case .infoPlistStrings(let key, let values):
+                let declared = Set((info[key] as? [String]) ?? [])
+                if !Set(values).isSubset(of: declared) { findings.append(Finding(requirement: requirement)) }
             case .urlScheme(let scheme):
                 if !declaredSchemes.contains(scheme.lowercased()) { findings.append(Finding(requirement: requirement)) }
             case .entitlement:

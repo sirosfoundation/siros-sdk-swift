@@ -15,9 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IDVResult`. Configured with `FaceTecIDVConfig(processRequestUrl:authToken:deviceKeyIdentifier:)`
   (`requireNfc` defaults to true; `configureSession` runs after FaceTec has
   initialized, for customization). Follows siros-sdk-kotlin's
-  `FaceTecIDVProvider` (same flow and config names; Kotlin has no dedicated
-  errors yet for `chip_untrusted`, `document_expired` and `session_expired`,
-  which it reports as `ProviderError`). It maps facetec-api's refusal codes to
+  `FaceTecIDVProvider` (same flow, config names and dedicated errors for
+  `chip_untrusted`, `document_expired` and `session_expired`). It maps facetec-api's refusal codes to
   `IDVError`s: `nfc_*` to `documentChipNotVerified`, `liveness_failed` to
   `livenessFailed`, `match_failed`/`policy_rejected`/`document_unreadable` to
   `verificationFailed`, `chip_untrusted`/`document_expired`/`session_expired`
@@ -28,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every `/process-request`**, which facetec-api v0.16.0 requires: it refuses
   the final result with `liveness_failed` unless that session's liveness was
   proven under the same ID. See `docs/IDENTITY-VERIFICATION.md`.
+- `HostAppRequirements` now lists, under `.identityVerification`, the NFC chip read's
+  declarations: `NFCReaderUsageDescription`, the `com.apple.developer.nfc.readersession.formats`
+  entitlement and the ISO 7816 select-identifiers (`faceTecChipApplicationIdentifiers`),
+  with a new array-valued requirement kind `infoPlistStrings` that `audit` checks.
 - The sample app uses it (device key from the `FACETEC_DEVICE_KEY_IDENTIFIER`
   build setting) and shows a localized message per `idv_*` error code (en, sv).
 - **`IDVError.documentChipNotVerified(reason:message:)`: a refused issuance

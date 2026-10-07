@@ -56,7 +56,8 @@ import FaceTecSDK
 ///   throws ``IDVError/unavailable(reason:)``.
 /// - `NSCameraUsageDescription`, and for the chip read the "NFC Tag Reading"
 ///   capability with `NFCReaderUsageDescription` and the ISO 7816 application
-///   identifiers FaceTec documents.
+///   identifiers FaceTec documents. ``HostAppRequirements`` (`.identityVerification`)
+///   lists them and `audit` checks them.
 ///
 /// ## Errors
 ///
