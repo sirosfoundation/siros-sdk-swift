@@ -52,6 +52,8 @@ extension WalletViewModel {
 
     func openTransactionLog() {
         showTransactionLog = true
+        // Every load takes its own generation, so a slower older read can never overwrite a newer one.
+        transactionLogGeneration += 1
         let generation = transactionLogGeneration
         Task {
             let entries = await wallet?.transactionLog() ?? []

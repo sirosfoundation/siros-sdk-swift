@@ -96,7 +96,13 @@ final class TransactionDataSettingsTests: XCTestCase {
         let firstTask = Task { await vm.requestTransactionConsent(Self.sampleRequest()) }
         let first = try await waitForPending(vm)
         let secondTask = Task { await vm.requestTransactionConsent(Self.sampleRequest()) }
+        // Fails (rather than hanging on `firstTask.value`) when the second prompt never replaces the first.
         for _ in 0..<200 where vm.pendingTransactionConsent?.id == first.id { try await Task.sleep(nanoseconds: 10_000_000) }
+        if vm.pendingTransactionConsent?.id == first.id {
+            vm.dismissTransactionConsent(); secondTask.cancel()
+            XCTFail("the second prompt was never presented")
+            return
+        }
         let firstAnswer = await firstTask.value
         XCTAssertFalse(firstAnswer)
         vm.pendingTransactionConsent?.respond(true)
@@ -153,6 +159,40 @@ final class TransactionDataLifecycleTests: XCTestCase {
             return [sentinel]
         }
         func release() { lock.lock(); released = true; let c = continuation; continuation = nil; lock.unlock(); c?.resume() }
+    }
+
+    /// First read slow, second read fast: the slow one must not overwrite the newer result.
+    private final class TwoSpeedLogStore: TransactionLogStore, @unchecked Sendable {
+        private let lock = NSLock()
+        private var reads = 0
+        private var slow: CheckedContinuation<Void, Never>?
+        private func entry(_ id: String) -> TransactionLogEntry {
+            TransactionLogEntry(subject: TransactionLogSubject(transactionId: id, typeName: nil), verifier: "v", credential: "c", outcome: .consented)
+        }
+        func append(_ entries: [TransactionLogEntry]) async throws {}
+        func entries() async -> [TransactionLogEntry] {
+            lock.lock(); reads += 1; let mine = reads; lock.unlock()
+            if mine == 1 {
+                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in lock.lock(); slow = c; lock.unlock() }
+                return [entry("OLD")]
+            }
+            return [entry("NEW")]
+        }
+        func releaseSlow() { lock.lock(); let c = slow; slow = nil; lock.unlock(); c?.resume() }
+    }
+
+    func testAnOlderLogReadDoesNotOverwriteANewerOne() async throws {
+        let vm = WalletViewModel()
+        vm.rebuildWalletIfNeeded()
+        let store = TwoSpeedLogStore()
+        try XCTUnwrap(vm.wallet).setTransactionLogStore(store)
+        vm.openTransactionLog()                                   // read 1: suspended
+        try await Task.sleep(nanoseconds: 100_000_000)
+        vm.openTransactionLog()                                   // read 2: finishes at once
+        try await Task.sleep(nanoseconds: 200_000_000)
+        store.releaseSlow()                                       // the older read now returns
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(vm.transactionLog.first?.transactionId, "NEW")
     }
 
     func testALogLoadStartedBeforeLogoutDoesNotRepopulateTheNextSession() async throws {
