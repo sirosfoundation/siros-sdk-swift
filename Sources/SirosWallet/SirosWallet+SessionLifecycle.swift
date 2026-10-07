@@ -75,6 +75,17 @@ extension SirosWallet {
         // again as part of its normal path.
         keystore.lock()
         resetDefaultTransactionLogStore()
+        // Same account/session-boundary reasoning as `endSessionLocally()`
+        // (review finding: this teardown used to skip it entirely) - a
+        // cut-off is exactly the kind of event whose own likely CAUSE is a
+        // revocation, so serving a stale cached status or Status List Token
+        // through the replacement session would be the worst possible time
+        // to get this wrong. AWAITED, not fire-and-forget (review finding):
+        // this function calls `login()` itself moments later with no human
+        // pacing gap, so a `refreshCredentialStatuses()` the replacement
+        // session starts must never be able to reach the evaluator before
+        // this clear has actually finished.
+        await clearCredentialStatusCachesAwaited()
         // The teardown above awaits the WMP peer's shutdown, and the caller
         // may have logged out or destroyed the wallet in the meantime. Logging
         // back in then would resurrect a session the user explicitly ended -

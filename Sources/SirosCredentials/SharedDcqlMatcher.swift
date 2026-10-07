@@ -227,7 +227,14 @@ extension SharedDcqlMatcher {
     /// Repeated to a fixed point, because a disclosed value may itself carry an
     /// `_sd` array whose digests only become reachable once its parent is
     /// restored.
-    private static func resolvingDisclosures(_ payload: [String: Any], in raw: String) -> [String: Any] {
+    ///
+    /// Not `private`: `CredentialUtils.parseValidityClaims` reuses this
+    /// (review finding) - a `validFrom`/`validUntil`/`status` claim can
+    /// itself be selectively disclosed, and evaluating validity/revocation
+    /// against the raw, undisclosed payload would read a disclosed one as
+    /// absent and report the credential `.valid` regardless of what it
+    /// actually says.
+    static func resolvingDisclosures(_ payload: [String: Any], in raw: String) -> [String: Any] {
         let segments = raw.split(separator: "~", omittingEmptySubsequences: true).map(String.init)
         guard segments.count > 1 else { return payload }
 
