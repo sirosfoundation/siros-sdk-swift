@@ -302,6 +302,20 @@ public struct TransactionDataPipeline: Sendable {
         )
     }
 
+    /// The DCQL query ids the entries name in `credential_ids`, decoded best-effort: an entry
+    /// that cannot be decoded names nothing here (the pipeline refuses it later). Used to tell
+    /// transaction-bound queries from unbound ones before validation.
+    public static func boundQueryIds(rawEntries: [String]) -> Set<String> {
+        var ids = Set<String>()
+        for raw in rawEntries where !raw.isEmpty && raw.utf8.count <= 64 * 1024 {
+            guard let bytes = TransactionDataHashing.base64UrlDecode(raw),
+                  let object = (try? StrictJSON.parse(bytes))?.objectValue,
+                  let list = object["credential_ids"]?.arrayValue else { continue }
+            for id in list.compactMap(\.stringValue) { ids.insert(id) }
+        }
+        return ids
+    }
+
     private func decode(_ raw: String) throws -> [String: JSONValue] {
         guard !raw.isEmpty, raw.utf8.count <= maxRawEntryBytes else {
             throw TransactionDataError(.invalidEntry, detail: "raw entry is empty or too large")
@@ -484,8 +498,13 @@ extension JSONValue {
         switch any {
         case .string(let s): self = .string(s)
         case .int(let i): self = .int(Int64(i))
-        // The hint's number is kept as its shortest decimal text, never compared through
-        // binary floating point: `0.1` and `0.10000000000000001` are different numbers.
+        // The transport (`AnyCodable`) has already decoded a fractional number to a binary
+        // `Double`, so the orchestrator's original digits are gone and cannot be recovered here.
+        // The hint keeps the shortest decimal text of that Double and is compared exactly against
+        // the SDK's own decoding of `raw`. Known, accepted limit: two distinct orchestrator numbers
+        // with the same Double read as one, so a hint can agree when it should not; it can never
+        // be wrongly trusted, because the hint is advisory only: what is shown, validated and
+        // hashed is always the decoding of `raw`, and a disagreement only ever REFUSES.
         case .double(let d): self = .decimal("\(d)")
         case .bool(let b): self = .bool(b)
         case .object_(let o): self = .object(o.mapValues(JSONValue.init))

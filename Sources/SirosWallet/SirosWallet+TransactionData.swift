@@ -351,6 +351,19 @@ extension SirosWallet {
         }
     }
 
+    /// The verifier identity the user is shown and the log records: the display name trust
+    /// evaluated, else the identifier it verified, else `fallback` (what the request itself
+    /// claims). For a signed DC API request whose verified `client_id` differs from the browser
+    /// origin and with no display name, both are named, so the label is never the wrong identity.
+    static func transactionVerifierLabel(trust: TrustResult?, fallback: String, origin: String? = nil) -> String {
+        if let name = trust?.entityName, !name.isEmpty { return name }
+        if let id = trust?.identifier, !id.isEmpty {
+            if let origin, !origin.isEmpty, origin != id { return "\(id) (via \(origin))" }
+            return id
+        }
+        return fallback
+    }
+
     /// The TS12 plan for a presentation relayed by the orchestrator (legacy
     /// engine or WMP). `nil` when the request carries no `transaction_data`. A
     /// request that does carry it is refused unless TS12 handling was in
@@ -362,8 +375,12 @@ extension SirosWallet {
         allCreds: [StoredCredential],
         audience: String,
         flowId: String,
-        viaWmp: Bool
+        viaWmp: Bool,
+        verifier verifierLabel: String? = nil
     ) async throws -> ScaPlan? {
+        // The identity shown and logged is the one trust evaluated (see `transactionVerifierLabel`);
+        // the protocol audience is only the fallback.
+        let verifier = (verifierLabel?.isEmpty == false) ? verifierLabel! : audience
         // An absent or empty member means the request carries no transaction.
         guard transactionData.requestsTransactionHandling else { return nil }
         let raws = (transactionData.entries ?? []).map { $0.raw ?? "" }
@@ -377,11 +394,21 @@ extension SirosWallet {
             // Without credentials_to_include nothing resolves and the pipeline refuses.
             var selected: [String: StoredCredential] = [:]
             var disclosed: [String: [String]] = [:]
+            // Which queries are transaction-bound is decided FIRST: only those must be answered
+            // by exactly one credential; an unbound query may have several.
+            let boundQueries = TransactionDataPipeline.boundQueryIds(rawEntries: raws)
             for ref in refs ?? [] {
                 guard let queryId = ref.credentialQueryId, !queryId.isEmpty,
-                      let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }),
-                      selected[queryId] == nil else {
+                      let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }) else {
                     throw TransactionDataError(.invalidEntry, detail: "credentials_to_include cannot be matched to DCQL queries")
+                }
+                if selected[queryId] != nil {
+                    guard !boundQueries.contains(queryId) else {
+                        throw TransactionDataError(.invalidEntry, detail: "more than one credential answers a query the transaction is bound to")
+                    }
+                    let extra = (ref.disclosedClaims ?? []).filter { !(disclosed[queryId] ?? []).contains($0) }
+                    disclosed[queryId, default: []].append(contentsOf: extra)
+                    continue
                 }
                 selected[queryId] = cred
                 disclosed[queryId] = ref.disclosedClaims ?? []
@@ -390,13 +417,13 @@ extension SirosWallet {
                 entries: entries.map(TransactionDataEntryInput.init),
                 responseMode: responseMode,
                 selected: selected,
-                verifier: audience,
+                verifier: verifier,
                 requestSigned: nil,
                 disclosedClaims: disclosed,
                 requireEveryCredentialBound: viaWmp
             )
         } catch let error as TransactionDataError {
-            if !error.alreadyLogged { await logPreparatoryRefusal(error, rawEntries: raws, verifier: audience) }
+            if !error.alreadyLogged { await logPreparatoryRefusal(error, rawEntries: raws, verifier: verifier) }
             throw SirosError.transactionData(error)
         }
     }
@@ -405,12 +432,12 @@ extension SirosWallet {
     /// every credential must be one the transaction is bound to (combined
     /// presentations are not supported over WMP, which lacks the response URI
     /// a non-SCA mdoc part would need).
-    func wmpTransactionPresentation(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
+    func wmpTransactionPresentation(flowId: String, params: SignSubFlowParams, verifier: String? = nil) async throws -> SignSubFlowResult {
         let allCreds = await credentialStore.getAll()
         guard let plan = try await orchestratedTransactionPlan(
             transactionData: params.transactionDataMember, responseMode: params.responseMode,
             refs: params.credentialsToInclude, allCreds: allCreds, audience: params.audience,
-            flowId: flowId, viaWmp: true
+            flowId: flowId, viaWmp: true, verifier: verifier
         ) else {
             throw SirosError.transactionData(TransactionDataError(.invalidEntry, detail: "no transaction_data"))
         }

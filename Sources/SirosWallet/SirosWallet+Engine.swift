@@ -332,10 +332,12 @@ extension SirosWallet {
             // transport's handleSignRequest - this transport previously
             // skipped it entirely, so a WMP-relayed sign_presentation was
             // never checked against the trust result computed for this flow.
-            try validateAudience(flowId: flowId, audience: params.audience)
+            let evaluated = try validateAudience(flowId: flowId, audience: params.audience)
             if params.transactionDataMember.requestsTransactionHandling {
-                // Tracked per flow: a flow error, logout or peer teardown cancels it.
-                return try await trackedTransaction(flowId: flowId) { try await self.wmpTransactionPresentation(flowId: flowId, params: params) }
+                // Tracked per flow: a flow error, logout or peer teardown cancels it. The verifier
+                // shown and logged is the evaluated identity, not the protocol audience.
+                let verifier = Self.transactionVerifierLabel(trust: evaluated, fallback: params.audience)
+                return try await trackedTransaction(flowId: flowId) { try await self.wmpTransactionPresentation(flowId: flowId, params: params, verifier: verifier) }
             }
             // NOTE (pre-existing, separate gap - not addressed by this
             // change): unlike the legacy engine transport's
@@ -726,7 +728,7 @@ extension SirosWallet {
                 let credsToInclude = msg.params.credentialsToInclude
 
                 // Validate audience matches trusted verifier identity
-                try validateAudience(flowId: msg.flowId, audience: audience)
+                let evaluated = try validateAudience(flowId: msg.flowId, audience: audience)
 
                 let allCredsForTransaction = await credentialStore.getAll()
                 // Empty for every request without `transaction_data`; refuses
@@ -735,7 +737,8 @@ extension SirosWallet {
                 let scaPlan = try await orchestratedTransactionPlan(
                     transactionData: msg.params.transactionDataMember, responseMode: msg.params.responseMode,
                     refs: credsToInclude, allCreds: allCredsForTransaction, audience: audience,
-                    flowId: msg.flowId, viaWmp: false
+                    flowId: msg.flowId, viaWmp: false,
+                    verifier: Self.transactionVerifierLabel(trust: evaluated, fallback: audience)
                 )
 
                 if let credsToInclude, !credsToInclude.isEmpty {
@@ -1289,7 +1292,8 @@ extension SirosWallet {
     /// handleSignRequest proceeded to sign and send the VP token regardless,
     /// defeating the audience-binding protection this function's name
     /// implies it provides.
-    private func validateAudience(flowId: String, audience: String) throws {
+    @discardableResult
+    private func validateAudience(flowId: String, audience: String) throws -> TrustResult? {
         lock.lock()
         // Consume (remove) the entry here, at actual point of use, instead
         // of at credential-selection time - see `handleMatchRequest`'s
@@ -1297,10 +1301,11 @@ extension SirosWallet {
         let trustResult = lastTrustResults.removeValue(forKey: flowId)
         lock.unlock()
 
-        guard let trustResult, let expectedId = trustResult.identifier else { return }
+        guard let trustResult, let expectedId = trustResult.identifier else { return trustResult }
         if !audience.isEmpty && !expectedId.isEmpty && audience != expectedId {
             throw SirosError.wallet(message: "Audience mismatch for flow \(flowId): sign_request audience='\(audience)' != trusted identifier='\(expectedId)'")
         }
+        return trustResult
     }
 
     /// Report a flow-terminating failure immediately (e.g. a keystore/WSCD

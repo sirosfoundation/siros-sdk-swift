@@ -7,7 +7,15 @@ private final class Source: TransactionMetadataSource, @unchecked Sendable {
     var documents: [String: String] = [:]
     var resources: [String: Data] = [:]
     func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? { documents[vct] }
-    func fetchResource(uri: String, maxBytes: Int) async -> Data? { resources[uri] }
+    var delayNanos: UInt64 = 0
+    private let lock = NSLock()
+    private var _fetches: [String: Int] = [:]
+    var fetches: [String: Int] { lock.lock(); defer { lock.unlock() }; return _fetches }
+    func fetchResource(uri: String, maxBytes: Int) async -> Data? {
+        lock.lock(); _fetches[uri, default: 0] += 1; lock.unlock()
+        if delayNanos > 0 { try? await Task.sleep(nanoseconds: delayNanos) }
+        return resources[uri]
+    }
 }
 
 private final class Handler: TransactionConsentHandler, @unchecked Sendable {
@@ -377,6 +385,20 @@ final class TransactionConsentTests: XCTestCase {
         XCTAssertEqual(both.map(\.credential), ["Card A", "Card B"])
     }
 
+    /// Text from a request cannot spoof the log: newlines, bidi controls and other format characters are neutralised.
+    func testLoggedTextIsNeutralised() {
+        let spoof = "Refund\nApproved \u{202E}evil\u{200B}\u{0007}"
+        let e = TransactionLogEntry(
+            subject: TransactionLogSubject(transactionId: spoof, typeName: spoof, entities: ["payee": spoof]),
+            verifier: spoof, credential: spoof, outcome: .refused, reason: "unsupportedType"
+        )
+        for value in [e.transactionId!, e.typeName!, e.entities["payee"]!, e.verifier, e.credential] {
+            XCTAssertEqual(value, "Refund\u{FFFD}Approved \u{FFFD}evil\u{FFFD}\u{FFFD}")
+            XCTAssertFalse(value.contains("\n"))
+        }
+        XCTAssertEqual(TransactionLogEntry.displaySafe("plain text"), "plain text")
+    }
+
     func testLoggedFieldsAreCapped() {
         let long = String(repeating: "y", count: 5000)
         let e = TransactionLogEntry(subject: TransactionLogSubject(transactionId: long, typeName: long, entities: ["payee": long]),
@@ -470,6 +492,35 @@ final class TransactionConsentTests: XCTestCase {
         // Unreachable resource refuses.
         s.resources["https://pay.example/c.json"] = nil
         await expectRefusal(.metadataUnavailable, service(s, handler: Handler(.yes)), req)
+    }
+
+    private func uriDoc() -> String {
+        let entry = #"{"schema":"urn:eudi:sca:payment:1","claims_uri":"https://pay.example/c.json","ui_labels_uri":"https://pay.example/l.json"}"#
+        return #"{"vct":"\#(vct)","category":"urn:eu:europa:ec:eudi:sua:sca","transaction_data_types":{"urn:eudi:sca:payment:1":\#(entry)}}"#
+    }
+
+    /// Several entries naming the same documents download each once per validation.
+    func testEachReferencedDocumentIsFetchedOncePerValidation() async throws {
+        let s = source(uriDoc())
+        s.resources["https://pay.example/c.json"] = Data(claimsJson().utf8)
+        s.resources["https://pay.example/l.json"] = Data(labels.utf8)
+        let three = [paymentRaw(), paymentRaw(), paymentRaw()]
+        _ = try await service(s, handler: Handler(.yes)).process(request(three), context: context())
+        XCTAssertEqual(s.fetches["https://pay.example/c.json"], 1)
+        XCTAssertEqual(s.fetches["https://pay.example/l.json"], 1)
+    }
+
+    /// All fetching shares one deadline: slow documents that each beat the per-fetch timeout still end the validation together.
+    func testFetchingSharesOneRequestWideDeadline() async {
+        let s = source(uriDoc())
+        s.resources["https://pay.example/c.json"] = Data(claimsJson().utf8)
+        s.resources["https://pay.example/l.json"] = Data(labels.utf8)
+        s.delayNanos = 190_000_000      // each below the 0.2 s per-fetch timeout, together above 0.3 s
+        let svc = TransactionDataService(
+            source: s, consentHandler: Handler(.yes), factorsProvider: FixedFactors(factors: twoFactors),
+            log: InMemoryTransactionLogStore(), consentTimeout: 5, fetchTimeout: 0.2
+        )
+        await expectRefusal(.metadataUnavailable, svc, request())
     }
 
     func testClaimsBothInlineAndByUriRefuses() async {

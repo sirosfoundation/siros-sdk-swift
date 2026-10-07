@@ -84,7 +84,7 @@ extension SirosWallet {
         let (encryptionJwk, encryptionThumbprint) = try dcapiResolveEncryption(request: request)
         let scaPlan = try await dcapiTransactionPlan(
             request: request, selection: selection, allCreds: allCreds,
-            verifier: trustResult.entityName ?? origin
+            verifier: Self.transactionVerifierLabel(trust: trustResult, fallback: origin, origin: origin)
         )
 
         let finalResponseJson: String
@@ -493,16 +493,24 @@ extension SirosWallet {
         guard request.hasTransactionData, let strings = request.transactionData else { return nil }
         var selected: [String: StoredCredential] = [:]
         var disclosed: [String: [String]] = [:]
+        // A query the transaction is bound to answers with exactly one credential; an
+        // unbound query may answer with several (DC API presents an array per query).
+        let boundQueries = TransactionDataPipeline.boundQueryIds(rawEntries: strings)
         for id in selection.selectedIds {
             guard let cred = allCreds.first(where: { $0.id == id }) else { continue }
             let queryId = selection.matchResultByCredentialId[id]?.queryId ?? "_default"
-            guard selected[queryId] == nil else {
-                let refusal = TransactionDataError(.invalidEntry, detail: "more than one credential answers a query a transaction may be bound to")
-                await logPreparatoryRefusal(refusal, rawEntries: strings, verifier: verifier)
-                throw SirosError.transactionData(refusal)
+            let claims = selection.matchResultByCredentialId[id]?.requestedClaims.compactMap(\.last) ?? []
+            if selected[queryId] != nil {
+                guard !boundQueries.contains(queryId) else {
+                    let refusal = TransactionDataError(.invalidEntry, detail: "more than one credential answers a query the transaction is bound to")
+                    await logPreparatoryRefusal(refusal, rawEntries: strings, verifier: verifier)
+                    throw SirosError.transactionData(refusal)
+                }
+                disclosed[queryId, default: []].append(contentsOf: claims.filter { !(disclosed[queryId] ?? []).contains($0) })
+                continue
             }
             selected[queryId] = cred
-            disclosed[queryId] = selection.matchResultByCredentialId[id]?.requestedClaims.compactMap(\.last) ?? []
+            disclosed[queryId] = claims
         }
         do {
             return try await processTransactionData(
