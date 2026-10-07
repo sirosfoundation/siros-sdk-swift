@@ -232,9 +232,10 @@ final class TransactionDataEndToEndTests: XCTestCase {
 
     // MARK: - Legacy engine
 
-    private func engineMessage(flow: String = "f1", transactionData: String? = nil, refs: String = #"[{"credential_query_id":"pay","credential_id":"1"}]"#, extra: String = "") throws -> SignRequestMessage {
+    private func engineMessage(flow: String = "f1", transactionData: String? = nil, refs: String = #"[{"credential_query_id":"pay","credential_id":"1"}]"#, extra: String = "",
+                               nonce: String = "n-1", audience audienceOverride: String? = nil) throws -> SignRequestMessage {
         let td = transactionData ?? #"[{"raw":"\#(raw)","type":"urn:eudi:sca:payment:1","credential_ids":["pay"],"payload":\#(payload),"transaction_data_hashes_alg":["sha-256"]}]"#
-        let json = #"{"type":"sign_request","flow_id":"\#(flow)","message_id":"m1","action":"sign_presentation","params":{"audience":"\#(audience)","nonce":"n-1","response_mode":"direct_post.jwt","credentials_to_include":\#(refs),"transaction_data":\#(td)\#(extra)}}"#
+        let json = #"{"type":"sign_request","flow_id":"\#(flow)","message_id":"m1","action":"sign_presentation","params":{"audience":"\#(audienceOverride ?? audience)","nonce":"\#(nonce)","response_mode":"direct_post.jwt","credentials_to_include":\#(refs),"transaction_data":\#(td)\#(extra)}}"#
         return try JSONDecoder().decode(SignRequestMessage.self, from: Data(json.utf8))
     }
 
@@ -868,10 +869,10 @@ final class TransactionDataEndToEndTests: XCTestCase {
 
     /// Without a replay challenge or a verifier binding nothing is signed (engine and WMP).
     func testAnEmptyNonceOrAudienceRefusesTheTransaction() async throws {
-        for extra in [",\"nonce\":\"\"", ",\"audience\":\"\""] {
+        for (extra, msg) in [("nonce", try engineMessage(nonce: "")), ("audience", try engineMessage(audience: ""))] {
             let f = try await fixture()
             let sender = Sender()
-            await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage(extra: extra))
+            await f.wallet.handleSignRequest(engine: sender, msg: msg)
             XCTAssertNil(sender.sent.last?.vpToken, "engine \(extra)")
             XCTAssertEqual(f.keystore.scaCalls, 0, "engine \(extra)")
             XCTAssertTrue(f.consent.requests.isEmpty, "refused before the user is asked: \(extra)")
