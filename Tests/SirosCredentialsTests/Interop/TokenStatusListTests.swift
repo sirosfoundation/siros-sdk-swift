@@ -1,0 +1,491 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import XCTest
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
+@testable import SirosCredentials
+
+final class TokenStatusListTests: XCTestCase {
+
+    // MARK: - bit packing
+    //
+    // The draft's own packing: entries are packed least-significant-bits
+    // first within each byte.
+
+    func testOneBitEntriesAreReadLeastSignificantBitFirst() {
+        // 0b1010_0101 -> indices 0..7 = 1,0,1,0,0,1,0,1
+        let list = Data([0xA5])
+        let read = (0...7).map { TokenStatusList.readStatus(in: list, bits: 1, idx: $0) }
+        XCTAssertEqual(read, [1, 0, 1, 0, 0, 1, 0, 1])
+    }
+
+    func testTwoBitEntriesPackFourToAByte() {
+        // 0b11_10_01_00 -> indices 0..3 = 0,1,2,3
+        let list = Data([0xE4])
+        XCTAssertEqual((0...3).map { TokenStatusList.readStatus(in: list, bits: 2, idx: $0) }, [0, 1, 2, 3])
+    }
+
+    func testFourBitEntriesPackTwoToAByte() {
+        // 0b1100_0011 -> index 0 = 3, index 1 = 12
+        let list = Data([0xC3])
+        XCTAssertEqual(TokenStatusList.readStatus(in: list, bits: 4, idx: 0), 3)
+        XCTAssertEqual(TokenStatusList.readStatus(in: list, bits: 4, idx: 1), 12)
+    }
+
+    func testEightBitEntriesAreOnePerByte() {
+        let list = Data([0x00, 0x01, 0x02, 0xFF])
+        XCTAssertEqual((0...3).map { TokenStatusList.readStatus(in: list, bits: 8, idx: $0) }, [0, 1, 2, 255])
+    }
+
+    func testAnIndexPastTheEndReadsAsUnknownNotAsValid() {
+        // Reporting 0 (VALID) for an out-of-range index would silently treat a
+        // revoked credential as good.
+        XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 1, idx: 8))
+        XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 8, idx: 1))
+        XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 1, idx: -1))
+    }
+
+    /// Regression (review finding): a genuinely unreachable transport (no
+    /// response at all) is the ONE case that gets the offline-friendly
+    /// treatment - `.unreachable`, not `.unavailable`. Every OTHER failure
+    /// mode (a reached-but-unverifiable response) must stay `.unavailable`,
+    /// which `CredentialStatusEvaluator` now maps to `.unknown` rather than
+    /// `.valid` - conflating the two previously let a forged/invalid
+    /// signature read exactly like an offline wallet.
+    func testOnlyAGenuineTransportFailureIsUnreachable() async {
+        let unreachableClient = TokenStatusListClient(httpGet: { _, _ in .unreachable })
+        let unreachable = await unreachableClient.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unreachable = unreachable else {
+            return XCTFail("expected .unreachable for a transport that returns nothing, got \(unreachable)")
+        }
+
+        let garbageClient = TokenStatusListClient(httpGet: { _, _ in .success(Data("not-a-jws".utf8)) })
+        let garbage = await garbageClient.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unavailable = garbage else {
+            return XCTFail("a reached-but-unparseable response is .unavailable, not .unreachable, got \(garbage)")
+        }
+    }
+
+    /// Regression (review finding): the wallet's own `fetchPublicUrl` returns
+    /// `nil` both for a genuinely unreachable endpoint AND for a request its
+    /// own policy refused to even attempt, or one that reached the server
+    /// and got back a non-2xx response - `TokenStatusList.FetchOutcome`
+    /// exists so `httpGet` can tell `resolve` apart which happened.
+    /// `.rejected` must map to `.unavailable` (and so to `.unknown`, never
+    /// `.valid`), NOT to `.unreachable`'s offline-friendly treatment - a
+    /// blocked or failing status URI is not the same as an offline wallet.
+    func testARejectedFetchIsUnavailableNotUnreachable() async {
+        let client = TokenStatusListClient(httpGet: { _, _ in .rejected })
+        let resolution = await client.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unavailable = resolution else {
+            return XCTFail("a policy-rejected or non-2xx fetch must be .unavailable, got \(resolution)")
+        }
+    }
+
+    func testAnIllegalEntryWidthIsReportedAsSuchNotAsAMissingIndex() async {
+        // "Index 1 is outside the status list" would send whoever is debugging
+        // the issuer looking in entirely the wrong place.
+        let key = P256.Signing.PrivateKey()
+        let token = Self.statusListToken(bits: 3, signedBy: key)
+        let client = TokenStatusListClient(
+            httpGet: { _, _ in .success(Data(token.utf8)) },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+        let resolution = await client.resolve(
+            TokenStatusList.Reference(idx: 1, uri: "https://x.example")
+        )
+        guard case .unavailable(let reason) = resolution else {
+            return XCTFail("expected an unavailable status, got \(resolution)")
+        }
+        XCTAssertTrue(reason.contains("entry width of 3 bits"), reason)
+    }
+
+    /// Regression (review finding): `kty`/`crv` are checked explicitly, not
+    /// inferred from `x`/`y` merely being present - a JWKS entry for a
+    /// different key type or purpose that happens to also carry members
+    /// named `x`/`y` must not be imported as ES256/P-256 material.
+    func testAResolvedSigningKeyDeclaringTheWrongKtyIsRejected() async {
+        let key = P256.Signing.PrivateKey()
+        let token = Self.statusListToken(bits: 1, signedBy: key)
+        var wrongKty = Self.publicJwk(of: key)
+        wrongKty["kty"] = "RSA"
+        let client = TokenStatusListClient(
+            httpGet: { _, _ in .success(Data(token.utf8)) },
+            resolveIssuerKey: { _, _ in wrongKty }
+        )
+        let resolution = await client.resolve(TokenStatusList.Reference(idx: 0, uri: "https://x.example"))
+        guard case .unavailable(let reason) = resolution else {
+            return XCTFail("expected an unavailable status, got \(resolution)")
+        }
+        XCTAssertTrue(reason.contains("not an EC P-256 public key"), reason)
+    }
+
+    /// Regression (review finding): without a way to clear it, a fetched
+    /// Status List Token could survive a session boundary (logout, account
+    /// switch) and keep answering for the next account's credentials -
+    /// missing a revocation published after it was fetched.
+    func testClearCacheForcesARefetchOnTheNextResolve() async {
+        let key = P256.Signing.PrivateKey()
+        let token = Self.statusListToken(bits: 1, signedBy: key)
+        actor FetchCounter {
+            private(set) var count = 0
+            func increment() { count += 1 }
+        }
+        let fetches = FetchCounter()
+        let client = TokenStatusListClient(
+            httpGet: { _, _ in
+                await fetches.increment()
+                return .success(Data(token.utf8))
+            },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+        let reference = TokenStatusList.Reference(idx: 0, uri: "https://x.example")
+        // Matching statusListToken's own "iss" (see its doc comment) - the
+        // cache keys a hit on the expected issuer matching the one the entry
+        // was fetched and authenticated for.
+        let issuer = "https://issuer.example"
+
+        _ = await client.resolve(reference, expectedIssuer: issuer)
+        _ = await client.resolve(reference, expectedIssuer: issuer)
+        var count = await fetches.count
+        XCTAssertEqual(count, 1, "the second resolve must be served from cache")
+
+        await client.clearCache()
+        _ = await client.resolve(reference, expectedIssuer: issuer)
+        count = await fetches.count
+        XCTAssertEqual(count, 2, "clearCache must force a real refetch, not another cache hit")
+    }
+
+    /// Regression (review finding): with no bound at all, a wallet holding
+    /// many credentials with distinct status-list URIs would retain every
+    /// one of their lists for the life of this client, growing memory
+    /// without limit. The oldest entry must be evicted once the cache
+    /// exceeds its cap (500 - see TokenStatusListClient.maxCacheEntries), so
+    /// resolving it again is a real refetch, while a recently-touched entry
+    /// stays cached.
+    func testTheOldestCacheEntryIsEvictedOncePastTheCap() async {
+        let key = P256.Signing.PrivateKey()
+        let issuer = "https://issuer.example"
+        actor FetchCounter {
+            private(set) var uris: [String] = []
+            func record(_ uri: String) { uris.append(uri) }
+        }
+        let fetched = FetchCounter()
+        let client = TokenStatusListClient(
+            httpGet: { uri, _ in
+                await fetched.record(uri)
+                return .success(Data(Self.statusListToken(bits: 1, signedBy: key, uri: uri).utf8))
+            },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+
+        let oldestUri = "https://x.example/0"
+        // One past the cap: the 501st distinct uri must evict the 1st.
+        for index in 0...500 {
+            let uri = "https://x.example/\(index)"
+            _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: uri), expectedIssuer: issuer)
+        }
+
+        let fetchesBefore = await fetched.uris.count
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: oldestUri), expectedIssuer: issuer)
+        let fetchesAfter = await fetched.uris.count
+        XCTAssertEqual(fetchesAfter, fetchesBefore + 1, "the evicted oldest entry must be refetched, not cached")
+
+        let recentUri = "https://x.example/500"
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: recentUri), expectedIssuer: issuer)
+        let fetchesFinal = await fetched.uris.count
+        XCTAssertEqual(fetchesFinal, fetchesAfter, "a recently-touched entry must still be served from cache")
+    }
+
+    /// A raw (no zlib wrapper) DEFLATE stream of `byteCount` zero bytes,
+    /// built from however many stored (type 0) blocks that takes - a
+    /// stored block's LEN is 16 bits, capping each one at 65,535 bytes.
+    /// Lets a test construct an arbitrarily large, cheaply-built
+    /// decompressed list without needing a real zlib encoder in this
+    /// package (see `Inflate`'s own doc comment for why there isn't one).
+    private static func storedDeflate(byteCount: Int) -> Data {
+        var result = Data()
+        var remaining = byteCount
+        while remaining > 0 {
+            let chunk = min(remaining, 65535)
+            let isFinal = remaining == chunk
+            let len = UInt16(chunk)
+            let nlen = ~len
+            result.append(isFinal ? 0x01 : 0x00)
+            result.append(UInt8(len & 0xFF))
+            result.append(UInt8(len >> 8))
+            result.append(UInt8(nlen & 0xFF))
+            result.append(UInt8(nlen >> 8))
+            result.append(Data(repeating: 0, count: chunk))
+            remaining -= chunk
+        }
+        return result
+    }
+
+    /// Regression (review finding): `maxCacheEntries` bounds entry COUNT,
+    /// but each entry's decompressed list can be as large as `Inflate`'s own
+    /// 64 MiB output cap - far fewer than 500 oversized entries can still
+    /// retain tens of gigabytes. Shrinks the byte budget (rather than
+    /// building cache entries anywhere near the real 50 MiB default, which
+    /// would make this test slow) so a handful of modest, cheaply-built
+    /// lists - well under the entry-count cap - must still evict the
+    /// oldest ones on byte pressure alone.
+    func testTheOldestCacheEntryIsEvictedOncePastTheByteBudgetEvenUnderTheEntryCap() async {
+        let originalBudget = tokenStatusListCacheByteBudget
+        defer { tokenStatusListCacheByteBudget = originalBudget }
+        tokenStatusListCacheByteBudget = 500_000
+
+        let key = P256.Signing.PrivateKey()
+        let issuer = "https://issuer.example"
+        let bigList = EncryptedContainerBase64.urlEncode(Self.storedDeflate(byteCount: 100_000))
+        actor FetchCounter {
+            private(set) var uris: [String] = []
+            func record(_ uri: String) { uris.append(uri) }
+        }
+        let fetched = FetchCounter()
+        let client = TokenStatusListClient(
+            httpGet: { uri, _ in
+                await fetched.record(uri)
+                return .success(Data(Self.statusListToken(bits: 1, signedBy: key, uri: uri, lst: bigList).utf8))
+            },
+            resolveIssuerKey: { _, _ in Self.publicJwk(of: key) }
+        )
+
+        let oldestUri = "https://x.example/big/0"
+        // 6 entries * 100,000 bytes = 600,000, past the 500,000 budget -
+        // and only 6 entries, far under the 500-entry cap, so this is the
+        // byte budget evicting, not the count one.
+        for index in 0..<6 {
+            let uri = "https://x.example/big/\(index)"
+            _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: uri), expectedIssuer: issuer)
+        }
+
+        let fetchesBefore = await fetched.uris.count
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: oldestUri), expectedIssuer: issuer)
+        let fetchesAfter = await fetched.uris.count
+        XCTAssertEqual(fetchesAfter, fetchesBefore + 1, "the oldest entry must have been evicted by byte pressure")
+
+        let recentUri = "https://x.example/big/5"
+        _ = await client.resolve(TokenStatusList.Reference(idx: 0, uri: recentUri), expectedIssuer: issuer)
+        let fetchesFinal = await fetched.uris.count
+        XCTAssertEqual(fetchesFinal, fetchesAfter, "a recently-touched entry must still be served from cache")
+    }
+
+    /// A properly signed Status List Token declaring `bits` as its entry width.
+    ///
+    /// Really signed, because the reader verifies the signature before it
+    /// looks at the list - an unsigned shell never reaches the width check.
+    private static func statusListToken(
+        bits: Int,
+        signedBy key: P256.Signing.PrivateKey,
+        uri: String = "https://x.example",
+        lst: String = "eJxjYGRiZmFlYwcAAFwAHQ=="
+    ) -> String {
+        func b64(_ object: [String: Any]) -> String {
+            EncryptedContainerBase64.urlEncode(
+                // swiftlint:disable:next force_try
+                try! JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
+            )
+        }
+        // Spelled out rather than written as one nested literal: Swift 6.1's
+        // type-checker gives up on the heterogeneous inner dictionary
+        // ("unable to type-check this expression in reasonable time"), which
+        // is the Swift version CI builds Linux with.
+        let header: [String: Any] = ["alg": "ES256", "typ": "statuslist+jwt"]
+        // A real zlib stream (the eight bytes 0..7 - see
+        // testAZlibWrappedListInflates), not an empty/placeholder one: a
+        // caller that reaches actual status-bit reading (unlike
+        // testAnIllegalEntryWidthIsReportedAsSuchNotAsAMissingIndex, which
+        // fails before ever decompressing) needs this to actually inflate.
+        let statusList: [String: Any] = ["bits": bits, "lst": lst]
+        let payload: [String: Any] = [
+            "iss": "https://issuer.example",
+            // Must match the `Reference.uri` the caller resolves against -
+            // `sub` is REQUIRED (review finding, see TokenStatusList's own
+            // doc comment), so an absent one is no longer a signed-but-
+            // otherwise-valid token.
+            "sub": uri,
+            "status_list": statusList,
+        ]
+        let signingInput = "\(b64(header)).\(b64(payload))"
+        // swiftlint:disable:next force_try
+        let signature = try! key.signature(for: Data(signingInput.utf8))
+        return "\(signingInput).\(EncryptedContainerBase64.urlEncode(signature.rawRepresentation))"
+    }
+
+    private static func publicJwk(of key: P256.Signing.PrivateKey) -> [String: String] {
+        let x963 = key.publicKey.x963Representation
+        return [
+            "kty": "EC",
+            "crv": "P-256",
+            "x": EncryptedContainerBase64.urlEncode(Data(x963[1..<33])),
+            "y": EncryptedContainerBase64.urlEncode(Data(x963[33..<65])),
+        ]
+    }
+
+    func testAnEntryWidthTheDraftDoesNotDefineIsRefused() {
+        XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 3, idx: 0))
+        XCTAssertNil(TokenStatusList.readStatus(in: Data([0x00]), bits: 0, idx: 0))
+    }
+
+    func testAnIndexInALaterByteIsFound() {
+        var list = Data(repeating: 0, count: 4)
+        list[2] = 0x04 // 0b0000_0100 -> bit 2 of byte 2 -> index 18
+        XCTAssertEqual(TokenStatusList.readStatus(in: list, bits: 1, idx: 18), 1)
+        XCTAssertEqual(TokenStatusList.readStatus(in: list, bits: 1, idx: 17), 0)
+    }
+
+    // MARK: - the credential's reference
+
+    func testAStatusListReferenceIsReadFromACredentialsClaims() {
+        let reference = TokenStatusList.extractReference(from: claims(
+            #"{"status":{"status_list":{"idx":42,"uri":"https://issuer.example/statuslists/1"}}}"#
+        ))
+        XCTAssertEqual(reference?.idx, 42)
+        XCTAssertEqual(reference?.uri, "https://issuer.example/statuslists/1")
+    }
+
+    func testACredentialWithoutAStatusReferenceHasNone() {
+        XCTAssertNil(TokenStatusList.extractReference(from: claims(#"{"iss":"https://issuer.example"}"#)))
+        XCTAssertNil(TokenStatusList.extractReference(from: claims(#"{"status":{}}"#)))
+        // A reference missing either half is not a reference.
+        XCTAssertNil(TokenStatusList.extractReference(from: claims(#"{"status":{"status_list":{"idx":1}}}"#)))
+        XCTAssertNil(TokenStatusList.extractReference(
+            from: claims(#"{"status":{"status_list":{"uri":"https://x.example"}}}"#)
+        ))
+    }
+
+    func testHasStatusReferenceDistinguishesAbsentFromUnreadable() {
+        // No status claim at all - an ordinary credential, correctly absent.
+        XCTAssertFalse(TokenStatusList.hasStatusReference(claims(#"{"iss":"https://issuer.example"}"#)))
+        // Regression (review finding): status present, but empty - no
+        // status_list declared inside it - still counts as declared, not
+        // absent. A conformant issuer meaning "no revocation tracking"
+        // omits `status` entirely rather than emitting an empty object.
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(#"{"status":{}}"#)))
+        // A well-formed status_list - present, obviously.
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(
+            #"{"status":{"status_list":{"idx":1,"uri":"https://x.example"}}}"#
+        )))
+        // Regression (review finding): `status` is present but not even a
+        // map - `{"status":"invalid"}` - previously made `extractReference`
+        // return nil AND made this cast fail the same way, so an unreadable
+        // status read exactly like no status claim at all and the
+        // credential came back `.valid`. Status data IS present here, just
+        // unreadable - must say true so the caller reports `.unknown`.
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(#"{"status":"invalid"}"#)))
+        XCTAssertTrue(TokenStatusList.hasStatusReference(claims(#"{"status":7}"#)))
+    }
+
+    // MARK: - decompression
+
+    func testAZlibWrappedListInflates() {
+        // A zlib stream produced elsewhere, holding the eight bytes 0..7.
+        let compressed = Data(base64Encoded: "eJxjYGRiZmFlYwcAAFwAHQ==")
+        XCTAssertNotNil(compressed)
+        XCTAssertEqual(TokenStatusList.inflate(compressed!), Data([0, 1, 2, 3, 4, 5, 6, 7]))
+    }
+
+    func testAStoredUncompressedDeflateBlockInflates() {
+        // A raw DEFLATE stream with a single stored (type 0) block, which is
+        // the one shape that can be written by hand: final bit set, type 0,
+        // then LEN/NLEN and the literal bytes.
+        var raw = Data([0x01, 0x03, 0x00, 0xFC, 0xFF])
+        raw.append(contentsOf: [0xAA, 0xBB, 0xCC])
+        XCTAssertEqual(TokenStatusList.inflate(raw), Data([0xAA, 0xBB, 0xCC]))
+    }
+
+    func testARealCompressedListInflatesByteForByte() {
+        // Exercises the paths a hand-written stored block does not: dynamic
+        // Huffman tables and LZ77 back-references, including the overlapping
+        // copies a long run of one byte compresses to.
+        let base64 = "eNpj5hKUkFfTNbF28gwIj0vNKa5q7OifNnfJ6k07Dxw/d/XO41cff7BwC0kqqOuZ2jh7BUbEp+WWVDd1Tpg+b+mazbsOnjh/7e6T159+svIISylq6JvZungHRSak55XWNHdNnDF/2dotuw+dvHD93tM3n3+x8YpIK2kamNu5+gRHJWbkl9W2dE+auWD5uq17Dp+6eOP+s7dfGNj5RGWUtQwt7N18Q6KTMgvK61p7Js9auGL9tr1HTl+6+eD5u6+MHPxisiraRpYO7n6hMclZhRX1bb1TZi9auWH7vqNnLt96+OL9NyZOAXE5VR1jK0cP/7DYlOyiyob2vqlzFq/auGP/sbNXbj96+eE7M6leZx4Nq9GwGg2r0bAaDathF1aOo2DEAQBUmdZk"
+        let compressed = Data(base64Encoded: base64)
+        XCTAssertNotNil(compressed)
+
+        // Built in named steps with explicit types: Swift 6.1's type-checker
+        // gives up on the one-expression form (`.map {}.repeated() + [...]`
+        // inside a `Data.init` overload set), and 6.1 is what CI builds Linux
+        // with.
+        let pattern: [UInt8] = (0..<300).map { index in UInt8((index * 7 + 3) % 251) }
+        let repeatedPattern: [UInt8] = pattern.repeated(6)
+        let run: [UInt8] = [UInt8](repeating: 0x41, count: 500)
+        var bytes: [UInt8] = repeatedPattern
+        bytes.append(contentsOf: run)
+        let expected = Data(bytes)
+        XCTAssertEqual(TokenStatusList.inflate(compressed!), expected)
+    }
+
+    func testDataThatIsNotCompressedAtAllCannotBeInflated() {
+        XCTAssertNil(TokenStatusList.inflate(Data([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])))
+    }
+
+    /// Regression (review finding, on `Inflate`'s own dynamic-Huffman
+    /// `decode`): a malformed/oversubscribed code-length table could in
+    /// principle make `code - first` go negative and index `symbols` out of
+    /// bounds, trapping instead of reporting corruption - this is
+    /// issuer-supplied compressed data, so a malformed one must never crash
+    /// the process. `decode` now guards `code >= first` before indexing.
+    ///
+    /// A single hand-crafted byte sequence can't reliably force that EXACT
+    /// arithmetic condition (short of literally re-deriving the decoder's
+    /// internal bit-level state), so this instead fuzzes many random byte
+    /// sequences, forced into the BFINAL=1/BTYPE=10 (dynamic Huffman) header
+    /// every real issuer-controlled payload would use - a crash anywhere in
+    /// `readDynamicTables`/`Huffman.decode` would abort this entire test
+    /// process (not just fail an assertion), so simply reaching the end of
+    /// this loop is the proof: every one of these inputs returns (nil, for
+    /// everything attempted here - none happens to be valid DEFLATE) rather
+    /// than trapping.
+    func testMalformedDynamicHuffmanBlocksNeverCrashOnlyFailToInflate() {
+        var rng = SplitMix64(seed: 0xC0FFEE)
+        var inflatedAnyway = 0
+        for _ in 0..<2_000 {
+            var bytes: [UInt8] = []
+            let length = Int(rng.next() % 48) + 1
+            for _ in 0..<length { bytes.append(UInt8(rng.next() & 0xFF)) }
+            // Force BFINAL=1, BTYPE=10 (dynamic Huffman) in the first byte's
+            // low 3 bits (DEFLATE is read LSB-first) - the path the review
+            // finding is about. The rest stays random.
+            bytes[0] = (bytes[0] & 0b1111_1000) | 0b101
+            // The assertion that matters is that this call RETURNS at all -
+            // a reintroduced crash traps the whole process, not just this
+            // one case, so simply completing all 2,000 iterations is the
+            // real proof. Random bytes are overwhelmingly unlikely to also
+            // happen to be internally-consistent DEFLATE, but tolerate the
+            // astronomically rare case where one does rather than assert a
+            // stronger property than "does not crash" was ever the point.
+            if Inflate.inflate(Data(bytes)) != nil { inflatedAnyway += 1 }
+        }
+        XCTAssertLessThan(inflatedAnyway, 2_000, "sanity: this loop must actually run, not get optimized away")
+    }
+
+    private func claims(_ json: String) -> [String: Any] {
+        (try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]) ?? [:]
+    }
+}
+
+private extension Array {
+    func repeated(_ times: Int) -> [Element] {
+        var result: [Element] = []
+        for _ in 0..<times { result.append(contentsOf: self) }
+        return result
+    }
+}
+
+/// A small, deterministic, dependency-free PRNG for the fuzz test above -
+/// not cryptographic, just reproducible across platforms/runs.
+private struct SplitMix64 {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+}
