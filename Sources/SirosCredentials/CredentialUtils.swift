@@ -281,6 +281,207 @@ public enum CredentialUtils {
         (parseJwtPayload(credential.raw)?["vct"] as? String) ?? credential.metadata?.vct
     }
 
+    /// How this credential names the Holder key it is bound to - which is also
+    /// which interoperability profile it was issued under.
+    ///
+    /// A `cnf.kid` naming a DID verification method is DIIP; a `cnf.jwk`
+    /// carrying the key is HAIP. An mdoc always carries the device key by
+    /// value, so it is the HAIP form by construction. Nil when the credential
+    /// has no holder binding at all.
+    ///
+    /// Nothing in the wallet needs to be told this - signing follows the `cnf`
+    /// directly (see `KeystoreManager.signVpToken`) - but it is what a person
+    /// debugging a wallet that talks to both ecosystems wants to see.
+    public static func holderBinding(_ credential: StoredCredential) -> HolderBinding? {
+        if credential.format == "mso_mdoc" { return .embeddedJwk }
+        guard let cnf = parseJwtPayload(credential.raw)?["cnf"] as? [String: Any] else { return nil }
+        if cnf["kid"] != nil { return .didJwk }
+        if cnf["jwk"] != nil { return .embeddedJwk }
+        return nil
+    }
+
+    /// Internal marker key `parseValidityClaims` sets when an mdoc's MSO
+    /// declared a `validityInfo` block, even if neither `validFrom` nor
+    /// `validUntil` came out readable from it - see
+    /// ``hasDeclaredValidityWindow(_:)``. Never present for a JWT-based
+    /// credential's own claims, so this can never collide with a real
+    /// server-issued claim name.
+    private static let hasDeclaredValidityWindowKey = "_mdocHasDeclaredValidityInfo"
+
+    /// Internal marker keys for EACH bound individually (review finding):
+    /// `hasDeclaredValidityWindowKey` alone only catches the case where
+    /// NEITHER bound could be read. A `validityInfo` with one genuinely
+    /// readable bound and one present-but-malformed one (e.g. a real
+    /// `validFrom` alongside a `validUntil` that is an integer instead of a
+    /// tagged date string) has `hasDeclaredValidityWindowKey` true but
+    /// `extract(from:)`'s OTHER bound non-nil, so the combined "both nil"
+    /// check never fires - the malformed bound silently reads as "no bound
+    /// at all" (valid indefinitely) rather than unreadable.
+    private static let unreadableValidFromKey = "_mdocValidFromUnreadable"
+    private static let unreadableValidUntilKey = "_mdocValidUntilUnreadable"
+
+    /// Whether `claims` (from ``parseValidityClaims(_:)``) declares a
+    /// validity window AT ALL, even one neither `validFrom` nor `validUntil`
+    /// could be read from.
+    ///
+    /// `CredentialValidity.extract(from:)` reading both bounds as nil cannot
+    /// distinguish "this credential declares no validity window" (an
+    /// ordinary credential, correctly valid indefinitely per VCDM semantics)
+    /// from "it declares one this SDK could not read" (review finding: an
+    /// mdoc's `validityInfo` block present but undecodable) - the same
+    /// distinction `TokenStatusList.hasStatusReference` makes for `status`.
+    ///
+    /// This alone only covers a `validityInfo` with NEITHER bound readable
+    /// (including one present as an empty object, with neither key inside
+    /// it at all) - see ``hasUnreadableValidFrom(_:)``/
+    /// ``hasUnreadableValidUntil(_:)`` for the "one bound readable, the
+    /// other declared but malformed" case this does not catch.
+    static func hasDeclaredValidityWindow(_ claims: [String: Any]) -> Bool {
+        claims[hasDeclaredValidityWindowKey] as? Bool == true
+    }
+
+    /// Whether `validityInfo.validFrom` was present in the MSO but could not
+    /// be read as a date - distinct from simply being absent, which is not
+    /// an error (see `hasDeclaredValidityWindow`'s doc comment).
+    static func hasUnreadableValidFrom(_ claims: [String: Any]) -> Bool {
+        claims[unreadableValidFromKey] as? Bool == true
+    }
+
+    /// `validityInfo.validUntil`'s counterpart to ``hasUnreadableValidFrom(_:)``.
+    static func hasUnreadableValidUntil(_ claims: [String: Any]) -> Bool {
+        claims[unreadableValidUntilKey] as? Bool == true
+    }
+
+    /// The claims DIIP's Validity and Revocation Algorithm reads - the
+    /// validity window and the Token Status List reference - normalised to one
+    /// JSON shape across credential formats.
+    ///
+    /// For the JWT-based formats these are simply the credential's own claims.
+    /// An mdoc keeps them somewhere else entirely: the validity window lives
+    /// in the MSO's `validityInfo`, and the status reference (where an issuer
+    /// publishes one) in the MSO's `status`. Returning them under the same
+    /// names is what lets one evaluator serve every format.
+    public static func validityClaims(_ credential: StoredCredential) -> [String: Any]? {
+        try? parseValidityClaims(credential)
+    }
+
+    /// ``validityClaims(_:)`` without swallowing the failure, so a caller can
+    /// tell "this credential says nothing about its validity" (nil) from
+    /// "this credential's validity data would not parse" (throws).
+    ///
+    /// The difference matters: the first is an ordinary credential and the
+    /// second must not be reported as valid, which is what collapsing both to
+    /// nil did.
+    public static func parseValidityClaims(_ credential: StoredCredential) throws -> [String: Any]? {
+        if credential.format == "mso_mdoc" {
+            return try mdocValidityClaims(credential)
+        }
+        // A JWT that will not even parse (malformed base64url, not valid
+        // JSON) is the JWT-format analogue of `mdocValidityClaims`'s
+        // `UnreadableValidityClaims` - unreadable, not "no claims" (review
+        // finding). `parseJwtPayload` returning nil was previously forwarded
+        // as-is, which `credentialStatus(of:)` then read as "nothing to
+        // check" and reported `.valid`, exactly the fail-open this method's
+        // own doc comment says it exists to prevent. A credential whose
+        // payload DOES parse but happens to carry none of the validity-
+        // window/status keys still returns an ordinary (non-throwing) empty
+        // dictionary here, which is correctly "says nothing about its
+        // validity," not an error.
+        guard let claims = parseJwtPayload(credential.raw) else {
+            throw UnreadableValidityClaims()
+        }
+        // `validFrom`/`validUntil`/`status` can themselves be selectively
+        // disclosed (review finding) - `parseJwtPayload` only ever sees the
+        // JWT body, with every disclosed claim still replaced by its `_sd`
+        // digest. Reusing SharedDcqlMatcher's disclosure resolution (rather
+        // than reimplementing it) is what `matchingClaims` already does for
+        // the same reason: without it, a disclosed validity/status claim
+        // reads as absent and this credential is reported `.valid`
+        // regardless of what it actually says.
+        return SharedDcqlMatcher.resolvingDisclosures(claims, in: credential.raw)
+    }
+
+    /// Raised when a credential's validity data is present but unreadable.
+    public struct UnreadableValidityClaims: Error {}
+
+    private static func mdocValidityClaims(_ credential: StoredCredential) throws -> [String: Any]? {
+        guard let document = parseMdocDocument(credential.raw) else {
+            throw UnreadableValidityClaims()
+        }
+        let mso = try MdocCbor.decodeMso(issuerAuth: document.issuerSigned.issuerAuth)
+
+        var claims: [String: Any] = [:]
+        if let validity = mso[CBOR.utf8String("validityInfo")] {
+            // ISO 18013-5 encodes these as tdate (a tag-0 RFC 3339 string),
+            // which is the same lexical form the VCDM uses for
+            // validFrom/validUntil - so no conversion is needed, only untagging.
+            for key in ["validFrom", "validUntil"] {
+                let raw = validity[CBOR.utf8String(key)]
+                if let text = untaggedString(raw) {
+                    claims[key] = text
+                } else if raw != nil {
+                    // Present in the CBOR map, but not something `untaggedString`
+                    // could read (review finding): distinct from the key being
+                    // simply ABSENT, which `extract(from:)` already correctly
+                    // reads as "no bound" - this one bound was declared and is
+                    // unreadable, which must fail closed even when the OTHER
+                    // bound parsed fine.
+                    claims[key == "validFrom" ? unreadableValidFromKey : unreadableValidUntilKey] = true
+                }
+            }
+            // A presence marker (review finding), checked by
+            // `hasDeclaredValidityWindow` below: `validityInfo` WAS present
+            // in the MSO even when neither date untags to something
+            // readable, and that must not look identical to a credential
+            // that declares no validity window at all - the latter is
+            // ordinary and correctly valid indefinitely (VCDM semantics);
+            // the former is attacker-adjacent data this SDK could not read,
+            // the same class of gap `hasStatusReference` exists to close for
+            // an unreadable `status`.
+            claims[hasDeclaredValidityWindowKey] = true
+        }
+        // Only requires "status" to be PRESENT, not that it parses as a map
+        // (review finding): the previous `if let status = ..., let
+        // statusList = status[...]` failed as a single unit when `status`
+        // was anything else (e.g. a bare scalar) - a malformed-but-declared
+        // status dropped the claim entirely, same fail-open hole
+        // `hasStatusReference` exists to close for a malformed idx/uri.
+        if let status = mso[CBOR.utf8String("status")] {
+            var reference: [String: Any] = [:]
+            if let statusList = status[CBOR.utf8String("status_list")] {
+                // `idx` comes from the credential, which is not this
+                // wallet's to trust before it has been verified. `Int(idx)`
+                // traps on a value past Int.max, and a trap is not a parse
+                // failure - it takes the process down. A status list with
+                // that many entries does not exist, so an index that will
+                // not convert is simply not read, leaving the reference
+                // incomplete and the status unavailable.
+                if case .unsignedInt(let idx)? = statusList[CBOR.utf8String("idx")],
+                   let index = Int(exactly: idx) {
+                    reference["idx"] = index
+                }
+                if case .utf8String(let uri)? = statusList[CBOR.utf8String("uri")] {
+                    reference["uri"] = uri
+                }
+            }
+            // Preserved even when EMPTY, or status_list itself was missing
+            // or not a map (review finding) - "status" was declared
+            // regardless, which is enough for hasStatusReference to see
+            // SOMETHING rather than reporting this credential `.valid`
+            // instead of `.unknown`.
+            claims["status"] = ["status_list": reference]
+        }
+        return claims.isEmpty ? nil : claims
+    }
+
+    private static func untaggedString(_ value: CBOR?) -> String? {
+        switch value {
+        case .utf8String(let text): return text
+        case .tagged(_, let inner): return untaggedString(inner)
+        default: return nil
+        }
+    }
+
     public static func declaredType(format: String, raw: String) -> String? {
         if format == "mso_mdoc" {
             return parseMdocDocument(raw)?.docType

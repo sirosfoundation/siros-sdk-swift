@@ -56,7 +56,18 @@
     "payloadLabel": "Payload",
     "disclosureLabel": "Friläggning %1$d",
     "rowActionAdd": "Lägg till",
-    "rowActionClose": "Stäng"
+    "rowActionClose": "Stäng",
+    "statusExpired": "Utgånget",
+    "statusNotYetValid": "Inte giltigt än",
+    "statusRevoked": "Återkallat",
+    "statusSuspended": "Spärrat",
+    "statusExpiredDetail": "Det här intyget har gått ut",
+    "statusNotYetValidDetail": "Det här intyget är inte giltigt än",
+    "statusRevokedDetail": "Det här intyget har återkallats av utfärdaren",
+    "statusSuspendedDetail": "Det här intyget har spärrats tillfälligt av utfärdaren",
+    "statusUnknown": "Okänt",
+    "statusUnknownDetail": "Det gick inte att fastställa detta intygs status",
+    "fieldHolderBinding": "Innehavarbindning"
   },
   "presentation": {
     "title": "Intygsbegäran",
@@ -112,7 +123,8 @@
     "diagnosticMessagesToggle": "Diagnostikmeddelanden",
     "diagnosticMessagesDescription": "Visa den råa backend-stegtoken tillsammans med den vänliga förloppsetiketten under ett flöde.",
     "photoIdOnboardingToggle": "PhotoID-registrering",
-    "photoIdOnboardingDescription": "Visa en genväg \"Skaffa ditt PhotoID\" på hemskärmen när denna klient erbjuder identitetsverifierat PhotoID-utfärdande"
+    "photoIdOnboardingDescription": "Visa en genväg \"Skaffa ditt PhotoID\" på hemskärmen när denna klient erbjuder identitetsverifierat PhotoID-utfärdande",
+    "interopProfiles": "Interop-profiler"
   },
   "wscd": {
     "title": "WSCA Utvecklare",
