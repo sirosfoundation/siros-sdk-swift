@@ -1,0 +1,68 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+import Foundation
+import SirosWallet
+import SirosCredentials
+
+/// The EC TS12 surface of the view model: bridging the SDK's consent handler
+/// to a sheet, and the transaction log screen. No TS12 logic lives here.
+extension WalletViewModel {
+
+    /// Bridges the SDK's `TransactionConsentHandler.confirm` to
+    /// `TransactionConsentSheet`: suspends until the user confirms or
+    /// declines. A prompt still pending when another arrives is declined, and
+    /// cancelling the awaiting task (the SDK's deadline passing) withdraws the
+    /// prompt and declines.
+    nonisolated func requestTransactionConsent(_ request: TransactionConsentRequest) async -> Bool {
+        let box = TransactionConsentContinuationBox()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                guard box.set(continuation) else { return }   // already cancelled: resumed with false
+                Task { @MainActor in
+                    self.transactionConsentBox?.resumeOnce(false)
+                    self.transactionConsentBox = box
+                    self.pendingTransactionConsent = PendingTransactionConsent(request: request, respond: { answer in
+                        self.finishTransactionConsent(box)
+                        box.resumeOnce(answer)
+                    })
+                }
+            }
+        } onCancel: {
+            box.cancel()
+            Task { @MainActor in self.finishTransactionConsent(box) }
+        }
+    }
+
+    /// Clears the prompt and box, but only if `box` is still the current one: a
+    /// response from an outgoing prompt must not clear a newer one.
+    func finishTransactionConsent(_ box: TransactionConsentContinuationBox) {
+        guard transactionConsentBox === box else { return }
+        pendingTransactionConsent = nil
+        transactionConsentBox = nil
+    }
+
+    /// Declines the pending transaction if its sheet is dismissed without an
+    /// answer (for example swiped away); a no-op once answered.
+    func dismissTransactionConsent() {
+        pendingTransactionConsent = nil
+        transactionConsentBox?.resumeOnce(false)
+        transactionConsentBox = nil
+    }
+
+    func openTransactionLog() {
+        showTransactionLog = true
+        Task { transactionLog = await wallet?.transactionLog() ?? [] }
+    }
+
+    func closeTransactionLog() {
+        showTransactionLog = false
+    }
+
+    /// Account-scoped state must not outlive the session: the log entries, the
+    /// screen and any prompt still showing.
+    func resetTransactionDataState() {
+        showTransactionLog = false
+        transactionLog = []
+        dismissTransactionConsent()
+    }
+}

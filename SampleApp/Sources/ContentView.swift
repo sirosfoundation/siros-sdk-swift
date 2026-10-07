@@ -32,6 +32,8 @@ struct ContentView: View {
                     CredentialDetailView(credential: credential)
                 } else if viewModel.showHistory {
                     PresentationHistoryView()
+                } else if viewModel.showTransactionLog {
+                    TransactionLogView()
                 } else if viewModel.showActivate {
                     ActivateView()
                 } else if viewModel.showIDVPreparation {
@@ -92,6 +94,13 @@ struct ContentView: View {
             viewModel.dismissWscdChoice()
         }) { choice in
             WscdChoiceSheet(choice: choice)
+        }
+        // Same top-level rationale: a transaction (EC TS12) can be put to the
+        // user while any screen is showing. Dismissing the sheet declines.
+        .sheet(item: $viewModel.pendingTransactionConsent, onDismiss: {
+            viewModel.dismissTransactionConsent()
+        }) { pending in
+            TransactionConsentSheet(pending: pending)
         }
         // Same top-level rationale as `pendingWscdChoice` above - a FIDO2
         // ClientPin prompt (see `SampleAppAuthProvider.requestPin`) can fire

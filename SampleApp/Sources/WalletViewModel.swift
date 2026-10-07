@@ -62,6 +62,14 @@ final class WalletViewModel: ObservableObject {
     @Published var useWmpProtocol: Bool {
         didSet { UserDefaults.standard.set(useWmpProtocol, forKey: "siros_use_wmp_protocol") }
     }
+    /// EC TS12 switch: persisted, applied to the live wallet. Default off.
+    @Published var transactionDataEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(transactionDataEnabled, forKey: Self.transactionDataEnabledKey)
+            wallet?.transactionDataEnabled = transactionDataEnabled
+        }
+    }
+    static let transactionDataEnabledKey = "siros_transaction_data_enabled"
     @Published var showCredentialDetails: Bool {
         didSet { UserDefaults.standard.set(showCredentialDetails, forKey: "siros_show_credential_details") }
     }
@@ -191,6 +199,12 @@ final class WalletViewModel: ObservableObject {
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingPresentation`'s
     /// pattern above.
     @Published var pendingWscdChoice: PendingWscdChoice?
+    /// Non-nil while a transaction prompt awaits the user (TS12).
+    @Published var pendingTransactionConsent: PendingTransactionConsent?
+    @Published var showTransactionLog = false
+    @Published var transactionLog: [TransactionLogEntry] = []
+    var transactionConsentBox: TransactionConsentContinuationBox?
+    private lazy var transactionConsentBridge = TransactionConsentBridge(viewModel: self)
     /// Non-nil while a FIDO2 ClientPin prompt (see `SampleAppAuthProvider.requestPin`)
     /// is awaiting the user's PIN - drives `Fido2PinEntryView` via
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingWscdChoice`'s
@@ -349,6 +363,7 @@ final class WalletViewModel: ObservableObject {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
         self.useWmpProtocol = defaults.bool(forKey: "siros_use_wmp_protocol")
+        self.transactionDataEnabled = defaults.bool(forKey: Self.transactionDataEnabledKey)
         if let storedShowDetails = defaults.object(forKey: "siros_show_credential_details") as? Bool {
             self.showCredentialDetails = storedShowDetails
         } else {
@@ -449,6 +464,7 @@ final class WalletViewModel: ObservableObject {
         showActivate = false
         showWscaDeveloper = false
         showIDVPreparation = false
+        resetTransactionDataState()
         resetDevicesNavigation()
     }
 
@@ -1290,6 +1306,7 @@ final class WalletViewModel: ObservableObject {
             tenantId: tenantId,
             redirectUri: "\(redirectScheme)://callback",
             useWmpProtocol: useWmpProtocol,
+            transactionDataEnabled: transactionDataEnabled,
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,
             requestWscdChoice: resolvedRequestWscdChoice,
@@ -1321,6 +1338,7 @@ final class WalletViewModel: ObservableObject {
             keystore: keystore
         )
         wallet?.credentialConsumptionPolicy = credentialConsumptionPolicy
+        wallet?.transactionConsentHandler = transactionConsentBridge
         wallet?.setEventListener(self)
         observeState()
     }
@@ -1346,6 +1364,7 @@ final class WalletViewModel: ObservableObject {
         switch state {
         case .disconnected(let accounts):
             walletState = .disconnected
+            resetTransactionDataState()
             credentials = []
             displayName = nil
             userId = nil
