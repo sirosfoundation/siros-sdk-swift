@@ -484,8 +484,13 @@ extension JSONValue {
         switch any {
         case .string(let s): self = .string(s)
         case .int(let i): self = .int(Int64(i))
-        // The hint's number is kept as its shortest decimal text, never compared through
-        // binary floating point: `0.1` and `0.10000000000000001` are different numbers.
+        // The transport (`AnyCodable`) has already decoded a fractional number to a binary
+        // `Double`, so the orchestrator's original digits are gone and cannot be recovered here.
+        // The hint keeps the shortest decimal text of that Double and is compared exactly against
+        // the SDK's own decoding of `raw`. Known, accepted limit: two distinct orchestrator numbers
+        // with the same Double read as one, so a hint can agree when it should not; it can never
+        // be wrongly trusted, because the hint is advisory only: what is shown, validated and
+        // hashed is always the decoding of `raw`, and a disagreement only ever REFUSES.
         case .double(let d): self = .decimal("\(d)")
         case .bool(let b): self = .bool(b)
         case .object_(let o): self = .object(o.mapValues(JSONValue.init))

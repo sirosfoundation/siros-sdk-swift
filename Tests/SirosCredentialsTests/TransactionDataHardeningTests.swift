@@ -135,7 +135,9 @@ final class TransactionDataHardeningTests: XCTestCase {
         guard case .unsupported = try outcome("1", #"{"$id":"https://evil.example/s","type":"integer"}"#) else { return XCTFail("$id changes reference resolution") }
         XCTAssertEqual(try outcome("1", #"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"integer"}"#), .valid, "$schema stays an annotation")
         for bad in [#"{"minLength":"x"}"#, #"{"maxItems":-1}"#, #"{"required":"a"}"#, #"{"properties":[1]}"#, #"{"enum":"a"}"#, #"{"minimum":"1"}"#,
-                    #"{"type":5}"#, #"{"anyOf":{}}"#, #"{"pattern":5}"#] {
+                    #"{"type":5}"#, #"{"anyOf":{}}"#, #"{"pattern":5}"#,
+                    #"{"allOf":[]}"#, #"{"oneOf":[]}"#, #"{"anyOf":[5]}"#, #"{"additionalProperties":5}"#, #"{"items":5}"#, #"{"not":5}"#,
+                    #"{"properties":{"a":5}}"#, #"{"$ref":5}"#, #"{"items":[{}]}"#] {
             guard case .unsupported = try outcome("1", bad) else { return XCTFail("\(bad) must be refused even for a number") }
             guard case .unsupported = try outcome(#""text""#, bad) else { return XCTFail(bad) }
         }
