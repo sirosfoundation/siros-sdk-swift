@@ -70,7 +70,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// What the flag and handler were when each flow (legacy) or the WMP
     /// session started: a flow in progress finishes under the setting it
     /// started with. See `SirosWallet+TransactionData.swift`.
-    var legacyFlowSnapshotQueue: [Bool] = []
+    var legacyFlowSnapshotQueue: [(effective: Bool, at: Date)] = []
+    /// Consent flows in progress, so teardown can cancel them (see `cancelEngineTasks`).
+    var transactionTasks: [UUID: Task<Void, Never>] = [:]
     var legacyFlowSnapshots: [String: Bool] = [:]
     var wmpSessionSnapshot = false
     var transactionLogStoreIsDefault = false
@@ -497,8 +499,10 @@ public final class SirosWallet: @unchecked Sendable {
     // `vct#integrity` can be driven without the network. Assigned only in
     // `init` otherwise.
     var vctmFetcher: VctmFetcher
-    /// The shared type-metadata HTTP GET (see `makeTypeMetadataHttpGet`); also
-    /// used to fetch documents an SCA attestation's metadata references.
+    /// The shared, authenticated type-metadata HTTP GET (see
+    /// `makeTypeMetadataHttpGet`). NOT used for anything an SCA attestation's
+    /// metadata references: those documents go through `transactionResourceGet`,
+    /// which carries no credentials.
     let typeMetadataHttpGet: @Sendable (String) async -> String?
     let mddlSchemaFetcher: MddlSchemaFetcher
     // Not `private`: `SirosWallet+Passkey.swift` reads it for the login PRF

@@ -692,11 +692,72 @@ final class TransactionConsentTests: XCTestCase {
     }
 
     func testHostSuppliedVerificationIsAddedWithoutDuplicates() async throws {
-        let p = InterimAuthenticationFactorsProvider { _ in
+        let p = InterimAuthenticationFactorsProvider(verifiedThisOperation: { _ in
             [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.inherence, "face_device")]
-        }
+        })
         let f = try await p.factors(for: AuthenticationFactorContext(keyStorage: ["remote_hsm"]))
         XCTAssertEqual(f, [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.inherence, "face_device")])
+    }
+
+    /// The pre-consent probe never runs the host's verification (which may prompt the user).
+    func testTheProbeDoesNotRunTheVerificationClosure() async throws {
+        final class Counter: @unchecked Sendable { var n = 0 }
+        let counter = Counter()
+        let p = InterimAuthenticationFactorsProvider(
+            verifiedThisOperation: { _ in counter.n += 1; return [AuthenticationFactor(.inherence, "face_device")] },
+            canVerifyAnotherCategory: { _ in true }
+        )
+        let context = AuthenticationFactorContext(keyStorage: ["remote_hsm"])
+        let can = await p.canEstablishTwoCategories(for: context)
+        XCTAssertTrue(can)
+        XCTAssertEqual(counter.n, 0, "the probe has no side effects")
+        let factors = try await p.factors(for: context)
+        XCTAssertEqual(counter.n, 1)
+        XCTAssertEqual(Set(factors.map(\.category)), [.possession, .inherence])
+        // Without a possession factor the probe is false whatever the host could verify.
+        let none = await p.canEstablishTwoCategories(for: AuthenticationFactorContext(keyStorage: ["software"], pluginId: "softkey"))
+        XCTAssertFalse(none)
+        let defaultProbe = await InterimAuthenticationFactorsProvider().canEstablishTwoCategories(for: context)
+        XCTAssertFalse(defaultProbe)
+    }
+
+    /// An unrelated credential in a combined presentation is never asked for factors.
+    func testFactorsAreOnlyEstablishedForBoundCredentials() async throws {
+        final class Spy: AuthenticationFactorsProvider, @unchecked Sendable {
+            private let lock = NSLock(); private var asked: [String?] = []
+            var queries: [String?] { lock.lock(); defer { lock.unlock() }; return asked }
+            func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor] {
+                lock.lock(); asked.append(context.keyId); lock.unlock()
+                if context.keyId == "unrelated" { throw NSError(domain: "x", code: 1) }
+                return [AuthenticationFactor(.knowledge, "other"), AuthenticationFactor(.possession, "other")]
+            }
+        }
+        var req = request()
+        req.credentials.append(TransactionDataCredential(queryId: "age", format: "mso_mdoc", vct: nil))
+        let spy = Spy()
+        let svc = TransactionDataService(source: source(), consentHandler: Handler(.yes), factorsProvider: spy, log: InMemoryTransactionLogStore(), consentTimeout: 5, fetchTimeout: 2)
+        let ctx = TransactionDataContext(verifier: "v", locale: "en", factorContexts: [
+            "pay": AuthenticationFactorContext(keyId: "bound"), "age": AuthenticationFactorContext(keyId: "unrelated"),
+        ])
+        let plan = try await svc.process(req, context: ctx)
+        XCTAssertEqual(Set(plan.bindings.keys), ["pay"])
+        XCTAssertFalse(spy.queries.contains("unrelated"), "the unbound credential was never asked")
+    }
+
+    func testLoggedFieldsAreCappedByScalarsNotCharacters() {
+        let combining = "e" + String(repeating: "\u{0301}", count: 50_000)    // one character, 50,001 scalars
+        XCTAssertEqual(combining.count, 1)
+        let e = TransactionLogEntry(subject: TransactionLogSubject(transactionId: combining, typeName: nil), verifier: "v", credential: "c", outcome: .refused)
+        XCTAssertEqual(e.transactionId?.unicodeScalars.count, TransactionLogEntry.maxFieldLength)
+    }
+
+    func testRefusalLoggingDoesNotDecodeWhatValidationWouldNotAccept() {
+        let huge = String(repeating: "A", count: 100_000)
+        let fields = TransactionLogFields(raw: huge)
+        XCTAssertNil(fields.transactionId)
+        XCTAssertNil(fields.typeName)
+        let rec = TransactionLogEntry.records(rawEntries: [huge], verifier: "v", credentialLabel: { _ in "" }, outcome: .refused, reason: "invalidEntry")
+        XCTAssertEqual(rec.count, 1)
     }
 
     private func sha256(_ data: Data) -> [UInt8] {

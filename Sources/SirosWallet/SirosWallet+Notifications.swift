@@ -35,6 +35,7 @@ extension SirosWallet {
     /// crash the app. The backend authenticates the notification using ephemeral
     /// issuance state and never stores credential data.
     func handleFlowComplete(msg: FlowCompleteMessage) async {
+        lock.lock(); legacyFlowSnapshots.removeValue(forKey: msg.flowId); lock.unlock()
         lock.lock()
         let offer = activeOffer
         let vctm = activeVctm

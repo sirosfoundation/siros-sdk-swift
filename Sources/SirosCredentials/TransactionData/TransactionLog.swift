@@ -63,8 +63,13 @@ public struct TransactionLogEntry: Codable, Sendable, Equatable, Identifiable {
     public static let truncationMarker = "[truncated]"
 
     static func capped(_ text: String, _ limit: Int) -> String {
-        guard text.count > limit else { return text }
-        return String(text.prefix(limit - truncationMarker.count)) + truncationMarker
+        // By Unicode scalars: a run of combining marks is one character but many scalars.
+        let scalars = text.unicodeScalars
+        guard scalars.count > limit else { return text }
+        let keep = limit - truncationMarker.unicodeScalars.count
+        var cut = String.UnicodeScalarView()
+        cut.append(contentsOf: scalars.prefix(keep))
+        return String(cut) + truncationMarker
     }
 
     /// Builds the records for a request's raw entries. Decodes leniently: a
@@ -94,13 +99,16 @@ public struct TransactionLogEntry: Codable, Sendable, Equatable, Identifiable {
 
 /// The section 5.3 fields read from a raw entry.
 struct TransactionLogFields {
+    static let maxRawBytes = 64 * 1024
     var transactionId: String?
     var typeName: String?
     var entities: [String: String] = [:]
     var firstCredentialId: String?
 
     init(raw: String) {
-        guard let bytes = TransactionDataHashing.base64UrlDecode(raw),
+        // Same bound as the pipeline's: refusal logging must not decode what validation would not.
+        guard raw.utf8.count <= TransactionLogFields.maxRawBytes,
+              let bytes = TransactionDataHashing.base64UrlDecode(raw),
               let object = (try? StrictJSON.parse(bytes))?.objectValue else { return }
         let type = object["type"]?.stringValue
         firstCredentialId = object["credential_ids"]?.arrayValue?.first?.stringValue

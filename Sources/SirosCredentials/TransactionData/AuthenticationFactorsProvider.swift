@@ -60,14 +60,34 @@ public extension AuthenticationFactorsProvider {
 /// this provider alone fewer than two categories are established and SCA
 /// presentations are refused (`insufficientAuthenticationFactors`). A host app
 /// that performs a verification for this very operation (or a later WSCD
-/// manager that reports it) supplies `verifiedThisOperation`.
+/// manager that reports it) supplies `verifiedThisOperation` AND says, without
+/// side effects, whether it can (`canVerifyAnotherCategory`): the pre-consent
+/// probe uses only that, so the verification itself runs once, after consent.
 public struct InterimAuthenticationFactorsProvider: AuthenticationFactorsProvider {
     public typealias Verified = @Sendable (AuthenticationFactorContext) async -> [AuthenticationFactor]
 
-    private let verifiedThisOperation: Verified
+    public typealias Capability = @Sendable (AuthenticationFactorContext) async -> Bool
 
-    public init(verifiedThisOperation: @escaping Verified = { _ in [] }) {
+    private let verifiedThisOperation: Verified
+    private let canVerifyAnotherCategory: Capability
+
+    /// - Parameters:
+    ///   - verifiedThisOperation: runs the host's verification for THIS operation
+    ///     (it may prompt the user); called only after consent.
+    ///   - canVerifyAnotherCategory: side-effect-free "can the host verify a
+    ///     category beyond possession?" used by the pre-consent probe.
+    public init(
+        verifiedThisOperation: @escaping Verified = { _ in [] },
+        canVerifyAnotherCategory: @escaping Capability = { _ in false }
+    ) {
         self.verifiedThisOperation = verifiedThisOperation
+        self.canVerifyAnotherCategory = canVerifyAnotherCategory
+    }
+
+    /// Possession from the key, plus whatever the host says it can verify; never runs the verification.
+    public func canEstablishTwoCategories(for context: AuthenticationFactorContext) async -> Bool {
+        guard Self.possession(for: context) != nil else { return false }
+        return await canVerifyAnotherCategory(context)
     }
 
     public func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor] {
