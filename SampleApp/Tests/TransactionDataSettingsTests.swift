@@ -151,6 +151,11 @@ final class TransactionDataLifecycleTests: XCTestCase {
         let stale = try XCTUnwrap(vm.pendingTransactionConsent)
         let second = Task { await vm.requestTransactionConsent(TransactionDataSettingsTests.sampleRequest()) }
         for _ in 0..<200 where vm.pendingTransactionConsent?.id == stale.id { try await Task.sleep(nanoseconds: 10_000_000) }
+        if vm.pendingTransactionConsent?.id == stale.id {      // fail instead of hanging on `first.value`
+            vm.dismissTransactionConsent(); second.cancel()
+            XCTFail("the second prompt was never presented")
+            return
+        }
         let firstAnswer = await first.value
         XCTAssertFalse(firstAnswer)
         let current = try XCTUnwrap(vm.pendingTransactionConsent)
@@ -227,6 +232,11 @@ final class TransactionDataLifecycleTests: XCTestCase {
         let earlier = try XCTUnwrap(vm.pendingTransactionConsent)
         let second = Task { await vm.requestTransactionConsent(TransactionDataSettingsTests.sampleRequest()) }
         for _ in 0..<200 where vm.pendingTransactionConsent?.id == earlier.id { try await Task.sleep(nanoseconds: 10_000_000) }
+        if vm.pendingTransactionConsent?.id == earlier.id {      // fail instead of hanging on `first.value`
+            vm.dismissTransactionConsent(); second.cancel()
+            XCTFail("the second prompt was never presented")
+            return
+        }
         _ = await first.value
         let current = try XCTUnwrap(vm.pendingTransactionConsent)
         earlier.respond(false)      // the earlier sheet's late dismissal callback

@@ -1282,6 +1282,7 @@ final class WalletViewModel: ObservableObject {
             lastFlowType = flowType
         case .lifecycleBlocked(let reason, let message, let accounts):
             walletState = .lifecycleBlocked(reason: reason, message: message)
+            resetTransactionDataState()   // the SDK ended the session before publishing this state
             credentials = []
             displayName = nil
             userId = nil
