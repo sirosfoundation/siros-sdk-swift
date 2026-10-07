@@ -223,7 +223,10 @@
       "issuance_failed": "Din identitet verifierades, men e-legitimationen kunde inte utfärdas. Försök igen senare.",
       "internal_error": "Något gick fel hos oss, så ingen e-legitimation utfärdades. Försök igen senare.",
       "locked_out": "För många försök. Vänta en stund och försök igen.",
-      "request_aborted": "Verifieringen avbröts. Försök igen."
+      "request_aborted": "Verifieringen avbröts. Försök igen.",
+      "initialization_failed": "Identitetsverifieringen kunde inte startas. Försök igen senare.",
+      "unknown_internal_error": "Något gick fel under skanningen. Försök igen.",
+      "no_session_result": "Skanningen avslutades utan resultat. Försök igen."
     }
   },
   "error": {

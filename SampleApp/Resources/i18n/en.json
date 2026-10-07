@@ -223,7 +223,10 @@
       "issuance_failed": "Your identity was verified, but the credential could not be issued. Please try again later.",
       "internal_error": "Something went wrong on our side, so no credential was issued. Please try again later.",
       "locked_out": "Too many attempts. Please wait a while and try again.",
-      "request_aborted": "The verification was interrupted. Please try again."
+      "request_aborted": "The verification was interrupted. Please try again.",
+      "initialization_failed": "Identity verification could not be started. Please try again later.",
+      "unknown_internal_error": "Something went wrong during the scan. Please try again.",
+      "no_session_result": "The scan ended without a result. Please try again."
     }
   },
   "error": {
