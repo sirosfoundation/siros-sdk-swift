@@ -128,9 +128,16 @@ public struct JSONSchemaValidator: Sendable {
         if let v = kw["required"], v.arrayValue?.allSatisfy({ $0.stringValue != nil }) != true { return "required must be an array of strings" }
         if let v = kw["properties"], v.objectValue == nil { return "properties must be an object" }
         if let v = kw["enum"], v.arrayValue == nil { return "enum must be an array" }
+        func isSchema(_ v: JSONValue) -> Bool { if case .bool = v { return true }; return v.objectValue != nil }
         for key in ["allOf", "anyOf", "oneOf"] {
-            if let v = kw[key], v.arrayValue == nil { return "\(key) must be an array" }
+            guard let v = kw[key] else { continue }
+            guard let list = v.arrayValue, !list.isEmpty, list.allSatisfy(isSchema) else { return "\(key) must be a non-empty array of schemas" }
         }
+        for key in ["not", "items", "additionalProperties"] {
+            if let v = kw[key], !isSchema(v) { return "\(key) must be a schema" }
+        }
+        if let v = kw["properties"]?.objectValue, !v.values.allSatisfy(isSchema) { return "every property must be a schema" }
+        if let v = kw["$ref"], v.stringValue == nil { return "$ref must be a string" }
         if let v = kw["type"] {
             let ok = v.stringValue != nil || v.arrayValue?.allSatisfy { $0.stringValue != nil } == true
             if !ok { return "type must be a string or array of strings" }
