@@ -639,10 +639,14 @@ final class TransactionDataEndToEndTests: XCTestCase {
     /// A sign request cancelled while the user decides (teardown, or the flow ended) exits quietly: no flow error, no signing.
     func testACancelledSignRequestReportsNothing() async throws {
         let f = try await fixture()
-        f.consent.whileDeciding = { withUnsafeCurrentTask { $0?.cancel() } }
+        // The consent callback runs in its own task, so cancel the sign request's task through a holder.
+        final class Holder: @unchecked Sendable { var task: Task<Void, Never>? }
+        let holder = Holder()
+        f.consent.whileDeciding = { holder.task?.cancel() }
         let sender = Sender()
         let msg = try engineMessage(flow: "gone")
         let task = Task { await f.wallet.handleSignRequest(engine: sender, msg: msg) }
+        holder.task = task
         await task.value
         XCTAssertTrue(f.listener.errors.isEmpty, "no failure reported for a cancelled request: \(f.listener.errors)")
         XCTAssertNil(sender.sent.last?.vpToken, "nothing was signed for a cancelled request")
