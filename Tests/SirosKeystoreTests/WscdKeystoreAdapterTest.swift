@@ -211,6 +211,32 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertNil(claims?["nonce"])
     }
 
+    /// Regression (review finding): `exportPublicKey` only promises a public
+    /// JWK, not a `kid` of its own - a HAIP proof's embedded `jwk` must carry
+    /// the WSCD's own `key.keyId` so `resolveSigningKey` can match it
+    /// directly on its first, cheap attempt instead of falling back to
+    /// exporting and thumbprinting every key the WSCD holds.
+    func testGenerateProofEmbedsTheWscdKeyIdAsTheJwkKidForHaip() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+
+        let jwt = try await adapter.generateProof(
+            audience: "https://issuer.example.com",
+            nonce: "n",
+            freshKey: false,
+            holderBinding: .embeddedJwk
+        )
+
+        let header = JwtHelpers.parseJwtHeader(jwt)
+        let jwk = header?["jwk"] as? [String: Any]
+        XCTAssertEqual(jwk?["kid"] as? String, "test-key-1")
+        // The key's own public-key members are still exactly what
+        // `exportPublicKey` returned, untouched.
+        XCTAssertNotNil(jwk?["x"])
+        XCTAssertNotNil(jwk?["y"])
+        XCTAssertNil(header?["kid"], "HAIP must not ALSO carry a top-level header kid")
+    }
+
     func testGenerateDPoPProofBuildsProofThroughSigner() async throws {
         let signer = MockSigner()
         let adapter = try await unlockedAdapter(signer)
@@ -310,6 +336,111 @@ final class WscdKeystoreAdapterTest: XCTestCase {
               case .map(let deviceAuth)? = deviceSigned[.utf8String("deviceAuth")],
               deviceAuth[.utf8String("deviceSignature")] != nil else {
             return XCTFail("expected deviceSigned.deviceAuth.deviceSignature to be present")
+        }
+    }
+
+    /// Regression (review finding): `signMdocPresentation`,
+    /// `signMdocPresentationForDCAPI`, and `signMdocPresentationForProximity`
+    /// called `selectSigningKey` (exact `keyId` match only) instead of
+    /// `resolveSigningKey` (which also matches a thumbprint, the way a
+    /// DIIP-bound mdoc device key names it) - a credential whose `kid` is a
+    /// thumbprint rather than the WSCD's own key id threw `keyNotFound` on
+    /// every mdoc presentation path even though the matching key WAS held.
+    func testSignMdocPresentationForDCAPIResolvesAKidNamedByThumbprintNotWscdKeyId() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+        let jwkData = try await adapter.exportPublicKey(keyId: "test-key-1")
+        let jwk = try JSONSerialization.jsonObject(with: jwkData) as? [String: Any]
+        let thumbprint = try XCTUnwrap(jwk.flatMap { JwtHelpers.jwkThumbprint($0) })
+        XCTAssertNotEqual(
+            thumbprint, "test-key-1",
+            "the test must exercise the thumbprint-fallback path, not an accidental exact keyId match"
+        )
+
+        let responseBytes = try await adapter.signMdocPresentationForDCAPI(
+            credentialBytes: buildIssuerSignedEnvelope(),
+            disclosedClaims: nil,
+            nonce: "test-nonce",
+            origin: "https://verifier.example.com",
+            encryptionPublicJwkThumbprint: nil,
+            kid: thumbprint
+        )
+        XCTAssertFalse(responseBytes.isEmpty)
+    }
+
+    // MARK: - cnf fail-closed (review findings)
+
+    private func sdJwt(_ payload: String) -> String {
+        func b64(_ text: String) -> String {
+            EncryptedContainer.base64UrlEncode(Data(text.utf8))
+        }
+        return "\(b64(#"{"alg":"ES256","typ":"dc+sd-jwt"}"#)).\(b64(payload)).sig~"
+    }
+
+    /// Regression (review finding): a `cnf` present but malformed (`kid` not
+    /// a string, no `jwk`) must refuse rather than reach
+    /// `resolveSigningKey(kid: nil)`'s "use the first available key"
+    /// fallback.
+    func testAMalformedCnfRefusesRatherThanSigningWithAnUnrelatedKey() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+        let credential = sdJwt(#"{"vct":"urn:example:x","cnf":{"kid":123}}"#)
+
+        do {
+            _ = try await adapter.signVpToken(
+                credential: credential, disclosedClaims: nil, nonce: "n",
+                audience: "https://verifier.example", kid: nil
+            )
+            XCTFail("a cnf this adapter cannot resolve must refuse, not sign with an unrelated key")
+        } catch {
+            // expected
+        }
+    }
+
+    /// Regression (review finding): the KB-JWT header must follow the SAME
+    /// `cnf.kid`-over-`cnf.jwk` precedence `resolveCnfKid` applies when
+    /// selecting the signing key, not a separate "is cnf.jwk present"
+    /// re-check - a credential carrying both must be presented with a `kid`
+    /// header, not an embedded jwk.
+    func testACredentialWithBothCnfKidAndCnfJwkFollowsCnfKidNotCnfJwk() async throws {
+        let signer = MockSigner()
+        let adapter = try await unlockedAdapter(signer)
+        // MockSigner always has exactly one key, "test-key-1" - cnf.kid names
+        // it directly, so no DID/thumbprint resolution is needed to observe
+        // the header precedence this test is about.
+        let unrelatedJwk: [String: Any] = ["kty": "EC", "crv": "P-256", "x": "aa", "y": "bb"]
+        let jwkJson = String(
+            data: try JSONSerialization.data(withJSONObject: unrelatedJwk, options: .sortedKeys),
+            encoding: .utf8
+        )!
+        let credential = sdJwt(#"{"vct":"urn:example:x","cnf":{"kid":"test-key-1","jwk":\#(jwkJson)}}"#)
+
+        let vp = try await adapter.signVpToken(
+            credential: credential, disclosedClaims: nil, nonce: "n",
+            audience: "https://verifier.example", kid: nil
+        )
+        let kb = try XCTUnwrap(vp.split(separator: "~").last.map(String.init))
+        let header = JwtHelpers.parseJwtHeader(kb)
+        XCTAssertEqual(header?["kid"] as? String, "test-key-1", "cnf.kid wins, per resolveCnfKid's own precedence")
+        XCTAssertNil(header?["jwk"], "must not also embed the unrelated cnf.jwk key")
+    }
+
+    /// Regression (review finding): checking only `kty` let a malformed WSCD
+    /// export (no `x`/`y`) mint a `did:jwk` that `Did.resolveDidJwk` itself
+    /// would reject - this must fail at mint time instead.
+    func testGenerateProofForDiipRefusesAnIncompleteExportedPublicKey() async throws {
+        let signer = MockSigner()
+        signer.exportPublicKeyOverride = try JSONSerialization.data(withJSONObject: ["kty": "EC"])
+        let adapter = WscdKeystoreAdapter(signer: signer, profile: .diip)
+        try await adapter.unlock(prfOutput: Data(), encryptedContainer: Data(), hkdfSalt: Data(), hkdfInfo: Data())
+
+        do {
+            _ = try await adapter.generateProof(
+                audience: "https://issuer.example.com", nonce: "n", freshKey: false, holderBinding: nil
+            )
+            XCTFail("an incomplete exported public key must not mint a did:jwk nothing can resolve")
+        } catch {
+            // expected
         }
     }
 }

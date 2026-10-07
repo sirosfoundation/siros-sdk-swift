@@ -434,6 +434,23 @@ public final class SirosWallet: @unchecked Sendable {
     // `keystore` itself had to stay internal (not private).
 
     let credentialStore: CredentialStore
+
+    /// Resolves the DID methods the active `config.diipProfile` requires, for
+    /// Issuer and Verifier identities. `did:jwk` resolves offline; `did:web`
+    /// goes over HTTPS with no wallet credentials attached, since it targets
+    /// arbitrary third-party domains.
+    /// Not `private`: `SirosWallet+CredentialStatus.swift` needs it - same
+    /// cross-file-extension-access reason as `keystore` above.
+    let didResolver: DidResolver
+
+    /// Runs DIIP's Validity and Revocation Algorithm. One per wallet
+    /// instance, so the Token Status List it fetches is fetched once and
+    /// shared by every credential pointing into it.
+    let credentialStatusEvaluator: CredentialStatusEvaluator
+
+    /// Statuses evaluated so far, so a UI can read one without re-running the
+    /// algorithm per frame.
+    let credentialStatusCache = CredentialStatusCache()
     // Not `private`: `SirosWallet+Issuance.swift` needs it too - same
     // cross-file-extension-access reason as `keystore` above.
     // `var`, not `let`: the type-metadata tests replace it with one backed by
@@ -767,7 +784,11 @@ public final class SirosWallet: @unchecked Sendable {
         self.sessionStore = sessionStore
 
         #if canImport(CryptoKit)
-        self.keystore = keystore ?? JweKeystore()
+        // The profile has to reach the default keystore, or a wallet
+        // configured for DIIP generates keys with no did:jwk identity and then
+        // silently falls back to a HAIP-shaped proof - the configuration would
+        // look applied and do nothing. A host-supplied keystore carries its own.
+        self.keystore = keystore ?? JweKeystore(profile: config.interopProfile)
         #else
         guard let ks = keystore else {
             return nil
@@ -777,6 +798,52 @@ public final class SirosWallet: @unchecked Sendable {
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
 
+        // Set up new AS-based auth. Moved ahead of the DID resolver below
+        // (it used to follow it) so `tokens` already exists to authenticate
+        // the resolver's own `BackendApiClient` - captured directly, the
+        // same way `typeMetadataGet`'s `makeTypeMetadataHttpGet` call
+        // captures it further down, not via `self.authTokens` (`self` isn't
+        // fully initialized yet at this point in `init`).
+        let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
+        self.authServerClient = asClient
+        let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
+        self.authTokens = tokens
+
+        // `did:jwk` resolves offline inside the resolver; everything else is
+        // handed to the backend, which delegates to go-trust. Which document
+        // is authoritative for an identifier is a trust decision, and it is
+        // not this wallet's to make by fetching whatever a domain serves.
+        let backendUrl = config.backendUrl
+        let tenantId = config.tenantId
+        let diipProfile = config.diipProfile
+        let resolver = DidResolver(profile: config.diipProfile) { did in
+            let client = BackendApiClient(
+                baseUrl: backendUrl,
+                tenantId: tenantId,
+                httpFn: SirosWallet.defaultHttpFn
+            )
+            // Without this, every non-did:jwk resolution is unauthenticated
+            // and `/v1/resolve` refuses it outright (review finding) - DID
+            // resolution needs the same bearer token every other backend
+            // REST call does, not a bespoke unauthenticated client.
+            client.setAuthTokens(tokens)
+            return try? await client.resolveDid(did)
+        }
+        self.didResolver = resolver
+        self.credentialStatusEvaluator = CredentialStatusEvaluator(
+            statusListClient: TokenStatusListClient(
+                httpGet: { url, headers in
+                    await SirosWallet.fetchPublicUrl(url, headers: headers)
+                },
+                resolveIssuerKey: { issuer, kid in
+                    await SirosWallet.resolveIssuerSigningKey(
+                        issuer: issuer, kid: kid, resolver: resolver, profile: diipProfile
+                    )
+                }
+            ),
+            clockTolerance: config.clockTolerance
+        )
+
         self.accountRegistry = accountRegistry ?? AccountRegistry()
 
         self.wscdSelectionPolicy = WscdSelectionPolicy(
@@ -784,12 +851,6 @@ public final class SirosWallet: @unchecked Sendable {
             defaultMapping: config.defaultWscdMapping,
             requestChoice: config.requestWscdChoice
         )
-
-        // Set up new AS-based auth
-        let asClient = AuthServerClient(baseUrl: config.backendUrl, tenantId: config.tenantId, httpFn: Self.defaultHttpFn)
-        self.authServerClient = asClient
-        let tokens = AuthTokens(authServerClient: asClient, tenantId: config.tenantId)
-        self.authTokens = tokens
 
         // Shared HTTP GET for both type-metadata fetchers - see
         // `makeTypeMetadataHttpGet`'s doc comment for why the auth headers
@@ -1183,6 +1244,52 @@ public final class SirosWallet: @unchecked Sendable {
         setState(.disconnected(cachedAccounts: accountRegistry.listLoginableAccounts()))
     }
 
+    /// Drops every credential-status cache so neither survives a session
+    /// boundary (review finding): shared by every teardown path that ends or
+    /// replaces a session, not just `endSessionLocally()` - `reloginAfterCutOff`
+    /// used to perform its own, separate teardown that skipped this entirely,
+    /// so a cut-off-triggered self-driven re-login could reuse a prior
+    /// session's no-TTL Status List Token cache and miss a revocation
+    /// published since.
+    ///
+    /// Account-scoped, like the session itself: without this,
+    /// `cachedCredentialStatus(of:)` could answer with the PREVIOUS account's
+    /// status - or a deleted credential's - until the next account's own
+    /// `refreshCredentialStatuses()` happens to overwrite the same id.
+    /// `credentialStatusCache` only holds the last-computed UI-facing result,
+    /// but `credentialStatusEvaluator`'s own `TokenStatusListClient` caches
+    /// the fetched Status List Tokens those results came from - with no ttl
+    /// (or a long one), a cached token can survive this boundary and be
+    /// reused for the next account's credentials. An in-flight evaluation
+    /// from the ending session could otherwise also repopulate
+    /// `credentialStatusCache` right after this clears it, so both are
+    /// cleared together, in the same place, rather than relying on whatever
+    /// engine/task cancellation the caller already did to have stopped
+    /// everything that could still be running one.
+    func clearCredentialStatusCaches() {
+        credentialStatusCache.clear()
+        let evaluator = credentialStatusEvaluator
+        Task { await evaluator.clearCache() }
+    }
+
+    /// ``clearCredentialStatusCaches()``, but AWAITED rather than fired
+    /// fire-and-forget (review finding): that version is safe for `logout()`/
+    /// `destroy()` - both public, synchronous APIs this SDK cannot change the
+    /// signature of - because a human-paced, deliberate action (the user
+    /// manually logging back in) always follows, not a race-prone
+    /// programmatic retry. `reloginAfterCutOff` is different: it is a SELF-
+    /// DRIVEN re-login that calls `login()` itself moments later, with no
+    /// human pacing gap, so the fire-and-forget version's race - a new
+    /// session's `refreshCredentialStatuses()` reaching the evaluator before
+    /// its unawaited clear completes, serving the superseded session's
+    /// cached Status List Token - is real there in a way it is not for a
+    /// human re-logging in by hand. Any caller that is already `async` and
+    /// about to start a new session right after should use this instead.
+    func clearCredentialStatusCachesAwaited() async {
+        credentialStatusCache.clear()
+        await credentialStatusEvaluator.clearCache()
+    }
+
     /// Everything `logout()` does except ending the server session: drop the
     /// engine, the WMP peer, the API client, the cached tokens, the keystore
     /// and the account-scoped session, and end this session's generation.
@@ -1210,6 +1317,7 @@ public final class SirosWallet: @unchecked Sendable {
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()
+        clearCredentialStatusCaches()
         // The WIA cache is wallet-wide but the instance key it attests is
         // account-scoped, so a WIA kept across a logout would answer
         // `thisInstanceId` (and `wallet_instance_id`) with the PREVIOUS
@@ -1336,6 +1444,10 @@ public final class SirosWallet: @unchecked Sendable {
     public func deleteCredential(_ credentialId: Int64) async {
         let deletedBatchId = await credentialStore.getAll().first { $0.id == credentialId }?.batchId
         await credentialStore.delete(credentialId)
+        // A deleted id can be reused (review finding) - an unrelated
+        // credential later assigned this same id must not read back the
+        // deleted one's cached status.
+        credentialStatusCache.remove(credentialId)
         // If that was the last instance of its batch, its refresh_token
         // entry (if any) is now orphaned - privatedata-spec §6.2 requires
         // it not linger pointing at a batch that no longer exists.
