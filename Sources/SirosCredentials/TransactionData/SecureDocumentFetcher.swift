@@ -8,6 +8,13 @@ import FoundationNetworking
 /// Fetches a document an attacker can influence the location of (a schema,
 /// claim or label document, or type metadata, referenced by SCA metadata).
 ///
+/// Known limit: the public-address check is a preflight; the connection resolves
+/// the name again, so a name that answers differently to the two lookups (DNS
+/// rebinding) is not stopped here. It is bounded by the other measures (no
+/// redirects, no credentials, size and time caps, and the integrity pins the
+/// issuer can put on referenced documents); closing it needs connection-level
+/// address pinning, which `URLSession` does not offer.
+///
 /// What it guarantees:
 /// - https only, to a public host (see ``PublicHostPolicy``);
 /// - a FRESH ephemeral session per fetch: no cookie jar, no credential store,
@@ -51,11 +58,28 @@ public final class SecureDocumentFetcher: @unchecked Sendable {
         return config
     }
 
-    /// The document at `url`, or `nil` for any refusal or failure.
-    public func fetch(_ url: URL, maxBytes: Int) async -> Data? {
-        guard url.scheme?.lowercased() == "https", let host = url.host,
-              url.user == nil, url.password == nil, maxBytes > 0,
-              await PublicHostPolicy.isAllowed(host: host, resolver: resolver) else { return nil }
+    /// The document at `url`, or `nil` for any refusal or failure. The time cap
+    /// covers everything, host resolution included, and releases the caller on
+    /// time even if a resolver or the transport never answers.
+    ///
+    /// - Parameters:
+    ///   - headers: sent as given. EMPTY for every attacker-influenced location;
+    ///     only the wallet's own backend is ever fetched with headers.
+    ///   - ownBackend: skips the https and public-host rules for the wallet's
+    ///     own configured backend (which may be a private or development host).
+    ///     Never set for a location that came from a document.
+    public func fetch(_ url: URL, maxBytes: Int, headers: [String: String] = [:], ownBackend: Bool = false) async -> Data? {
+        await withDeadline(timeout, fallback: nil) { await self.fetchWithoutDeadline(url, maxBytes: maxBytes, headers: headers, ownBackend: ownBackend) }
+    }
+
+    private func fetchWithoutDeadline(_ url: URL, maxBytes: Int, headers: [String: String], ownBackend: Bool) async -> Data? {
+        guard let host = url.host, url.user == nil, url.password == nil, maxBytes > 0 else { return nil }
+        if !ownBackend {
+            guard url.scheme?.lowercased() == "https", headers.isEmpty,
+                  await PublicHostPolicy.isAllowed(host: host, resolver: resolver) else { return nil }
+        } else {
+            guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        }
         let config = Self.makeConfiguration(timeout: timeout)
         configure?(config)
         let delegate = FetchDelegate(maxBytes: maxBytes)
@@ -64,6 +88,7 @@ public final class SecureDocumentFetcher: @unchecked Sendable {
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         // The hard time cap does not rely on the transport's own timeouts.
         let limit = timeout
         let timer = Task {
@@ -137,8 +162,9 @@ final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
-        buffer.append(data)
-        let tooBig = buffer.count > maxBytes
+        // Checked BEFORE appending: one large callback must not allocate past the cap.
+        let tooBig = buffer.count + data.count > maxBytes
+        if !tooBig { buffer.append(data) }
         lock.unlock()
         if tooBig { fail(dataTask) }
     }

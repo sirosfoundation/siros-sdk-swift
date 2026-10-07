@@ -289,6 +289,7 @@ public struct JSONSchemaValidator: Sendable {
 /// over-long patterns. Plain classes, anchors and bounded repeats pass.
 enum RegexSafety {
     static let maxPatternLength = 256
+    static let maxGroups = 8
     static let maxInputBytes = 4096
 
     static func isSafe(_ pattern: String) -> Bool {
@@ -296,6 +297,21 @@ enum RegexSafety {
         let chars = Array(pattern)
         // Back-references and lookaround are refused outright.
         if pattern.contains("(?=") || pattern.contains("(?!") || pattern.contains("(?<=") || pattern.contains("(?<!") { return false }
+        // Alternation is refused outright: ambiguous alternatives repeated in
+        // sequence (`(aa|aaaa)` twenty times) backtrack exponentially without
+        // any quantifier on the group, so no local test can be trusted.
+        var scanEscaped = false
+        var scanClass = false
+        var groups = 0
+        for c in chars {
+            if scanEscaped { scanEscaped = false; continue }
+            if c == "\\" { scanEscaped = true; continue }
+            if scanClass { if c == "]" { scanClass = false }; continue }
+            if c == "[" { scanClass = true; continue }
+            if c == "|" { return false }
+            if c == "(" { groups += 1 }
+        }
+        guard groups <= maxGroups else { return false }
         var i = 0
         var stack: [Int] = []          // start indices of open groups
         var escaped = false

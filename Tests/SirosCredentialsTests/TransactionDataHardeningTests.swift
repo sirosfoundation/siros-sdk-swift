@@ -79,20 +79,36 @@ final class TransactionDataHardeningTests: XCTestCase {
 
     func testCatastrophicPatternsAreRefusedNotRun() throws {
         let started = Date()
-        let evil = ["(a+)+$", "(a|aa)+$", "(a*)*$", "(.*a){12}x", "^(([a-z])+.)+[A-Z]([a-z])+$", #"(a)\1+"#, "(?=a)a", String(repeating: "a", count: 300)]
+        let evil = ["(a+)+$", "(a|aa)+$", "(a*)*$", "(.*a){12}x", "^(([a-z])+.)+[A-Z]([a-z])+$", #"(a)\1+"#, "(?=a)a", String(repeating: "a", count: 300),
+                    "^" + String(repeating: "(aa|aaaa)", count: 24) + "$", "^(ab|cd)$", "^(a)(b)(c)(d)(e)(f)(g)(h)(i)$"]
         for pattern in evil {
             let schema = try StrictJSON.parse(#"{"pattern":"\#(pattern.replacingOccurrences(of: "\\", with: "\\\\"))"}"#)
             let outcome = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 40) + "!"), against: schema)
             guard case .unsupported = outcome else { return XCTFail("\(pattern): \(outcome)") }
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
-        for fine in ["^[A-Z]{3}$", "^[a-z0-9._-]+$", "^\\d{4}-\\d{2}$", "^(ab|cd)$", "^(abc)?x$"] {
+        for fine in ["^[A-Z]{3}$", "^[a-z0-9._-]+$", "^\\d{4}-\\d{2}$", "^(abc)?x$"] {
             let schema = try StrictJSON.parse(#"{"pattern":"\#(fine.replacingOccurrences(of: "\\", with: "\\\\"))"}"#)
             if case .unsupported = JSONSchemaValidator().validate(.string("x"), against: schema) { XCTFail("\(fine) should be allowed") }
         }
         // An over-long input is not matched at all.
         let schema = try StrictJSON.parse(#"{"pattern":"^a+$"}"#)
         guard case .invalid = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 10_000)), against: schema) else { return XCTFail() }
+    }
+
+    /// A caller that is cancelled is released at once, whatever the work is doing.
+    func testWithDeadlineReleasesACancelledCaller() async {
+        let task = Task { () -> Int in
+            await withDeadline(30, fallback: 7) { () async -> Int in
+                await withCheckedContinuation { (_: CheckedContinuation<Int, Never>) in }
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        task.cancel()
+        let started = Date()
+        let value = await task.value
+        XCTAssertEqual(value, 7)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
     }
 
     // MARK: malformed integrity claims
