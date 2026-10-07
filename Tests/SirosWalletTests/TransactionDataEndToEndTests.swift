@@ -791,7 +791,8 @@ final class TransactionDataEndToEndTests: XCTestCase {
     /// An unbound credential of another format in a combined presentation does not stop the transaction.
     func testAnUnboundMdocCredentialDoesNotRefuseTheTransaction() async throws {
         let f = try await fixture()
-        let pay = try XCTUnwrap(await f.store.getAll().first)
+        let stored = await f.store.getAll()
+        let pay = try XCTUnwrap(stored.first)
         let mdoc = StoredCredential(id: 7, format: "mso_mdoc", raw: "not-an-sd-jwt", metadata: CredentialMetadata(name: nil, vct: nil, doctype: "org.iso.18013.5.1.mDL"), batchId: 7, instanceId: 0)
         var selection = SirosWallet.ScaSelection()
         selection.credentials = ["pay": pay, "other": mdoc]
@@ -818,6 +819,22 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let bound = GenerationBoundLogStore(SwitchingStore(onRead: { gen.bump() }), generation: 0, current: { gen.now })
         let read = await bound.entries()
         XCTAssertTrue(read.isEmpty)
+    }
+
+    /// A refusal raised before the service runs (here a malformed integrity claim) is logged exactly once.
+    func testAPreServiceRefusalIsLoggedOnce() async throws {
+        let f = try await fixture()
+        let badPayload = b64(#"{"vct":"\#(vct)","vct#integrity":5}"#)
+        await f.store.save(StoredCredential(
+            id: 1, format: "dc+sd-jwt", raw: "eyJhbGciOiJFUzI1NiJ9.\(badPayload).c2ln~", metadata: CredentialMetadata(name: "Visa card", vct: vct, doctype: nil),
+            batchId: 1, instanceId: 0
+        ))
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
+        XCTAssertNil(sender.sent.last?.vpToken)
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.count, 1, "one refusal record per request: \(log.map(\.reason))")
+        XCTAssertEqual(log.first?.outcome, .refused)
     }
 
     func testTeardownCancelsConsentFlowsInProgress() async throws {
