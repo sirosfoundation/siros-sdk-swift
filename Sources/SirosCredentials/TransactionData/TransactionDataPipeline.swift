@@ -408,8 +408,13 @@ public struct TransactionDataPipeline: Sendable {
     private func checkSchema(
         payload: JSONValue, type: String, typeEntry: JSONValue?, credential: TransactionDataCredential, state: RunState
     ) async throws {
-        let schema = try await resolveSchema(type: type, typeEntry: typeEntry, credential: credential, state: state)
-        let validator = JSONSchemaValidator(resolveRef: { TransactionDataBuiltIns.schema(forReference: $0) })
+        let (schema, isBuiltIn) = try await resolveSchema(type: type, typeEntry: typeEntry, credential: credential, state: state)
+        // File-name `$ref`s exist only between the bundled schemas. A bare `$ref` in an issuer's schema is
+        // relative to ITS own location, so it must never resolve to a bundled document of the same name:
+        // for any other schema it is unresolvable (refused); same-document `#...` refs still work.
+        let validator = isBuiltIn
+            ? JSONSchemaValidator(resolveRef: { TransactionDataBuiltIns.schema(forReference: $0) })
+            : JSONSchemaValidator()
         switch validator.validate(payload, against: schema) {
         case .valid: return
         case .invalid(let path, let reason):
@@ -421,12 +426,12 @@ public struct TransactionDataPipeline: Sendable {
 
     private func resolveSchema(
         type: String, typeEntry: JSONValue?, credential: TransactionDataCredential, state: RunState
-    ) async throws -> JSONValue {
+    ) async throws -> (JSONValue, Bool) {
         guard let entry = typeEntry?.objectValue else {
             guard let builtIn = TransactionDataBuiltIns.schema(forType: type) else {
                 throw TransactionDataError(.metadataUnavailable, detail: "no schema for the type")
             }
-            return builtIn
+            return (builtIn, true)
         }
         switch (entry["schema"], entry["schema_uri"]) {
         case (.some, .some):
@@ -435,20 +440,20 @@ public struct TransactionDataPipeline: Sendable {
             guard let builtIn = TransactionDataBuiltIns.schema(forType: type) else {
                 throw TransactionDataError(.metadataUnavailable, detail: "metadata names no schema")
             }
-            return builtIn
+            return (builtIn, true)
         case (.some(let embedded), .none):
             if let urn = embedded.stringValue {
-                if let builtIn = TransactionDataBuiltIns.schema(forType: urn) { return builtIn }
+                if let builtIn = TransactionDataBuiltIns.schema(forType: urn) { return (builtIn, true) }
                 // A JSON Schema document carried as a string.
-                if let parsed = try? StrictJSON.parse(urn), parsed.objectValue != nil { return parsed }
+                if let parsed = try? StrictJSON.parse(urn), parsed.objectValue != nil { return (parsed, false) }
                 throw TransactionDataError(.metadataUnavailable, detail: "schema is neither a known built-in nor a JSON Schema")
             }
-            return embedded
+            return (embedded, false)
         case (.none, .some(let uriValue)):
             guard let uri = uriValue.stringValue, !uri.isEmpty else {
                 throw TransactionDataError(.metadataUnavailable, detail: "schema_uri is not a string")
             }
-            if let builtIn = TransactionDataBuiltIns.schema(forType: uri) { return builtIn }
+            if let builtIn = TransactionDataBuiltIns.schema(forType: uri) { return (builtIn, true) }
             let pin = credential.integrityClaims["transaction_data_types['\(type)'].schema_uri#integrity"]
             if pin == nil { state.note.noteUnpinned() }
             let limit = maxResourceBytes
@@ -466,7 +471,7 @@ public struct TransactionDataPipeline: Sendable {
             guard let parsed = try? StrictJSON.parse(data) else {
                 throw TransactionDataError(.metadataUnavailable, detail: "schema_uri content is not JSON")
             }
-            return parsed
+            return (parsed, false)
         }
     }
 
