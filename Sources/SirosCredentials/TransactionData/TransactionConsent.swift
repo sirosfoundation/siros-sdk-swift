@@ -51,6 +51,20 @@ public struct TransactionConsentEntry: Sendable, Equatable {
     }
 }
 
+/// The attributes of one credential that will be disclosed with the
+/// transaction (TS12 3.3.1: transactional data is shown "in conjunction with
+/// the requested attributes").
+public struct TransactionConsentAttributes: Sendable, Equatable {
+    public let credentialName: String
+    /// Claim names as requested; the SDK has no localised names for them here.
+    public let claims: [String]
+
+    public init(credentialName: String, claims: [String]) {
+        self.credentialName = credentialName
+        self.claims = claims
+    }
+}
+
 /// Everything the host app needs to ask for consent to a transaction.
 public struct TransactionConsentRequest: Sendable, Equatable {
     public let verifier: String
@@ -61,6 +75,8 @@ public struct TransactionConsentRequest: Sendable, Equatable {
     /// the SDK does not know (the orchestrator pre-verifies).
     public let requestSigned: Bool?
     public let locale: String
+    /// What will be disclosed alongside the transaction.
+    public let attributes: [TransactionConsentAttributes]
 
     /// The affirmative label when every entry gives the same one; `nil`
     /// otherwise, in which case one button would consent to differently
@@ -79,7 +95,8 @@ public struct TransactionConsentRequest: Sendable, Equatable {
     }
 
     public init(verifier: String, credentialName: String, entries: [TransactionConsentEntry],
-                requestSigned: Bool?, locale: String) {
+                requestSigned: Bool?, locale: String, attributes: [TransactionConsentAttributes] = []) {
+        self.attributes = attributes
         self.verifier = verifier
         self.credentialName = credentialName
         self.entries = entries

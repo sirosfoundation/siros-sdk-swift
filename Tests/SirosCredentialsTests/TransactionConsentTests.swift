@@ -6,8 +6,8 @@ import XCTest
 private final class Source: TransactionMetadataSource, @unchecked Sendable {
     var documents: [String: String] = [:]
     var resources: [String: Data] = [:]
-    func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String? { documents[vct] }
-    func fetchResource(uri: String) async -> Data? { resources[uri] }
+    func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? { documents[vct] }
+    func fetchResource(uri: String, maxBytes: Int) async -> Data? { resources[uri] }
 }
 
 private final class Handler: TransactionConsentHandler, @unchecked Sendable {
@@ -144,9 +144,9 @@ final class TransactionConsentTests: XCTestCase {
         XCTAssertEqual(e.affirmativeLabel, "Confirm Payment")
         XCTAssertEqual(e.denialLabel, "Cancel Payment")
         XCTAssertEqual(e.securityHint, "Never confirm a payment you did not start.")
-        // level 1 (claim order), level 2, default level 3 (no visualisation set), level 4
+        // level 1 (claim order), level 2; the payee id has no level set (default 3) but is a decision field of a built-in type, so it is raised to 2; level 4
         XCTAssertEqual(e.fields.map(\.label), ["Amount", "Currency", "Payee", "Payee ID", "Transaction ID"])
-        XCTAssertEqual(e.fields.map(\.level), [1, 1, 2, 3, 4])
+        XCTAssertEqual(e.fields.map(\.level), [1, 1, 2, 2, 4])
         XCTAssertEqual(e.fields.first?.value, "49.99")
         XCTAssertEqual(e.fields.first?.path, ["amount"])
         XCTAssertEqual(e.fields.first(where: { $0.label == "Payee" })?.path, ["payee", "name"])
@@ -192,8 +192,8 @@ final class TransactionConsentTests: XCTestCase {
         let h = Handler(.yes)
         _ = try await service(source(metadata(claims: c)), handler: h).process(request(), context: context())
         let fields = try XCTUnwrap(h.seen.first?.entries.first?.fields)
-        XCTAssertEqual(fields.map(\.level), [1, 1, 2, 3, 4])
-        XCTAssertEqual(fields.map(\.label), ["Currency", "Amount", "Payee", "Payee ID", "Transaction ID"], "claim order within a level")
+        XCTAssertEqual(fields.map(\.level), [1, 1, 2, 2, 4])
+        XCTAssertEqual(fields.map(\.label), ["Currency", "Amount", "Payee ID", "Payee", "Transaction ID"], "claim order within a level")
     }
 
     func testOversizedReferencedDocumentRefuses() async {
@@ -243,6 +243,134 @@ final class TransactionConsentTests: XCTestCase {
         await expectRefusal(.insufficientAuthenticationFactors, svc)
         let entry = try await firstLog(log)
         XCTAssertEqual(entry.reason, "insufficientAuthenticationFactors")
+    }
+
+    // MARK: text safety
+
+    func testUnsafeValuesAreRefusedNotCleaned() async {
+        let evil: [(String, String)] = [
+            ("bidi override", "Shop \u{202E}AB"), ("bidi isolate", "Shop \u{2066}AB\u{2069}"), ("zero width", "Sh\u{200B}op"),
+            ("zwj", "a\u{200D}b"), ("bom", "\u{FEFF}Shop"), ("newline", "Shop\nPay 1 EUR"), ("tab", "A\tB"), ("nul", "A\u{0}B"),
+            ("line separator", "A\u{2028}B"), ("private use", "A\u{E000}B"),
+        ]
+        for (name, value) in evil {
+            let payload = #"{"transaction_id":"t","payee":{"name":"\#(value.unicodeScalars.map { String(format: "\\u%04x", $0.value) }.joined())","id":"1"},"currency":"EUR","amount":1}"#
+            let h = Handler(.yes)
+            do { _ = try await service(source(), handler: h).process(request([paymentRaw(payload: payload)]), context: context()); XCTFail(name) }
+            catch let e as TransactionDataError { XCTAssertEqual(e.reason, .invalidEntry, name) } catch { XCTFail("\(error)") }
+            XCTAssertTrue(h.seen.isEmpty, "\(name): the user is never shown it")
+        }
+    }
+
+    func testOrdinaryInternationalTextIsAccepted() async throws {
+        let h = Handler(.yes)
+        let payload = #"{"transaction_id":"t","payee":{"name":"Åkesson & Söner – 東京 \ud83d\ude00","id":"1"},"currency":"EUR","amount":1}"#
+        _ = try await service(source(), handler: h).process(request([paymentRaw(payload: payload)]), context: context())
+        XCTAssertEqual(h.seen.first?.entries.first?.fields.first(where: { $0.label == "Payee" })?.value, "Åkesson & Söner – 東京 \u{1F600}")
+    }
+
+    func testOverlongValuesAreRefusedNotTruncated() async {
+        let long = String(repeating: "x", count: 1001)
+        let payload = #"{"transaction_id":"t","payee":{"name":"\#(long)","id":"1"},"currency":"EUR","amount":1}"#
+        await expectRefusal(.invalidEntry, service(source(), handler: Handler(.yes)), request([paymentRaw(payload: payload)]))
+        let ok = String(repeating: "x", count: 1000)
+        _ = try? await service(source(), handler: Handler(.yes)).process(request([paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"\#(ok)","id":"1"},"currency":"EUR","amount":1}"#)]), context: context())
+    }
+
+    func testUnsafeLabelsFromMetadataAreRefused() async {
+        let l = #"{"affirmative_action_label":[{"lang":"en","value":"Confirm\u202E"}]}"#
+        await expectRefusal(.invalidEntry, service(source(metadata(labels: l)), handler: Handler(.yes)))
+        let c = claimsJson().replacingOccurrences(of: #""label":"Amount""#, with: #""label":"Amo\u200Bunt""#)
+        await expectRefusal(.invalidEntry, service(source(metadata(claims: c)), handler: Handler(.yes)))
+    }
+
+    // MARK: display floor for built-in types
+
+    /// Whatever the metadata says, what is paid, in what currency, and to whom is shown at level 2 or higher.
+    func testBuiltInDecisionFieldsAreNeverBelowLevelTwo() async throws {
+        let c = "[" + [
+            claim(#""amount""#, level: 4, labels: [("en", "Amount")]),
+            claim(#""currency""#, level: 3, labels: [("en", "Currency")]),
+            claim(#""payee","name""#, level: 4, labels: [("en", "Payee")]),
+            claim(#""payee","id""#, level: nil, labels: [("en", "Payee ID")]),
+            claim(#""transaction_id""#, level: 4, labels: [("en", "Transaction ID")]),
+        ].joined(separator: ",") + "]"
+        let h = Handler(.yes)
+        _ = try await service(source(metadata(claims: c)), handler: h).process(request(), context: context())
+        let fields = try XCTUnwrap(h.seen.first?.entries.first?.fields)
+        func level(_ label: String) -> Int? { fields.first { $0.label == label }?.level }
+        XCTAssertEqual(level("Amount"), 2)
+        XCTAssertEqual(level("Currency"), 2)
+        XCTAssertEqual(level("Payee"), 2)
+        XCTAssertEqual(level("Payee ID"), 2)
+        XCTAssertEqual(level("Transaction ID"), 4, "a non-decision field keeps what the metadata says")
+        XCTAssertTrue(fields.allSatisfy { $0.level <= 4 })
+    }
+
+    func testTheDefaultLevelIsThreeForAFieldWithNoneSet() async throws {
+        let c = withClaim(claimsJson(skip: ["transaction_id"]), #"{"path":["payload","transaction_id"],"display":[{"lang":"en","label":"Transaction ID"}]}"#)
+        let h = Handler(.yes)
+        _ = try await service(source(metadata(claims: c)), handler: h).process(request(), context: context())
+        XCTAssertEqual(h.seen.first?.entries.first?.fields.first(where: { $0.label == "Transaction ID" })?.level, 3)
+    }
+
+    func testBuiltInDecisionFieldsKeepAHigherLevelWhenTheMetadataGivesOne() async throws {
+        let h = Handler(.yes)
+        _ = try await service(source(), handler: h).process(request(), context: context())
+        XCTAssertEqual(h.seen.first?.entries.first?.fields.first(where: { $0.label == "Amount" })?.level, 1)
+    }
+
+    func testADecisionFieldWithoutANameCannotBeHiddenByLevelFour() async {
+        let c = withClaim(claimsJson(skip: ["amount"]), #"{"path":["payload","amount"],"visualisation":4}"#)
+        await expectRefusal(.metadataUnavailable, service(source(metadata(claims: c)), handler: Handler(.yes)))
+    }
+
+    // MARK: attributes shown with the transaction
+
+    func testTheRequestedAttributesAreInTheConsentModel() async throws {
+        let h = Handler(.yes)
+        let ctx = TransactionDataContext(verifier: "v", locale: "en", credentialNames: ["pay": "Visa card"],
+                                         disclosedClaims: ["pay": ["given_name", "family_name"]])
+        _ = try await service(source(), handler: h).process(request(), context: ctx)
+        XCTAssertEqual(h.seen.first?.attributes, [TransactionConsentAttributes(credentialName: "Visa card", claims: ["given_name", "family_name"])])
+    }
+
+    // MARK: log content
+
+    func testRefusalsAreOneRecordPerRequestAndEachRecordNamesItsOwnCredential() async throws {
+        let many = (0..<5).map { _ in paymentRaw() }
+        let refused = TransactionLogEntry.records(rawEntries: many, verifier: "v", credentialLabel: { _ in "c" }, outcome: .refused, reason: "invalidEntry")
+        XCTAssertEqual(refused.count, 1, "an unauthenticated sender cannot multiply refusal records")
+        let consented = TransactionLogEntry.records(rawEntries: many, verifier: "v", credentialLabel: { _ in "c" }, outcome: .consented)
+        XCTAssertEqual(consented.count, 5)
+        let a = raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["a"],"payload":{"transaction_id":"1"}}"#)
+        let b = raw(#"{"type":"urn:eudi:sca:payment:1","credential_ids":["b"],"payload":{"transaction_id":"2"}}"#)
+        let both = TransactionLogEntry.records(rawEntries: [a, b], verifier: "v", credentialLabel: { $0 == "a" ? "Card A" : "Card B" }, outcome: .consented)
+        XCTAssertEqual(both.map(\.credential), ["Card A", "Card B"])
+    }
+
+    func testLoggedFieldsAreCapped() {
+        let long = String(repeating: "y", count: 5000)
+        let e = TransactionLogEntry(subject: TransactionLogSubject(transactionId: long, typeName: long, entities: ["payee": long]),
+                                    verifier: long, credential: long, outcome: .consented)
+        for value in [e.transactionId!, e.typeName!, e.entities["payee"]!, e.verifier, e.credential] {
+            XCTAssertEqual(value.count, TransactionLogEntry.maxFieldLength)
+            XCTAssertTrue(value.hasSuffix(TransactionLogEntry.truncationMarker))
+        }
+        let short = TransactionLogEntry(subject: TransactionLogSubject(transactionId: "tx-1", typeName: "t"), verifier: "v", credential: "c", outcome: .consented)
+        XCTAssertEqual(short.transactionId, "tx-1", "short values are untouched")
+    }
+
+    func testRefusalsDoNotEvictConsentedRecordsInMemory() async throws {
+        let log = InMemoryTransactionLogStore(capacity: 3, refusedCapacity: 2)
+        func e(_ i: Int, _ o: TransactionLogEntry.Outcome) -> TransactionLogEntry {
+            TransactionLogEntry(id: "\(i)", timestamp: Int64(i), subject: TransactionLogSubject(transactionId: nil, typeName: nil), verifier: "v", credential: "c", outcome: o)
+        }
+        try await log.append([e(1, .consented), e(2, .declined)])
+        for i in 10..<40 { try await log.append([e(i, .refused)]) }
+        let all = await log.entries()
+        XCTAssertEqual(all.filter { $0.outcome != .refused }.count, 2)
+        XCTAssertEqual(all.filter { $0.outcome == .refused }.count, 2)
     }
 
     func testOptionalLabelsAreAbsentWhenNotProvided() async throws {
@@ -355,10 +483,13 @@ final class TransactionConsentTests: XCTestCase {
     func testConsentYieldsBindingsAndLogEntry() async throws {
         let log = InMemoryTransactionLogStore()
         let r = request()
-        let bindings = try await service(source(), handler: Handler(.yes), log: log).process(r, context: context())
-        let b = try XCTUnwrap(bindings["pay"])
+        let plan = try await service(source(), handler: Handler(.yes), log: log).process(r, context: context())
+        let b = try XCTUnwrap(plan.bindings["pay"])
         XCTAssertEqual(b.rawEntries, [r.entries[0].raw])
         XCTAssertEqual(b.factors, twoFactors)
+        let before = await log.entries()
+        XCTAssertTrue(before.isEmpty, "consent is recorded only once signing succeeded")
+        await plan.complete(signed: true)
         let entry = try await firstLog(log)
         XCTAssertEqual(entry.outcome, .consented)
         XCTAssertEqual(entry.transactionId, "tx-1")
@@ -374,12 +505,120 @@ final class TransactionConsentTests: XCTestCase {
         XCTAssertTrue(h.seen.isEmpty, "the user is never asked to consent to a request that is refused")
     }
 
-    func testInsufficientFactorsRefuseAfterConsentAndAreLogged() async throws {
+    /// A request that can never satisfy two categories is refused BEFORE the user is shown anything.
+    func testInsufficientFactorsRefuseBeforeConsentAndAreLogged() async throws {
         let log = InMemoryTransactionLogStore()
-        let svc = service(source(), handler: Handler(.yes), factors: [AuthenticationFactor(.possession, "key_in_remote_wscd")], log: log)
+        let h = Handler(.yes)
+        let svc = service(source(), handler: h, factors: [AuthenticationFactor(.possession, "key_in_remote_wscd")], log: log)
         await expectRefusal(.insufficientAuthenticationFactors, svc)
+        XCTAssertTrue(h.seen.isEmpty, "the user was never asked to confirm something that cannot succeed")
         let entry = try await firstLog(log)
         XCTAssertEqual(entry.reason, "insufficientAuthenticationFactors")
+    }
+
+    func testTheDefaultInterimProviderRefusesBeforeConsent() async {
+        let h = Handler(.yes)
+        let svc = TransactionDataService(source: source(), consentHandler: h, factorsProvider: InterimAuthenticationFactorsProvider(),
+                                         log: InMemoryTransactionLogStore(), consentTimeout: 5, fetchTimeout: 2)
+        await expectRefusal(.insufficientAuthenticationFactors, svc)
+        XCTAssertTrue(h.seen.isEmpty)
+    }
+
+    /// A provider that can only produce factors by running a verification overrides the probe.
+    func testAProviderMayOverrideTheProbe() async throws {
+        struct Lazy: AuthenticationFactorsProvider {
+            func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor] {
+                [AuthenticationFactor(.knowledge, "other"), AuthenticationFactor(.possession, "other")]
+            }
+            func canEstablishTwoCategories(for context: AuthenticationFactorContext) async -> Bool { true }
+        }
+        let h = Handler(.yes)
+        let svc = TransactionDataService(source: source(), consentHandler: h, factorsProvider: Lazy(), log: InMemoryTransactionLogStore(), consentTimeout: 5, fetchTimeout: 2)
+        _ = try await svc.process(request(), context: context())
+        XCTAssertEqual(h.seen.count, 1)
+    }
+
+    /// A provider that says yes to the probe but then yields too little is still refused after consent.
+    func testFactorsThatFallShortAfterConsentAreStillRefused() async throws {
+        struct Optimistic: AuthenticationFactorsProvider {
+            func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor] { [AuthenticationFactor(.possession, "other")] }
+            func canEstablishTwoCategories(for context: AuthenticationFactorContext) async -> Bool { true }
+        }
+        let log = InMemoryTransactionLogStore()
+        let svc = TransactionDataService(source: source(), consentHandler: Handler(.yes), factorsProvider: Optimistic(), log: log, consentTimeout: 5, fetchTimeout: 2)
+        await expectRefusal(.insufficientAuthenticationFactors, svc)
+    }
+
+    func testSigningFailureIsLoggedAsRefusedNotConsented() async throws {
+        let log = InMemoryTransactionLogStore()
+        let plan = try await service(source(), handler: Handler(.yes), log: log).process(request(), context: context())
+        await plan.complete(signed: false)
+        await plan.complete(signed: true)   // later calls do nothing
+        let all = await log.entries()
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.outcome, .refused)
+        XCTAssertEqual(all.first?.reason, "signingFailed")
+    }
+
+    func testTheWalletsOwnCancellationIsNotADeclineAndIsNotLoggedAsOne() async throws {
+        let log = InMemoryTransactionLogStore()
+        let svc = service(source(), handler: Handler(.yes), log: log)
+        let r = request()
+        let ctx = context()
+        let task = Task { () -> Bool in
+            // Cancel ourselves just before the answer is evaluated.
+            do { _ = try await svc.process(r, context: ctx); return false } catch is CancellationError { return true } catch { return false }
+        }
+        task.cancel()
+        let cancelled = await task.value
+        XCTAssertTrue(cancelled, "cancellation propagates")
+        let entries = await log.entries()
+        XCTAssertFalse(entries.contains { $0.outcome == .declined }, "never recorded as the user declining")
+    }
+
+    func testAHandlerThatThrowsCancellationIsADecline() async throws {
+        final class Cancelling: TransactionConsentHandler, @unchecked Sendable {
+            func confirm(_ request: TransactionConsentRequest) async throws -> Bool { throw CancellationError() }
+        }
+        let svc = TransactionDataService(source: source(), consentHandler: Cancelling(), factorsProvider: FixedFactors(factors: twoFactors),
+                                         log: InMemoryTransactionLogStore(), consentTimeout: 5, fetchTimeout: 2)
+        await expectRefusal(.declined, svc)
+    }
+
+    func testEveryCredentialMustBeBoundWhenTheTransportRequiresIt() async {
+        let other = TransactionDataCredential(queryId: "age", format: "dc+sd-jwt", vct: "urn:age")
+        var req = request()
+        req.credentials.append(other)
+        let h = Handler(.yes)
+        let svc = service(source(), handler: h)
+        do {
+            _ = try await svc.process(req, context: TransactionDataContext(verifier: "v", locale: "en", requireEveryCredentialBound: true))
+            XCTFail("must refuse")
+        } catch let e as TransactionDataError { XCTAssertEqual(e.reason, .invalidEntry) } catch { XCTFail("\(error)") }
+        XCTAssertTrue(h.seen.isEmpty, "refused before the user is asked, not after")
+    }
+
+    func testAnUnboundCredentialIsFineWhenTheTransportAllowsIt() async throws {
+        var req = request()
+        req.credentials.append(TransactionDataCredential(queryId: "age", format: "mso_mdoc", vct: nil))
+        let plan = try await service(source(), handler: Handler(.yes)).process(req, context: context())
+        XCTAssertEqual(Set(plan.bindings.keys), ["pay"])
+    }
+
+    func testLogFailureIsSurfacedToTheCaller() async throws {
+        struct Failing: TransactionLogStore {
+            func append(_ entries: [TransactionLogEntry]) async throws { throw TransactionLogError("disk full") }
+            func entries() async -> [TransactionLogEntry] { [] }
+        }
+        final class Counter: @unchecked Sendable { var n = 0 }
+        let counter = Counter()
+        let svc = TransactionDataService(source: source(), consentHandler: Handler(.yes), factorsProvider: FixedFactors(factors: twoFactors),
+                                         log: Failing(), consentTimeout: 5, fetchTimeout: 2, onLogFailure: { _ in counter.n += 1 })
+        let plan = try await svc.process(request(), context: context())
+        await plan.complete(signed: true)
+        XCTAssertEqual(counter.n, 1)
+        await expectRefusal(.invalidEntry, svc, request(["!!!"]))
+        XCTAssertEqual(counter.n, 2)
     }
 
     func testRefusalOfAMalformedEntryIsStillLogged() async throws {
@@ -419,10 +658,10 @@ final class TransactionConsentTests: XCTestCase {
         XCTAssertEqual(custom.transactionId, "a")
     }
 
-    func testInMemoryLogIsBoundedAndNewestFirst() async {
+    func testInMemoryLogIsBoundedAndNewestFirst() async throws {
         let log = InMemoryTransactionLogStore(capacity: 3)
         for i in 0..<5 {
-            await log.append([TransactionLogEntry(id: "\(i)", timestamp: Int64(i), subject: TransactionLogSubject(transactionId: "\(i)", typeName: nil), verifier: "v", credential: "c", outcome: .consented)])
+            try await log.append([TransactionLogEntry(id: "\(i)", timestamp: Int64(i), subject: TransactionLogSubject(transactionId: "\(i)", typeName: nil), verifier: "v", credential: "c", outcome: .consented)])
         }
         let ids = await log.entries().map(\.id)
         XCTAssertEqual(ids, ["4", "3", "2"])

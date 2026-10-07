@@ -13,22 +13,57 @@ public struct TransactionDataContext: Sendable {
     public var credentialNames: [String: String]
     /// Key facts per DCQL query id, for the authentication factors.
     public var factorContexts: [String: AuthenticationFactorContext]
+    /// The claims that will be disclosed per DCQL query id, shown with the transaction.
+    public var disclosedClaims: [String: [String]]
+    /// Whether every credential of the request must be bound to a transaction
+    /// (a transport that cannot present an unbound credential, such as WMP).
+    public var requireEveryCredentialBound: Bool
 
     public init(verifier: String, requestSigned: Bool? = nil, locale: String,
-                credentialNames: [String: String] = [:], factorContexts: [String: AuthenticationFactorContext] = [:]) {
+                credentialNames: [String: String] = [:], factorContexts: [String: AuthenticationFactorContext] = [:],
+                disclosedClaims: [String: [String]] = [:], requireEveryCredentialBound: Bool = false) {
         self.verifier = verifier
         self.requestSigned = requestSigned
         self.locale = locale
         self.credentialNames = credentialNames
         self.factorContexts = factorContexts
+        self.disclosedClaims = disclosedClaims
+        self.requireEveryCredentialBound = requireEveryCredentialBound
     }
 }
 
-/// Runs the whole EC TS12 sequence for one request (contract section 4):
-/// validate, build the consent model, ask the user, establish the
-/// authentication factors, build the per-credential bindings and log the
-/// outcome. Nothing is signed by this type; a thrown error means NOTHING may
-/// be signed.
+/// What the caller signs, and the way to report how signing went. The user's
+/// consent is recorded only once the presentation was actually produced:
+/// call ``complete(signed:)`` exactly when signing has finished or failed.
+public final class TransactionDataPlan: @unchecked Sendable {
+    /// The bindings by DCQL query id, for the credentials the transaction is bound to.
+    public let bindings: [String: TransactionDataBinding]
+    private let onComplete: @Sendable (Bool) async -> Void
+    private let lock = NSLock()
+    private var completed = false
+
+    init(bindings: [String: TransactionDataBinding], onComplete: @escaping @Sendable (Bool) async -> Void) {
+        self.bindings = bindings
+        self.onComplete = onComplete
+    }
+
+    /// Records the outcome once: `consented` if signing succeeded, otherwise a
+    /// refusal (consent that did not lead to a presentation is not consent
+    /// that was acted on). Later calls do nothing.
+    public func complete(signed: Bool) async {
+        lock.lock()
+        let first = !completed
+        completed = true
+        lock.unlock()
+        if first { await onComplete(signed) }
+    }
+}
+
+/// Runs the EC TS12 sequence for one request (contract section 4): validate,
+/// check that two factor categories are even possible, build the consent
+/// model, ask the user, establish the factors, build the per-credential
+/// bindings and log the outcome. Nothing is signed by this type; a thrown
+/// error means NOTHING may be signed.
 public final class TransactionDataService: @unchecked Sendable {
     private let source: any TransactionMetadataSource
     private let consentHandler: (any TransactionConsentHandler)?
@@ -36,14 +71,21 @@ public final class TransactionDataService: @unchecked Sendable {
     private let log: any TransactionLogStore
     private let consentTimeout: TimeInterval
     private let fetchTimeout: TimeInterval
+    private let onLogFailure: (@Sendable (Error) -> Void)?
+
+    /// The consent default stays well below the backend's sign timeout
+    /// (go-wallet-backend `Session.RequestSign` waits 3 minutes) so the wallet
+    /// answers before the engine gives up, whatever time metadata took.
+    public static let defaultConsentTimeout: TimeInterval = 90
 
     public init(
         source: any TransactionMetadataSource,
         consentHandler: (any TransactionConsentHandler)?,
         factorsProvider: any AuthenticationFactorsProvider = InterimAuthenticationFactorsProvider(),
         log: any TransactionLogStore,
-        consentTimeout: TimeInterval = 120,
-        fetchTimeout: TimeInterval = 10
+        consentTimeout: TimeInterval = TransactionDataService.defaultConsentTimeout,
+        fetchTimeout: TimeInterval = 10,
+        onLogFailure: (@Sendable (Error) -> Void)? = nil
     ) {
         self.source = source
         self.consentHandler = consentHandler
@@ -51,28 +93,50 @@ public final class TransactionDataService: @unchecked Sendable {
         self.log = log
         self.consentTimeout = consentTimeout
         self.fetchTimeout = fetchTimeout
+        self.onLogFailure = onLogFailure
     }
 
-    /// The bindings by DCQL query id, for the credentials the transaction is bound to.
-    public func process(_ request: TransactionDataRequest, context: TransactionDataContext) async throws -> [String: TransactionDataBinding] {
+    public func process(_ request: TransactionDataRequest, context: TransactionDataContext) async throws -> TransactionDataPlan {
         let raws = request.entries.map(\.raw)
-        let credentialLabel = request.credentials.first.flatMap { context.credentialNames[$0.queryId] ?? $0.vct } ?? ""
+        let label: @Sendable (String?) -> String = { queryId in
+            guard let queryId else { return "" }
+            return context.credentialNames[queryId] ?? request.credentials.first(where: { $0.queryId == queryId })?.vct ?? ""
+        }
+        let note = MetadataAuthenticationNote()
+        defer { note.emitIfNeeded() }
         do {
             let pipeline = TransactionDataPipeline(source: source, fetchTimeout: fetchTimeout)
-            let validated = try await pipeline.validate(request)
+            let validated = try await pipeline.validate(request, note: note)
+            let boundQueryIds = Set(validated.entries.flatMap(\.credentialIds))
+            if context.requireEveryCredentialBound, request.credentials.contains(where: { !boundQueryIds.contains($0.queryId) }) {
+                throw TransactionDataError(.invalidEntry, detail: "a credential of the request is not bound to the transaction")
+            }
+
+            // Refuse BEFORE showing anything when two factor categories cannot be established.
+            for credential in request.credentials where boundQueryIds.contains(credential.queryId) {
+                let factorContext = context.factorContexts[credential.queryId] ?? AuthenticationFactorContext()
+                guard await factorsProvider.canEstablishTwoCategories(for: factorContext) else {
+                    throw TransactionDataError(.insufficientAuthenticationFactors, detail: "two authentication factor categories cannot be established")
+                }
+            }
 
             // 8. Display and consent. No handler: the transaction cannot be shown.
             guard let handler = consentHandler else { throw TransactionDataError(.noConsentHandler) }
-            let boundQueryId = validated.entries.first?.credentialIds.first ?? ""
-            let name = context.credentialNames[boundQueryId]
-                ?? request.credentials.first(where: { $0.queryId == boundQueryId })?.vct ?? ""
+            let firstQueryId = validated.entries.first?.credentialIds.first ?? ""
+            let attributes: [TransactionConsentAttributes] = request.credentials.compactMap { credential in
+                guard boundQueryIds.contains(credential.queryId) || context.disclosedClaims[credential.queryId] != nil else { return nil }
+                return TransactionConsentAttributes(credentialName: label(credential.queryId), claims: context.disclosedClaims[credential.queryId] ?? [])
+            }
             let model = try await TransactionConsentModelBuilder(
-                source: source, fetchTimeout: fetchTimeout, maxResourceBytes: 256 * 1024
+                source: source, fetchTimeout: fetchTimeout, maxResourceBytes: 256 * 1024, note: note
             ).build(
-                validated: validated, request: request, verifier: context.verifier, credentialName: name,
-                requestSigned: context.requestSigned, locale: context.locale
+                validated: validated, request: request, verifier: context.verifier, credentialName: label(firstQueryId),
+                requestSigned: context.requestSigned, locale: context.locale, attributes: attributes
             )
-            guard await askUser(handler, model) else { throw TransactionDataError(.declined) }
+            let answer = await askUser(handler, model)
+            // The wallet's own task being cancelled is not the user declining.
+            try Task.checkCancellation()
+            guard answer else { throw TransactionDataError(.declined) }
 
             // 9. Bindings with the factors applied for this operation.
             var bindings: [String: TransactionDataBinding] = [:]
@@ -91,23 +155,30 @@ public final class TransactionDataService: @unchecked Sendable {
                 }
             }
 
-            // 10. Log.
-            await log.append(TransactionLogEntry.records(
-                rawEntries: raws, verifier: context.verifier, credential: credentialLabel, outcome: .consented
-            ))
-            return bindings
+            // 10. The record is written when signing is known to have succeeded.
+            let verifier = context.verifier
+            return TransactionDataPlan(bindings: bindings) { [log, onLogFailure] signed in
+                let records = TransactionLogEntry.records(
+                    rawEntries: raws, verifier: verifier, credentialLabel: label,
+                    outcome: signed ? .consented : .refused, reason: signed ? nil : "signingFailed"
+                )
+                do { try await log.append(records) } catch { onLogFailure?(error) }
+            }
         } catch let error as TransactionDataError {
-            await log.append(TransactionLogEntry.records(
-                rawEntries: raws, verifier: context.verifier, credential: credentialLabel,
-                outcome: error.reason == .declined ? .declined : .refused,
-                reason: error.reason == .declined ? nil : error.reason.rawValue
-            ))
-            throw error
+            let declined = error.reason == .declined
+            let records = TransactionLogEntry.records(
+                rawEntries: raws, verifier: context.verifier, credentialLabel: label,
+                outcome: declined ? .declined : .refused, reason: declined ? nil : error.reason.rawValue
+            )
+            do { try await log.append(records) } catch { onLogFailure?(error) }
+            var logged = error
+            logged.alreadyLogged = true
+            throw logged
         }
     }
 
-    /// `true` only for an explicit yes. A throw or a missing answer within the
-    /// time limit is a decline.
+    /// `true` only for an explicit yes. A throw (including the handler being
+    /// cancelled) or a missing answer within the time limit is a decline.
     private func askUser(_ handler: any TransactionConsentHandler, _ model: TransactionConsentRequest) async -> Bool {
         await withDeadline(consentTimeout, fallback: false) { (try? await handler.confirm(model)) ?? false }
     }

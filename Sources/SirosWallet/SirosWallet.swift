@@ -75,11 +75,20 @@ public final class SirosWallet: @unchecked Sendable {
     var wmpSessionSnapshot = false
     var transactionLogStoreIsDefault = false
     /// How documents referenced by SCA type metadata are fetched (tests replace it).
-    var transactionResourceGet: @Sendable (URL) async -> Data? = SirosWallet.unauthenticatedResourceGet
-    /// Preferred language for transaction labels (BCP 47).
-    public var transactionDataLocale: String = Locale.preferredLanguages.first ?? "en"
+    var transactionResourceGet: @Sendable (URL, Int) async -> Data? = SirosWallet.secureResourceGet
+    /// How SCA type metadata is fetched; defaults to `fetchTypeMetadata`.
+    lazy var transactionMetadataFetch: @Sendable (String, String?, Int) async -> String? = { [weak self] vct, pin, limit in
+        await self?.fetchTypeMetadata(vct: vct, expectedIntegrity: pin, maxBytes: limit)
+    }
+    var transactionLogGeneration = 0
+    var transactionDataLocaleStorage: String = Locale.preferredLanguages.first ?? "en"
+    /// Preferred language for transaction labels (BCP 47). Safe to change at any time.
+    public var transactionDataLocale: String {
+        get { lock.lock(); defer { lock.unlock() }; return transactionDataLocaleStorage }
+        set { lock.lock(); transactionDataLocaleStorage = newValue; lock.unlock() }
+    }
     /// How long to wait for the app's consent answer before treating it as declined.
-    var transactionDataConsentTimeout: TimeInterval = 120
+    var transactionDataConsentTimeout: TimeInterval = TransactionDataService.defaultConsentTimeout
 
     /// The consent handler that shows a transaction to the user (EC TS12
     /// section 3.3). Without one the wallet cannot show the transaction, so

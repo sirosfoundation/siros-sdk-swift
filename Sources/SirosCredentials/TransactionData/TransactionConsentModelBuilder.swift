@@ -12,6 +12,7 @@ struct TransactionConsentModelBuilder: Sendable {
     let source: any TransactionMetadataSource
     let fetchTimeout: TimeInterval
     let maxResourceBytes: Int
+    let note: MetadataAuthenticationNote
 
     /// Maximum string lengths from section 3.3.3.
     static let maxLengths = ["affirmative_action_label": 30, "denial_action_label": 30,
@@ -23,7 +24,8 @@ struct TransactionConsentModelBuilder: Sendable {
         verifier: String,
         credentialName: String,
         requestSigned: Bool?,
-        locale: String
+        locale: String,
+        attributes: [TransactionConsentAttributes] = []
     ) async throws -> TransactionConsentRequest {
         var entries: [TransactionConsentEntry] = []
         for entry in validated.entries {
@@ -41,8 +43,14 @@ struct TransactionConsentModelBuilder: Sendable {
                 inline: typeEntry["ui_labels"], uri: typeEntry["ui_labels_uri"], name: "ui_labels",
                 pin: credential.integrityClaims[pinPrefix + "ui_labels_uri#integrity"]
             )
-            let fields = try fields(payload: entry.payload, claims: claims, locale: locale)
+            // Embedded claims/labels are authenticated only through the type
+            // metadata itself; with no `vct#integrity` they are not authenticated.
+            if credential.integrityClaims["vct#integrity"] == nil { note.noteUnpinned() }
+            let fields = try fields(payload: entry.payload, type: entry.type, claims: claims, locale: locale)
             let ui = try uiLabels(labels, locale: locale)
+            for text in [ui["transaction_title"], ui["security_hint"], ui["denial_action_label"], ui["affirmative_action_label"]] {
+                try TextSafety.require(text, maxLength: 250, what: "a label")
+            }
             entries.append(TransactionConsentEntry(
                 title: ui["transaction_title"],
                 typeName: TransactionDataBuiltIns.displayName(forType: entry.type),
@@ -54,7 +62,7 @@ struct TransactionConsentModelBuilder: Sendable {
         }
         return TransactionConsentRequest(
             verifier: verifier, credentialName: credentialName, entries: entries,
-            requestSigned: requestSigned, locale: locale
+            requestSigned: requestSigned, locale: locale, attributes: attributes
         )
     }
 
@@ -81,10 +89,12 @@ struct TransactionConsentModelBuilder: Sendable {
                 throw TransactionDataError(.metadataUnavailable, detail: "\(name) URI is not a string")
             }
             let source = self.source
-            let data: Data? = await withDeadline(fetchTimeout, fallback: nil) { await source.fetchResource(uri: uri) }
+            let limit = maxResourceBytes
+            let data: Data? = await withDeadline(fetchTimeout, fallback: nil) { await source.fetchResource(uri: uri, maxBytes: limit) }
             guard let data, data.count <= maxResourceBytes else {
                 throw TransactionDataError(.metadataUnavailable, detail: "\(name) URI could not be fetched")
             }
+            if pin == nil { note.noteUnpinned() }
             if let pin, !Integrity.matches(data, pin) {
                 throw TransactionDataError(.metadataUnavailable, detail: "\(name) content does not match its #integrity")
             }
@@ -135,7 +145,7 @@ struct TransactionConsentModelBuilder: Sendable {
         }
     }
 
-    private func fields(payload: JSONValue, claims: JSONValue, locale: String) throws -> [TransactionConsentField] {
+    private func fields(payload: JSONValue, type: String, claims: JSONValue, locale: String) throws -> [TransactionConsentField] {
         let metadata = try claimMetadata(claims)
         var result: [(order: Int, field: TransactionConsentField)] = []
         for (path, value) in try leaves(of: payload) {
@@ -145,10 +155,17 @@ struct TransactionConsentModelBuilder: Sendable {
             }
             guard let label = LocaleMatcher.pick(meta.labels, preferred: locale) else {
                 // Level 4 may be left out of the display, so its name is not required.
-                if meta.level == 4 { continue }
+                let isFloor = TransactionDataBuiltIns.displayFloorPaths(forType: type).contains { $0.map(Optional.some) == path }
+                if meta.level == 4 && !isFloor { continue }
                 throw TransactionDataError(.metadataUnavailable, detail: "no localised name for a payload parameter")
             }
-            result.append((meta.order, TransactionConsentField(label: label, value: value, level: meta.level, path: path)))
+            // What the user approves is never shown below level 2 for a built-in
+            // type, whatever the (possibly unauthenticated) metadata says.
+            let floor = TransactionDataBuiltIns.displayFloorPaths(forType: type).contains { $0.map(Optional.some) == path }
+            let level = floor ? min(meta.level, 2) : meta.level
+            try TextSafety.require(label, maxLength: 100, what: "a parameter name")
+            try TextSafety.require(value, maxLength: 1000, what: "a parameter value")
+            result.append((meta.order, TransactionConsentField(label: label, value: value, level: level, path: path)))
         }
         return result.sorted { ($0.field.level, $0.order) < ($1.field.level, $1.order) }.map(\.field)
     }
@@ -225,5 +242,31 @@ enum LocaleMatcher {
         if let same = options.first(where: { primary($0.lang) == primary(want) }) { return same.text }
         if let english = options.first(where: { primary($0.lang) == "en" }) { return english.text }
         return options[0].text
+    }
+}
+
+/// Text shown to the user comes from a verifier or an issuer-controlled
+/// document, so it is refused (never silently altered or cut) when it could
+/// misrepresent what is on screen: control and newline characters, format
+/// characters (bidirectional overrides and isolates, zero-width characters,
+/// joiners, byte-order marks), line and paragraph separators, private-use and
+/// unassigned code points, and over-long strings.
+enum TextSafety {
+    static func isSafe(_ text: String, maxLength: Int) -> Bool {
+        guard text.unicodeScalars.count <= maxLength else { return false }
+        for scalar in text.unicodeScalars {
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .unassigned, .surrogate: return false
+            default: break
+            }
+        }
+        return true
+    }
+
+    static func require(_ text: String?, maxLength: Int, what: String) throws {
+        guard let text else { return }
+        guard isSafe(text, maxLength: maxLength) else {
+            throw TransactionDataError(.invalidEntry, detail: "\(what) cannot be displayed safely")
+        }
     }
 }

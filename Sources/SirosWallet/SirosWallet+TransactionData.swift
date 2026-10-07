@@ -8,42 +8,102 @@ import SirosCredentials
 import SirosKeystore
 import SirosTransport
 
-/// Gives the EC TS12 pipeline its type metadata through the wallet's own
-/// fetchers: the registry and well-known strategies, with `vct#integrity`
-/// directing resolution (`VctmFetcher.fetchDocument`).
+/// Gives the EC TS12 pipeline its type metadata and referenced documents.
+///
+/// Neither goes through `VctmFetcher`, which follows redirects, accepts http
+/// and reads without a size limit: everything here is https only, size- and
+/// time-bounded, and fetched without any credential of the wallet's, EXCEPT
+/// the wallet's own registry (the wallet's backend), which is asked with the
+/// wallet's token because that is what it requires.
 struct WalletTransactionMetadataSource: TransactionMetadataSource {
-    let fetcher: VctmFetcher
-    let registryUrl: String
-    /// Fetches documents the metadata references. Deliberately NOT the wallet's
-    /// authenticated type-metadata getter: the URLs are attacker-influenced
-    /// until their integrity is checked and must never receive credentials.
-    let resourceGet: @Sendable (URL) async -> Data?
+    /// Fetches a type metadata document for `vct`; see `SirosWallet.transactionMetadataFetch`.
+    let metadataFetch: @Sendable (_ vct: String, _ expectedIntegrity: String?, _ maxBytes: Int) async -> String?
+    /// Fetches a referenced document; see `SirosWallet.transactionResourceGet`.
+    let resourceGet: @Sendable (_ url: URL, _ maxBytes: Int) async -> Data?
 
-    func typeMetadataDocument(vct: String, expectedIntegrity: String?) async -> String? {
-        // The issuer URL is not known here; the registry and the vct's own
-        // well-known location do not need it.
-        await fetcher.fetchDocument(
-            issuerUrl: "", scope: "", vct: vct, registryUrl: registryUrl, expectedIntegrity: expectedIntegrity
-        )?.raw
+    func typeMetadataDocument(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? {
+        await metadataFetch(vct, expectedIntegrity, maxBytes)
     }
 
-    func fetchResource(uri: String) async -> Data? {
-        // Only absolute https references: metadata is attacker-influenced
-        // input until its integrity is checked, so no other scheme is fetched.
+    func fetchResource(uri: String, maxBytes: Int) async -> Data? {
+        // Only absolute https references (the fetcher enforces it again, and
+        // refuses private hosts and redirects).
         guard let url = URL(string: uri), url.scheme?.lowercased() == "https" else { return nil }
-        return await resourceGet(url)
+        return await resourceGet(url, maxBytes)
+    }
+}
+
+/// A log store that stops accepting records once the account it was created
+/// for is gone, so a presentation still in flight at logout cannot write into
+/// the next account's container.
+final class GenerationBoundLogStore: TransactionLogStore, @unchecked Sendable {
+    private let inner: any TransactionLogStore
+    private let generation: Int
+    private let current: @Sendable () -> Int
+
+    init(_ inner: any TransactionLogStore, generation: Int, current: @escaping @Sendable () -> Int) {
+        self.inner = inner
+        self.generation = generation
+        self.current = current
+    }
+
+    func append(_ entries: [TransactionLogEntry]) async throws {
+        guard current() == generation else { throw TransactionLogError("the account changed before the record was written") }
+        try await inner.append(entries)
+    }
+
+    func entries() async -> [TransactionLogEntry] {
+        current() == generation ? await inner.entries() : []
+    }
+}
+
+/// What the wallet signs for a transaction presentation and how it reports the
+/// outcome: the bindings, the signing key pinned when the transaction was
+/// validated and shown, and the completion that records consent only once the
+/// presentation exists.
+final class ScaPlan: @unchecked Sendable {
+    let plan: TransactionDataPlan
+    let kids: [String: String]
+    var bindings: [String: TransactionDataBinding] { plan.bindings }
+
+    init(plan: TransactionDataPlan, kids: [String: String]) {
+        self.plan = plan
+        self.kids = kids
+    }
+
+    /// The key to sign with for `queryId`: the one that was validated, never re-selected.
+    func kid(for queryId: String?, fallback: String?) -> String? {
+        queryId.flatMap { kids[$0] } ?? fallback
     }
 }
 
 extension SirosWallet {
-    /// The default `resourceGet`: a plain, unauthenticated GET with a time and size limit.
-    static let unauthenticatedResourceGet: @Sendable (URL) async -> Data? = { url in
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 10
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 256 * 1024 else { return nil }
-        return data
+    /// The default `transactionResourceGet`: the hardened fetcher (https, public
+    /// hosts, no redirects, no credentials, size and time caps).
+    static let secureResourceGet: @Sendable (URL, Int) async -> Data? = { url, maxBytes in
+        await SecureDocumentFetcher().fetch(url, maxBytes: maxBytes)
+    }
+
+    /// The default `transactionMetadataFetch`: the wallet's registry (with the
+    /// wallet's token, size-checked), then the vct's own well-known location
+    /// through the hardened fetcher. With a pin the first document that hashes
+    /// to it wins.
+    func fetchTypeMetadata(vct: String, expectedIntegrity: String?, maxBytes: Int) async -> String? {
+        func acceptable(_ text: String?) -> String? {
+            guard let text, text.utf8.count <= maxBytes else { return nil }
+            if let expectedIntegrity, !Integrity.matches(Data(text.utf8), expectedIntegrity) { return nil }
+            return text
+        }
+        var components = URLComponents(string: resolvedRegistryUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/type-metadata")
+        components?.queryItems = [URLQueryItem(name: "vct", value: vct)]
+        if let registry = components?.url?.absoluteString, let found = acceptable(await typeMetadataHttpGet(registry)) { return found }
+        guard let url = URL(string: vct), url.scheme?.lowercased() == "https", let host = url.host else { return nil }
+        let path = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
+        guard !path.isEmpty else { return nil }
+        let port = url.port.map { ":\($0)" } ?? ""
+        guard let wellKnown = URL(string: "https://\(host)\(port)/.well-known/vct/\(path)"),
+              let data = await transactionResourceGet(wellKnown, maxBytes) else { return nil }
+        return acceptable(String(data: data, encoding: .utf8))
     }
 
     /// The transaction log (EC TS12 section 5.3), newest first: one record
@@ -65,6 +125,7 @@ extension SirosWallet {
     func resetDefaultTransactionLogStore() {
         lock.lock(); defer { lock.unlock() }
         if transactionLogStoreIsDefault { transactionLogStoreStorage = nil }
+        transactionLogGeneration += 1
     }
 
     func transactionLogStoreInstance() -> any TransactionLogStore {
@@ -79,19 +140,24 @@ extension SirosWallet {
         } else {
             created = InMemoryTransactionLogStore()
         }
-        transactionLogStoreStorage = created
-        return created
+        let generation = transactionLogGeneration
+        let bound = GenerationBoundLogStore(created, generation: generation, current: { [weak self] in
+            guard let self else { return -1 }
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.transactionLogGeneration
+        })
+        transactionLogStoreStorage = bound
+        return bound
     }
 
     func makeTransactionDataService() -> TransactionDataService {
         TransactionDataService(
-            source: WalletTransactionMetadataSource(
-                fetcher: vctmFetcher, registryUrl: resolvedRegistryUrl, resourceGet: transactionResourceGet
-            ),
+            source: WalletTransactionMetadataSource(metadataFetch: transactionMetadataFetch, resourceGet: transactionResourceGet),
             consentHandler: transactionConsentHandler,
             factorsProvider: authenticationFactorsProvider,
             log: transactionLogStoreInstance(),
-            consentTimeout: transactionDataConsentTimeout
+            consentTimeout: transactionDataConsentTimeout,
+            onLogFailure: { [weak self] _ in self?.reportTransactionLogFailure() }
         )
     }
 
@@ -130,71 +196,103 @@ extension SirosWallet {
         return value
     }
 
-    /// The `...#integrity` claims of an SD-JWT VC (name to SRI string), read
-    /// from its issuer-signed payload; empty when none or unreadable.
-    static func integrityClaims(ofSdJwt raw: String) -> [String: String] {
-        guard let jwt = raw.split(separator: "~", omittingEmptySubsequences: false).first,
-              case let parts = jwt.split(separator: ".", omittingEmptySubsequences: false), parts.count == 3,
-              let payloadBytes = TransactionDataHashing.base64UrlDecode(String(parts[1])),
-              let payload = (try? StrictJSON.parse(payloadBytes))?.objectValue else { return [:] }
-        return payload.compactMapValues { $0.stringValue }.filter { $0.key.hasSuffix("#integrity") }
+    /// Tells the host a transaction-log write did not reach durable storage.
+    func reportTransactionLogFailure() {
+        lock.lock(); let listener = eventListener; lock.unlock()
+        listener?.onTransactionLogFailure()
     }
 
-    /// Runs the TS12 sequence for a presentation and returns the bindings by
-    /// DCQL query id. `selected` maps each answering query id to the stored
-    /// credential chosen for it. Throws `SirosError.transactionData`.
+    /// Records a refusal that happened before the pipeline ran (so the service
+    /// did not log it): one `refused` record, whatever the request carried.
+    func logPreparatoryRefusal(_ error: TransactionDataError, rawEntries: [String], verifier: String) async {
+        let records = TransactionLogEntry.records(
+            rawEntries: rawEntries, verifier: verifier, credentialLabel: { _ in "" },
+            outcome: error.reason == .declined ? .declined : .refused, reason: error.reason.rawValue
+        )
+        do { try await transactionLogStoreInstance().append(records) } catch { reportTransactionLogFailure() }
+    }
+
+    /// Runs the TS12 sequence for a presentation and returns the plan to sign.
+    /// `selected` maps each answering query id to the stored credential chosen
+    /// for it. Throws `SirosError.transactionData`.
     func processTransactionData(
         entries: [TransactionDataEntryInput],
         responseMode: String?,
         selected: [String: StoredCredential],
         verifier: String,
-        requestSigned: Bool?
-    ) async throws -> [String: TransactionDataBinding] {
-        var credentials: [TransactionDataCredential] = []
-        var names: [String: String] = [:]
-        var factorContexts: [String: AuthenticationFactorContext] = [:]
-        for (queryId, cred) in selected.sorted(by: { $0.key < $1.key }) {
-            credentials.append(TransactionDataCredential(
-                queryId: queryId, format: cred.format, vct: cred.metadata?.vct,
-                integrityClaims: Self.integrityClaims(ofSdJwt: cred.raw)
-            ))
-            if let name = cred.metadata?.name { names[queryId] = name }
-            let kid = cred.kid ?? keystore.listKeys().first?.keyId
-            let properties: SignerSecurityProperties? = if let kid { await keystore.securityProperties(keyId: kid) } else { nil }
-            let pluginId = kid.flatMap { id in keystore.listKeys().first(where: { $0.keyId == id })?.pluginId }
-            factorContexts[queryId] = AuthenticationFactorContext(keyStorage: properties?.keyStorage ?? [], pluginId: pluginId, keyId: kid)
-        }
-        let service = makeTransactionDataService()
-        return try await service.process(
-            TransactionDataRequest(entries: entries, responseMode: responseMode, credentials: credentials),
-            context: TransactionDataContext(
-                verifier: verifier, requestSigned: requestSigned, locale: transactionDataLocale,
-                credentialNames: names, factorContexts: factorContexts
+        requestSigned: Bool?,
+        disclosedClaims: [String: [String]] = [:],
+        requireEveryCredentialBound: Bool = false
+    ) async throws -> ScaPlan {
+        do {
+            var credentials: [TransactionDataCredential] = []
+            var names: [String: String] = [:]
+            var factorContexts: [String: AuthenticationFactorContext] = [:]
+            var kids: [String: String] = [:]
+            for (queryId, cred) in selected.sorted(by: { $0.key < $1.key }) {
+                // A malformed `...#integrity` claim refuses here (never reads as "no pin").
+                credentials.append(TransactionDataCredential(
+                    queryId: queryId, format: cred.format, vct: cred.metadata?.vct,
+                    integrityClaims: try TransactionDataCredential.integrityClaims(ofSdJwt: cred.raw)
+                ))
+                if let name = cred.metadata?.name { names[queryId] = name }
+                // The key is resolved ONCE, here, and the same one is signed with.
+                let keys = keystore.listKeys()
+                let kid = cred.kid ?? keys.first?.keyId
+                if let kid { kids[queryId] = kid }
+                let properties: SignerSecurityProperties? = if let kid { await keystore.securityProperties(keyId: kid) } else { nil }
+                let pluginId = kid.flatMap { id in keys.first(where: { $0.keyId == id })?.pluginId }
+                factorContexts[queryId] = AuthenticationFactorContext(keyStorage: properties?.keyStorage ?? [], pluginId: pluginId, keyId: kid)
+            }
+            let plan = try await makeTransactionDataService().process(
+                TransactionDataRequest(entries: entries, responseMode: responseMode, credentials: credentials),
+                context: TransactionDataContext(
+                    verifier: verifier, requestSigned: requestSigned, locale: transactionDataLocale,
+                    credentialNames: names, factorContexts: factorContexts, disclosedClaims: disclosedClaims,
+                    requireEveryCredentialBound: requireEveryCredentialBound
+                )
             )
-        )
+            // What was validated and shown must be what is signed: refuse if a
+            // credential changed or went away while the user was deciding.
+            let current = await credentialStore.getAll()
+            for (_, cred) in selected where current.first(where: { $0.id == cred.id }) != cred {
+                await plan.complete(signed: false)
+                throw TransactionDataError(.invalidEntry, detail: "a credential changed while the transaction was being confirmed")
+            }
+            return ScaPlan(plan: plan, kids: kids)
+        } catch let error as TransactionDataError {
+            // The service logs what it refused itself; only what failed before it ran is logged here.
+            if !error.alreadyLogged { await logPreparatoryRefusal(error, rawEntries: entries.map(\.raw), verifier: verifier) }
+            throw error
+        }
     }
 
-    /// The TS12 bindings for a presentation relayed by the orchestrator
-    /// (legacy engine or WMP), by DCQL query id. Empty when the request
-    /// carries no `transaction_data`. A request that does carry it is refused
-    /// unless TS12 handling was in effect when the flow started.
-    func orchestratedTransactionBindings(
-        transactionData: [TransactionData]?,
+    /// The TS12 plan for a presentation relayed by the orchestrator (legacy
+    /// engine or WMP). `nil` when the request carries no `transaction_data`. A
+    /// request that does carry it is refused unless TS12 handling was in
+    /// effect when the flow started.
+    func orchestratedTransactionPlan(
+        transactionData: TransactionDataMember,
         responseMode: String?,
         refs: [CredentialRef]?,
         allCreds: [StoredCredential],
         audience: String,
         flowId: String,
         viaWmp: Bool
-    ) async throws -> [String: TransactionDataBinding] {
+    ) async throws -> ScaPlan? {
         // An absent or empty member means the request carries no transaction.
-        guard let transactionData, !transactionData.isEmpty else { return [:] }
+        guard transactionData.requestsTransactionHandling else { return nil }
+        let raws = (transactionData.entries ?? []).map { $0.raw ?? "" }
         do {
+            guard let entries = transactionData.entries else {
+                throw TransactionDataError(.invalidEntry, detail: "transaction_data is null")
+            }
             guard transactionDataActive(forFlow: flowId, viaWmp: viaWmp) else {
                 throw TransactionDataError(.disabled, detail: "transaction_data received but TS12 handling is not in effect")
             }
             // Without credentials_to_include nothing resolves and the pipeline refuses.
             var selected: [String: StoredCredential] = [:]
+            var disclosed: [String: [String]] = [:]
             for ref in refs ?? [] {
                 guard let queryId = ref.credentialQueryId, !queryId.isEmpty,
                       let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }),
@@ -202,15 +300,19 @@ extension SirosWallet {
                     throw TransactionDataError(.invalidEntry, detail: "credentials_to_include cannot be matched to DCQL queries")
                 }
                 selected[queryId] = cred
+                disclosed[queryId] = ref.disclosedClaims ?? []
             }
             return try await processTransactionData(
-                entries: transactionData.map(TransactionDataEntryInput.init),
+                entries: entries.map(TransactionDataEntryInput.init),
                 responseMode: responseMode,
                 selected: selected,
                 verifier: audience,
-                requestSigned: nil
+                requestSigned: nil,
+                disclosedClaims: disclosed,
+                requireEveryCredentialBound: viaWmp
             )
         } catch let error as TransactionDataError {
+            if !error.alreadyLogged { await logPreparatoryRefusal(error, rawEntries: raws, verifier: audience) }
             throw SirosError.transactionData(error)
         }
     }
@@ -221,30 +323,39 @@ extension SirosWallet {
     /// a non-SCA mdoc part would need).
     func wmpTransactionPresentation(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
         let allCreds = await credentialStore.getAll()
-        let bindings = try await orchestratedTransactionBindings(
-            transactionData: params.transactionData, responseMode: params.responseMode,
+        guard let plan = try await orchestratedTransactionPlan(
+            transactionData: params.transactionDataMember, responseMode: params.responseMode,
             refs: params.credentialsToInclude, allCreds: allCreds, audience: params.audience,
             flowId: flowId, viaWmp: true
-        )
-        // Resolve every reference first: nothing is signed unless all of them
-        // are bound to the transaction.
-        var toSign: [(cred: StoredCredential, ref: CredentialRef, binding: TransactionDataBinding)] = []
-        for ref in params.credentialsToInclude ?? [] {
-            guard let queryId = ref.credentialQueryId, let binding = bindings[queryId],
-                  let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }) else {
-                throw SirosError.transactionData(TransactionDataError(
-                    .invalidEntry, detail: "every credential in a WMP transaction presentation must be bound to the transaction"
+        ) else {
+            throw SirosError.transactionData(TransactionDataError(.invalidEntry, detail: "no transaction_data"))
+        }
+        do {
+            // Resolve every reference first: nothing is signed unless all of them
+            // are bound to the transaction.
+            var toSign: [(cred: StoredCredential, ref: CredentialRef, binding: TransactionDataBinding, queryId: String)] = []
+            for ref in params.credentialsToInclude ?? [] {
+                guard let queryId = ref.credentialQueryId, let binding = plan.bindings[queryId],
+                      let id = Int64(ref.credentialId), let cred = allCreds.first(where: { $0.id == id }) else {
+                    throw SirosError.transactionData(TransactionDataError(
+                        .invalidEntry, detail: "every credential in a WMP transaction presentation must be bound to the transaction"
+                    ))
+                }
+                toSign.append((cred, ref, binding, queryId))
+            }
+            var parts: [String] = []
+            for item in toSign {
+                parts.append(try await keystore.signVpToken(
+                    credential: item.cred.raw, disclosedClaims: item.ref.disclosedClaims, nonce: params.nonce,
+                    audience: params.audience, transactionData: item.binding,
+                    kid: plan.kid(for: item.queryId, fallback: item.cred.kid)
                 ))
             }
-            toSign.append((cred, ref, binding))
+            await plan.plan.complete(signed: true)
+            return SignSubFlowResult(vpToken: parts.joined(separator: "\n"))
+        } catch {
+            await plan.plan.complete(signed: false)
+            throw error
         }
-        var parts: [String] = []
-        for item in toSign {
-            parts.append(try await keystore.signVpToken(
-                credential: item.cred.raw, disclosedClaims: item.ref.disclosedClaims, nonce: params.nonce,
-                audience: params.audience, transactionData: item.binding, kid: item.cred.kid
-            ))
-        }
-        return SignSubFlowResult(vpToken: parts.joined(separator: "\n"))
     }
 }

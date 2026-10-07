@@ -28,6 +28,21 @@ public struct AuthenticationFactorContext: Sendable, Equatable {
 /// operation does not count.
 public protocol AuthenticationFactorsProvider: Sendable {
     func factors(for context: AuthenticationFactorContext) async throws -> [AuthenticationFactor]
+
+    /// A cheap, side-effect-free answer to "could two distinct categories be
+    /// established for this key?", asked BEFORE the user is shown the
+    /// transaction so a hopeless request is refused up front instead of after
+    /// they confirmed. Must not prompt the user. The default asks `factors`;
+    /// a provider that only produces factors by running a verification as part
+    /// of the operation overrides it.
+    func canEstablishTwoCategories(for context: AuthenticationFactorContext) async -> Bool
+}
+
+public extension AuthenticationFactorsProvider {
+    func canEstablishTwoCategories(for context: AuthenticationFactorContext) async -> Bool {
+        guard let factors = try? await factors(for: context) else { return false }
+        return Set(factors.map(\.category)).count >= 2
+    }
 }
 
 /// The default provider: conservative, and deliberately unable to satisfy SCA

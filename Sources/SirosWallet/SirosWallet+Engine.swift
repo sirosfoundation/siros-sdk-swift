@@ -737,7 +737,14 @@ extension SirosWallet {
         let signTask = Task { [weak self] in
             guard let self else { return }
             for await msg in engine.signRequests() {
-                await self.handleSignRequest(engine: engine, msg: msg)
+                if msg.action == "sign_presentation", msg.params.transactionDataMember.requestsTransactionHandling {
+                    // A transaction waits for the user. That must not hold up the
+                    // engine's other requests (issuance proofs, client auth,
+                    // attestation), which are handled in order on this loop.
+                    Task { await self.handleSignRequest(engine: engine, msg: msg) }
+                } else {
+                    await self.handleSignRequest(engine: engine, msg: msg)
+                }
             }
         }
         // Match requests → credential matching
@@ -810,8 +817,8 @@ extension SirosWallet {
                 // Empty for every request without `transaction_data`; refuses
                 // before anything is signed when the request carries it but
                 // cannot be honoured.
-                let transactionBindings = try await orchestratedTransactionBindings(
-                    transactionData: msg.params.transactionData, responseMode: msg.params.responseMode,
+                let scaPlan = try await orchestratedTransactionPlan(
+                    transactionData: msg.params.transactionDataMember, responseMode: msg.params.responseMode,
                     refs: credsToInclude, allCreds: allCredsForTransaction, audience: audience,
                     flowId: msg.flowId, viaWmp: false
                 )
@@ -828,6 +835,7 @@ extension SirosWallet {
                     let storedMatchResults = pendingMatchResultsByFlow.removeValue(forKey: msg.flowId)
                     lock.unlock()
                     var vpParts: [String] = []
+                    do {
                     for ref in credsToInclude {
                         // ref.credentialId is the WMP wire-protocol identifier
                         // (String) - parse it back to the numeric
@@ -843,11 +851,17 @@ extension SirosWallet {
                             nonce: nonce,
                             audience: audience,
                             msg: msg,
-                            transactionData: ref.credentialQueryId.flatMap { transactionBindings[$0] }
+                            transactionData: ref.credentialQueryId.flatMap { scaPlan?.bindings[$0] },
+                            transactionKid: scaPlan?.kid(for: ref.credentialQueryId, fallback: nil)
                         ))
+                    }
+                    } catch {
+                        await scaPlan?.plan.complete(signed: false)
+                        throw error
                     }
                     let vpToken = vpParts.joined(separator: "\n")
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
+                    await scaPlan?.plan.complete(signed: true)
                 } else {
                     let vpToken = try await keystore.signPresentation(
                         nonce: nonce, audience: audience, credentialIds: [], kid: nil
@@ -907,9 +921,10 @@ extension SirosWallet {
                 // Answer at once rather than leave the engine waiting out its
                 // sign timeout; an empty response makes it fail the flow. The
                 // engine protocol has no field for `invalid_transaction_data`
-                // / `access_denied`, so the code reaches the app in the message.
+                // / `access_denied`, so only the code reaches the app, and the
+                // user's own decline is not presented to it as an error.
                 engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
-                reportSignFailure(flowId: msg.flowId, message: "\(refusal.verifierErrorCode): \(refusal.userFacingDescription)")
+                reportSignFailure(flowId: msg.flowId, message: refusal.verifierErrorCode, notifyError: refusal.reason != .declined)
             } else {
                 reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
             }
@@ -934,7 +949,8 @@ extension SirosWallet {
         nonce: String,
         audience: String,
         msg: SignRequestMessage,
-        transactionData: TransactionDataBinding? = nil
+        transactionData: TransactionDataBinding? = nil,
+        transactionKid: String? = nil
     ) async throws -> String {
         if transactionData != nil, cred.format == "mso_mdoc" || matchResult?.format.map(CredentialUtils.isZkpFormat) == true {
             // The pipeline refuses non-SD-JWT credentials before this point.
@@ -1038,7 +1054,7 @@ extension SirosWallet {
                     nonce: nonce,
                     audience: audience,
                     transactionData: transactionData,
-                    kid: cred.kid
+                    kid: transactionKid ?? cred.kid
                 )
             }
             return try await keystore.signVpToken(
@@ -1374,12 +1390,12 @@ extension SirosWallet {
     /// handleSignRequest's catch block previously only logged
     /// (logger.error), so the engine waited indefinitely for a sign_response
     /// that would never arrive.
-    private func reportSignFailure(flowId: String, message: String) {
+    private func reportSignFailure(flowId: String, message: String, notifyError: Bool = true) {
         lock.lock()
         let listener = eventListener
         pendingMatchResultsByFlow.removeValue(forKey: flowId)
         lock.unlock()
-        listener?.onFlowError(flowId: flowId, errorMessage: message, redirectUri: nil)
+        if notifyError { listener?.onFlowError(flowId: flowId, errorMessage: message, redirectUri: nil) }
 
         // A terminal path for whatever issuance may have been in flight - a
         // no-op for a presentation sign-request failure, which never sets

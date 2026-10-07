@@ -40,6 +40,14 @@ private final class ZeroSigner: Signer, @unchecked Sendable {
     }
 }
 
+/// A shared, ordered record of what happened, to prove consent comes BEFORE signing.
+private final class Events: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    func add(_ e: String) { lock.lock(); items.append(e); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
+}
+
 /// Wallet keystore whose SD-JWT signing is the real `WscdKeystoreAdapter`
 /// (so the KB-JWT under test is the production one) while the wallet itself
 /// sees a locked keystore and skips container persistence.
@@ -47,7 +55,12 @@ private final class SigningKeystore: KeystoreManager, @unchecked Sendable {
     let adapter: WscdKeystoreAdapter
     private(set) var plainCalls = 0
     private(set) var scaCalls = 0
+    var events: Events?
+    var failSigning = false
+    var keys: [KeyInfo] = [KeyInfo(keyId: "k1", algorithm: "ES256", pluginId: "r2ps")]
+    private(set) var signingKids: [String?] = []
     struct NotImplemented: Error {}
+    struct SigningFailed: Error {}
 
     init() async throws {
         adapter = WscdKeystoreAdapter(signer: ZeroSigner())
@@ -70,6 +83,9 @@ private final class SigningKeystore: KeystoreManager, @unchecked Sendable {
     func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String,
                      transactionData: TransactionDataBinding?, kid: String?) async throws -> String {
         scaCalls += 1
+        events?.add("sign")
+        signingKids.append(kid)
+        if failSigning { throw SigningFailed() }
         return try await adapter.signVpToken(credential: credential, disclosedClaims: disclosedClaims, nonce: nonce,
                                              audience: audience, transactionData: transactionData, kid: kid)
     }
@@ -77,7 +93,7 @@ private final class SigningKeystore: KeystoreManager, @unchecked Sendable {
     func signMdocPresentationForDCAPI(credentialBytes: Data, disclosedClaims: [String]?, nonce: String, origin: String,
                                       encryptionPublicJwkThumbprint: String?, kid: String?) async throws -> Data { throw NotImplemented() }
     func exportEncryptedContainer() async throws -> Data { Data() }
-    func listKeys() -> [KeyInfo] { [KeyInfo(keyId: "k1", algorithm: "ES256", pluginId: "r2ps")] }
+    func listKeys() -> [KeyInfo] { keys }
     func saveCredential(id: Int64, json: String) async throws {}
     func getCredential(id: Int64) async throws -> String? { nil }
     func getAllCredentials() async throws -> [Int64: String] { [:] }
@@ -97,8 +113,27 @@ private final class Sender: SignResponseSender, @unchecked Sendable {
 
 private final class Consent: TransactionConsentHandler, @unchecked Sendable {
     var answer = true
+    var events: Events?
+    /// Runs while the user is "deciding" (to change the world under the wallet).
+    var whileDeciding: (@Sendable () async -> Void)?
     private(set) var requests: [TransactionConsentRequest] = []
-    func confirm(_ request: TransactionConsentRequest) async throws -> Bool { requests.append(request); return answer }
+    func confirm(_ request: TransactionConsentRequest) async throws -> Bool {
+        requests.append(request)
+        events?.add("consent")
+        await whileDeciding?()
+        return answer
+    }
+}
+
+private final class ErrorListener: WalletEventListener, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _errors: [String] = []
+    private var _logFailures = 0
+    var errors: [String] { lock.lock(); defer { lock.unlock() }; return _errors }
+    var logFailures: Int { lock.lock(); defer { lock.unlock() }; return _logFailures }
+    func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] { [] }
+    func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { lock.lock(); _errors.append(errorMessage); lock.unlock() }
+    func onTransactionLogFailure() { lock.lock(); _logFailures += 1; lock.unlock() }
 }
 
 private struct Factors: AuthenticationFactorsProvider {
@@ -131,6 +166,9 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let wallet: SirosWallet
         let keystore: SigningKeystore
         let consent: Consent
+        let events: Events
+        let listener: ErrorListener
+        let store: InMemoryCredentialStore
     }
 
     private func fixture(enabled: Bool = true, handler: Bool = true, format: String = "dc+sd-jwt", metadataDoc: String? = nil) async throws -> Fixture {
@@ -146,17 +184,22 @@ final class TransactionDataEndToEndTests: XCTestCase {
             authProvider: NoAuth(), keystore: keystore
         ))
         let doc = metadataDoc ?? metadata
-        wallet.vctmFetcher = VctmFetcher(httpGet: { url in url.contains("type-metadata") ? doc : nil })
+        wallet.transactionMetadataFetch = { _, _, _ in doc }
         wallet.apiClient = BackendApiClient(baseUrl: "https://example.invalid", httpFn: { _, _, _, _ in
             try JSONSerialization.data(withJSONObject: ["decision": true])
         })
         let consent = Consent()
+        let events = Events()
+        let listener = ErrorListener()
+        consent.events = events
+        keystore.events = events
+        wallet.setEventListener(listener)
         if handler { wallet.transactionConsentHandler = consent }
         wallet.authenticationFactorsProvider = Factors()
         wallet.transactionDataLocale = "en-GB"
         wallet.snapshotTransactionDataEnablement()
         wallet.snapshotWmpSessionEnablement()
-        return Fixture(wallet: wallet, keystore: keystore, consent: consent)
+        return Fixture(wallet: wallet, keystore: keystore, consent: consent, events: events, listener: listener, store: store)
     }
 
     private func kbClaims(_ vpToken: String) throws -> [String: Any] {
@@ -276,6 +319,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
         XCTAssertNil(sender.sent.first?.vpToken, "the default provider cannot establish two factors")
         XCTAssertEqual(f.keystore.scaCalls, 0)
+        XCTAssertTrue(f.consent.requests.isEmpty, "refused before the user was shown anything")
     }
 
     func testEngineRefusesMdocCredentialForTransactionData() async throws {
@@ -352,7 +396,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let entry = metadata.replacingOccurrences(of: #""ui_labels":{"affirmative_action_label":[{"lang":"en","value":"Confirm Payment"}]}"#, with: #""ui_labels_uri":"\#(labelsUrl)""#)
         let f = try await fixture(metadataDoc: entry)
         let rec = Recorder()
-        f.wallet.transactionResourceGet = { url in
+        f.wallet.transactionResourceGet = { url, _ in
             rec.add(url.absoluteString)
             return Data(#"{"affirmative_action_label":[{"lang":"en","value":"Confirm Payment"}]}"#.utf8)
         }
@@ -404,16 +448,15 @@ final class TransactionDataEndToEndTests: XCTestCase {
         }
         let rec = Recorder()
         let source = WalletTransactionMetadataSource(
-            fetcher: VctmFetcher(httpGet: { _ in "AUTHENTICATED-VCTM-GET-MUST-NOT-BE-USED" }),
-            registryUrl: "https://registry.example",
-            resourceGet: { rec.add($0); return Data("{}".utf8) }
+            metadataFetch: { _, _, _ in nil },
+            resourceGet: { url, _ in rec.add(url); return Data("{}".utf8) }
         )
         // A lookalike of the registry origin gets the unauthenticated getter only.
-        let data = await source.fetchResource(uri: "https://registry.example.attacker.test/labels.json")
+        let data = await source.fetchResource(uri: "https://registry.example.attacker.test/labels.json", maxBytes: 100)
         XCTAssertEqual(data, Data("{}".utf8))
         XCTAssertEqual(rec.all.map(\.absoluteString), ["https://registry.example.attacker.test/labels.json"])
         for bad in ["http://plain.example/x.json", "file:///etc/passwd", "ftp://x.example/y", "//x.example/y", "not a url"] {
-            let none = await source.fetchResource(uri: bad)
+            let none = await source.fetchResource(uri: bad, maxBytes: 100)
             XCTAssertNil(none, bad)
         }
         XCTAssertEqual(rec.all.count, 1, "no non-https reference reached the getter")
@@ -433,6 +476,134 @@ final class TransactionDataEndToEndTests: XCTestCase {
         f.wallet.authenticationFactorsProvider = capture
         _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
         XCTAssertEqual(capture.contexts.first?.pluginId, "r2ps")
+    }
+
+    // MARK: consent comes first, and what is signed is what was shown
+
+    func testConsentHappensBeforeSigningOnEveryTransport() async throws {
+        let engine = try await fixture()
+        await engine.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage())
+        XCTAssertEqual(engine.events.all, ["consent", "sign"], "engine")
+
+        let wmp = try await fixture()
+        _ = try await wmp.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
+        XCTAssertEqual(wmp.events.all, ["consent", "sign"], "WMP")
+
+        let dc = try await fixture()
+        _ = try await dc.wallet.handleDCAPIRequest(rawRequestJson: dcapiRequest(transactionData: #"["\#(raw)"]"#), origin: "https://shop.example")
+        XCTAssertEqual(dc.events.all, ["consent", "sign"], "DC API")
+    }
+
+    func testNothingIsSignedAndTheUserIsNotAskedWithTheDefaultFactorsProvider() async throws {
+        for transport in ["engine", "wmp", "dcapi"] {
+            let f = try await fixture()
+            f.wallet.authenticationFactorsProvider = InterimAuthenticationFactorsProvider()
+            switch transport {
+            case "engine": await f.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage())
+            case "wmp": _ = try? await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
+            default: _ = try? await f.wallet.handleDCAPIRequest(rawRequestJson: dcapiRequest(transactionData: #"["\#(raw)"]"#), origin: "https://shop.example")
+            }
+            XCTAssertTrue(f.events.all.isEmpty, "\(transport): no consent prompt and no signing: \(f.events.all)")
+        }
+    }
+
+    func testTheKeyThatWasValidatedIsTheKeyThatSigns() async throws {
+        let f = try await fixture()
+        f.consent.whileDeciding = { [keystore = f.keystore] in
+            // While the user decides, the first key in the keystore changes (a software key appears).
+            keystore.keys = [KeyInfo(keyId: "k-software", algorithm: "ES256", pluginId: "softkey"), KeyInfo(keyId: "k1", algorithm: "ES256", pluginId: "r2ps")]
+        }
+        _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
+        XCTAssertEqual(f.keystore.signingKids.compactMap { $0 }, ["k1"], "signed with the key whose factors were claimed, not a re-selected one")
+    }
+
+    func testACredentialThatChangesWhileTheUserDecidesIsRefused() async throws {
+        let f = try await fixture()
+        f.consent.whileDeciding = { [store = f.store] in
+            await store.save(StoredCredential(id: 1, format: "dc+sd-jwt", raw: "e30.e30.c2ln~", metadata: CredentialMetadata(name: "Other", vct: "urn:other", doctype: nil), batchId: 1, instanceId: 0))
+        }
+        do { _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams()); XCTFail("must refuse") }
+        catch SirosError.transactionData(let e) { XCTAssertEqual(e.reason, .invalidEntry) }
+        XCTAssertEqual(f.keystore.scaCalls, 0)
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.first?.outcome, .refused)
+        XCTAssertFalse(log.contains { $0.outcome == .consented })
+    }
+
+    func testConsentIsLoggedOnlyAfterSigningSucceeds() async throws {
+        let ok = try await fixture()
+        _ = try await ok.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
+        let okLog = await ok.wallet.transactionLog()
+        XCTAssertEqual(okLog.map(\.outcome), [.consented])
+
+        let failing = try await fixture()
+        failing.keystore.failSigning = true
+        do { _ = try await failing.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams()); XCTFail() } catch {}
+        let failLog = await failing.wallet.transactionLog()
+        XCTAssertEqual(failLog.map(\.outcome), [.refused])
+        XCTAssertEqual(failLog.first?.reason, "signingFailed")
+    }
+
+    func testAUsersOwnDeclineIsNotReportedAsAnError() async throws {
+        let f = try await fixture()
+        f.consent.answer = false
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
+        XCTAssertNil(sender.sent.first?.vpToken)
+        XCTAssertTrue(f.listener.errors.isEmpty, "a decline is not an error: \(f.listener.errors)")
+    }
+
+    func testARefusalReportsOnlyTheVerifierErrorCode() async throws {
+        let f = try await fixture(enabled: false)
+        await f.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage())
+        XCTAssertEqual(f.listener.errors, ["invalid_transaction_data"], "no developer text")
+    }
+
+    func testALogWriteFailureIsSurfacedToTheHost() async throws {
+        struct Failing: TransactionLogStore {
+            func append(_ entries: [TransactionLogEntry]) async throws { throw TransactionLogError("disk full") }
+            func entries() async -> [TransactionLogEntry] { [] }
+        }
+        let f = try await fixture()
+        f.wallet.setTransactionLogStore(Failing())
+        _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams())
+        XCTAssertEqual(f.listener.logFailures, 1)
+    }
+
+    func testARefusalBeforeThePipelineIsLoggedOnce() async throws {
+        let f = try await fixture(enabled: false)
+        await f.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage())
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.count, 1)
+        XCTAssertEqual(log.first?.reason, "disabled")
+        // The DC API's own pre-pipeline refusals too.
+        let dc = try await fixture(enabled: false)
+        _ = try? await dc.wallet.handleDCAPIRequest(rawRequestJson: dcapiRequest(transactionData: #"["\#(raw)"]"#), origin: "https://shop.example")
+        let dcLog = await dc.wallet.transactionLog()
+        XCTAssertEqual(dcLog.count, 1)
+        // A refusal inside the pipeline is logged by the service, not twice.
+        let inPipeline = try await fixture()
+        let bad = #"[{"raw":"@@@","type":"urn:eudi:sca:payment:1","credential_ids":["pay"]}]"#
+        await inPipeline.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage(transactionData: bad))
+        let inLog = await inPipeline.wallet.transactionLog()
+        XCTAssertEqual(inLog.count, 1)
+    }
+
+    func testAMalformedIntegrityClaimRefusesInsteadOfReadingAsNoPin() async throws {
+        let f = try await fixture()
+        let payload = b64(#"{"vct":"\#(vct)","vct#integrity":null}"#)
+        await f.store.save(StoredCredential(id: 1, format: "dc+sd-jwt", raw: "e30.\(payload).c2ln~", metadata: CredentialMetadata(name: "Visa card", vct: vct, doctype: nil), batchId: 1, instanceId: 0))
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
+        XCTAssertNil(sender.sent.first?.vpToken)
+        XCTAssertTrue(f.events.all.isEmpty)
+    }
+
+    func testTheDisclosedAttributesAreShownWithTheTransaction() async throws {
+        let f = try await fixture()
+        let refs = #"[{"credential_query_id":"pay","credential_id":"1","disclosed_claims":["given_name","family_name"]}]"#
+        await f.wallet.handleSignRequest(engine: Sender(), msg: try engineMessage(refs: refs))
+        XCTAssertEqual(f.consent.requests.first?.attributes, [TransactionConsentAttributes(credentialName: "Visa card", claims: ["given_name", "family_name"])])
     }
 
     func testNonScaPresentationUsesTheUnchangedPath() async throws {

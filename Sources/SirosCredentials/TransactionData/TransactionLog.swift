@@ -48,27 +48,45 @@ public struct TransactionLogEntry: Codable, Sendable, Equatable, Identifiable {
     ) {
         self.id = id
         self.timestamp = timestamp
-        self.transactionId = subject.transactionId
-        self.typeName = subject.typeName
-        self.entities = subject.entities
-        self.verifier = verifier
-        self.credential = credential
+        self.transactionId = subject.transactionId.map { Self.capped($0, Self.maxFieldLength) }
+        self.typeName = subject.typeName.map { Self.capped($0, Self.maxFieldLength) }
+        self.entities = Dictionary(uniqueKeysWithValues: subject.entities.prefix(8).map { ($0.key, Self.capped($0.value, Self.maxFieldLength)) })
+        self.verifier = Self.capped(verifier, Self.maxFieldLength)
+        self.credential = Self.capped(credential, Self.maxFieldLength)
         self.outcome = outcome
         self.reason = reason
     }
 
-    /// Builds the records for a request's raw entries, one per entry.
-    /// Decodes leniently: a refusal may be BECAUSE an entry is malformed, and
-    /// it must still be logged, with whatever fields could be read.
+    /// Each logged field is capped: the values come from the verifier and an
+    /// unbounded one could flood the log. A cut value ends in a marker.
+    public static let maxFieldLength = 200
+    public static let truncationMarker = "[truncated]"
+
+    static func capped(_ text: String, _ limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit - truncationMarker.count)) + truncationMarker
+    }
+
+    /// Builds the records for a request's raw entries. Decodes leniently: a
+    /// refusal may be BECAUSE an entry is malformed, and it must still be
+    /// logged, with whatever fields could be read.
+    ///
+    /// A consented or declined request gets one record per entry. A REFUSED
+    /// request gets ONE record (for its first entry), whatever it carried: an
+    /// unauthenticated sender must not be able to multiply records.
+    /// - Parameter credentialLabel: the credential's display name for the entry's
+    ///   first `credential_ids` element (so each record names the credential
+    ///   its own transaction was bound to).
     public static func records(
-        rawEntries: [String], verifier: String, credential: String, outcome: Outcome, reason: String? = nil
+        rawEntries: [String], verifier: String, credentialLabel: (_ queryId: String?) -> String, outcome: Outcome, reason: String? = nil
     ) -> [TransactionLogEntry] {
-        let raws = rawEntries.isEmpty ? [""] : rawEntries
+        var raws = rawEntries.isEmpty ? [""] : rawEntries
+        if outcome == .refused { raws = [raws[0]] }
         return raws.map { raw in
             let fields = TransactionLogFields(raw: raw)
             return TransactionLogEntry(
                 subject: TransactionLogSubject(transactionId: fields.transactionId, typeName: fields.typeName, entities: fields.entities),
-                verifier: verifier, credential: credential, outcome: outcome, reason: reason
+                verifier: verifier, credential: credentialLabel(fields.firstCredentialId), outcome: outcome, reason: reason
             )
         }
     }
@@ -79,11 +97,13 @@ struct TransactionLogFields {
     var transactionId: String?
     var typeName: String?
     var entities: [String: String] = [:]
+    var firstCredentialId: String?
 
     init(raw: String) {
         guard let bytes = TransactionDataHashing.base64UrlDecode(raw),
               let object = (try? StrictJSON.parse(bytes))?.objectValue else { return }
         let type = object["type"]?.stringValue
+        firstCredentialId = object["credential_ids"]?.arrayValue?.first?.stringValue
         typeName = type.map { TransactionDataBuiltIns.displayName(forType: $0) }
         let payload = object["payload"]
         transactionId = payload?["transaction_id"]?.stringValue
@@ -109,30 +129,56 @@ struct TransactionLogFields {
     }
 }
 
+/// Why a log write did not reach durable storage.
+public struct TransactionLogError: Error, Sendable, Equatable {
+    public let detail: String
+    public init(_ detail: String) { self.detail = detail }
+}
+
 /// Where transaction-log records are kept.
 public protocol TransactionLogStore: Sendable {
-    func append(_ entries: [TransactionLogEntry]) async
+    /// Throws when the records could not be made durable (they may still be
+    /// held for the running session); the caller surfaces that.
+    func append(_ entries: [TransactionLogEntry]) async throws
     /// Newest first.
     func entries() async -> [TransactionLogEntry]
 }
 
 /// A bounded in-memory log. Lost on restart: the wallet uses a persistent
 /// store when its keystore offers one and falls back to this otherwise.
+///
+/// Refused attempts are kept apart from consented and declined ones, each with
+/// its own capacity: refusals can be provoked by anyone who can send a request
+/// and must not push the user's own history out.
 public final class InMemoryTransactionLogStore: TransactionLogStore, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: [TransactionLogEntry] = []
     private let capacity: Int
+    private let refusedCapacity: Int
 
-    public init(capacity: Int = 500) { self.capacity = max(1, capacity) }
+    public init(capacity: Int = 500, refusedCapacity: Int = 100) {
+        self.capacity = max(1, capacity)
+        self.refusedCapacity = max(1, refusedCapacity)
+    }
 
-    public func append(_ entries: [TransactionLogEntry]) async {
+    public func append(_ entries: [TransactionLogEntry]) async throws {
         lock.lock(); defer { lock.unlock() }
         stored.insert(contentsOf: entries.reversed(), at: 0)
-        if stored.count > capacity { stored.removeLast(stored.count - capacity) }
+        stored = Self.bounded(stored, capacity: capacity, refusedCapacity: refusedCapacity)
     }
 
     public func entries() async -> [TransactionLogEntry] {
         lock.lock(); defer { lock.unlock() }
         return stored
+    }
+
+    /// Keeps the newest `capacity` user-driven records and the newest `refusedCapacity` refusals.
+    public static func bounded(_ entries: [TransactionLogEntry], capacity: Int, refusedCapacity: Int) -> [TransactionLogEntry] {
+        var kept = 0, refused = 0
+        return entries.filter { entry in
+            if entry.outcome == .refused { refused += 1; return refused <= refusedCapacity }
+            kept += 1
+            return kept <= capacity
+        }
     }
 }
