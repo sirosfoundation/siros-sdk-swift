@@ -75,8 +75,16 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     // MARK: - Lifecycle
 
     /// Connect and create a WMP session. Starts the dispatch loop.
-    public func connect(authToken: String, sender: String? = nil) async throws {
-        try await session.create(authToken: authToken, sender: sender)
+    ///
+    /// `capabilitiesOffered` is sent in `wmp.session.create`. Capabilities are
+    /// negotiated per session, so changing what is offered means creating a
+    /// new session.
+    public func connect(
+        authToken: String,
+        sender: String? = nil,
+        capabilitiesOffered: [String: AnyCodable]? = nil
+    ) async throws {
+        try await session.create(authToken: authToken, sender: sender, capabilitiesOffered: capabilitiesOffered)
         startDispatch()
     }
 

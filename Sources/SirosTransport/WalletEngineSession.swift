@@ -565,12 +565,14 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
     /// Start an OID4VP credential presentation flow.
     public func startPresentation(
         requestUri: String? = nil,
-        requestUriRef: String? = nil
+        requestUriRef: String? = nil,
+        features: [String]? = nil
     ) {
         send(FlowStartMessage(
             protocol: "oid4vp",
             requestUri: requestUri,
-            requestUriRef: requestUriRef
+            requestUriRef: requestUriRef,
+            features: features
         ))
     }
 

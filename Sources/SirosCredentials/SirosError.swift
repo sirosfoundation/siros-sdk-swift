@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosTransport
 
 /// Base error type for the SIROS SDK.
 ///
@@ -26,6 +27,9 @@ public enum SirosError: Error, Sendable {
     /// error), which should surface to the user instead of being silently
     /// retried as a full re-issuance.
     case renewalUnavailable(batchId: Int64)
+    /// EC TS12 payment-SCA `transaction_data` was refused or declined; the
+    /// reason says why. See ``TransactionDataError``.
+    case transactionData(TransactionDataError)
 
     /// Why a SIROS backend refused this installation with `403` for wallet
     /// lifecycle reasons (SID-AUTH-06, go-wallet-backend#319/#340). None is
@@ -149,6 +153,7 @@ public enum SirosError: Error, Sendable {
         case .wallet: return "wallet_error"
         case .backendApi(let code, _, _): return "backend_api_\(code)"
         case .renewalUnavailable: return "renewal_unavailable"
+        case .transactionData(let error): return error.errorCode
         }
     }
 }
@@ -196,6 +201,14 @@ extension SirosError: LocalizedError {
         case .backendApi(let code, let message, _): return "\(code): \(message)"
         case .renewalUnavailable(let batchId):
             return "No refresh_token stored for batch \(batchId) - it may not be renewable, or was already renewed"
+        case .transactionData(let error): return error.userFacingDescription
         }
+    }
+}
+
+extension SirosError: WmpErrorCodeProviding {
+    public var wmpErrorCode: String? {
+        if case .transactionData(let error) = self { return error.verifierErrorCode }
+        return nil
     }
 }

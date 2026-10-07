@@ -124,16 +124,134 @@ public struct VPTokenResult: Codable, Sendable {
     }
 }
 
+/// One `transaction_data` entry as the orchestrator relays it (legacy engine
+/// `sign_request.params.transaction_data[]` and the WMP sign sub-flow; go-wmp
+/// `openid4x.TransactionData`).
+///
+/// `raw` is the verifier's base64url string exactly as sent: the ONLY valid
+/// hash input (OpenID4VP 1.0 Appendix B). Every other member is the
+/// orchestrator's decoded hint and must never be trusted over `raw`.
 public struct TransactionData: Codable, Sendable {
     public var type: String
     public var params: AnyCodable?
     public var credentialIds: [String]?
     public var hashAlgorithm: String?
+    /// The base64url string exactly as the verifier sent it.
+    public var raw: String?
+    /// The decoded `payload` object (TS12 section 3.2 step 4).
+    public var payload: AnyCodable?
+    /// The request's `transaction_data_hashes_alg`: an array in OpenID4VP 1.0
+    /// Appendix B; a bare string is tolerated on input.
+    public var hashesAlg: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case type, params
+        case type, params, raw, payload
         case credentialIds = "credential_ids"
         case hashAlgorithm = "hash_alg"
+        case hashesAlg = "transaction_data_hashes_alg"
+    }
+
+    public init(
+        type: String,
+        params: AnyCodable? = nil,
+        credentialIds: [String]? = nil,
+        hashAlgorithm: String? = nil,
+        raw: String? = nil,
+        payload: AnyCodable? = nil,
+        hashesAlg: [String]? = nil
+    ) {
+        self.type = type
+        self.params = params
+        self.credentialIds = credentialIds
+        self.hashAlgorithm = hashAlgorithm
+        self.raw = raw
+        self.payload = payload
+        self.hashesAlg = hashesAlg
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        params = try c.decodeIfPresent(AnyCodable.self, forKey: .params)
+        credentialIds = try c.decodeIfPresent([String].self, forKey: .credentialIds)
+        hashAlgorithm = try c.decodeIfPresent(String.self, forKey: .hashAlgorithm)
+        raw = try c.decodeIfPresent(String.self, forKey: .raw)
+        payload = try c.decodeIfPresent(AnyCodable.self, forKey: .payload)
+        if let list = try? c.decodeIfPresent([String].self, forKey: .hashesAlg) {
+            hashesAlg = list
+        } else if let single = try? c.decodeIfPresent(String.self, forKey: .hashesAlg) {
+            hashesAlg = [single]
+        } else {
+            hashesAlg = nil
+        }
+    }
+}
+
+/// An error that names the WMP flow-error code it should be reported with
+/// (for example `invalid_transaction_data`); any other error is `SIGN_ERROR`.
+public protocol WmpErrorCodeProviding {
+    var wmpErrorCode: String? { get }
+}
+
+/// The `transaction_data` member of a sign request with its PRESENCE kept: an
+/// absent member, an explicit `null` and an empty array are different things,
+/// and a request that names the member at all must never be answered as if it
+/// did not.
+public struct TransactionDataMember: Codable, Sendable {
+    public var entries: [TransactionData]?
+    /// The member was present and `null`.
+    public var isExplicitNull: Bool
+    /// The member was present but not an array of well-formed entries (a
+    /// scalar, an object, an entry without `type`, ...). It must be REFUSED,
+    /// never read as absent, and decoding must not throw: a request that failed
+    /// to decode is dropped silently by the transport and the verifier would
+    /// get no answer at all.
+    public var isMalformed: Bool
+
+    public init(entries: [TransactionData]? = nil, isExplicitNull: Bool = false, isMalformed: Bool = false) {
+        self.entries = entries
+        self.isExplicitNull = isExplicitNull
+        self.isMalformed = isMalformed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() {
+            self.init(entries: nil, isExplicitNull: true)
+        } else if let entries = try? c.decode([TransactionData].self) {
+            self.init(entries: entries)
+        } else {
+            self.init(entries: nil, isMalformed: true)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        if let entries { try c.encode(entries) } else { try c.encodeNil() }
+    }
+
+    /// Whether a request carrying this member asks for TS12 handling:
+    /// anything but absent or an empty array (explicit null and malformed included).
+    public var requestsTransactionHandling: Bool { isExplicitNull || isMalformed || !(entries ?? []).isEmpty }
+}
+
+extension KeyedDecodingContainer {
+    /// An absent key decodes as an absent member rather than an error.
+    func decode(_: TransactionDataMember.Type, forKey key: Key) throws -> TransactionDataMember {
+        guard contains(key) else { return TransactionDataMember() }
+        return try TransactionDataMember(from: try superDecoder(forKey: key))
+    }
+}
+
+extension KeyedEncodingContainer {
+    /// An absent member is omitted, never written as `null`.
+    mutating func encode(_ value: TransactionDataMember, forKey key: Key) throws {
+        guard value.entries != nil || value.isExplicitNull || value.isMalformed else { return }
+        try encodeValue(value, forKey: key)
+    }
+
+    private mutating func encodeValue(_ value: TransactionDataMember, forKey key: Key) throws {
+        if let entries = value.entries { try encode(entries, forKey: key) } else { try encodeNil(forKey: key) }
     }
 }
 
@@ -144,7 +262,18 @@ public struct SignSubFlowParams: Codable, Sendable {
     public var proofType: String?
     public var parentFlowId: String?
     public var count: Int?
-    public var transactionData: [TransactionData]?
+    /// The member with its presence kept (see `TransactionDataMember`).
+    public var transactionDataMember = TransactionDataMember()
+    public var transactionData: [TransactionData]? {
+        get { transactionDataMember.entries }
+        set { transactionDataMember = TransactionDataMember(entries: newValue) }
+    }
+    /// OID4VP `response_mode` of the request (go-wmp `SignSubFlowParams`).
+    public var responseMode: String?
+    /// Which credential answers which DCQL query id (go-wmp v0.6.0).
+    public var credentialsToInclude: [CredentialRef]?
+    /// The verifier-assigned session id (go-wmp v0.6.0).
+    public var verifierSessionId: String?
     /// PoP/proof `iss` (the flow's OAuth client_id) for `request_attestation`
     /// and `sign_client_auth`.
     public var issuer: String?
@@ -163,7 +292,10 @@ public struct SignSubFlowParams: Codable, Sendable {
         case action, nonce, audience, count, issuer, htm, htu, ath
         case proofType = "proof_type"
         case parentFlowId = "parent_flow_id"
-        case transactionData = "transaction_data"
+        case transactionDataMember = "transaction_data"
+        case responseMode = "response_mode"
+        case credentialsToInclude = "credentials_to_include"
+        case verifierSessionId = "verifier_session_id"
         case dpopNonce = "dpop_nonce"
         case keyId = "key_id"
     }
@@ -176,6 +308,9 @@ public struct SignSubFlowParams: Codable, Sendable {
         parentFlowId: String? = nil,
         count: Int? = nil,
         transactionData: [TransactionData]? = nil,
+        responseMode: String? = nil,
+        credentialsToInclude: [CredentialRef]? = nil,
+        verifierSessionId: String? = nil,
         issuer: String? = nil,
         htm: String? = nil,
         htu: String? = nil,
@@ -189,7 +324,10 @@ public struct SignSubFlowParams: Codable, Sendable {
         self.proofType = proofType
         self.parentFlowId = parentFlowId
         self.count = count
-        self.transactionData = transactionData
+        self.transactionDataMember = TransactionDataMember(entries: transactionData)
+        self.responseMode = responseMode
+        self.credentialsToInclude = credentialsToInclude
+        self.verifierSessionId = verifierSessionId
         self.issuer = issuer
         self.htm = htm
         self.htu = htu
@@ -212,7 +350,10 @@ public struct SignSubFlowParams: Codable, Sendable {
         proofType = try c.decodeIfPresent(String.self, forKey: .proofType)
         parentFlowId = try c.decodeIfPresent(String.self, forKey: .parentFlowId)
         count = try c.decodeIfPresent(Int.self, forKey: .count)
-        transactionData = try c.decodeIfPresent([TransactionData].self, forKey: .transactionData)
+        transactionDataMember = try c.decode(TransactionDataMember.self, forKey: .transactionDataMember)
+        responseMode = try c.decodeIfPresent(String.self, forKey: .responseMode)
+        credentialsToInclude = try c.decodeIfPresent([CredentialRef].self, forKey: .credentialsToInclude)
+        verifierSessionId = try c.decodeIfPresent(String.self, forKey: .verifierSessionId)
         issuer = try c.decodeIfPresent(String.self, forKey: .issuer)
         htm = try c.decodeIfPresent(String.self, forKey: .htm)
         htu = try c.decodeIfPresent(String.self, forKey: .htu)
@@ -443,7 +584,8 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, @unchecked Senda
             let result = try await handler(flowId, signParams)
             await sendSignResponse(flowId: flowId, result: result)
         } catch {
-            await sendFlowError(flowId: flowId, code: "SIGN_ERROR", message: error.localizedDescription)
+            let code = (error as? WmpErrorCodeProviding)?.wmpErrorCode ?? "SIGN_ERROR"
+            await sendFlowError(flowId: flowId, code: code, message: error.localizedDescription)
         }
     }
 

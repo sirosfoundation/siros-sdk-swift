@@ -60,6 +60,11 @@ public final class SirosWallet: @unchecked Sendable {
     var _state: WalletState = .disconnected()
     var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
+    // EC TS12 payment SCA (`transaction_data`): state here, behaviour in
+    // `SirosWallet+TransactionDataFlag.swift`.
+    var transactionDataEnabledValue: Bool
+    var transactionConsentHandlerRegistered: Bool = false
+
     /// Current wallet state (thread-safe read).
     public var state: WalletState {
         lock.lock(); defer { lock.unlock() }
@@ -739,6 +744,7 @@ public final class SirosWallet: @unchecked Sendable {
         accountRegistry: AccountRegistry? = nil
     ) {
         self.config = config
+        self.transactionDataEnabledValue = config.transactionDataEnabled
         self.authProvider = authProvider
         self.sessionStore = sessionStore
 

@@ -56,7 +56,11 @@ public final class WmpSession: @unchecked Sendable {
     }
 
     /// Create a new WMP session with the given auth token.
-    public func create(authToken: String, sender: String? = nil) async throws {
+    public func create(
+        authToken: String,
+        sender: String? = nil,
+        capabilitiesOffered: [String: AnyCodable]? = nil
+    ) async throws {
         setState(.connecting)
         try await transport.connect()
         startMessageLoop()
@@ -64,6 +68,7 @@ public final class WmpSession: @unchecked Sendable {
         let params = try codec.encodeParams(
             SessionCreateParams(
                 wmp: WmpMeta(sender: sender),
+                capabilitiesOffered: capabilitiesOffered,
                 ttl: config.sessionTtlSeconds,
                 auth: SessionAuth(type: "bearer", token: authToken)
             )

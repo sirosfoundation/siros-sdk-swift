@@ -64,6 +64,13 @@ public struct DCAPIRequest: @unchecked Sendable {
     /// callback) with no other correlator. The wallet MUST echo this back
     /// unchanged in its response body.
     public let state: String?
+    /// True when the request carries a `transaction_data` member at all
+    /// (any value, including malformed ones). A wallet that cannot handle it
+    /// must refuse with `invalid_transaction_data`, never ignore it.
+    public let hasTransactionData: Bool
+    /// The `transaction_data` entries (base64url strings exactly as sent),
+    /// or `nil` when absent or not an array of strings.
+    public let transactionData: [String]?
 
     public init(
         clientId: String?,
@@ -73,7 +80,9 @@ public struct DCAPIRequest: @unchecked Sendable {
         clientMetadata: [String: Any]?,
         keyMaterial: DCAPIRequestKeyMaterial? = nil,
         protocolIdentifier: String,
-        state: String?
+        state: String?,
+        hasTransactionData: Bool = false,
+        transactionData: [String]? = nil
     ) {
         self.clientId = clientId
         self.responseMode = responseMode
@@ -83,6 +92,8 @@ public struct DCAPIRequest: @unchecked Sendable {
         self.keyMaterial = keyMaterial
         self.protocolIdentifier = protocolIdentifier
         self.state = state
+        self.hasTransactionData = hasTransactionData
+        self.transactionData = transactionData
     }
 }
 
@@ -161,7 +172,9 @@ public enum DCAPIRequestParser {
             clientMetadata: obj["client_metadata"] as? [String: Any],
             keyMaterial: nil,
             protocolIdentifier: protocolIdentifier,
-            state: obj["state"] as? String
+            state: obj["state"] as? String,
+            hasTransactionData: obj["transaction_data"] != nil,
+            transactionData: obj["transaction_data"] as? [String]
         )
     }
 
@@ -200,7 +213,9 @@ public enum DCAPIRequestParser {
             clientMetadata: payload["client_metadata"] as? [String: Any],
             keyMaterial: DCAPIRequestKeyMaterial(x5c: x5cChain, jwk: headerJwk),
             protocolIdentifier: protocolIdentifier,
-            state: payload["state"] as? String
+            state: payload["state"] as? String,
+            hasTransactionData: payload["transaction_data"] != nil,
+            transactionData: payload["transaction_data"] as? [String]
         )
     }
 

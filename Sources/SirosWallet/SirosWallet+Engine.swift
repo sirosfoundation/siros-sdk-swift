@@ -141,7 +141,11 @@ extension SirosWallet {
             }
         ))
         peer.use(profile)
-        try await peer.connect(authToken: appToken)
+        // Offered per session: a flag flip applies from the next session.
+        try await peer.connect(
+            authToken: appToken,
+            capabilitiesOffered: transactionDataWmpCapabilities
+        )
         lock.lock(); wmpPeer = peer; lock.unlock()
 
         #if canImport(os)
@@ -296,7 +300,8 @@ extension SirosWallet {
         }
     }
 
-    private func handleWmpSignRequest(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
+    // Not `private`: the test target drives it directly.
+    func handleWmpSignRequest(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
         switch params.action {
         case "generate_proof":
             let count = params.count ?? 1
@@ -320,6 +325,10 @@ extension SirosWallet {
             return SignSubFlowResult(proofs: proofs)
 
         case "sign_presentation":
+            // EC TS12 is not processed yet (it needs the pipeline of a later
+            // change): refuse before anything else rather than answer without
+            // the hashes and without showing the user the transaction.
+            try Self.refuseTransactionData(params.transactionDataMember)
             // Same defense-in-depth audience check as the legacy engine
             // transport's handleSignRequest - this transport previously
             // skipped it entirely, so a WMP-relayed sign_presentation was
@@ -685,6 +694,7 @@ extension SirosWallet {
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
             case "sign_presentation":
+                try Self.refuseTransactionData(msg.params.transactionDataMember)
                 let nonce = msg.params.nonce ?? ""
                 let audience = msg.params.audience ?? ""
                 let credsToInclude = msg.params.credentialsToInclude
@@ -778,8 +788,26 @@ extension SirosWallet {
             #if canImport(os)
             logger.error("Error handling sign request: \(error.localizedDescription)")
             #endif
-            reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
+            if case SirosError.transactionData(let refusal) = error {
+                // Answer at once rather than leave the engine waiting out its
+                // sign timeout (an empty response makes it fail the flow).
+                engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
+                // Verifier error code first, so the app can act on it.
+                reportSignFailure(flowId: msg.flowId, message: "\(refusal.verifierErrorCode): \(refusal.userFacingDescription)")
+            } else {
+                reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
+            }
         }
+    }
+
+    /// Refuses a presentation request that carries `transaction_data`: this
+    /// SDK cannot process it yet, and answering without the transaction hashes
+    /// (and without the user seeing the transaction) is never acceptable.
+    static func refuseTransactionData(_ member: TransactionDataMember) throws {
+        guard member.requestsTransactionHandling else { return }
+        throw SirosError.transactionData(TransactionDataError(
+            .disabled, detail: "sign_presentation carries transaction_data and TS12 handling is not in effect"
+        ))
     }
 
     /// Builds a single credential's VP-token part - ZK-wrapped mdoc, plain
