@@ -31,6 +31,12 @@ final class TransactionConsentContinuationBox {
         return true
     }
 
+    /// Whether the box still awaits an answer: installed, not answered, not cancelled.
+    var isPending: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return continuation != nil && !cancelled
+    }
+
     func resumeOnce(_ answer: Bool) {
         lock.lock()
         let continuation = self.continuation
@@ -166,16 +172,14 @@ struct TransactionConsentSheet: View {
         return VStack(spacing: 10) {
             Button(action: { pending.respond(true) }) {
                 Text(request.commonAffirmativeLabel ?? L10n.string(request.entries.count > 1 ? "transactionConsent.confirmAll" : "transactionConsent.confirm"))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
+                    .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
             .disabled(requiresAcknowledgement && !acknowledgedUnsigned)
 
             Button(action: { pending.respond(false) }) {
                 Text(request.commonDenialLabel ?? L10n.string("transactionConsent.cancel"))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
+                    .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.bordered)
             .tint(.red)

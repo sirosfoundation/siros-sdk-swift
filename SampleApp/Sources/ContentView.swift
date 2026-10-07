@@ -97,9 +97,16 @@ struct ContentView: View {
         }
         // Same top-level rationale: a transaction (EC TS12) can be put to the
         // user while any screen is showing. Dismissing the sheet declines.
-        .sheet(item: $viewModel.pendingTransactionConsent, onDismiss: {
-            viewModel.dismissTransactionConsent()
-        }) { pending in
+        // The decline is bound to the prompt that was dismissed (by id), so a stale
+        // dismissal callback can never answer a newer prompt.
+        .sheet(item: Binding(
+            get: { viewModel.pendingTransactionConsent },
+            set: { newValue in
+                if newValue == nil, let current = viewModel.pendingTransactionConsent {
+                    viewModel.dismissTransactionConsent(ifCurrent: current.id)
+                }
+            }
+        )) { pending in
             TransactionConsentSheet(pending: pending)
         }
         // Same top-level rationale as `pendingWscdChoice` above - a FIDO2

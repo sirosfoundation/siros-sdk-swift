@@ -144,6 +144,22 @@ final class TransactionDataLifecycleTests: XCTestCase {
         XCTAssertFalse(vm.showTransactionLog)
     }
 
+    func testADismissalForAnEarlierPromptDoesNotDeclineANewerOne() async throws {
+        let vm = WalletViewModel()
+        let first = Task { await vm.requestTransactionConsent(TransactionDataSettingsTests.sampleRequest()) }
+        for _ in 0..<200 where vm.pendingTransactionConsent == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        let earlier = try XCTUnwrap(vm.pendingTransactionConsent)
+        let second = Task { await vm.requestTransactionConsent(TransactionDataSettingsTests.sampleRequest()) }
+        for _ in 0..<200 where vm.pendingTransactionConsent?.id == earlier.id { try await Task.sleep(nanoseconds: 10_000_000) }
+        _ = await first.value
+        let current = try XCTUnwrap(vm.pendingTransactionConsent)
+        vm.dismissTransactionConsent(ifCurrent: earlier.id)      // the earlier sheet's late dismissal callback
+        XCTAssertEqual(vm.pendingTransactionConsent?.id, current.id, "the newer prompt is untouched")
+        current.respond(true)
+        let answer = await second.value
+        XCTAssertTrue(answer)
+    }
+
     func testEndingTheSessionClearsTheLogAndTheScreen() {
         let vm = WalletViewModel()
         vm.showTransactionLog = true

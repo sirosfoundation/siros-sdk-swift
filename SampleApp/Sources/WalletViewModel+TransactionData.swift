@@ -19,6 +19,8 @@ extension WalletViewModel {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 guard box.set(continuation) else { return }   // already cancelled: resumed with false
                 Task { @MainActor in
+                    // Cancelled or answered before this ran: nothing to show.
+                    guard box.isPending else { return }
                     self.transactionConsentBox?.resumeOnce(false)
                     self.transactionConsentBox = box
                     self.pendingTransactionConsent = PendingTransactionConsent(request: request, respond: { answer in
@@ -42,7 +44,14 @@ extension WalletViewModel {
     }
 
     /// Declines the pending transaction if its sheet is dismissed without an
-    /// answer (for example swiped away); a no-op once answered.
+    /// answer (for example swiped away) - but only that prompt: a stale
+    /// callback for an earlier one does nothing.
+    func dismissTransactionConsent(ifCurrent id: UUID) {
+        guard pendingTransactionConsent?.id == id else { return }
+        dismissTransactionConsent()
+    }
+
+    /// Declines whatever prompt is pending.
     func dismissTransactionConsent() {
         pendingTransactionConsent = nil
         transactionConsentBox?.resumeOnce(false)

@@ -125,7 +125,7 @@
     "photoIdOnboardingToggle": "PhotoID Onboarding",
     "photoIdOnboardingDescription": "Show a \"Get your PhotoID\" shortcut on Home when this tenant offers identity-verified PhotoID issuance",
     "transactionDataToggle": "Payment confirmation (EC TS12)",
-    "transactionDataDescription": "Allow payment and login confirmations that show you the transaction before you approve it. Applies to requests started after you change it.",
+    "transactionDataDescription": "Allow payment and login confirmations that show you the transaction before you approve it. Applies to requests started after you change it; with the WMP transport, to the next connection (sign out and in again).",
     "transactionLogButton": "Transaction Log",
     "interopProfiles": "Interop profiles"
   },

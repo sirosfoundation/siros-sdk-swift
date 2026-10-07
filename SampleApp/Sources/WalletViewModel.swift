@@ -212,7 +212,8 @@ final class WalletViewModel: ObservableObject {
     @Published var pendingWscdChoice: PendingWscdChoice?
     /// Non-nil while a transaction prompt awaits the user (TS12).
     @Published var pendingTransactionConsent: PendingTransactionConsent?
-    @Published var showTransactionLog = false, transactionLog: [TransactionLogEntry] = []
+    @Published var showTransactionLog = false
+    @Published var transactionLog: [TransactionLogEntry] = []
     var transactionLogGeneration = 0
     var transactionConsentBox: TransactionConsentContinuationBox?
     private lazy var transactionConsentBridge = TransactionConsentBridge(viewModel: self)
