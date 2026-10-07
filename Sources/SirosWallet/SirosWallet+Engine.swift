@@ -647,6 +647,10 @@ extension SirosWallet {
                     // The flow's start record is claimed HERE, on this serial collector, so
                     // records are consumed in message-arrival order whatever order the
                     // spawned tasks happen to run in.
+                    // A collector cancelled by a teardown does not go on to start work for the old request,
+                    // and the registration below is checked against the teardown epoch captured first.
+                    guard !Task.isCancelled else { break }
+                    let epoch = self.currentTaskEpoch()
                     _ = self.transactionDataActive(forFlow: msg.flowId, viaWmp: false)
                     let id = UUID()
                     self.lock.lock()
@@ -654,7 +658,7 @@ extension SirosWallet {
                         await self?.handleSignRequest(engine: engine, msg: msg)
                         self?.lock.lock(); self?.transactionTasks.removeValue(forKey: id); self?.lock.unlock()
                     }
-                    self.transactionTasks[id] = (flowId: msg.flowId, cancel: { task.cancel() })
+                    if self.transactionTaskEpoch == epoch { self.transactionTasks[id] = (flowId: msg.flowId, cancel: { task.cancel() }) } else { task.cancel() }
                     // A flow that ended between the claim above and this registration has had its record
                     // removed by the terminal handler (which found nothing to cancel): cancel the task now.
                     if self.legacyFlowSnapshots[msg.flowId] == nil { task.cancel() }
