@@ -51,7 +51,13 @@ extension WalletViewModel {
 
     func openTransactionLog() {
         showTransactionLog = true
-        Task { transactionLog = await wallet?.transactionLog() ?? [] }
+        let generation = transactionLogGeneration
+        Task {
+            let entries = await wallet?.transactionLog() ?? []
+            // Only publish if the session it was read for is still the active one.
+            guard generation == transactionLogGeneration else { return }
+            transactionLog = entries
+        }
     }
 
     func closeTransactionLog() {
@@ -61,6 +67,7 @@ extension WalletViewModel {
     /// Account-scoped state must not outlive the session: the log entries, the
     /// screen and any prompt still showing.
     func resetTransactionDataState() {
+        transactionLogGeneration += 1
         showTransactionLog = false
         transactionLog = []
         dismissTransactionConsent()

@@ -135,6 +135,15 @@ final class TransactionDataLifecycleTests: XCTestCase {
         XCTAssertTrue(secondAnswer)
     }
 
+    func testALogLoadStartedBeforeLogoutDoesNotRepopulateTheNextSession() async throws {
+        let vm = WalletViewModel()
+        vm.openTransactionLog()          // starts loading for this session
+        vm.disconnect()                  // the session ends before the load returns
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(vm.transactionLog.isEmpty)
+        XCTAssertFalse(vm.showTransactionLog)
+    }
+
     func testEndingTheSessionClearsTheLogAndTheScreen() {
         let vm = WalletViewModel()
         vm.showTransactionLog = true

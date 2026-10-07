@@ -86,12 +86,30 @@ struct TransactionConsentSheet: View {
                         entryView(entry)
                     }
 
+                    attributesView
+
                     actions
                 }
                 .padding()
             }
-            .navigationTitle(request.entries.first?.title ?? L10n.string("transactionConsent.title"))
+            .navigationTitle(L10n.string("transactionConsent.title"))
             .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    /// What will be shared along with the transaction (TS12 3.3.1).
+    @ViewBuilder private var attributesView: some View {
+        let shown = request.attributes.filter { !$0.claims.isEmpty }
+        if !shown.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.string("transactionConsent.attributesTitle"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(SirosTheme.onSurfaceVariant)
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, group in
+                    Text("\(group.credentialName): \(group.claims.joined(separator: ", "))")
+                        .font(.footnote)
+                }
+            }
         }
     }
 
@@ -111,6 +129,10 @@ struct TransactionConsentSheet: View {
 
     private func entryView(_ entry: TransactionConsentEntry) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Each entry shows its own title, so none of them goes unseen.
+            if let title = entry.title {
+                Text(title).font(.headline)
+            }
             Text(entry.typeName)
                 .font(.caption.weight(.semibold))
                 .foregroundColor(SirosTheme.onSurfaceVariant)
