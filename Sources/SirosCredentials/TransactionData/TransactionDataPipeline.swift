@@ -211,6 +211,8 @@ public struct TransactionDataPipeline: Sendable {
             catch let error as TransactionDataError { return .failure(error) }
             catch { return .failure(TransactionDataError(.invalidEntry, detail: "\(error)")) }
         }
+        // The caller's own cancellation is not a validation failure.
+        try Task.checkCancellation()
         return try outcome.get()
     }
 

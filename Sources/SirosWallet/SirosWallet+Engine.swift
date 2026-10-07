@@ -636,7 +636,12 @@ extension SirosWallet {
                     // A transaction waits for the user. That must not hold up the
                     // engine's other requests (issuance proofs, client auth,
                     // attestation), which are handled in order on this loop.
-                    Task { await self.handleSignRequest(engine: engine, msg: msg) }
+                    let id = UUID()
+                    let task = Task { [weak self] in
+                        await self?.handleSignRequest(engine: engine, msg: msg)
+                        self?.lock.lock(); self?.transactionTasks.removeValue(forKey: id); self?.lock.unlock()
+                    }
+                    self.lock.lock(); self.transactionTasks[id] = task; self.lock.unlock()
                 } else {
                     await self.handleSignRequest(engine: engine, msg: msg)
                 }
@@ -701,6 +706,9 @@ extension SirosWallet {
                 engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
 
             case "sign_presentation":
+                // Claim this flow's enablement record whether or not it carries a
+                // transaction, so a plain presentation does not leave it behind.
+                _ = transactionDataActive(forFlow: msg.flowId, viaWmp: false)
                 let nonce = msg.params.nonce ?? ""
                 let audience = msg.params.audience ?? ""
                 let credsToInclude = msg.params.credentialsToInclude
@@ -1289,6 +1297,7 @@ extension SirosWallet {
         lock.lock()
         let listener = eventListener
         pendingMatchResultsByFlow.removeValue(forKey: flowId)
+        legacyFlowSnapshots.removeValue(forKey: flowId)
         lock.unlock()
         if notifyError { listener?.onFlowError(flowId: flowId, errorMessage: message, redirectUri: nil) }
 
@@ -1314,6 +1323,7 @@ extension SirosWallet {
         lock.lock()
         let listener = eventListener
         pendingMatchResultsByFlow.removeValue(forKey: fid)
+        legacyFlowSnapshots.removeValue(forKey: fid)
         lock.unlock()
         let redirectUri = msg.error.details?["redirect_uri"]?.stringValue
         // This one error's details name the credential the user is missing, so

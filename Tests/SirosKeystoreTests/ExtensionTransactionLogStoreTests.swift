@@ -8,6 +8,7 @@ private final class FakeExtensionStore: ExtensionStore, @unchecked Sendable {
     private let lock = NSLock()
     private var data: [String: [String: String]] = [:]
     var locked = false
+    var failRemovals = false
 
     func extensionEntries(namespace: String) async -> [String: String] {
         lock.lock(); defer { lock.unlock() }
@@ -18,7 +19,7 @@ private final class FakeExtensionStore: ExtensionStore, @unchecked Sendable {
         lock.lock(); data[namespace, default: [:]][key] = value; lock.unlock()
     }
     func removeExtensionEntry(namespace: String, key: String) async throws {
-        if locked { throw KeystoreError.locked }
+        if locked || failRemovals { throw KeystoreError.locked }
         lock.lock(); data[namespace]?[key] = nil; lock.unlock()
     }
 }
@@ -87,6 +88,29 @@ final class ExtensionTransactionLogStoreTests: XCTestCase {
         XCTAssertEqual(all.filter { $0.outcome == .refused }.count, 2, "refusals are bounded on their own")
         let keys = Set(await ext.extensionEntries(namespace: ExtensionTransactionLogStore.namespace).keys)
         XCTAssertEqual(keys.count, 4)
+    }
+
+    /// A pruning failure leaves records beyond capacity: the host is told.
+    func testAFailedPruneIsSurfaced() async throws {
+        let ext = FakeExtensionStore()
+        let store = ExtensionTransactionLogStore(store: ext, capacity: 1)
+        try await store.append([entry(1)])
+        ext.failRemovals = true
+        do { try await store.append([entry(2)]); XCTFail("must surface") }
+        catch let e as TransactionLogError { XCTAssertTrue(e.detail.contains("could not be removed")) }
+    }
+
+    /// Once the account is gone, nothing more is written (the check is made immediately before each write).
+    func testWritesStopWhenTheAccountIsGone() async throws {
+        final class Flag: @unchecked Sendable { var open = true }
+        let flag = Flag()
+        let ext = FakeExtensionStore()
+        let store = ExtensionTransactionLogStore(store: ext, writesAllowed: { flag.open })
+        try await store.append([entry(1)])
+        flag.open = false
+        do { try await store.append([entry(2)]); XCTFail() } catch is TransactionLogError {}
+        let keys = Set(await ext.extensionEntries(namespace: ExtensionTransactionLogStore.namespace).keys)
+        XCTAssertEqual(keys, ["e1"], "the late record never reached the container")
     }
 
     func testUndecodableEntriesAreIgnoredAndNeverDeleted() async throws {

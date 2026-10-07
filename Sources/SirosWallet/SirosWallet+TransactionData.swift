@@ -84,6 +84,19 @@ extension SirosWallet {
         await SecureDocumentFetcher().fetch(url, maxBytes: maxBytes)
     }
 
+    /// The headers the wallet's own registry expects (tenant and the wallet's
+    /// token), sent only to the wallet's own backend.
+    func registryHeaders() async -> [String: String] {
+        var headers = ["X-Tenant-ID": config.tenantId]
+        lock.lock(); let tokens = authTokens; lock.unlock()
+        if let token = try? await tokens?.ensureBackendToken() {
+            headers["Authorization"] = "Bearer \(token.raw)"
+        } else if let appToken = sessionStore.appToken {
+            headers["Authorization"] = "Bearer \(appToken)"
+        }
+        return headers
+    }
+
     /// The default `transactionMetadataFetch`: the wallet's registry (with the
     /// wallet's token, size-checked), then the vct's own well-known location
     /// through the hardened fetcher. With a pin the first document that hashes
@@ -96,7 +109,9 @@ extension SirosWallet {
         }
         var components = URLComponents(string: resolvedRegistryUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/type-metadata")
         components?.queryItems = [URLQueryItem(name: "vct", value: vct)]
-        if let registry = components?.url?.absoluteString, let found = acceptable(await typeMetadataHttpGet(registry)) { return found }
+        if let registry = components?.url,
+           let data = await SecureDocumentFetcher().fetch(registry, maxBytes: maxBytes, headers: await registryHeaders(), ownBackend: true),
+           let found = acceptable(String(data: data, encoding: .utf8)) { return found }
         guard let url = URL(string: vct), url.scheme?.lowercased() == "https", let host = url.host else { return nil }
         let path = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
         guard !path.isEmpty else { return nil }
@@ -134,8 +149,13 @@ extension SirosWallet {
         transactionLogStoreIsDefault = true
         let created: any TransactionLogStore
         if let extensions = keystore as? ExtensionStore {
+            let generation = transactionLogGeneration
             created = ExtensionTransactionLogStore(store: extensions, persisted: { [weak self] in
                 await self?.persistAndSyncKeystore()
+            }, writesAllowed: { [weak self] in
+                guard let self else { return false }
+                self.lock.lock(); defer { self.lock.unlock() }
+                return self.transactionLogGeneration == generation
             })
         } else {
             created = InMemoryTransactionLogStore()
@@ -169,7 +189,7 @@ extension SirosWallet {
     @discardableResult
     func snapshotTransactionDataEnablement() -> Bool {
         let effective = transactionDataEffectivelyEnabled
-        lock.lock(); legacyFlowSnapshotQueue.append(effective); lock.unlock()
+        lock.lock(); legacyFlowSnapshotQueue.append((effective, Date())); lock.unlock()
         return effective
     }
 
@@ -181,6 +201,9 @@ extension SirosWallet {
         return effective
     }
 
+    /// How long an unclaimed start record stays valid.
+    static let snapshotLifetime: TimeInterval = 600
+
     /// Whether `flowId` (legacy) or the WMP session started with TS12
     /// handling in effect AND a handler is still registered. A legacy flow
     /// that started without a record falls back to the live value.
@@ -189,9 +212,12 @@ extension SirosWallet {
         guard transactionConsentHandlerStorage != nil else { return false }
         if viaWmp { return wmpSessionSnapshot }
         if let known = legacyFlowSnapshots[flowId] { return known }
+        // Records of flows that never produced a sign request go stale: drop them.
+        let horizon = Date().addingTimeInterval(-Self.snapshotLifetime)
+        legacyFlowSnapshotQueue.removeAll { $0.at < horizon }
         let value = legacyFlowSnapshotQueue.isEmpty
             ? transactionDataEnabledValue
-            : legacyFlowSnapshotQueue.removeFirst()
+            : legacyFlowSnapshotQueue.removeFirst().effective
         legacyFlowSnapshots[flowId] = value
         return value
     }

@@ -17,11 +17,16 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
     private let capacity: Int
     private let refusedCapacity: Int
     private let persisted: (@Sendable () async -> Void)?
+    private let writesAllowed: (@Sendable () -> Bool)?
     private let memory: InMemoryTransactionLogStore
 
     /// - Parameter persisted: called after a successful write so the owner
     ///   can export and sync the container (the wallet's `persistAndSyncKeystore`).
-    public init(store: any ExtensionStore, capacity: Int = 500, refusedCapacity: Int = 100, persisted: (@Sendable () async -> Void)? = nil) {
+    ///   - writesAllowed: asked immediately before each durable write; `false`
+    ///     (the account the store belongs to is gone) skips it and the append throws.
+    public init(store: any ExtensionStore, capacity: Int = 500, refusedCapacity: Int = 100,
+                persisted: (@Sendable () async -> Void)? = nil, writesAllowed: (@Sendable () -> Bool)? = nil) {
+        self.writesAllowed = writesAllowed
         self.store = store
         self.capacity = max(1, capacity)
         self.refusedCapacity = max(1, refusedCapacity)
@@ -36,17 +41,19 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
         let encoder = JSONEncoder()
         var failed = 0
         for entry in entries {
-            guard let data = try? encoder.encode(entry), let json = String(data: data, encoding: .utf8),
+            guard writesAllowed?() ?? true, let data = try? encoder.encode(entry), let json = String(data: data, encoding: .utf8),
                   (try? await store.setExtensionEntry(namespace: Self.namespace, key: entry.id, value: json)) != nil else {
                 failed += 1
                 continue
             }
         }
+        var pruneFailures = 0
         if failed < entries.count {
-            await prune()
+            pruneFailures = await prune()
             await persisted?()
         }
         if failed > 0 { throw TransactionLogError("\(failed) of \(entries.count) records were not stored") }
+        if pruneFailures > 0 { throw TransactionLogError("\(pruneFailures) old records could not be removed") }
     }
 
     public func entries() async -> [TransactionLogEntry] {
@@ -62,11 +69,13 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
     /// Removes the oldest records beyond each class's capacity. Only ever
     /// deletes entries it has read and decoded: a failed or partial read
     /// removes nothing.
-    private func prune() async {
+    private func prune() async -> Int {
         let all = await entries()
         let keep = Set(InMemoryTransactionLogStore.bounded(all, capacity: capacity, refusedCapacity: refusedCapacity).map(\.id))
+        var failures = 0
         for old in all where !keep.contains(old.id) {
-            try? await store.removeExtensionEntry(namespace: Self.namespace, key: old.id)
+            if (try? await store.removeExtensionEntry(namespace: Self.namespace, key: old.id)) == nil { failures += 1 }
         }
+        return failures
     }
 }

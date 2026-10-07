@@ -73,9 +73,9 @@ public final class TransactionDataService: @unchecked Sendable {
     private let fetchTimeout: TimeInterval
     private let onLogFailure: (@Sendable (Error) -> Void)?
 
-    /// The consent default stays well below the backend's sign timeout
-    /// (go-wallet-backend `Session.RequestSign` waits 3 minutes) so the wallet
-    /// answers before the engine gives up, whatever time metadata took.
+    /// 90 seconds: well below the backend's sign timeout (go-wallet-backend
+    /// `Session.RequestSign` waits 3 minutes) so the wallet answers before the
+    /// engine gives up, after the up to 30 s validation and fetching before it.
     public static let defaultConsentTimeout: TimeInterval = 90
 
     public init(
@@ -140,7 +140,9 @@ public final class TransactionDataService: @unchecked Sendable {
 
             // 9. Bindings with the factors applied for this operation.
             var bindings: [String: TransactionDataBinding] = [:]
-            for credential in request.credentials {
+            // Only credentials the transaction is bound to: an unrelated one in a
+            // combined presentation must not trigger another authentication or refuse the binding.
+            for credential in request.credentials where boundQueryIds.contains(credential.queryId) {
                 let factors: [AuthenticationFactor]
                 do {
                     factors = try await factorsProvider.factors(for: context.factorContexts[credential.queryId] ?? AuthenticationFactorContext())
