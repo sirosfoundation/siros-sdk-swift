@@ -60,45 +60,10 @@ public final class SirosWallet: @unchecked Sendable {
     var _state: WalletState = .disconnected()
     var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
-    // MARK: - EC TS12 payment SCA (`transaction_data`)
-
+    // EC TS12 payment SCA (`transaction_data`): state here, behaviour in
+    // `SirosWallet+TransactionDataFlag.swift`.
     var transactionDataEnabledValue: Bool
-
-    /// Whether the host app has registered a consent handler able to show a
-    /// transaction to the user. No handler API exists yet (it arrives with the
-    /// consent/log/factors change), so this is `false` and TS12 handling can
-    /// never be effectively enabled: the wallet declares nothing and the DC
-    /// API path refuses. Internal so tests can exercise the declaration logic.
     var transactionConsentHandlerRegistered: Bool = false
-
-    /// Runtime switch for EC TS12 payment-SCA `transaction_data` handling.
-    /// Default `false` (`WalletConfig.transactionDataEnabled`). Readable and
-    /// writable at any time from any thread; a change applies to flows
-    /// started after it, a flow already in progress keeps the setting it
-    /// started with. WMP offers capabilities per session, so a change takes
-    /// effect on the WMP transport at the next session (reconnect).
-    public var transactionDataEnabled: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return transactionDataEnabledValue }
-        set { lock.lock(); transactionDataEnabledValue = newValue; lock.unlock() }
-    }
-
-    /// Effective enablement: the flag is on AND a consent handler is
-    /// registered. Without a handler the wallet cannot show the transaction,
-    /// so it behaves as disabled.
-    var transactionDataEffectivelyEnabled: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return transactionDataEnabledValue && transactionConsentHandlerRegistered
-    }
-
-    /// `flow_start.features` for a flow started now (legacy engine).
-    var transactionDataEngineFeatures: [String]? {
-        TransactionDataDeclaration.engineFeatures(enabled: transactionDataEffectivelyEnabled)
-    }
-
-    /// `capabilities_offered` for a WMP session created now.
-    var transactionDataWmpCapabilities: [String: AnyCodable]? {
-        TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: transactionDataEffectivelyEnabled)
-    }
 
     /// Current wallet state (thread-safe read).
     public var state: WalletState {
