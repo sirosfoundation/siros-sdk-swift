@@ -67,7 +67,7 @@ private final class SigningKeystore: KeystoreManager, @unchecked Sendable {
         try await adapter.unlock(prfOutput: Data(), encryptedContainer: Data(), hkdfSalt: Data(), hkdfInfo: Data())
     }
 
-    var isUnlocked: Bool { false }
+    var isUnlocked: Bool { true }
     func unlock(prfOutput: Data, encryptedContainer: Data, hkdfSalt: Data, hkdfInfo: Data) async throws {}
     func lock() {}
     func generateKey(algorithm: String) async throws -> String { throw NotImplemented() }
