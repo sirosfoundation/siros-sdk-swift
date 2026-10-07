@@ -6,7 +6,7 @@ import os
 private let diagnosticsLogger = Logger(subsystem: "org.siros.sdk", category: "TransactionData")
 #endif
 
-/// Records whether type metadata drove an SCA decision without an integrity
+/// Records whether metadata that was actually USED for an accepted SCA validation had no integrity
 /// pin (`vct#integrity`, or the `...#integrity` of a fetched referenced
 /// document), so that exactly one warning is emitted per validation.
 final class MetadataAuthenticationNote: @unchecked Sendable {
@@ -30,7 +30,7 @@ final class MetadataAuthenticationNote: @unchecked Sendable {
 /// a particular card type is itself private and device logs are read by other tooling.
 enum TransactionDataDiagnostics {
     static let unpinnedMessage =
-        "SCA type metadata is not authenticated by vct#integrity; display and schema come from an unpinned source"
+        "SCA transaction handling relied on metadata that is not integrity-pinned"
 
     /// Where warnings go; tests replace it to capture them.
     nonisolated(unsafe) static var sink: @Sendable (String) -> Void = { message in

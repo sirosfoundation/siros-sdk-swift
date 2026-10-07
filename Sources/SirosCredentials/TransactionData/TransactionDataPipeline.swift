@@ -187,7 +187,7 @@ public struct TransactionDataPipeline: Sendable {
     private final class RunState: @unchecked Sendable {
         let note: MetadataAuthenticationNote
         init(note: MetadataAuthenticationNote) { self.note = note }
-        var metadata: [String: JSONValue] = [:]
+        var metadata: [MetadataKey: JSONValue] = [:]
         var resources: [String: Data] = [:]
     }
 
@@ -197,8 +197,9 @@ public struct TransactionDataPipeline: Sendable {
 
     public func validate(_ request: TransactionDataRequest) async throws -> ValidatedTransactionData {
         let note = MetadataAuthenticationNote()
-        defer { note.emitIfNeeded() }
-        return try await validate(request, note: note)
+        let validated = try await validate(request, note: note)
+        note.emitIfNeeded()   // only for a validation that succeeded, i.e. whose metadata was actually used
+        return validated
     }
 
     /// As `validate(_:)`, recording unpinned metadata in `note` for the caller
@@ -357,15 +358,20 @@ public struct TransactionDataPipeline: Sendable {
 
     // MARK: Metadata
 
+    /// Cache key for an accepted type-metadata document: the credential's vct AND its own pin, as separate
+    /// fields (a delimiter-joined string can collide: `("a\0b", nil)` vs `("a", "b\0")`), so a document
+    /// accepted for one credential is never handed to another that pins something else.
+    struct MetadataKey: Hashable {
+        let vct: String
+        let pin: String?
+    }
+
     private func scaMetadata(for credential: TransactionDataCredential, state: RunState) async throws -> [String: JSONValue] {
         guard let vct = credential.vct, !vct.isEmpty else {
             throw TransactionDataError(.metadataUnavailable, detail: "credential has no vct")
         }
         let pin = credential.integrityClaims["vct#integrity"]
-        if pin == nil { state.note.noteUnpinned() }
-        // Keyed by the credential's own pin too: a document accepted for one
-        // credential is never handed to another that pins something else.
-        let cacheKey = vct + "\u{0}" + (pin ?? "")
+        let cacheKey = MetadataKey(vct: vct, pin: pin)
         if let cached = state.metadata[cacheKey]?.objectValue { return try requireSca(cached) }
         let metadataLimit = maxMetadataBytes
         guard let text = await bounded({ await source.typeMetadataDocument(vct: vct, expectedIntegrity: pin, maxBytes: metadataLimit) }),
@@ -385,7 +391,11 @@ public struct TransactionDataPipeline: Sendable {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata is for a different vct")
         }
         state.metadata[cacheKey] = parsed
-        return try requireSca(object)
+        let sca = try requireSca(object)
+        // Only now has the document actually been ACCEPTED and used: an unpinned one that was refused
+        // above drove no decision and warrants no warning.
+        if pin == nil { state.note.noteUnpinned() }
+        return sca
     }
 
     private func requireSca(_ metadata: [String: JSONValue]) throws -> [String: JSONValue] {
@@ -469,7 +479,6 @@ public struct TransactionDataPipeline: Sendable {
             }
             if let builtIn = TransactionDataBuiltIns.schema(forType: uri) { return (builtIn, true) }
             let pin = credential.integrityClaims["transaction_data_types['\(type)'].schema_uri#integrity"]
-            if pin == nil { state.note.noteUnpinned() }
             let limit = maxResourceBytes
             let fetched: Data?
             if let known = state.resources[uri] { fetched = known } else {
@@ -485,6 +494,7 @@ public struct TransactionDataPipeline: Sendable {
             guard let parsed = try? StrictJSON.parse(data) else {
                 throw TransactionDataError(.metadataUnavailable, detail: "schema_uri content is not JSON")
             }
+            if pin == nil { state.note.noteUnpinned() }   // used, unpinned
             return (parsed, false)
         }
     }
