@@ -5,6 +5,25 @@ import SirosCredentials
 #if canImport(CryptoKit)
 import CryptoKit
 
+/// Transaction data item of the pre-TS12 API.
+///
+/// Kept only so existing callers still compile. The signing overload that took
+/// it did not implement EC TS12 (it hashed a re-serialised form), so it now
+/// refuses a non-empty list; the wallet presents transactions through
+/// ``SirosWallet`` once ``SirosWallet/transactionDataEnabled`` is on.
+@available(*, deprecated, message: "Use SirosWallet's transaction_data handling (SirosWallet.transactionDataEnabled and transactionConsentHandler).")
+public struct TransactionDataItem: Sendable {
+    /// Transaction type.
+    public let type: String
+    /// Serialization of this transaction data item.
+    public let rawJson: String
+
+    public init(type: String, rawJson: String) {
+        self.type = type
+        self.rawJson = rawJson
+    }
+}
+
 /// Adapts a `Signer` (e.g. backed by WSCD/UniFFI bindings) into the
 /// full `KeystoreManager` protocol expected by `SirosWallet`.
 ///
@@ -383,6 +402,27 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         )
     }
 
+    /// The pre-TS12 overload. A list of items is refused (it never produced
+    /// TS12-conformant claims); `nil` or an empty list signs as a plain presentation.
+    @available(*, deprecated, message: "Use the overload taking a TransactionDataBinding, built by the SDK.")
+    @_disfavoredOverload
+    public func signVpToken(
+        credential: String,
+        disclosedClaims: [String]?,
+        nonce: String,
+        audience: String,
+        transactionData: [TransactionDataItem]?,
+        kid: String? = nil
+    ) async throws -> String {
+        guard transactionData?.isEmpty ?? true else {
+            throw KeystoreError.invalidParameter("transaction data items are no longer supported by this API; the wallet handles transaction_data itself")
+        }
+        return try await signVpToken(
+            credential: credential, disclosedClaims: disclosedClaims, nonce: nonce, audience: audience,
+            transactionData: nil as TransactionDataBinding?, kid: kid
+        )
+    }
+
     /// VP token signing with EC TS12 payment-SCA claims (see
     /// ``KeystoreManager/signVpToken(credential:disclosedClaims:nonce:audience:transactionData:kid:)``).
     public func signVpToken(
@@ -419,6 +459,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
             throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
         }
         let key = try await resolveSigningKey(keys, kid: effectiveKid)
+        // The factors in the binding were established for the key the CALLER named. The credential's
+        // `cnf` decides which key signs, so if they differ the claim would describe a different key
+        // than the one that signs: refuse rather than assert possession of the wrong one.
+        if transactionData != nil, key.keyId != kid {
+            throw KeystoreError.invalidParameter("the key the credential is bound to is not the key the authentication factors were established for")
+        }
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)

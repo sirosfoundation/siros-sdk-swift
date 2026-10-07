@@ -212,6 +212,29 @@ extension SirosWallet {
         return effective
     }
 
+    /// Runs `body` as a task a flow error/completion, logout or peer teardown can cancel.
+    func trackedTransaction<T: Sendable>(flowId: String, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
+        let task = Task { try await body() }
+        let id = registerTransactionTask(flowId: flowId) { task.cancel() }
+        defer { unregisterTransactionTask(id) }
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    private func registerTransactionTask(flowId: String, cancel: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        lock.lock(); transactionTasks[id] = (flowId: flowId, cancel: cancel); lock.unlock()
+        return id
+    }
+
+    private func unregisterTransactionTask(_ id: UUID) {
+        lock.lock(); transactionTasks.removeValue(forKey: id); lock.unlock()
+    }
+
+    /// Runs `body` to completion even if the calling task is cancelled meanwhile.
+    static func shielded(_ body: @escaping @Sendable () async -> Void) async {
+        await Task { await body() }.value
+    }
+
     /// How long an unclaimed start record stays valid.
     static let snapshotLifetime: TimeInterval = 600
 
@@ -244,9 +267,11 @@ extension SirosWallet {
     /// `persistAndSyncKeystore`, which only logs it).
     func persistKeystoreOrThrow() async throws {
         guard keystore.isUnlocked else { throw TransactionLogError("the container is locked") }
-        let container = try await keystore.exportEncryptedContainer()
-        sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
-        try await syncPrivateDataToBackend()
+        try await keystorePersistMutex.withLock {
+            let container = try await keystore.exportEncryptedContainer()
+            sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
+            try await syncPrivateDataToBackend()
+        }
     }
 
     /// Tells the host a transaction-log write did not reach durable storage.
@@ -315,6 +340,9 @@ extension SirosWallet {
                 changed.alreadyLogged = true
                 throw changed
             }
+            // A logout or a finished flow may have cancelled this task while the awaits above
+            // ignored it: hand nothing to a transport once that is so.
+            try Task.checkCancellation()
             return ScaPlan(plan: plan, kids: kids)
         } catch let error as TransactionDataError {
             // The service logs what it refused itself; only what failed before it ran is logged here.

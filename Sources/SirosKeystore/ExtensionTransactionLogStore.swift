@@ -67,7 +67,10 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
         var byId: [String: TransactionLogEntry] = [:]
         for entry in await persistedEntries() { byId[entry.id] = entry }
         for entry in await memory.entries() { byId[entry.id] = entry }
-        return byId.values.sorted { $0.timestamp > $1.timestamp }
+        // Bounded like the container: a session-only record plus the durable history must not
+        // read back as roughly twice the configured capacity.
+        let newestFirst = byId.values.sorted { $0.timestamp > $1.timestamp }
+        return InMemoryTransactionLogStore.bounded(newestFirst, capacity: capacity, refusedCapacity: refusedCapacity)
     }
 
     /// The records actually present in the container (decoded). Retention is

@@ -133,10 +133,12 @@ extension SirosWallet {
                 // Terminal path for this issuance over the WMP transport too -
                 // see `resetIssuanceGuards()`.
                 self?.resetIssuanceGuards()
+                self?.cancelTransactionTasks(flowId: flowId)
                 self?.eventListener?.onFlowComplete(flowId: flowId, redirectUri: nil)
             },
             onError: { [weak self] flowId, code, message in
                 self?.resetIssuanceGuards()
+                self?.cancelTransactionTasks(flowId: flowId)
                 self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")", redirectUri: nil)
             }
         ))
@@ -332,7 +334,8 @@ extension SirosWallet {
             // never checked against the trust result computed for this flow.
             try validateAudience(flowId: flowId, audience: params.audience)
             if params.transactionDataMember.requestsTransactionHandling {
-                return try await wmpTransactionPresentation(flowId: flowId, params: params)
+                // Tracked per flow: a flow error, logout or peer teardown cancels it.
+                return try await trackedTransaction(flowId: flowId) { try await self.wmpTransactionPresentation(flowId: flowId, params: params) }
             }
             // NOTE (pre-existing, separate gap - not addressed by this
             // change): unlike the legacy engine transport's
@@ -638,12 +641,18 @@ extension SirosWallet {
                     // attestation), which are handled in order on this loop.
                     // The lock is held across creation AND registration, so the task's own
                     // removal (it takes the same lock) can never run before it is registered.
+                    //
+                    // The flow's start record is claimed HERE, on this serial collector, so
+                    // records are consumed in message-arrival order whatever order the
+                    // spawned tasks happen to run in.
+                    _ = self.transactionDataActive(forFlow: msg.flowId, viaWmp: false)
                     let id = UUID()
                     self.lock.lock()
-                    self.transactionTasks[id] = (flowId: msg.flowId, task: Task { [weak self] in
+                    let task = Task { [weak self] in
                         await self?.handleSignRequest(engine: engine, msg: msg)
                         self?.lock.lock(); self?.transactionTasks.removeValue(forKey: id); self?.lock.unlock()
-                    })
+                    }
+                    self.transactionTasks[id] = (flowId: msg.flowId, cancel: { task.cancel() })
                     self.lock.unlock()
                 } else {
                     await self.handleSignRequest(engine: engine, msg: msg)
@@ -743,6 +752,8 @@ extension SirosWallet {
                     var vpParts: [String] = []
                     do {
                     for ref in credsToInclude {
+                        // A flow that ended (or a logout) while the user decided must not sign.
+                        try Task.checkCancellation()
                         // ref.credentialId is the WMP wire-protocol identifier
                         // (String) - parse it back to the numeric
                         // StoredCredential.id it refers to.
@@ -762,12 +773,14 @@ extension SirosWallet {
                         ))
                     }
                     } catch {
-                        await scaPlan?.plan.complete(signed: false)
+                        await Self.shielded { await scaPlan?.plan.complete(signed: false) }
                         throw error
                     }
                     let vpToken = vpParts.joined(separator: "\n")
                     engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
-                    await scaPlan?.plan.complete(signed: true)
+                    // The record of a presentation that was sent must be written even if the flow's
+                    // completion cancels this task meanwhile.
+                    await Self.shielded { await scaPlan?.plan.complete(signed: true) }
                 } else {
                     let vpToken = try await keystore.signPresentation(
                         nonce: nonce, audience: audience, credentialIds: [], kid: nil
@@ -1333,7 +1346,7 @@ extension SirosWallet {
         let doomed = transactionTasks.filter { $0.value.flowId == flowId }
         for key in doomed.keys { transactionTasks.removeValue(forKey: key) }
         lock.unlock()
-        for entry in doomed.values { entry.task.cancel() }
+        for entry in doomed.values { entry.cancel() }
     }
 
     func handleFlowError(msg: FlowErrorMessage) {

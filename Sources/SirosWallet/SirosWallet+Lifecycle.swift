@@ -347,9 +347,11 @@ extension SirosWallet {
     func persistAndSyncKeystore() async {
         guard keystore.isUnlocked else { return }
         do {
-            let container = try await keystore.exportEncryptedContainer()
-            sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
-            try await syncPrivateDataToBackend()
+            try await keystorePersistMutex.withLock {
+                let container = try await keystore.exportEncryptedContainer()
+                sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
+                try await syncPrivateDataToBackend()
+            }
         } catch {
             #if canImport(os)
             logger.error("Failed to persist keystore: \(error.localizedDescription)")
@@ -365,12 +367,12 @@ extension SirosWallet {
         for t in engineTasks { t.cancel() }
         engineTasks.removeAll()
         lock.lock()
-        let consentTasks = transactionTasks.values.map(\.task)
+        let consentTasks = transactionTasks.values.map(\.cancel)
         transactionTasks.removeAll()
         legacyFlowSnapshotQueue.removeAll()
         legacyFlowSnapshots.removeAll()
         lock.unlock()
-        for t in consentTasks { t.cancel() }
+        for cancel in consentTasks { cancel() }
     }
 
 }

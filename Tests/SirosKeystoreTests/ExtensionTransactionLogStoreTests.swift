@@ -127,6 +127,17 @@ final class ExtensionTransactionLogStoreTests: XCTestCase {
         XCTAssertEqual(keys, ["e1", "e3"], "retention is decided from what is durable")
     }
 
+    /// Durable e1 plus a session-only e2 must not read back as more than the capacity.
+    func testReadsAreBoundedByCapacityEvenWithSessionOnlyRecords() async throws {
+        let ext = FakeExtensionStore()
+        let store = ExtensionTransactionLogStore(store: ext, capacity: 1)
+        try await store.append([entry(1)])
+        ext.locked = true
+        do { try await store.append([entry(2)]) } catch {}
+        let ids = await store.entries().map(\.id)
+        XCTAssertEqual(ids, ["e2"], "bounded to the capacity, newest first")
+    }
+
     func testAPersistFailureIsSurfacedAndTheCallbackIsNotRunForAGoneAccount() async throws {
         struct SyncFailed: Error {}
         let ext = FakeExtensionStore()

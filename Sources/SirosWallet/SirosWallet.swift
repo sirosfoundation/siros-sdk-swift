@@ -71,9 +71,9 @@ public final class SirosWallet: @unchecked Sendable {
     var legacyFlowSnapshotQueue: [(effective: Bool, at: Date)] = []
     var legacyFlowSnapshots: [String: Bool] = [:]
     var wmpSessionSnapshot = false
-    var transactionTasks: [UUID: (flowId: String, task: Task<Void, Never>)] = [:]
-    var transactionLogStoreIsDefault = false
-    var transactionLogGeneration = 0
+    var transactionTasks: [UUID: (flowId: String, cancel: @Sendable () -> Void)] = [:]
+    var transactionLogStoreIsDefault = false, transactionLogGeneration = 0
+    let keystorePersistMutex = AsyncMutex()
     var transactionDataLocaleStorage: String = Locale.preferredLanguages.first ?? "en"
     var transactionDataConsentTimeout: TimeInterval = TransactionDataService.defaultConsentTimeout
     // Test hooks: how referenced documents and type metadata are fetched.
