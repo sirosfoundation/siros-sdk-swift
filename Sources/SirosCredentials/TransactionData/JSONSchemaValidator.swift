@@ -326,7 +326,9 @@ enum RegexSafety {
     static let maxPatternLength = 256
     static let maxGroups = 8
     static let maxQuantifiers = 6
-    static let maxInputBytes = 4096
+    static let maxInputBytes = 1024
+    /// Variable-width quantifiers (`+ * ?`, `{n,m}`): adjacent overlapping ones backtrack polynomially (`a{0,64}` x6 on 384 chars did not finish), so only two are allowed. Fixed `{n}` is free.
+    static let maxVariableQuantifiers = 2
 
     static func isSafe(_ pattern: String) -> Bool {
         guard pattern.utf8.count <= maxPatternLength else { return false }
@@ -338,6 +340,7 @@ enum RegexSafety {
         var groups = 0
         var quantifiers = 0
         var unbounded = 0
+        var variable = 0
         var lastWasGroupClose = false
         while i < chars.count {
             let c = chars[i]
@@ -361,13 +364,14 @@ enum RegexSafety {
             case ")":
                 guard openGroups > 0 else { return false }
                 openGroups -= 1
-            case "+", "*": quantified = true; quantifiers += 1; unbounded += 1
+            case "+", "*": quantified = true; quantifiers += 1; unbounded += 1; variable += 1
             case "?":
                 // `(?:` introduces a non-capturing group; a `?` after an atom is optional; `+?` / `*?` are lazy forms.
                 let previous = i > 0 ? chars[i - 1] : " "
                 if previous == "(" || previous == "+" || previous == "*" || previous == "?" { break }
                 quantified = true
                 quantifiers += 1
+                variable += 1
             case "{":
                 guard let close = chars[i...].firstIndex(of: "}") else { return false }
                 let body = String(chars[(i + 1)..<close])
@@ -376,6 +380,7 @@ enum RegexSafety {
                 if parts.count == 2 {
                     if parts[1].isEmpty { unbounded += 1 }
                     else { guard let high = Int(parts[1]), high <= 64, high >= low else { return false } }
+                    if parts[1].isEmpty || Int(parts[1]) != low { variable += 1 }
                 }
                 quantified = true
                 quantifiers += 1
@@ -386,6 +391,6 @@ enum RegexSafety {
             lastWasGroupClose = c == ")"
             i += 1
         }
-        return openGroups == 0 && !inClass && groups <= maxGroups && quantifiers <= maxQuantifiers && unbounded <= 1
+        return openGroups == 0 && !inClass && groups <= maxGroups && quantifiers <= maxQuantifiers && unbounded <= 1 && variable <= maxVariableQuantifiers
     }
 }

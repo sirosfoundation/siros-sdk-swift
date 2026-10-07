@@ -365,7 +365,7 @@ extension SirosWallet {
         for t in engineTasks { t.cancel() }
         engineTasks.removeAll()
         lock.lock()
-        let consentTasks = transactionTasks.values
+        let consentTasks = transactionTasks.values.map(\.task)
         transactionTasks.removeAll()
         legacyFlowSnapshotQueue.removeAll()
         legacyFlowSnapshots.removeAll()

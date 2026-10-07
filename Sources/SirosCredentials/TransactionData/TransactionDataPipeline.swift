@@ -360,7 +360,10 @@ public struct TransactionDataPipeline: Sendable {
         if let pin, !Integrity.matches(Data(text.utf8), pin) {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata does not match vct#integrity")
         }
-        guard let parsed = try? StrictJSON.parse(text), let object = parsed.objectValue else {
+        // The pin was checked over the document as downloaded; a leading UTF-8 BOM (RFC 8259 section 8.1
+        // allows a parser to ignore one) is dropped only now, for parsing.
+        let json = text.unicodeScalars.first == "\u{FEFF}" ? String(String.UnicodeScalarView(text.unicodeScalars.dropFirst())) : text
+        guard let parsed = try? StrictJSON.parse(json), let object = parsed.objectValue else {
             throw TransactionDataError(.metadataUnavailable, detail: "type metadata is not a JSON object")
         }
         guard object["vct"]?.stringValue == vct else {

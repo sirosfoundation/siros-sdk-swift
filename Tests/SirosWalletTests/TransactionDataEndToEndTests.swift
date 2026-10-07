@@ -594,6 +594,33 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertNil(sender.sent.last?.vpToken, "the transaction flow got its own (disabled) record, not the plain flow's leftover")
     }
 
+    /// A flow that runs while no handler is registered still retires its own start record.
+    func testAFlowWithoutAHandlerStillClaimsItsStartRecord() async throws {
+        let f = try await fixture(handler: false)
+        f.wallet.legacyFlowSnapshotQueue = [(effective: true, at: Date()), (effective: false, at: Date())]
+        XCTAssertFalse(f.wallet.transactionDataActive(forFlow: "plain", viaWmp: false), "no handler")
+        f.wallet.lock.lock(); let left = f.wallet.legacyFlowSnapshotQueue.count; f.wallet.lock.unlock()
+        XCTAssertEqual(left, 1, "the plain flow consumed its record")
+        f.wallet.transactionConsentHandler = Consent()
+        XCTAssertFalse(f.wallet.transactionDataActive(forFlow: "next", viaWmp: false), "the next flow gets ITS record (disabled), not the leftover")
+    }
+
+    /// A flow that ends in error takes its waiting consent task with it; other flows' tasks are untouched.
+    func testFlowErrorCancelsThatFlowsConsentTaskOnly() async throws {
+        let f = try await fixture()
+        let mine = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
+        let other = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
+        f.wallet.lock.lock()
+        f.wallet.transactionTasks[UUID()] = (flowId: "ended", task: mine)
+        f.wallet.transactionTasks[UUID()] = (flowId: "running", task: other)
+        f.wallet.lock.unlock()
+        let json = #"{"type":"flow_error","flow_id":"ended","error":{"code":"X","message":"m"}}"#
+        f.wallet.handleFlowError(msg: try JSONDecoder().decode(FlowErrorMessage.self, from: Data(json.utf8)))
+        XCTAssertTrue(mine.isCancelled)
+        XCTAssertFalse(other.isCancelled)
+        other.cancel()
+    }
+
     func testStaleStartRecordsAreDropped() async throws {
         let f = try await fixture(enabled: false)
         f.wallet.legacyFlowSnapshotQueue = [(effective: true, at: Date().addingTimeInterval(-SirosWallet.snapshotLifetime - 60))]

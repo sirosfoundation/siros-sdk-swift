@@ -343,6 +343,14 @@ final class TransactionDataPipelineTests: XCTestCase {
         await expectRefusal(.metadataUnavailable, request([.init(raw: entry())], credentials: [credential(pins: ["vct#integrity": "sha256-AAAA"])]), source: source(doc))
     }
 
+    /// A pinned document that starts with a UTF-8 BOM is accepted: the pin covers the bytes as downloaded.
+    func testPinnedMetadataWithALeadingBomIsAccepted() async throws {
+        let doc = "\u{FEFF}" + metadata()
+        let pin = "sha256-" + Data(SHA256.hash(data: Data(doc.utf8))).base64EncodedString()
+        XCTAssertEqual(Array(doc.utf8.prefix(3)), [0xEF, 0xBB, 0xBF])
+        _ = try await TransactionDataPipeline(source: source(doc)).validate(request([.init(raw: entry())], credentials: [credential(pins: ["vct#integrity": pin])]))
+    }
+
     // MARK: - Step 5: type support
 
     func testUnknownTypeIsRefused() async {

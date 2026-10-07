@@ -71,7 +71,7 @@ public final class SirosWallet: @unchecked Sendable {
     var legacyFlowSnapshotQueue: [(effective: Bool, at: Date)] = []
     var legacyFlowSnapshots: [String: Bool] = [:]
     var wmpSessionSnapshot = false
-    var transactionTasks: [UUID: Task<Void, Never>] = [:]
+    var transactionTasks: [UUID: (flowId: String, task: Task<Void, Never>)] = [:]
     var transactionLogStoreIsDefault = false
     var transactionLogGeneration = 0
     var transactionDataLocaleStorage: String = Locale.preferredLanguages.first ?? "en"
