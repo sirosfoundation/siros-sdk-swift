@@ -523,6 +523,24 @@ final class TransactionConsentTests: XCTestCase {
         await expectRefusal(.metadataUnavailable, svc, request())
     }
 
+    /// A request cancelled while a document is being fetched ends as a cancellation, not as a logged refusal.
+    func testACancelledValidationIsNotLoggedAsARefusal() async throws {
+        let s = source(uriDoc())
+        s.resources["https://pay.example/c.json"] = Data(claimsJson().utf8)
+        s.resources["https://pay.example/l.json"] = Data(labels.utf8)
+        s.delayNanos = 5_000_000_000
+        let log = InMemoryTransactionLogStore()
+        let svc = service(s, handler: Handler(.yes), log: log)
+        let req = request()
+        let ctx = context()
+        let task = Task { try await svc.process(req, context: ctx) }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("expected an error") } catch is CancellationError {} catch { XCTFail("\(error)") }
+        let entries = await log.entries()
+        XCTAssertTrue(entries.isEmpty, "no refusal was recorded for a cancelled request: \(entries.map(\.reason))")
+    }
+
     func testClaimsBothInlineAndByUriRefuses() async {
         let doc = metadata(extra: #","claims_uri":"https://pay.example/c.json""#)
         await expectRefusal(.metadataUnavailable, service(source(doc), handler: Handler(.yes)))

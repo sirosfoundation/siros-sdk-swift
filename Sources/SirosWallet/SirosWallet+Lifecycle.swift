@@ -346,8 +346,11 @@ extension SirosWallet {
 
     func persistAndSyncKeystore() async {
         guard keystore.isUnlocked else { return }
+        let generation = currentAccountGeneration()
         do {
             try await keystorePersistMutex.withLock {
+                // The wait can span a logout and another account's login: do not export theirs.
+                guard currentAccountGeneration() == generation, keystore.isUnlocked else { return }
                 let container = try await keystore.exportEncryptedContainer()
                 sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
                 try await syncPrivateDataToBackend()
