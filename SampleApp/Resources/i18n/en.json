@@ -217,7 +217,29 @@
     "whyFaceScanDescription": "A 3D face scan verifies you are a real, live person. Your biometric data is encrypted during capture and processed only for identity verification. It is not stored after the session.",
     "consentText": "I consent to biometric processing for identity verification.",
     "startScanButton": "Start Scan",
-    "navTitle": "Scan Physical ID"
+    "navTitle": "Scan Physical ID",
+    "errors": {
+      "cancelled": "Identity verification was cancelled.",
+      "unavailable": "Identity verification is not available on this device.",
+      "liveness_failed": "We could not confirm that a live person was in front of the camera. Please try again in good light, facing the camera.",
+      "verification_failed": "Your scan could not be accepted. Please try again in good light, or use another identity document.",
+      "network_error": "Network error during identity verification.",
+      "nfc_not_requested": "This document cannot be verified by its chip. Please use an e-passport or an ID card whose chip can be read.",
+      "nfc_device_not_capable": "This device could not read the chip. Make sure NFC is turned on and try again.",
+      "nfc_skipped": "Reading the chip in your document is required. Please try again and hold your document against the top of the phone when asked.",
+      "nfc_chip_read_failed": "The chip in your document could not be read. Please try again and hold the document still against the top of the phone.",
+      "nfc_not_authenticated": "The chip in your document could not be verified, so no credential was issued.",
+      "chip_untrusted": "The chip in your document could not be confirmed as issued by a recognised authority, so no credential was issued.",
+      "document_expired": "This document has expired, so no credential was issued. Please use a valid identity document.",
+      "session_expired": "The verification took too long or was already used. Please start again.",
+      "issuance_failed": "Your identity was verified, but the credential could not be issued. Please try again later.",
+      "internal_error": "Something went wrong on our side, so no credential was issued. Please try again later.",
+      "locked_out": "Too many attempts. Please wait a while and try again.",
+      "request_aborted": "The verification was interrupted. Please try again.",
+      "initialization_failed": "Identity verification could not be started. Please try again later.",
+      "unknown_internal_error": "Something went wrong during the scan. Please try again.",
+      "no_session_result": "The scan ended without a result. Please try again."
+    }
   },
   "error": {
     "title": "Something went wrong",

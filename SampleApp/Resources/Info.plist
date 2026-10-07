@@ -50,7 +50,15 @@
     <string>Face ID is used to authenticate and protect your credentials.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Bluetooth is used to advertise device engagement and present credentials directly to a nearby ISO 18013-5 mdoc reader.</string>
+    <key>FaceTecDeviceKeyIdentifier</key>
+    <string>$(FACETEC_DEVICE_KEY_IDENTIFIER)</string>
     <key>NFCReaderUsageDescription</key>
-    <string>NFC is used to communicate with a security key for FIDO2 authentication.</string>
+    <string>NFC is used to communicate with a security key for FIDO2 authentication and to read the chip in your passport or ID card.</string>
+    <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+    <array>
+        <string>A0000002471001</string>
+        <string>A0000002472001</string>
+        <string>00000000000000</string>
+    </array>
 </dict>
 </plist>

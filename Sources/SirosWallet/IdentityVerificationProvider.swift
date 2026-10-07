@@ -45,6 +45,19 @@ public enum IDVError: Error, Sendable {
     /// `nfc_chip_read_failed` and `nfc_not_authenticated` as well, and any
     /// `nfc_*` code a backend sends maps here.
     case documentChipNotVerified(reason: String, message: String)
+    /// The backend refused to issue because the document's chip data could not
+    /// be verified against a trusted document signer (facetec-api's
+    /// `chip_untrusted`, from its trust PDP). Retrying with the same document
+    /// will not help; the user needs another one.
+    case chipUntrusted(message: String)
+    /// The backend refused to issue because the document has expired or its
+    /// expiry date could not be read as unexpired (facetec-api's
+    /// `document_expired`). The user needs a valid document.
+    case documentExpired(message: String)
+    /// The backend no longer has the verification session: it expired or was
+    /// already used (facetec-api's `session_expired`). The user has to start
+    /// the verification again.
+    case sessionExpired(message: String)
     /// Provider-specific error.
     case providerError(code: String, message: String)
 
@@ -57,6 +70,9 @@ public enum IDVError: Error, Sendable {
         case .verificationFailed: return "idv_verification_failed"
         case .networkError: return "idv_network_error"
         case .documentChipNotVerified(let reason, _): return "idv_\(reason)"
+        case .chipUntrusted: return "idv_chip_untrusted"
+        case .documentExpired: return "idv_document_expired"
+        case .sessionExpired: return "idv_session_expired"
         case .providerError(let code, _): return "idv_provider_\(code)"
         }
     }
@@ -71,6 +87,9 @@ extension IDVError: LocalizedError {
         case .verificationFailed(let message): return message
         case .networkError(let underlying): return "Network error during IDV: \(underlying.localizedDescription)"
         case .documentChipNotVerified(_, let message): return message
+        case .chipUntrusted(let message): return message
+        case .documentExpired(let message): return message
+        case .sessionExpired(let message): return message
         case .providerError(let code, let message): return "[\(code)] \(message)"
         }
     }
@@ -92,8 +111,12 @@ extension IDVError: LocalizedError {
 /// ## Example
 ///
 /// ```swift
-/// let provider = FaceTecIDVProvider(apiUrl: "https://ft.example.com", deviceKey: "...")
-/// try await wallet.verifyIdentityAndIssue(provider: provider, from: viewController)
+/// let provider = FaceTecIDVProvider(config: FaceTecIDVConfig(
+///     processRequestUrl: URL(string: "https://idv.example.com/v1/process-request")!,
+///     authToken: "Bearer \(token)",
+///     deviceKeyIdentifier: "<from FaceTec>"
+/// ))
+/// try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: viewController)
 /// ```
 ///
 /// ## Thread Safety
@@ -122,4 +145,44 @@ public protocol IdentityVerificationProvider: AnyObject, Sendable {
     /// - Throws: ``IDVError`` on failure or cancellation.
     /// - Returns: An ``IDVResult`` containing the credential offer URI.
     func startVerification(presentingViewController: Any) async throws -> IDVResult
+}
+
+extension IDVError {
+    /// Maps a refusal code from facetec-api (`credentialIssueErrorCode` from
+    /// `/process-request`, or `error_code` of a legacy `/v1` 422) to an
+    /// ``IDVError``. siros-sdk-kotlin maps the
+    /// same way except that it does not yet have dedicated errors for
+    /// `chip_untrusted`, `document_expired` and `session_expired`.
+    ///
+    /// - `nfc_*`: the document's chip was not read and authenticated
+    ///   (``documentChipNotVerified(reason:message:)``).
+    /// - `chip_untrusted`, `document_expired`, `session_expired`:
+    ///   ``chipUntrusted(message:)``, ``documentExpired(message:)``,
+    ///   ``sessionExpired(message:)``.
+    /// - `liveness_failed`: ``livenessFailed(message:)``.
+    /// - `match_failed`, `policy_rejected`, `document_unreadable`:
+    ///   ``verificationFailed(message:)``.
+    /// - Anything else, e.g. `issuance_failed`, `internal_error` or a code a
+    ///   newer facetec-api adds: ``providerError(code:message:)``, which keeps
+    ///   the code (`errorCode` = `idv_provider_<code>`) so an app can still
+    ///   explain it.
+    init(refusalCode code: String, message: String?) {
+        let text = message ?? "No credential was issued (\(code))"
+        switch code {
+        case _ where code.hasPrefix("nfc_"):
+            self = .documentChipNotVerified(reason: code, message: text)
+        case "chip_untrusted":
+            self = .chipUntrusted(message: text)
+        case "document_expired":
+            self = .documentExpired(message: text)
+        case "session_expired":
+            self = .sessionExpired(message: text)
+        case "liveness_failed":
+            self = .livenessFailed(message: text)
+        case "match_failed", "policy_rejected", "document_unreadable":
+            self = .verificationFailed(message: text)
+        default:
+            self = .providerError(code: code, message: text)
+        }
+    }
 }
