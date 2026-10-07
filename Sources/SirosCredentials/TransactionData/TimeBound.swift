@@ -18,6 +18,18 @@ private final class OnceResumer<T: Sendable>: @unchecked Sendable {
     }
 }
 
+private final class DeadlineHandles<T: Sendable>: @unchecked Sendable {
+    let lock = NSLock()
+    var once: OnceResumer<T>?
+    var work: Task<Void, Never>?
+    var cancelled = false
+    func cancel(_ fallback: T) {
+        lock.lock(); cancelled = true; let o = once; let w = work; lock.unlock()
+        o?.resume(fallback)
+        w?.cancel()
+    }
+}
+
 /// Runs `operation` and answers `fallback` if it has not finished within
 /// `seconds`.
 ///
@@ -29,13 +41,24 @@ private final class OnceResumer<T: Sendable>: @unchecked Sendable {
 func withDeadline<T: Sendable>(
     _ seconds: TimeInterval, fallback: T, _ operation: @escaping @Sendable () async -> T
 ) async -> T {
-    await withCheckedContinuation { continuation in
-        let once = OnceResumer(continuation)
-        let work = Task { once.resume(await operation()) }
-        Task {
-            try? await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
-            once.resume(fallback)
-            work.cancel()
+    let handles = DeadlineHandles<T>()
+    return await withTaskCancellationHandler {
+        await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
+            let once = OnceResumer(continuation)
+            let work = Task { once.resume(await operation()) }
+            handles.lock.lock()
+            handles.once = once
+            handles.work = work
+            let alreadyCancelled = handles.cancelled
+            handles.lock.unlock()
+            if alreadyCancelled { once.resume(fallback); work.cancel(); return }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+                once.resume(fallback)
+                work.cancel()
+            }
         }
+    } onCancel: {
+        handles.cancel(fallback)
     }
 }

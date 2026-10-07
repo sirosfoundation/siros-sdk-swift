@@ -11,6 +11,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     enum Behaviour {
         case ok(Data, contentLength: Int64? = nil)
         case chunks([Data])
+        case oneChunk(Data)
         case redirect(String)
         case status(Int)
         case never
@@ -40,6 +41,10 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         case .chunks(let parts):
             respond(200)
             for part in parts { client?.urlProtocol(self, didLoad: part) }
+            client?.urlProtocolDidFinishLoading(self)
+        case .oneChunk(let data):
+            respond(200)
+            client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
         case .redirect(let location):
             // A real redirect: if the session follows it, the target is requested next and answered.
@@ -156,6 +161,40 @@ final class SecureDocumentFetcherTests: XCTestCase {
         StubURLProtocol.reset(.chunks([Data(repeating: 0x41, count: 400), Data(repeating: 0x41, count: 600)]))
         let exact = await fetcher().fetch(url, maxBytes: 1000)
         XCTAssertEqual(exact?.count, 1000, "exactly the cap is allowed")
+    }
+
+    /// One callback larger than the cap is refused without being retained.
+    func testASingleOversizedChunkIsRefused() async {
+        StubURLProtocol.reset(.oneChunk(Data(repeating: 0x41, count: 50_000)))
+        let result = await fetcher().fetch(url, maxBytes: 1000)
+        XCTAssertNil(result)
+    }
+
+    /// A resolver that never answers cannot hold the fetch past its deadline.
+    func testAHungResolverIsCoveredByTheDeadline() async {
+        StubURLProtocol.reset(.ok(Data("{}".utf8)))
+        let hung: PublicHostPolicy.Resolver = { _ in await withCheckedContinuation { (_: CheckedContinuation<[String], Never>) in } }
+        let started = Date()
+        let result = await fetcher(timeout: 0.3, resolver: hung).fetch(url, maxBytes: 1000)
+        XCTAssertNil(result)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    /// Only the wallet's own backend is fetched with headers and without the public-host rule.
+    func testOwnBackendMayUseHeadersAndAPrivateHttpHostButNothingElseMay() async throws {
+        StubURLProtocol.reset(.ok(Data("{}".utf8)))
+        let backend = URL(string: "http://192.168.1.5:8080/registry/type-metadata?vct=x")!
+        let data = await fetcher().fetch(backend, maxBytes: 100, headers: ["Authorization": "Bearer wallet"], ownBackend: true)
+        XCTAssertEqual(data, Data("{}".utf8))
+        XCTAssertEqual(StubURLProtocol.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer wallet")
+        // The same request to a document-supplied location is refused: private/http, and headers.
+        StubURLProtocol.reset(.ok(Data("{}".utf8)))
+        let notBackend = await fetcher().fetch(backend, maxBytes: 100, headers: ["Authorization": "Bearer wallet"])
+        XCTAssertNil(notBackend)
+        let withHeaders = await fetcher().fetch(url, maxBytes: 100, headers: ["Authorization": "Bearer wallet"])
+        XCTAssertNil(withHeaders, "headers are never sent to a document-supplied location")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
     }
 
     func testNon200AndTimeoutAndCancellationFail() async {
