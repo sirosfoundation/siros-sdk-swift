@@ -182,7 +182,8 @@ public final class InMemoryTransactionLogStore: TransactionLogStore, @unchecked 
 
     /// Keeps the newest `capacity` user-driven records and the newest `refusedCapacity` refusals.
     public static func bounded(_ entries: [TransactionLogEntry], capacity: Int, refusedCapacity: Int) -> [TransactionLogEntry] {
-        var kept = 0, refused = 0
+        var kept = 0
+        var refused = 0
         return entries.filter { entry in
             if entry.outcome == .refused { refused += 1; return refused <= refusedCapacity }
             kept += 1

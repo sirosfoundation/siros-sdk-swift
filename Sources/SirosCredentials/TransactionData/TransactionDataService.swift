@@ -38,11 +38,11 @@ public struct TransactionDataContext: Sendable {
 public final class TransactionDataPlan: @unchecked Sendable {
     /// The bindings by DCQL query id, for the credentials the transaction is bound to.
     public let bindings: [String: TransactionDataBinding]
-    private let onComplete: @Sendable (Bool) async -> Void
+    private let onComplete: @Sendable (Bool, String?) async -> Void
     private let lock = NSLock()
     private var completed = false
 
-    init(bindings: [String: TransactionDataBinding], onComplete: @escaping @Sendable (Bool) async -> Void) {
+    init(bindings: [String: TransactionDataBinding], onComplete: @escaping @Sendable (Bool, String?) async -> Void) {
         self.bindings = bindings
         self.onComplete = onComplete
     }
@@ -50,12 +50,15 @@ public final class TransactionDataPlan: @unchecked Sendable {
     /// Records the outcome once: `consented` if signing succeeded, otherwise a
     /// refusal (consent that did not lead to a presentation is not consent
     /// that was acted on). Later calls do nothing.
-    public func complete(signed: Bool) async {
+    ///
+    /// - Parameter refusal: the reason to record when `signed` is false;
+    ///   `signingFailed` when not given.
+    public func complete(signed: Bool, refusal: TransactionDataError.Reason? = nil) async {
         lock.lock()
         let first = !completed
         completed = true
         lock.unlock()
-        if first { await onComplete(signed) }
+        if first { await onComplete(signed, refusal?.rawValue) }
     }
 }
 
@@ -127,6 +130,11 @@ public final class TransactionDataService: @unchecked Sendable {
                 guard boundQueryIds.contains(credential.queryId) || context.disclosedClaims[credential.queryId] != nil else { return nil }
                 return TransactionConsentAttributes(credentialName: label(credential.queryId), claims: context.disclosedClaims[credential.queryId] ?? [])
             }
+            // Every string the user is shown must be safe, whoever supplied it.
+            try TextSafety.require(context.verifier, maxLength: 200, what: "the verifier name")
+            for text in attributes.flatMap({ [$0.credentialName] + $0.claims }) + [label(firstQueryId)] {
+                try TextSafety.require(text, maxLength: 200, what: "an attribute or credential name")
+            }
             let model = try await TransactionConsentModelBuilder(
                 source: source, fetchTimeout: fetchTimeout, maxResourceBytes: 256 * 1024, note: note
             ).build(
@@ -159,10 +167,10 @@ public final class TransactionDataService: @unchecked Sendable {
 
             // 10. The record is written when signing is known to have succeeded.
             let verifier = context.verifier
-            return TransactionDataPlan(bindings: bindings) { [log, onLogFailure] signed in
+            return TransactionDataPlan(bindings: bindings) { [log, onLogFailure] signed, reason in
                 let records = TransactionLogEntry.records(
                     rawEntries: raws, verifier: verifier, credentialLabel: label,
-                    outcome: signed ? .consented : .refused, reason: signed ? nil : "signingFailed"
+                    outcome: signed ? .consented : .refused, reason: signed ? nil : (reason ?? "signingFailed")
                 )
                 do { try await log.append(records) } catch { onLogFailure?(error) }
             }

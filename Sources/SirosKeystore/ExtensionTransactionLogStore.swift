@@ -16,7 +16,7 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
     private let store: any ExtensionStore
     private let capacity: Int
     private let refusedCapacity: Int
-    private let persisted: (@Sendable () async -> Void)?
+    private let persisted: (@Sendable () async throws -> Void)?
     private let writesAllowed: (@Sendable () -> Bool)?
     private let memory: InMemoryTransactionLogStore
 
@@ -25,7 +25,7 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
     ///   - writesAllowed: asked immediately before each durable write; `false`
     ///     (the account the store belongs to is gone) skips it and the append throws.
     public init(store: any ExtensionStore, capacity: Int = 500, refusedCapacity: Int = 100,
-                persisted: (@Sendable () async -> Void)? = nil, writesAllowed: (@Sendable () -> Bool)? = nil) {
+                persisted: (@Sendable () async throws -> Void)? = nil, writesAllowed: (@Sendable () -> Bool)? = nil) {
         self.writesAllowed = writesAllowed
         self.store = store
         self.capacity = max(1, capacity)
@@ -48,32 +48,48 @@ public final class ExtensionTransactionLogStore: TransactionLogStore, @unchecked
             }
         }
         var pruneFailures = 0
+        var persistFailure: Error?
         if failed < entries.count {
             pruneFailures = await prune()
-            await persisted?()
+            // The container is exported only if the account is still the one this store belongs to.
+            if writesAllowed?() ?? true {
+                do { try await persisted?() } catch { persistFailure = error }
+            } else {
+                persistFailure = TransactionLogError("the account changed before the container was exported")
+            }
         }
         if failed > 0 { throw TransactionLogError("\(failed) of \(entries.count) records were not stored") }
         if pruneFailures > 0 { throw TransactionLogError("\(pruneFailures) old records could not be removed") }
+        if persistFailure != nil { throw TransactionLogError("the records were stored but the container could not be saved or synchronized") }
     }
 
     public func entries() async -> [TransactionLogEntry] {
-        let decoder = JSONDecoder()
         var byId: [String: TransactionLogEntry] = [:]
-        for raw in (await store.extensionEntries(namespace: Self.namespace)).values {
-            if let entry = try? decoder.decode(TransactionLogEntry.self, from: Data(raw.utf8)) { byId[entry.id] = entry }
-        }
+        for entry in await persistedEntries() { byId[entry.id] = entry }
         for entry in await memory.entries() { byId[entry.id] = entry }
         return byId.values.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// The records actually present in the container (decoded). Retention is
+    /// decided from these alone: a session-only record whose write failed must
+    /// never push durable history out.
+    private func persistedEntries() async -> [TransactionLogEntry] {
+        let decoder = JSONDecoder()
+        return (await store.extensionEntries(namespace: Self.namespace)).values.compactMap {
+            try? decoder.decode(TransactionLogEntry.self, from: Data($0.utf8))
+        }.sorted { $0.timestamp > $1.timestamp }   // newest first: retention keeps the head
     }
 
     /// Removes the oldest records beyond each class's capacity. Only ever
     /// deletes entries it has read and decoded: a failed or partial read
     /// removes nothing.
     private func prune() async -> Int {
-        let all = await entries()
+        let all = await persistedEntries()
         let keep = Set(InMemoryTransactionLogStore.bounded(all, capacity: capacity, refusedCapacity: refusedCapacity).map(\.id))
         var failures = 0
         for old in all where !keep.contains(old.id) {
+            // Revalidated before every removal: never touch a container that is no longer ours.
+            guard writesAllowed?() ?? true else { failures += 1; continue }
             if (try? await store.removeExtensionEntry(namespace: Self.namespace, key: old.id)) == nil { failures += 1 }
         }
         return failures

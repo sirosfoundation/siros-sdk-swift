@@ -80,20 +80,24 @@ final class TransactionDataHardeningTests: XCTestCase {
     func testCatastrophicPatternsAreRefusedNotRun() throws {
         let started = Date()
         let evil = ["(a+)+$", "(a|aa)+$", "(a*)*$", "(.*a){12}x", "^(([a-z])+.)+[A-Z]([a-z])+$", #"(a)\1+"#, "(?=a)a", String(repeating: "a", count: 300),
-                    "^" + String(repeating: "(aa|aaaa)", count: 24) + "$", "^(ab|cd)$", "^(a)(b)(c)(d)(e)(f)(g)(h)(i)$"]
+                    "^" + String(repeating: "(aa|aaaa)", count: 24) + "$", "^(ab|cd)$", "^(a)(b)(c)(d)(e)(f)(g)(h)(i)$",
+                    "^(a?){30}a{30}$", "a*a*a*b", "a?a?a?a?a?a?a?aaaaaaa", "^(abc)?x$", "(a){2,}(b)+"]
         for pattern in evil {
             let schema = try StrictJSON.parse(#"{"pattern":"\#(pattern.replacingOccurrences(of: "\\", with: "\\\\"))"}"#)
             let outcome = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 40) + "!"), against: schema)
             guard case .unsupported = outcome else { return XCTFail("\(pattern): \(outcome)") }
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
-        for fine in ["^[A-Z]{3}$", "^[a-z0-9._-]+$", "^\\d{4}-\\d{2}$", "^(abc)?x$"] {
+        for fine in ["^[A-Z]{3}$", "^[a-z0-9._-]+$", "^\\d{4}-\\d{2}$", "^(?:abc)x$", "^[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}$"] {
             let schema = try StrictJSON.parse(#"{"pattern":"\#(fine.replacingOccurrences(of: "\\", with: "\\\\"))"}"#)
             if case .unsupported = JSONSchemaValidator().validate(.string("x"), against: schema) { XCTFail("\(fine) should be allowed") }
         }
         // An over-long input is not matched at all.
         let schema = try StrictJSON.parse(#"{"pattern":"^a+$"}"#)
-        guard case .invalid = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 10_000)), against: schema) else { return XCTFail() }
+        guard case .unsupported = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 10_000)), against: schema) else { return XCTFail() }
+        // ... and a `not` cannot turn that refusal into acceptance.
+        let negated = try StrictJSON.parse(#"{"not":{"pattern":"^a+$"}}"#)
+        guard case .unsupported = JSONSchemaValidator().validate(.string(String(repeating: "a", count: 10_000)), against: negated) else { return XCTFail("fail-open under not") }
     }
 
     /// A caller that is cancelled is released at once, whatever the work is doing.
@@ -109,6 +113,42 @@ final class TransactionDataHardeningTests: XCTestCase {
         let value = await task.value
         XCTAssertEqual(value, 7)
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+    }
+
+    // MARK: undecidable results never read as "different"
+
+    func testNotCannotInvertAnUndecidableNumericComparison() throws {
+        let big = "1234567890123456789012345678901234567890"
+        let schema = try StrictJSON.parse(#"{"not":{"const":\#(big)}}"#)
+        guard case .unsupported = JSONSchemaValidator().validate(try StrictJSON.parse(big), against: schema) else { return XCTFail("the forbidden value must not be accepted") }
+        let enumSchema = try StrictJSON.parse(#"{"not":{"enum":[\#(big)]}}"#)
+        guard case .unsupported = JSONSchemaValidator().validate(try StrictJSON.parse(big), against: enumSchema) else { return XCTFail() }
+        // A definite difference is still decided.
+        XCTAssertEqual(JSONSchemaValidator().validate(.int(5), against: try StrictJSON.parse(#"{"not":{"const":6}}"#)), .valid)
+    }
+
+    func testIdAndMalformedKeywordsFailClosedWhateverTheInstanceType() throws {
+        func outcome(_ instance: String, _ schema: String) throws -> JSONSchemaValidator.Outcome {
+            JSONSchemaValidator().validate(try StrictJSON.parse(instance), against: try StrictJSON.parse(schema))
+        }
+        guard case .unsupported = try outcome("1", #"{"$id":"https://evil.example/s","$ref":"ts12-urn-eudi-sca-payment-1-data-model.json"}"#) else { return XCTFail("$id changes reference resolution") }
+        for bad in [#"{"minLength":"x"}"#, #"{"maxItems":-1}"#, #"{"required":"a"}"#, #"{"properties":[1]}"#, #"{"enum":"a"}"#, #"{"minimum":"1"}"#,
+                    #"{"type":5}"#, #"{"anyOf":{}}"#, #"{"pattern":5}"#] {
+            guard case .unsupported = try outcome("1", bad) else { return XCTFail("\(bad) must be refused even for a number") }
+            guard case .unsupported = try outcome(#""text""#, bad) else { return XCTFail(bad) }
+        }
+    }
+
+    // MARK: IPv6 classification
+
+    func testOnlyGlobalUnicastIPv6IsPublic() {
+        let denied = ["64:ff9b:1::1", "100::1", "2001:2::1", "2001::1", "2001:10::1", "2001:20::1", "2001:db8::1", "3fff::1", "fc00::1", "fe80::1", "fec0::1",
+                      "ff02::1", "::", "::1", "4000::1", "5f00::1", "2620:4f:8000::1", "1::1"]
+        for text in denied { XCTAssertFalse(PublicHostPolicy.parseAddress(text).map(PublicHostPolicy.isPublic) ?? true, text) }
+        for text in ["2606:4700::1111", "2a00:1450:4001::1", "2001:4860:4860::8888", "2400:cb00::1", "2002:0808:0808::1", "64:ff9b::808:808"] {
+            XCTAssertTrue(PublicHostPolicy.parseAddress(text).map(PublicHostPolicy.isPublic) ?? false, text)
+        }
+        XCTAssertFalse(PublicHostPolicy.parseAddress("2002:7f00:1::1").map(PublicHostPolicy.isPublic) ?? true, "6to4 of 127.0.0.1")
     }
 
     // MARK: malformed integrity claims

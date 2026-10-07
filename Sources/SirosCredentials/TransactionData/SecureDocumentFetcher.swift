@@ -149,7 +149,7 @@ final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable
         finish(nil)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               http.expectedContentLength <= Int64(maxBytes) else {
@@ -160,7 +160,7 @@ final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable
         completionHandler(.allow)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
         // Checked BEFORE appending: one large callback must not allocate past the cap.
         let tooBig = buffer.count + data.count > maxBytes
@@ -170,15 +170,15 @@ final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable
     }
 
     /// Redirects are never followed.
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+    func urlSession(_: URLSession, task: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse,
+                    newRequest _: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
         fail(task)
     }
 
     /// Server trust is evaluated by the system; any other challenge (HTTP
     /// authentication) is cancelled, never answered.
-    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+    func urlSession(_: URLSession, task _: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         if challenge.protectionSpace.authenticationMethod == "NSURLAuthenticationMethodServerTrust" {
             completionHandler(.performDefaultHandling, nil)
@@ -187,7 +187,7 @@ final class FetchDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
         let ok = error == nil && !failed
         let data = buffer

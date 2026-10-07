@@ -201,18 +201,27 @@ public struct TransactionDataMember: Codable, Sendable {
     public var entries: [TransactionData]?
     /// The member was present and `null`.
     public var isExplicitNull: Bool
+    /// The member was present but not an array of well-formed entries (a
+    /// scalar, an object, an entry without `type`, ...). It must be REFUSED,
+    /// never read as absent, and decoding must not throw: a request that failed
+    /// to decode is dropped silently by the transport and the verifier would
+    /// get no answer at all.
+    public var isMalformed: Bool
 
-    public init(entries: [TransactionData]? = nil, isExplicitNull: Bool = false) {
+    public init(entries: [TransactionData]? = nil, isExplicitNull: Bool = false, isMalformed: Bool = false) {
         self.entries = entries
         self.isExplicitNull = isExplicitNull
+        self.isMalformed = isMalformed
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() {
             self.init(entries: nil, isExplicitNull: true)
+        } else if let entries = try? c.decode([TransactionData].self) {
+            self.init(entries: entries)
         } else {
-            self.init(entries: try c.decode([TransactionData].self), isExplicitNull: false)
+            self.init(entries: nil, isMalformed: true)
         }
     }
 
@@ -222,13 +231,13 @@ public struct TransactionDataMember: Codable, Sendable {
     }
 
     /// Whether a request carrying this member asks for TS12 handling:
-    /// anything but absent or an empty array (an explicit null included).
-    public var requestsTransactionHandling: Bool { isExplicitNull || !(entries ?? []).isEmpty }
+    /// anything but absent or an empty array (explicit null and malformed included).
+    public var requestsTransactionHandling: Bool { isExplicitNull || isMalformed || !(entries ?? []).isEmpty }
 }
 
 extension KeyedDecodingContainer {
     /// An absent key decodes as an absent member rather than an error.
-    func decode(_ type: TransactionDataMember.Type, forKey key: Key) throws -> TransactionDataMember {
+    func decode(_: TransactionDataMember.Type, forKey key: Key) throws -> TransactionDataMember {
         guard contains(key) else { return TransactionDataMember() }
         return try TransactionDataMember(from: try superDecoder(forKey: key))
     }
@@ -237,7 +246,7 @@ extension KeyedDecodingContainer {
 extension KeyedEncodingContainer {
     /// An absent member is omitted, never written as `null`.
     mutating func encode(_ value: TransactionDataMember, forKey key: Key) throws {
-        guard value.entries != nil || value.isExplicitNull else { return }
+        guard value.entries != nil || value.isExplicitNull || value.isMalformed else { return }
         try encodeValue(value, forKey: key)
     }
 
