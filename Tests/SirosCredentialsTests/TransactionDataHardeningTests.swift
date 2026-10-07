@@ -131,7 +131,8 @@ final class TransactionDataHardeningTests: XCTestCase {
         func outcome(_ instance: String, _ schema: String) throws -> JSONSchemaValidator.Outcome {
             JSONSchemaValidator().validate(try StrictJSON.parse(instance), against: try StrictJSON.parse(schema))
         }
-        guard case .unsupported = try outcome("1", #"{"$id":"https://evil.example/s","$ref":"ts12-urn-eudi-sca-payment-1-data-model.json"}"#) else { return XCTFail("$id changes reference resolution") }
+        guard case .unsupported = try outcome("1", #"{"$id":"https://evil.example/s","type":"integer"}"#) else { return XCTFail("$id changes reference resolution") }
+        XCTAssertEqual(try outcome("1", #"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"integer"}"#), .valid, "$schema stays an annotation")
         for bad in [#"{"minLength":"x"}"#, #"{"maxItems":-1}"#, #"{"required":"a"}"#, #"{"properties":[1]}"#, #"{"enum":"a"}"#, #"{"minimum":"1"}"#,
                     #"{"type":5}"#, #"{"anyOf":{}}"#, #"{"pattern":5}"#] {
             guard case .unsupported = try outcome("1", bad) else { return XCTFail("\(bad) must be refused even for a number") }
