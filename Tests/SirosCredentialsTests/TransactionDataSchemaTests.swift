@@ -107,6 +107,14 @@ final class JSONSchemaValidatorTests: XCTestCase {
         guard case .invalid = try check("9007199254740993", #"{"enum":[9007199254740992]}"#) else { return XCTFail("exact enum") }
     }
 
+    /// An undecidable integer/bound check is refused, and a `not` cannot turn it into acceptance.
+    func testUndecidableNumberChecksAreUnsupportedNotInvalid() throws {
+        let big = "1234567890123456789012345678901234567890"
+        for schema in [#"{"type":"integer"}"#, #"{"not":{"type":"integer"}}"#, #"{"not":{"maximum":1234567890123456789012345678901234567891}}"#, #"{"maximum":1234567890123456789012345678901234567891}"#] {
+            guard case .unsupported = try check(big, schema) else { return XCTFail("\(schema) must be unsupported") }
+        }
+    }
+
     func testEnumConstAndCombinators() throws {
         XCTAssertEqual(try check(#""A""#, #"{"enum":["A","B"]}"#), .valid)
         guard case .invalid = try check(#""C""#, #"{"enum":["A","B"]}"#) else { return XCTFail() }

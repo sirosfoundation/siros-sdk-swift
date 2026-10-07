@@ -166,6 +166,10 @@ public struct JSONSchemaValidator: Sendable {
         let known: Set<String> = ["null", "boolean", "object", "array", "number", "integer", "string"]
         guard names.allSatisfy(known.contains) else { return .unsupported("unknown type name") }
         if names.contains(where: { matches(instance, $0) }) { return .valid }
+        // Undecidable is not a mismatch: `not` would turn a false into acceptance.
+        if names.contains("integer"), instance.isNumber, instance.integrality == nil {
+            return .unsupported("integrality of the number cannot be decided exactly")
+        }
         return .invalid(path: path, reason: "expected type \(names.joined(separator: " or "))")
     }
 
@@ -213,7 +217,7 @@ public struct JSONSchemaValidator: Sendable {
             guard let limit = kw[key] else { continue }
             guard limit.isNumber else { return .unsupported("\(key) must be a number") }
             // Not comparable exactly: fail closed rather than let it through.
-            guard let order = JSONValue.compareNumbers(instance, limit) else { return .invalid(path: path, reason: "cannot be compared with \(key)") }
+            guard let order = JSONValue.compareNumbers(instance, limit) else { return .unsupported("cannot be compared exactly with \(key)") }
             if violated(order) { return .invalid(path: path, reason: "violates \(key)") }
         }
         return .valid
