@@ -386,8 +386,12 @@ extension SirosWallet {
             return ScaPlan(plan: plan, kids: kids)
         } catch let error as TransactionDataError {
             // The service logs what it refused itself; only what failed before it ran is logged here.
-            if !error.alreadyLogged { await logPreparatoryRefusal(error, rawEntries: entries.map(\.raw), verifier: verifier) }
-            throw error
+            guard !error.alreadyLogged else { throw error }
+            await logPreparatoryRefusal(error, rawEntries: entries.map(\.raw), verifier: verifier)
+            // One refusal record per request: the caller must not log what was just recorded.
+            var logged = error
+            logged.alreadyLogged = true
+            throw logged
         }
     }
 
