@@ -459,6 +459,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
             throw KeystoreError.keyNotFound("Credential's cnf does not resolve to a usable holder-key binding")
         }
         let key = try await resolveSigningKey(keys, kid: effectiveKid)
+        // The factors in the binding were established for the key the CALLER named. The credential's
+        // `cnf` decides which key signs, so if they differ the claim would describe a different key
+        // than the one that signs: refuse rather than assert possession of the wrong one.
+        if transactionData != nil, key.keyId != kid {
+            throw KeystoreError.invalidParameter("the key the credential is bound to is not the key the authentication factors were established for")
+        }
 
         // Split SD-JWT: IssuerJWT~disclosure1~disclosure2~...~
         let parts = credential.split(separator: "~", omittingEmptySubsequences: false).map(String.init)

@@ -612,14 +612,53 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let mine = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
         let other = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
         f.wallet.lock.lock()
-        f.wallet.transactionTasks[UUID()] = (flowId: "ended", task: mine)
-        f.wallet.transactionTasks[UUID()] = (flowId: "running", task: other)
+        f.wallet.transactionTasks[UUID()] = (flowId: "ended", cancel: { mine.cancel() })
+        f.wallet.transactionTasks[UUID()] = (flowId: "running", cancel: { other.cancel() })
         f.wallet.lock.unlock()
         let json = #"{"type":"flow_error","flow_id":"ended","error":{"code":"X","message":"m"}}"#
         f.wallet.handleFlowError(msg: try JSONDecoder().decode(FlowErrorMessage.self, from: Data(json.utf8)))
         XCTAssertTrue(mine.isCancelled)
         XCTAssertFalse(other.isCancelled)
         other.cancel()
+    }
+
+    /// A completed flow takes its waiting task with it too (the consented record is shielded, see `shielded`).
+    func testFlowCompleteCancelsThatFlowsTrackedTask() async throws {
+        let f = try await fixture()
+        let mine = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
+        f.wallet.lock.lock(); f.wallet.transactionTasks[UUID()] = (flowId: "done", cancel: { mine.cancel() }); f.wallet.lock.unlock()
+        await f.wallet.handleFlowComplete(msg: try JSONDecoder().decode(FlowCompleteMessage.self, from: Data(#"{"type":"flow_complete","flow_id":"done"}"#.utf8)))
+        XCTAssertTrue(mine.isCancelled)
+    }
+
+    /// A WMP transaction runs as a tracked task: cancelling the flow cancels the work, whose result is then a cancellation.
+    func testATrackedTransactionIsCancelledWithItsFlow() async throws {
+        let f = try await fixture()
+        let running = Task { () -> String in
+            try await f.wallet.trackedTransaction(flowId: "w") { try await Task.sleep(nanoseconds: 60_000_000_000); return "finished" }
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        f.wallet.cancelTransactionTasks(flowId: "w")
+        do { _ = try await running.value; XCTFail("expected cancellation") } catch is CancellationError {} catch { XCTFail("\(error)") }
+        f.wallet.lock.lock(); let left = f.wallet.transactionTasks.count; f.wallet.lock.unlock()
+        XCTAssertEqual(left, 0, "unregistered once finished")
+    }
+
+    /// Overlapping persists run one at a time, in order.
+    func testTheKeystorePersistMutexSerializes() async throws {
+        let mutex = AsyncMutex()
+        final class Probe: @unchecked Sendable {
+            let l = NSLock(); var active = 0; var maxActive = 0
+            func enter() { l.lock(); active += 1; maxActive = max(maxActive, active); l.unlock() }
+            func leave() { l.lock(); active -= 1; l.unlock() }
+        }
+        let probe = Probe()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask { await mutex.withLock { probe.enter(); try? await Task.sleep(nanoseconds: 5_000_000); probe.leave() } }
+            }
+        }
+        XCTAssertEqual(probe.maxActive, 1)
     }
 
     func testStaleStartRecordsAreDropped() async throws {
@@ -656,7 +695,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
     func testTeardownCancelsConsentFlowsInProgress() async throws {
         let f = try await fixture()
         let task = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
-        f.wallet.lock.lock(); f.wallet.transactionTasks[UUID()] = (flowId: "f", task: task); f.wallet.lock.unlock()
+        f.wallet.lock.lock(); f.wallet.transactionTasks[UUID()] = (flowId: "f", cancel: { task.cancel() }); f.wallet.lock.unlock()
         f.wallet.cancelEngineTasks()
         XCTAssertTrue(task.isCancelled)
         f.wallet.lock.lock(); let remaining = f.wallet.transactionTasks.count; f.wallet.lock.unlock()
