@@ -480,7 +480,9 @@ extension JSONValue {
         switch any {
         case .string(let s): self = .string(s)
         case .int(let i): self = .int(Int64(i))
-        case .double(let d): self = .double(d)
+        // The hint's number is kept as its shortest decimal text, never compared through
+        // binary floating point: `0.1` and `0.10000000000000001` are different numbers.
+        case .double(let d): self = .decimal("\(d)")
         case .bool(let b): self = .bool(b)
         case .object_(let o): self = .object(o.mapValues(JSONValue.init))
         case .array(let a): self = .array(a.map(JSONValue.init))

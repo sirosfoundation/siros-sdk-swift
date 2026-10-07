@@ -29,7 +29,7 @@ public struct JSONSchemaValidator: Sendable {
     public typealias RefResolver = @Sendable (String) -> JSONValue?
 
     private static let annotationKeywords: Set<String> = [
-        "$schema", "$id", "$comment", "title", "description", "examples", "default",
+        "$schema", "$comment", "title", "description", "examples", "default",
         "format", "$defs", "definitions", "deprecated", "readOnly", "writeOnly",
     ]
     private static let maxDepth = 64
@@ -78,6 +78,7 @@ public struct JSONSchemaValidator: Sendable {
         for key in kw.keys where !known.contains(key) && !Self.annotationKeywords.contains(key) {
             return .unsupported("unsupported schema keyword '\(key)'")
         }
+        if let problem = Self.keywordShapeProblem(kw) { return .unsupported(problem) }
         var result: Outcome = .valid
         func check(_ outcome: Outcome) -> Bool {
             if outcome != .valid { result = outcome; return false }
@@ -93,12 +94,16 @@ public struct JSONSchemaValidator: Sendable {
         }
         if let e = kw["enum"] {
             guard let options = e.arrayValue else { return .unsupported("enum must be an array") }
-            if !options.contains(where: { $0.jsonEquals(instance) }) {
+            let results = options.map { $0.equality(instance) }
+            if !results.contains(true) {
+                // Undecidable comparisons must not read as "different" (a `not` would invert them).
+                if results.contains(where: { $0 == nil }) { return .unsupported("cannot compare exactly") }
                 return .invalid(path: path, reason: "not one of the allowed values")
             }
         }
-        if let c = kw["const"], !c.jsonEquals(instance) {
-            return .invalid(path: path, reason: "does not equal the required constant")
+        if let c = kw["const"] {
+            guard let same = c.equality(instance) else { return .unsupported("cannot compare exactly") }
+            if !same { return .invalid(path: path, reason: "does not equal the required constant") }
         }
         guard check(checkString(instance, kw, path: path)) else { return result }
         guard check(checkNumber(instance, kw, path: path)) else { return result }
@@ -106,6 +111,31 @@ public struct JSONSchemaValidator: Sendable {
         guard check(checkArray(instance, kw, root: root, path: path, depth: depth, budget: budget)) else { return result }
         guard check(checkCombinators(instance, kw, root: root, path: path, depth: depth, budget: budget)) else { return result }
         return .valid
+    }
+
+    /// Known keywords must have the shape the specification gives them, whatever
+    /// the instance is: a malformed assertion must not pass just because this
+    /// instance is of another type.
+    static func keywordShapeProblem(_ kw: [String: JSONValue]) -> String? {
+        for key in ["minLength", "maxLength", "minItems", "maxItems"] {
+            guard let v = kw[key] else { continue }
+            guard case .int(let n) = v, n >= 0 else { return "\(key) must be a non-negative integer" }
+        }
+        for key in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"] {
+            if let v = kw[key], !v.isNumber { return "\(key) must be a number" }
+        }
+        if let v = kw["pattern"], v.stringValue == nil { return "pattern must be a string" }
+        if let v = kw["required"], v.arrayValue?.allSatisfy({ $0.stringValue != nil }) != true { return "required must be an array of strings" }
+        if let v = kw["properties"], v.objectValue == nil { return "properties must be an object" }
+        if let v = kw["enum"], v.arrayValue == nil { return "enum must be an array" }
+        for key in ["allOf", "anyOf", "oneOf"] {
+            if let v = kw[key], v.arrayValue == nil { return "\(key) must be an array" }
+        }
+        if let v = kw["type"] {
+            let ok = v.stringValue != nil || v.arrayValue?.allSatisfy { $0.stringValue != nil } == true
+            if !ok { return "type must be a string or array of strings" }
+        }
+        return nil
     }
 
     private func resolve(_ ref: JSONValue, root: JSONValue) -> (schema: JSONValue, root: JSONValue)? {
@@ -165,7 +195,8 @@ public struct JSONSchemaValidator: Sendable {
                 return .unsupported("pattern is not a usable, bounded regular expression")
             }
             // A bounded input too: matching cost grows with the string.
-            guard s.utf8.count <= RegexSafety.maxInputBytes else { return .invalid(path: path, reason: "too long to match a pattern") }
+            // Not evaluated: undecided, so the schema is refused (an `.invalid` here would be inverted by `not`).
+            guard s.utf8.count <= RegexSafety.maxInputBytes else { return .unsupported("string too long to match a pattern") }
             let range = NSRange(s.startIndex..., in: s)
             if regex.firstMatch(in: s, range: range) == nil { return .invalid(path: path, reason: "does not match pattern") }
         }
@@ -281,88 +312,80 @@ public struct JSONSchemaValidator: Sendable {
     }
 }
 
-/// A conservative gate on schema `pattern`s, which come from an issuer-controlled
-/// document and run on the wallet. `NSRegularExpression` has no time limit, so
-/// patterns that can backtrack catastrophically are refused rather than run:
-/// a quantified group whose body itself contains a quantifier or an
-/// alternation (`(a+)+`, `(a|aa)*`), back-references, lookaround, and
-/// over-long patterns. Plain classes, anchors and bounded repeats pass.
+/// A deliberately small, provably bounded subset of regular expressions for
+/// schema `pattern`s, which come from an issuer-controlled document and run on
+/// the wallet. `NSRegularExpression` has no time limit, so anything that can
+/// backtrack badly is refused rather than run. Allowed: literals, escapes,
+/// character classes, anchors and plain (capturing or `(?:`) groups that are
+/// NOT quantified, with at most ONE unbounded quantifier (`+`, `*`, `{n,}`)
+/// and at most six quantifiers in all. Refused: alternation, a quantified
+/// group (`(a?){30}`, `(a+)+`), several unbounded repeats (`a*a*a*b`), too many
+/// optional or repeated atoms (`a?a?a?...`), back-references, lookaround, and
+/// over-long patterns. `^[A-Z]{3}$`, `^[a-z0-9._-]+$` and `^\d{4}-\d{2}$` pass.
 enum RegexSafety {
     static let maxPatternLength = 256
     static let maxGroups = 8
+    static let maxQuantifiers = 6
     static let maxInputBytes = 4096
 
     static func isSafe(_ pattern: String) -> Bool {
         guard pattern.utf8.count <= maxPatternLength else { return false }
-        let chars = Array(pattern)
-        // Back-references and lookaround are refused outright.
         if pattern.contains("(?=") || pattern.contains("(?!") || pattern.contains("(?<=") || pattern.contains("(?<!") { return false }
-        // Alternation is refused outright: ambiguous alternatives repeated in
-        // sequence (`(aa|aaaa)` twenty times) backtrack exponentially without
-        // any quantifier on the group, so no local test can be trusted.
-        var scanEscaped = false
-        var scanClass = false
-        var groups = 0
-        for c in chars {
-            if scanEscaped { scanEscaped = false; continue }
-            if c == "\\" { scanEscaped = true; continue }
-            if scanClass { if c == "]" { scanClass = false }; continue }
-            if c == "[" { scanClass = true; continue }
-            if c == "|" { return false }
-            if c == "(" { groups += 1 }
-        }
-        guard groups <= maxGroups else { return false }
+        let chars = Array(pattern)
         var i = 0
-        var stack: [Int] = []          // start indices of open groups
-        var escaped = false
         var inClass = false
-        func isQuantifier(at index: Int) -> Bool {
-            guard index < chars.count else { return false }
-            switch chars[index] {
-            case "+", "*": return true
-            case "{":
-                // {n,} or {n,m} with m > 1 repeats; {n} / {0,1} is bounded and harmless.
-                guard let close = chars[index...].firstIndex(of: "}") else { return false }
-                let body = String(chars[(index + 1)..<close])
-                if body.contains(",") {
-                    let upper = body.split(separator: ",", omittingEmptySubsequences: false).last.map(String.init) ?? ""
-                    return upper.isEmpty || (Int(upper) ?? 2) > 1
-                }
-                return (Int(body) ?? 2) > 1
-            default: return false
-            }
-        }
+        var openGroups = 0
+        var groups = 0
+        var quantifiers = 0
+        var unbounded = 0
+        var lastWasGroupClose = false
         while i < chars.count {
             let c = chars[i]
-            if escaped {
-                if c.isNumber && c != "0" { return false }   // back-reference
-                escaped = false
-            } else if c == "\\" {
-                escaped = true
-            } else if inClass {
-                if c == "]" { inClass = false }
-            } else if c == "[" {
-                inClass = true
-            } else if c == "(" {
-                stack.append(i)
-            } else if c == ")" {
-                guard let start = stack.popLast() else { return false }
-                if isQuantifier(at: i + 1) {
-                    let body = chars[(start + 1)..<i]
-                    var bodyEscaped = false
-                    var bodyInClass = false
-                    for (offset, b) in body.enumerated() {
-                        let position = start + 1 + offset
-                        if bodyEscaped { bodyEscaped = false; continue }
-                        if b == "\\" { bodyEscaped = true; continue }
-                        if bodyInClass { if b == "]" { bodyInClass = false }; continue }
-                        if b == "[" { bodyInClass = true; continue }
-                        if b == "|" || b == "(" || isQuantifier(at: position) { return false }
-                    }
-                }
+            var quantified = false
+            if c == "\\" {
+                guard i + 1 < chars.count else { return false }
+                if chars[i + 1].isNumber && chars[i + 1] != "0" { return false }   // back-reference
+                i += 2
+                lastWasGroupClose = false
+                continue
             }
+            if inClass {
+                if c == "]" { inClass = false }
+                i += 1
+                continue
+            }
+            switch c {
+            case "[": inClass = true
+            case "|": return false
+            case "(": openGroups += 1; groups += 1
+            case ")":
+                guard openGroups > 0 else { return false }
+                openGroups -= 1
+            case "+", "*": quantified = true; quantifiers += 1; unbounded += 1
+            case "?":
+                // `(?:` introduces a non-capturing group; a `?` after an atom is optional; `+?` / `*?` are lazy forms.
+                let previous = i > 0 ? chars[i - 1] : " "
+                if previous == "(" || previous == "+" || previous == "*" || previous == "?" { break }
+                quantified = true
+                quantifiers += 1
+            case "{":
+                guard let close = chars[i...].firstIndex(of: "}") else { return false }
+                let body = String(chars[(i + 1)..<close])
+                let parts = body.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+                guard parts.count <= 2, let low = Int(parts[0]), low <= 64 else { return false }
+                if parts.count == 2 {
+                    if parts[1].isEmpty { unbounded += 1 }
+                    else { guard let high = Int(parts[1]), high <= 64, high >= low else { return false } }
+                }
+                quantified = true
+                quantifiers += 1
+                i = close
+            default: break
+            }
+            if quantified && lastWasGroupClose { return false }
+            lastWasGroupClose = c == ")"
             i += 1
         }
-        return stack.isEmpty
+        return openGroups == 0 && !inClass && groups <= maxGroups && quantifiers <= maxQuantifiers && unbounded <= 1
     }
 }

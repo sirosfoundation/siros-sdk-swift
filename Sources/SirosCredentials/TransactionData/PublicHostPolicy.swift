@@ -85,23 +85,26 @@ public enum PublicHostPolicy {
         }
     }
 
+    /// IPv6: only global unicast (2000::/3) is public, minus the special-purpose
+    /// ranges inside it; everything else (loopback, unique-local, link-local,
+    /// multicast, the unspecified address, discard 100::/64, local-use NAT64
+    /// 64:ff9b:1::/48, ORCHID, ...) is refused. Embedded IPv4 (mapped, NAT64,
+    /// 6to4) is checked as IPv4.
     private static func isPublicV6(_ b: [UInt8]) -> Bool {
-        if b.allSatisfy({ $0 == 0 }) { return false }                              // ::
-        if b[0..<15].allSatisfy({ $0 == 0 }) && b[15] == 1 { return false }        // ::1
         if b[0..<10].allSatisfy({ $0 == 0 }) && b[10] == 0xff && b[11] == 0xff {   // ::ffff:a.b.c.d
             return isPublicV4(Array(b[12..<16]))
         }
-        if b[0..<12].allSatisfy({ $0 == 0 }) { return false }                      // deprecated IPv4-compatible
-        if b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b {          // 64:ff9b::/96 NAT64
+        if b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b[4..<12].allSatisfy({ $0 == 0 }) {   // 64:ff9b::/96
             return isPublicV4(Array(b[12..<16]))
         }
-        if (b[0] & 0xfe) == 0xfc { return false }                                  // fc00::/7
-        if b[0] == 0xfe && (b[1] & 0xc0) == 0x80 { return false }                  // fe80::/10
-        if b[0] == 0xfe && (b[1] & 0xc0) == 0xc0 { return false }                  // fec0::/10 (site-local)
-        if b[0] == 0xff { return false }                                           // multicast
-        if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8 { return false } // documentation
-        if b[0] == 0x20 && b[1] == 0x02 { return isPublicV4(Array(b[2..<6])) }     // 6to4
-        if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00 { return isPublicV4(Array(b[12..<16].map { $0 ^ 0xff })) } // Teredo
+        if b[0] == 0x20 && b[1] == 0x02 { return isPublicV4(Array(b[2..<6])) }     // 2002::/16 (6to4)
+        guard (b[0] & 0xe0) == 0x20 else { return false }                           // not 2000::/3
+        // Special-purpose ranges inside 2000::/3.
+        if b[0] == 0x20 && b[1] == 0x01 && b[2] <= 0x01 { return false }            // 2001::/23 (Teredo, ORCHID, benchmarking, ...)
+        if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8 { return false } // 2001:db8::/32 documentation
+        if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x02 { return false } // 2001:2::/48
+        if b[0] == 0x3f && (b[1] & 0xf0) == 0xf0 { return false }                  // 3fff::/20 documentation
+        if b[0] == 0x26 && b[1] == 0x20 && b[2] == 0x00 && b[3] == 0x4f && b[4] == 0x80 && b[5] == 0x00 { return false } // 2620:4f:8000::/48
         return true
     }
 

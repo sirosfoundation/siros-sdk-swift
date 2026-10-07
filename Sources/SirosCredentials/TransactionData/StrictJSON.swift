@@ -105,18 +105,41 @@ public enum JSONValue: Sendable, Equatable {
     }
 
     /// Equality in the JSON data model: `1` equals `1.0`, exactly.
+    /// An undecidable comparison (a number too long to compare exactly) is not equal.
     public func jsonEquals(_ other: JSONValue) -> Bool {
+        equality(other) == true
+    }
+
+    /// Three-valued equality: `nil` when it cannot be decided exactly (a
+    /// number beyond `Decimal`'s precision somewhere inside). A caller that
+    /// negates the answer (`not`) must treat `nil` as a refusal, never as "different".
+    public func equality(_ other: JSONValue) -> Bool? {
         switch (self, other) {
         case (.null, .null): return true
         case (.bool(let a), .bool(let b)): return a == b
         case (.string(let a), .string(let b)): return a == b
         case (.array(let a), .array(let b)):
-            return a.count == b.count && zip(a, b).allSatisfy { $0.jsonEquals($1) }
+            guard a.count == b.count else { return false }
+            return JSONValue.all(zip(a, b).map { $0.equality($1) })
         case (.object(let a), .object(let b)):
-            return a.count == b.count && a.allSatisfy { k, v in b[k].map { v.jsonEquals($0) } ?? false }
+            guard a.count == b.count else { return false }
+            var results: [Bool?] = []
+            for (key, value) in a {
+                guard let counterpart = b[key] else { return false }
+                results.append(value.equality(counterpart))
+            }
+            return JSONValue.all(results)
         default:
-            return JSONValue.compareNumbers(self, other) == .orderedSame
+            guard isNumber, other.isNumber else { return false }
+            guard let order = JSONValue.compareNumbers(self, other) else { return nil }
+            return order == .orderedSame
         }
+    }
+
+    /// `false` if any is definitely false, else `nil` if any is undecided, else `true`.
+    private static func all(_ results: [Bool?]) -> Bool? {
+        if results.contains(false) { return false }
+        return results.contains(where: { $0 == nil }) ? nil : true
     }
 }
 
