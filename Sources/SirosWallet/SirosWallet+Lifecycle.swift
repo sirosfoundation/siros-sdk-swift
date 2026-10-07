@@ -320,14 +320,14 @@ extension SirosWallet {
     // cross-file-extension-access reason as `keystore` above.
     func syncPrivateDataToBackend() async throws {
         lock.lock(); let client = apiClient; lock.unlock()
-        try await syncPrivateDataToBackend(using: client)
+        try await syncPrivateDataToBackend(using: client, containerJson: sessionStore.privateDataJwe)
     }
 
     /// Syncs through `client`, captured by the caller when its operation STARTED, so a logout and a
     /// new login in between can never make this write through the next account's client.
-    func syncPrivateDataToBackend(using client: BackendApiClient?) async throws {
+    func syncPrivateDataToBackend(using client: BackendApiClient?, containerJson: String?) async throws {
         guard let client else { return }
-        guard let containerJson = sessionStore.privateDataJwe else { return }
+        guard let containerJson else { return }
         do {
             // Parse the JSON string back to a dict and send
             if let data = containerJson.data(using: .utf8),
@@ -375,11 +375,15 @@ extension SirosWallet {
             lock.unlock()
             guard sameAccount, keystore.isUnlocked else { throw TransactionLogError("the account changed before the container was exported") }
             let container = try await keystore.exportEncryptedContainer()
-            guard currentAccountGeneration() == generation, keystore.isUnlocked else {
-                throw TransactionLogError("the account changed while the container was being exported")
-            }
-            sessionStore.privateDataJwe = String(data: container, encoding: .utf8)
-            try await syncPrivateDataToBackend(using: client)
+            // The check and the assignment are one step under the wallet lock, which a logout's generation
+            // bump also takes; and the sync is handed THIS container rather than re-reading the store.
+            let json = String(data: container, encoding: .utf8)
+            lock.lock()
+            let stillSame = transactionLogGeneration == generation && keystore.isUnlocked
+            if stillSame { sessionStore.privateDataJwe = json }
+            lock.unlock()
+            guard stillSame else { throw TransactionLogError("the account changed while the container was being exported") }
+            try await syncPrivateDataToBackend(using: client, containerJson: json)
         }
     }
 
