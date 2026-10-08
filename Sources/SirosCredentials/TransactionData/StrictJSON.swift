@@ -296,8 +296,10 @@ public enum StrictJSON {
                     throw fail("bad escape")
                 }
             }
-            guard let s = String(bytes: out, encoding: .utf8) else { throw fail("invalid UTF-8 in string") }
-            return s
+            // Validate with Foundation, but keep the text as written: Foundation
+            // silently drops a leading U+FEFF, which would hide a format character.
+            guard String(bytes: out, encoding: .utf8) != nil else { throw fail("invalid UTF-8 in string") }
+            return String(decoding: out, as: UTF8.self)
         }
 
         mutating func parseNumber() throws -> JSONValue {

@@ -60,10 +60,25 @@ public final class SirosWallet: @unchecked Sendable {
     var _state: WalletState = .disconnected()
     var stateContinuations: [String: AsyncStream<WalletState>.Continuation] = [:]
 
-    // EC TS12 payment SCA (`transaction_data`): state here, behaviour in
-    // `SirosWallet+TransactionDataFlag.swift`.
+    // EC TS12 payment SCA (`transaction_data`): state here, behaviour in `SirosWallet+TransactionData*.swift`.
     var transactionDataEnabledValue: Bool
-    var transactionConsentHandlerRegistered: Bool = false
+    var transactionConsentHandlerStorage: (any TransactionConsentHandler)?
+    var transactionLogStoreStorage: (any TransactionLogStore)?
+    var authenticationFactorsProviderStorage: any AuthenticationFactorsProvider = InterimAuthenticationFactorsProvider()
+    // Enablement records per flow / WMP session, consent flows in progress, log-store bookkeeping.
+    var legacyFlowSnapshotQueue: [(effective: Bool, at: Date)] = []
+    var legacyFlowSnapshots: [String: Bool] = [:]
+    var wmpSessionSnapshot = false
+    var transactionTasks: [UUID: (flowId: String, cancel: @Sendable () -> Void)] = [:]
+    var transactionLogStoreIsDefault = false
+    var transactionLogGeneration = 0
+    var transactionTaskEpoch = 0
+    let keystorePersistMutex = AsyncMutex()
+    var transactionDataLocaleStorage: String = Locale.preferredLanguages.first ?? "en"
+    var transactionDataConsentTimeout: TimeInterval = TransactionDataService.defaultConsentTimeout
+    // Test hooks: how referenced documents and type metadata are fetched.
+    var transactionResourceGet: @Sendable (URL, Int) async -> Data? = SirosWallet.secureResourceGet
+    lazy var transactionMetadataFetch: @Sendable (String, String?, Int) async -> String? = { [weak self] v, p, l in await self?.fetchTypeMetadata(vct: v, expectedIntegrity: p, maxBytes: l) }
 
     /// Current wallet state (thread-safe read).
     public var state: WalletState {
@@ -423,6 +438,11 @@ public final class SirosWallet: @unchecked Sendable {
     // `vct#integrity` can be driven without the network. Assigned only in
     // `init` otherwise.
     var vctmFetcher: VctmFetcher
+    /// The shared, authenticated type-metadata HTTP GET (see
+    /// `makeTypeMetadataHttpGet`). NOT used for anything an SCA attestation's
+    /// metadata references: those documents go through `transactionResourceGet`,
+    /// which carries no credentials.
+    let typeMetadataHttpGet: @Sendable (String) async -> String?
     let mddlSchemaFetcher: MddlSchemaFetcher
     // Not `private`: `SirosWallet+Passkey.swift` reads it for the login PRF
     // candidates - same cross-file-extension-access reason as `keystore`.
@@ -844,6 +864,7 @@ public final class SirosWallet: @unchecked Sendable {
             sessionStore: sessionStore
         )
         self.vctmFetcher = VctmFetcher(httpGet: typeMetadataGet)
+        self.typeMetadataHttpGet = typeMetadataGet
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
         #if os(iOS)
@@ -1300,6 +1321,7 @@ public final class SirosWallet: @unchecked Sendable {
         cancelEngineTasks()
         releaseZkProvers()
         keystore.lock()
+        resetDefaultTransactionLogStore()
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil
         authTokens?.clear()
@@ -1415,84 +1437,4 @@ public final class SirosWallet: @unchecked Sendable {
             setState(.error(message: error.localizedDescription))
         }
     }
-
-    // MARK: - Credentials
-
-    /// Get credentials, optionally including expired.
-    public func getCredentials(includeExpired: Bool = false) async -> [StoredCredential] {
-        let all = await credentialStore.getAll()
-        if includeExpired { return all }
-        let now = Int64(Date().timeIntervalSince1970)
-        return all.filter { $0.expiresAt == nil || $0.expiresAt! > now }
-    }
-
-    /// Delete a credential by ID and sync to backend.
-    public func deleteCredential(_ credentialId: Int64) async {
-        let deletedBatchId = await credentialStore.getAll().first { $0.id == credentialId }?.batchId
-        await credentialStore.delete(credentialId)
-        // A deleted id can be reused (review finding) - an unrelated
-        // credential later assigned this same id must not read back the
-        // deleted one's cached status.
-        credentialStatusCache.remove(credentialId)
-        // If that was the last instance of its batch, its refresh_token
-        // entry (if any) is now orphaned - privatedata-spec §6.2 requires
-        // it not linger pointing at a batch that no longer exists.
-        if let batchId = deletedBatchId {
-            let remaining = await credentialStore.getAll()
-            if !remaining.contains(where: { $0.batchId == batchId }) {
-                await removeCredentialRefreshToken(batchId: batchId)
-            }
-        }
-        if case .ready(let userId, let displayName, _, _) = state {
-            let creds = await credentialStore.getAll()
-            setState(.ready(userId: userId, displayName: displayName, credentials: creds))
-        }
-        await persistAndSyncKeystore()
-    }
-
-    /// Sign an mDoc DeviceResponse for an ISO 18013-5 proximity (BLE)
-    /// presentation - the local, engine-free counterpart to the redirect/
-    /// DC-API presentation paths (`handleSignRequest`/wallet-managed-protocol
-    /// sign handling above), since proximity presentation has no
-    /// wallet-backend/engine round trip at all: the reader IS the
-    /// counterpart, connected directly over BLE.
-    ///
-    /// - Parameters:
-    ///   - credentialId: the `StoredCredential.id` of the mdoc credential to present.
-    ///   - disclosedClaims: element identifiers to disclose (see `DeviceRequestParser.DocRequest.disclosedClaims`).
-    ///   - sessionTranscriptBytes: the proximity `SessionTranscript` bytes, from `ProximitySessionTranscript.build`.
-    /// - Returns: CBOR-encoded DeviceResponse bytes.
-    public func signMdocPresentationForProximity(
-        credentialId: Int64,
-        disclosedClaims: [String]?,
-        sessionTranscriptBytes: Data
-    ) async throws -> Data {
-        guard let credential = await credentialStore.getById(credentialId) else {
-            throw SirosError.wallet(message: "Credential not found: \(credentialId)")
-        }
-        let allInstances = await credentialStore.getAll().filter { $0.batchId == credential.batchId }
-        let eligible = eligibleInstances(from: allInstances)
-        guard eligible.contains(where: { $0.id == credentialId }) else {
-            throw SirosError.wallet(message: "No eligible copies of this credential remain - renew it to get more")
-        }
-        guard let credBytes = CredentialUtils.base64UrlDecode(credential.raw) else {
-            throw SirosError.wallet(message: "Credential \(credentialId) has malformed base64url raw data")
-        }
-        let response = try await keystore.signMdocPresentationForProximity(
-            credentialBytes: credBytes,
-            disclosedClaims: disclosedClaims,
-            sessionTranscriptBytes: sessionTranscriptBytes,
-            kid: credential.kid
-        )
-        await recordPresentation(PresentationRecord(
-            id: randomUint32Id(),
-            flowId: "proximity-\(UUID().uuidString)",
-            credentialIds: [credentialId],
-            credentialNames: [credential.metadata?.name].compactMap { $0 },
-            requestedClaims: disclosedClaims ?? [],
-            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
-        ))
-        return response
-    }
-
 }
