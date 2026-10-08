@@ -441,6 +441,13 @@ public final class SirosWallet: @unchecked Sendable {
     /// outcome as any other unregistered proof system.
     public let zkProofSystemRegistry: ZkProofSystemRegistry
 
+    #if os(iOS)
+    /// Retained here (not just handed to `zkProofSystemRegistry`'s systems'
+    /// initializers and otherwise forgotten) so `releaseZkProvers()` has
+    /// something to reach - see `ZkProverResidency`'s own doc comment.
+    let zkProverResidency: ZkProverResidency
+    #endif
+
     /// go-wallet-backend's credential-type registry service base URL, for
     /// `vctmFetcher`/`mddlSchemaFetcher`'s registry-service fetch strategy.
     /// Uses `config.registryUrl` when the integrator set one explicitly,
@@ -840,7 +847,20 @@ public final class SirosWallet: @unchecked Sendable {
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
         #if os(iOS)
-        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [LongfellowZkProofSystem(zkCircuitClient: self.zkCircuitClient)])
+        // One residency shared by every mdoc ZK proof system constructed
+        // here - see `ZkProverResidency`'s own doc comment for why.
+        //
+        // BbsProofSystem (SirosCredentials) is NOT registered here - unlike
+        // VegaProofSystem, it needs a holder-state store (BbsHolderStateVault)
+        // and a WalletConfig field naming its VCTs, neither of which exists
+        // yet. A real, pre-existing gap (predates Vega), not a side effect
+        // of adding it.
+        let zkProverResidency = ZkProverResidency()
+        self.zkProverResidency = zkProverResidency
+        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [
+            LongfellowZkProofSystem(zkCircuitClient: self.zkCircuitClient, residency: zkProverResidency),
+            VegaProofSystem(zkCircuitClient: self.zkCircuitClient, residency: zkProverResidency),
+        ])
         #else
         self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [])
         #endif
@@ -1278,6 +1298,7 @@ public final class SirosWallet: @unchecked Sendable {
         engine?.disconnect()
         if let peer { Task { try? await peer.close() } }
         cancelEngineTasks()
+        releaseZkProvers()
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = nil

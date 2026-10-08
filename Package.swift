@@ -43,6 +43,16 @@ let package = Package(
         // not the native crate's. facebook/zstd ships its own SPM manifest
         // (a plain C target, no Swift wrapper) exposing this as `libzstd`.
         .package(url: "https://github.com/facebook/zstd.git", from: "1.5.6"),
+        // VegaProofSystem's ECDSA witness needs a real modular inverse
+        // (s^-1 mod the P-256 curve order) - the same operation Kotlin's
+        // port does via java.math.BigInteger.modInverse, a trusted
+        // platform bignum facility rather than a hand-rolled one. Swift/
+        // CryptoKit has no arbitrary-precision integer type at all; this is
+        // the de facto standard pure-Swift BigInt (no dependencies of its
+        // own), for the same reason: use a well-tested library for this
+        // rather than hand-rolling extended-Euclidean-algorithm code in a
+        // cryptographic path.
+        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.3.0"),
     ],
     targets: [
         // --- zk-cred-longfellow UniFFI bindings (XCFramework) ---
@@ -83,6 +93,18 @@ let package = Package(
             checksum: "319c9b1979c42a3569ef9d413d013729f81dc39560f61a0471e19f38123c389c"
         ),
 
+        // --- zk-cred-vega UniFFI bindings (XCFramework) ---
+        // Built by `make xcframework` in the zk-cred-vega crate (Swift/iOS
+        // support added there as a prerequisite - sirosfoundation/zk-cred-vega#9,
+        // merged, released as v0.0.6). Same naming convention as the three
+        // above: crate name + "FFI", headers nested under zk_cred_vegaFFI/
+        // to avoid the same module.modulemap collision.
+        .binaryTarget(
+            name: "zk_cred_vegaFFI",
+            url: "https://github.com/sirosfoundation/zk-cred-vega/releases/download/v0.0.6/zk_cred_vega.xcframework.zip",
+            checksum: "f95cf6d304862e1b3ba7274bda654ed19d99ff3dd30d03cb97109863606779a0"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -112,6 +134,14 @@ let package = Package(
                 // match. On macOS CredentialMatcher keeps its own parsing
                 // path, which is what it used everywhere until now.
                 .target(name: "siros_dc_matcher_ffiFFI", condition: .when(platforms: [.iOS])),
+                // Same story, same gate: zk_cred_vegaFFI ships iOS slices
+                // only (zk-cred-vega's own halo2curves dependency can't
+                // cross-compile for the legacy x86_64 iOS simulator, so
+                // only aarch64 device + simulator slices exist at all -
+                // see that crate's Makefile), and VegaProofSystem.swift
+                // plus Generated/zk_cred_vega.swift are `#if os(iOS)` to
+                // match.
+                .target(name: "zk_cred_vegaFFI", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosCredentials"
         ),
@@ -176,10 +206,15 @@ let package = Package(
                 // is correspondingly wrapped in `#if os(iOS)`.
                 .target(name: "siros_wscd_managerFFI", condition: .when(platforms: [.iOS])),
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
-                // Only used by LongfellowZkProofSystem.swift, which is
-                // itself `#if os(iOS)`-gated (see that file) since the
-                // native zk_cred_longfellowFFI it wraps is iOS-only.
+                // Only used by LongfellowZkProofSystem.swift and
+                // VegaProofSystem.swift, both themselves `#if os(iOS)`-gated
+                // (see those files) since the native FFI they each wrap is
+                // iOS-only.
                 .product(name: "libzstd", package: "zstd", condition: .when(platforms: [.iOS])),
+                // Only used by VegaProofSystem.swift's ECDSA witness
+                // (a real modular inverse mod the P-256 curve order) -
+                // itself `#if os(iOS)`-gated, same reason as libzstd above.
+                .product(name: "BigInt", package: "BigInt", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosKeystore"
         ),
