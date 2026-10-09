@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`IDVError.chipPhotoMismatch` (`chip_photo_mismatch`, `errorCode`
+  `idv_chip_photo_mismatch`):** facetec-api now refuses a scan whose face does
+  not match the photo stored on the document's chip
+  (sirosfoundation/facetec-api#77). Until now the code would have reached the
+  app as `providerError`. Both `FaceTecIDVProvider` and `RemoteIDVClient` map
+  it, the same as siros-sdk-kotlin's `IDVException.ChipPhotoMismatch`. Adding a
+  case breaks exhaustive `switch`es over `IDVError`. The sample app has a
+  message for it in English and Swedish.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob
