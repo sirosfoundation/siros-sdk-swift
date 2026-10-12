@@ -164,6 +164,13 @@ final class VegaProofSystemTests: XCTestCase {
     /// accepts must NOT be rejected - the boundary test above only proves
     /// the first rejected value is actually rejected; this proves the fix
     /// didn't overshoot into rejecting legitimate values one below it.
+    ///
+    /// `issuerAuth: .null` (same fixture every other test here uses) is not
+    /// a real COSE_Sign1, so `buildWitness` still fails downstream in
+    /// `buildEcdsaWitness` - that failure is expected and not what this test
+    /// checks. The point is narrower: whatever error comes back must NOT be
+    /// the digestID range rejection, since this value is one below the
+    /// boundary this guard exists to enforce.
     func testBuildWitness_digestIdJustBelow2Pow31_succeeds() throws {
         var items = fourItemNamespace()
         items[0] = namespaceItem(digestId: (UInt64(1) << 31) - 1, elementIdentifier: "claim0")
@@ -171,7 +178,11 @@ final class VegaProofSystemTests: XCTestCase {
             docType: "org.iso.18013.5.1.mDL",
             issuerSigned: IssuerSignedMdoc(nameSpaces: ["org.iso.18013.5.1": items], issuerAuth: .null)
         )
-        _ = try VegaProofSystem.buildWitness(document: document, requestedClaims: [])
+        do {
+            _ = try VegaProofSystem.buildWitness(document: document, requestedClaims: [])
+        } catch MdocError.malformed(let reason) {
+            XCTAssertFalse(reason.contains("supported range"), "digestID one below the 2^31 boundary must not be rejected: \(reason)")
+        }
     }
 
     // MARK: - buildWitness: unknown requested claims
