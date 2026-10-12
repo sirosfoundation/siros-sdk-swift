@@ -1434,7 +1434,6 @@ public final class SirosWallet: @unchecked Sendable {
             let assertion = try await performPasskeyAssertion(
                 asClient: asClient, accountId: sessionStore.activeAccountId
             )
-            let prfOutput = assertion.prfOutput
             _ = try await asClient.loginFinish(
                 challengeId: assertion.challengeId,
                 credential: assertion.credential
@@ -1451,17 +1450,52 @@ public final class SirosWallet: @unchecked Sendable {
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")
             }
-            guard let hkdfSalt = sessionStore.hkdfSalt.flatMap({ Self.b64Decode($0) }) else {
-                throw SirosError.keystore(message: "Missing HKDF salt")
+            let storedContainer = Data(storedJwe.utf8)
+
+            let prfOutput: PrfOutput
+            let hkdfSalt: Data
+            let hkdfInfo: Data
+            var recoveredSalt: Data?
+            if let knownPrfOutput = assertion.prfOutput {
+                prfOutput = knownPrfOutput
+                guard let storedHkdfSalt = sessionStore.hkdfSalt.flatMap({ Self.b64Decode($0) }) else {
+                    throw SirosError.keystore(message: "Missing HKDF salt")
+                }
+                hkdfSalt = storedHkdfSalt
+                hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
+            } else {
+                // Same cache-miss condition as `login()` - see
+                // `PasskeyAssertion.prfOutput`'s doc comment - but `privateData`
+                // is already in hand here (this account was resumed from a
+                // prior session), so recovery needs no extra network round
+                // trip.
+                let recovered = try await recoverPrfFromPrivateData(
+                    credentialId: assertion.credentialId, privateData: storedContainer
+                )
+                prfOutput = recovered.prfOutput
+                hkdfSalt = recovered.hkdfSalt
+                hkdfInfo = recovered.hkdfInfo
+                recoveredSalt = recovered.prfSalt
             }
-            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
 
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
-                encryptedContainer: Data(storedJwe.utf8),
+                encryptedContainer: storedContainer,
                 hkdfSalt: hkdfSalt,
                 hkdfInfo: hkdfInfo
             )
+
+            if let recoveredSalt, let accountId = sessionStore.activeAccountId {
+                healAccountCache(
+                    accountId: accountId,
+                    userId: userId,
+                    displayName: displayName,
+                    credentialId: assertion.credentialId,
+                    prfSalt: recoveredSalt,
+                    hkdfSalt: hkdfSalt,
+                    hkdfInfo: hkdfInfo
+                )
+            }
 
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
