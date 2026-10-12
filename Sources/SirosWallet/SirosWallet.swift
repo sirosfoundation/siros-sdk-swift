@@ -400,22 +400,8 @@ public final class SirosWallet: @unchecked Sendable {
 
     let credentialStore: CredentialStore
 
-    /// Where a BBS credential's holder state (blinding factor, committed
-    /// messages, key-binding keys) lives - `nil` unless `keystore` conforms
-    /// to `ExtensionStore` (see `BbsHolderStateVault`'s own doc comment for
-    /// why that state belongs beside the credential rather than in it).
-    /// Constructed unconditionally (not gated on `config.bbsCredentialTypes`,
-    /// unlike `BbsProofSystem`'s own registration in
-    /// `makeIOSZkProofSystemRegistry`) because credential DELETION must be
-    /// able to clean up a BBS credential's vault entry regardless of
-    /// whether this deployment is still issuing that type - mirrors
-    /// Kotlin's `SirosWallet.bbsHolderStateVault`, which has the exact same
-    /// shape for the same reason. `deleteCredential`/`deleteRenewalSourceBatch`
-    /// use this to satisfy `BbsHolderStateVault.remove`'s documented
-    /// cleanup contract (Copilot review, PR #194); it is also handed to
-    /// `makeIOSZkProofSystemRegistry` rather than that function
-    /// constructing its own, so there is exactly one vault instance, not two
-    /// independently-constructed wrappers around the same keystore entries.
+    /// A BBS credential's holder state vault - `nil` unless `keystore`
+    /// conforms to `ExtensionStore`. See `removeBbsHolderStateIfAny`.
     let bbsHolderStateVault: BbsHolderStateVault?
 
     /// Resolves the DID methods the active `config.diipProfile` requires, for
@@ -1436,49 +1422,11 @@ public final class SirosWallet: @unchecked Sendable {
     }
 
     // MARK: - Credentials
-
-    /// Get credentials, optionally including expired.
-    public func getCredentials(includeExpired: Bool = false) async -> [StoredCredential] {
-        let all = await credentialStore.getAll()
-        if includeExpired { return all }
-        let now = Int64(Date().timeIntervalSince1970)
-        return all.filter { $0.expiresAt == nil || $0.expiresAt! > now }
-    }
-
-    /// Delete a credential by ID and sync to backend.
-    public func deleteCredential(_ credentialId: Int64) async {
-        let deletedBatchId = await credentialStore.getAll().first { $0.id == credentialId }?.batchId
-        await credentialStore.delete(credentialId)
-        // A BBS credential's holder state (its long-lived blinding factor)
-        // lives beside it in `S.extensions`, not inside the credential
-        // itself - privatedata-spec §6.1.2 requires deleting the entity an
-        // entry names to delete the entry too, and `BbsHolderStateVault`'s
-        // own doc comment says the same. A no-op for any non-BBS credential
-        // (no entry ever existed under this id) and for a keystore that
-        // cannot hold extension entries at all (`bbsHolderStateVault` is
-        // `nil`) - best-effort like `removeCredentialRefreshToken` below:
-        // deletion of the credential itself must not be blocked by a
-        // locked keystore failing this cleanup (Copilot review, PR #194).
-        try? await bbsHolderStateVault?.remove(credentialId: String(credentialId))
-        // A deleted id can be reused (review finding) - an unrelated
-        // credential later assigned this same id must not read back the
-        // deleted one's cached status.
-        credentialStatusCache.remove(credentialId)
-        // If that was the last instance of its batch, its refresh_token
-        // entry (if any) is now orphaned - privatedata-spec §6.2 requires
-        // it not linger pointing at a batch that no longer exists.
-        if let batchId = deletedBatchId {
-            let remaining = await credentialStore.getAll()
-            if !remaining.contains(where: { $0.batchId == batchId }) {
-                await removeCredentialRefreshToken(batchId: batchId)
-            }
-        }
-        if case .ready(let userId, let displayName, _, _) = state {
-            let creds = await credentialStore.getAll()
-            setState(.ready(userId: userId, displayName: displayName, credentials: creds))
-        }
-        await persistAndSyncKeystore()
-    }
+    //
+    // getCredentials/deleteCredential moved to
+    // SirosWallet+CredentialLifecycle.swift (file_length gate - review
+    // finding on PR #194, which also added deleteCredential's BBS-vault
+    // cleanup call; see that file).
 
     /// Sign an mDoc DeviceResponse for an ISO 18013-5 proximity (BLE)
     /// presentation - the local, engine-free counterpart to the redirect/
