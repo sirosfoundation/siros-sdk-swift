@@ -37,6 +37,36 @@ extension SirosWallet {
         let credentialId: Data
     }
 
+    /// What `recoverPrfFromPrivateData` recovered from one `PrfKeyInfo` entry.
+    struct RecoveredPrf {
+        let prfOutput: PrfOutput
+        let prfSalt: Data
+        let hkdfSalt: Data
+        let hkdfInfo: Data
+    }
+
+    /// What `resolveLoginPrf` resolved for `login()` to unlock with.
+    struct LoginPrfResolution {
+        let prfOutput: PrfOutput
+        let prfSalt: Data
+        let hkdfSalt: Data
+        let hkdfInfo: Data
+        /// Non-nil exactly when recovered from privateData - see
+        /// `recordSuccessfulLogin`'s doc comment on what that triggers.
+        let recoveredSalt: Data?
+    }
+
+    /// What `resolveUnlockKeystorePrf` resolved for `unlockKeystore()` to
+    /// unlock with.
+    struct UnlockKeystorePrfResolution {
+        let prfOutput: PrfOutput
+        let hkdfSalt: Data
+        let hkdfInfo: Data
+        /// Non-nil exactly when recovered from privateData - the caller heals
+        /// the account cache in that case, same as `LoginPrfResolution`'s.
+        let recoveredSalt: Data?
+    }
+
     /// Runs `loginBegin` -> platform `authenticate` -> PRF resolution.
     ///
     /// Shared by `login()` and `unlockKeystore()`. The PRF output is resolved
@@ -269,11 +299,14 @@ extension SirosWallet {
     func recoverPrfFromPrivateData(
         credentialId: Data,
         privateData: Data
-    ) async throws -> (prfOutput: PrfOutput, prfSalt: Data, hkdfSalt: Data, hkdfInfo: Data) {
+    ) async throws -> RecoveredPrf {
         let prfKeyInfo = try recoverPrfKeyInfo(credentialId: credentialId, from: privateData)
         do {
             let prfOutput = try await authProvider.getPrfOutput(credentialId: credentialId, salt: prfKeyInfo.prfSalt)
-            return (prfOutput, prfKeyInfo.prfSalt, prfKeyInfo.hkdfSalt, prfKeyInfo.hkdfInfo)
+            return RecoveredPrf(
+                prfOutput: prfOutput, prfSalt: prfKeyInfo.prfSalt,
+                hkdfSalt: prfKeyInfo.hkdfSalt, hkdfInfo: prfKeyInfo.hkdfInfo
+            )
         } catch {
             throw SirosError.wallet(
                 message: "PRF not supported by authenticator — cannot decrypt wallet data",
@@ -321,7 +354,7 @@ extension SirosWallet {
         assertion: PasskeyAssertion,
         privateData: Data,
         cachedAccount: CachedAccount?
-    ) async throws -> (prfOutput: PrfOutput, prfSalt: Data, hkdfSalt: Data, hkdfInfo: Data, recoveredSalt: Data?) {
+    ) async throws -> LoginPrfResolution {
         if let knownPrfOutput = assertion.prfOutput, let knownPrfSalt = assertion.prfSalt {
             let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
                 ?? cachedAccount.flatMap { Self.b64Decode($0.hkdfSalt) }
@@ -329,7 +362,10 @@ extension SirosWallet {
             let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) }
                 ?? cachedAccount.flatMap { Self.b64Decode($0.hkdfInfo) }
                 ?? Data(Self.hkdfInfo.utf8)
-            return (knownPrfOutput, knownPrfSalt, hkdfSalt, hkdfInfo, nil)
+            return LoginPrfResolution(
+                prfOutput: knownPrfOutput, prfSalt: knownPrfSalt,
+                hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo, recoveredSalt: nil
+            )
         }
         // The recovered values are this credential's own real
         // registration-time salts - not a guess - so they take priority over
@@ -339,7 +375,10 @@ extension SirosWallet {
         let recovered = try await recoverPrfFromPrivateData(
             credentialId: assertion.credentialId, privateData: privateData
         )
-        return (recovered.prfOutput, recovered.prfSalt, recovered.hkdfSalt, recovered.hkdfInfo, recovered.prfSalt)
+        return LoginPrfResolution(
+            prfOutput: recovered.prfOutput, prfSalt: recovered.prfSalt,
+            hkdfSalt: recovered.hkdfSalt, hkdfInfo: recovered.hkdfInfo, recoveredSalt: recovered.prfSalt
+        )
     }
 
     /// Session/account bookkeeping once `login()`'s keystore unlock has
@@ -393,18 +432,21 @@ extension SirosWallet {
     func resolveUnlockKeystorePrf(
         assertion: PasskeyAssertion,
         storedContainer: Data
-    ) async throws -> (prfOutput: PrfOutput, hkdfSalt: Data, hkdfInfo: Data, recoveredSalt: Data?) {
+    ) async throws -> UnlockKeystorePrfResolution {
         if let knownPrfOutput = assertion.prfOutput {
             guard let hkdfSalt = sessionStore.hkdfSalt.flatMap({ Self.b64Decode($0) }) else {
                 throw SirosError.keystore(message: "Missing HKDF salt")
             }
             let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
-            return (knownPrfOutput, hkdfSalt, hkdfInfo, nil)
+            return UnlockKeystorePrfResolution(prfOutput: knownPrfOutput, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo, recoveredSalt: nil)
         }
         let recovered = try await recoverPrfFromPrivateData(
             credentialId: assertion.credentialId, privateData: storedContainer
         )
-        return (recovered.prfOutput, recovered.hkdfSalt, recovered.hkdfInfo, recovered.prfSalt)
+        return UnlockKeystorePrfResolution(
+            prfOutput: recovered.prfOutput, hkdfSalt: recovered.hkdfSalt,
+            hkdfInfo: recovered.hkdfInfo, recoveredSalt: recovered.prfSalt
+        )
     }
 
     /// Heals the local account cache after a successful PRF-salt recovery
