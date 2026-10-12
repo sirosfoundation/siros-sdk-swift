@@ -101,21 +101,21 @@ public final class RemoteIDVClient: @unchecked Sendable {
     }
 
     /// Maps a 422 from the IDV backend to an ``IDVError``. The backend's error
-    /// body is `{"error": "<message>", "error_code": "<code>"}`: an `nfc_*` code
-    /// means the document's chip was not read and authenticated
-    /// (``IDVError/documentChipNotVerified(reason:message:)``); anything else
-    /// goes to the step's own `fallback`, with the raw body as before.
+    /// body is `{"error": "<message>", "error_code": "<code>"}`. A body with a
+    /// code becomes the error for that code, with the backend's message
+    /// (see ``IDVError/init(refusalCode:message:)``: `nfc_*` is
+    /// ``IDVError/documentChipNotVerified(reason:message:)``, `chip_untrusted`,
+    /// `document_expired` and `session_expired` have their own errors, and so on).
+    /// A body without a code goes to the step's own `fallback`, with the raw body.
     static func idvError(
         for422ErrorCode errorCode: String?,
         errorMessage: String?,
         responseBody: String,
         fallback: (String) -> IDVError
     ) -> IDVError {
-        if let errorCode, errorCode.hasPrefix("nfc_") {
-            let message = errorMessage.flatMap { $0.isEmpty ? nil : $0 } ?? responseBody
-            return .documentChipNotVerified(reason: errorCode, message: message)
-        }
-        return fallback(responseBody)
+        guard let errorCode, !errorCode.isEmpty else { return fallback(responseBody) }
+        let message = errorMessage.flatMap { $0.isEmpty ? nil : $0 } ?? responseBody
+        return IDVError(refusalCode: errorCode, message: message)
     }
 
     // MARK: - HTTP helper
@@ -197,7 +197,7 @@ public protocol BiometricCaptureDelegate: AnyObject, Sendable {
 ///
 /// ```swift
 /// let client = RemoteIDVClient(config: .init(serverUrl: "...", authToken: "..."))
-/// let delegate = FaceTecCaptureDelegate()
+/// let delegate = MyCaptureDelegate() // your BiometricCaptureDelegate
 /// let provider = RemoteIDVProvider(client: client, delegate: delegate)
 /// try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: vc)
 /// ```

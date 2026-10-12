@@ -361,6 +361,33 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
     ///     `"pairwise_pseudonym"`), never the raw seed value.
     ///   - issuerAuth: the credential's own COSE_Sign1 `issuerAuth`
     ///     structure, to extract its x5chain (COSE header label 33) from.
+    ///   - digestIds: element identifier -> the credential's own `digestID`
+    ///     for that element (from the real, issuer-signed
+    ///     `IssuerSignedItem` - not something the wallet invents). Optional
+    ///     per identifier; harmless/unused by a Longfellow presentation
+    ///     (matched by position, not digestID), but REQUIRED for a Vega
+    ///     presentation's verifier-side claim matching, since Vega's fixed
+    ///     claim slots are ordered by the credential's own document order
+    ///     rather than the request's order - see `VegaProofSystem`'s doc
+    ///     comment on its witness-building.
+    ///   - issuerSignedItemBytes: element identifier -> that element's exact
+    ///     original `IssuerSignedItem` bytes (the same bytes
+    ///     `VegaProofSystem` feeds into `FfiClaim.issuerSignedItemBytes`
+    ///     when proving). Vega-only, as of the r12 circuit revision:
+    ///     `zk_cred_vega::verify()` no longer returns a disclosed claim's
+    ///     plaintext as part of the proof - the caller must supply it, and
+    ///     the verifier re-derives its blinded digest to check the binding
+    ///     (see `docs/ZK_VEGA_DIGESTID_WIRE_EXTENSION.md` in `vc`). Omitted
+    ///     for a Longfellow presentation, which never needs it.
+    ///   - claimSlotDigestIds: Vega-only: the credential's FULL, fixed-shape
+    ///     claim-slot list (`VegaProofSystem.maxClaimsV1` entries, in the
+    ///     credential's own document order - the same order
+    ///     `VegaProofSystem`'s witness-building assigns to `FfiClaim`
+    ///     slots), each entry being that slot's `digestID` regardless of
+    ///     whether this presentation discloses it. A Vega verifier has no
+    ///     independent way to learn which proof slot corresponds to which
+    ///     digestID otherwise. `nil` for a Longfellow presentation
+    ///     (positional matching, no slot concept).
     /// - Returns: CBOR-encoded `{version, status, zkDocuments}` bytes, ready
     ///   to become the `vp_token` value for this credential's query id.
     public static func buildZkDeviceResponse(
@@ -370,7 +397,10 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         timestamp: String,
         namespace: String,
         disclosedClaims: [(String, CBOR)],
-        issuerAuth: CBOR
+        issuerAuth: CBOR,
+        digestIds: [String: UInt32] = [:],
+        issuerSignedItemBytes: [String: [UInt8]] = [:],
+        claimSlotDigestIds: [UInt32]? = nil
     ) -> Data {
         var documentData: [CBOR: CBOR] = [
             .utf8String("zkSystemId"): .utf8String(zkSystemId),
@@ -379,12 +409,25 @@ public final class MdocDeviceResponseBuilder: @unchecked Sendable {
         ]
 
         let issuerSignedItems: [CBOR] = disclosedClaims.map { elementId, elementValue in
-            .map([
+            var item: [CBOR: CBOR] = [
                 .utf8String("elementIdentifier"): .utf8String(elementId),
                 .utf8String("elementValue"): elementValue,
-            ])
+            ]
+            if let digestId = digestIds[elementId] {
+                item[.utf8String("digestId")] = .unsignedInt(UInt64(digestId))
+            }
+            if let itemBytes = issuerSignedItemBytes[elementId] {
+                item[.utf8String("issuerSignedItemBytes")] = .byteString(itemBytes)
+            }
+            return .map(item)
         }
         documentData[.utf8String("issuerSigned")] = .map([.utf8String(namespace): .array(issuerSignedItems)])
+
+        if let claimSlotDigestIds {
+            documentData[.utf8String("claimSlotDigestIds")] = .array(
+                claimSlotDigestIds.map { .unsignedInt(UInt64($0)) }
+            )
+        }
 
         // We never disclose deviceSigned claims (everything comes from
         // issuerSigned) - matches assembleFinalResponse's identical

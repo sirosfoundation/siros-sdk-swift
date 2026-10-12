@@ -96,6 +96,14 @@ let config = WalletConfig(
 
 `KeystoreManager.generateProof(freshKey:)` supports batch VCI conformance — each credential in a batch is bound to a unique key to prevent verifier linkability.
 
+### Identity Verification (FaceTec)
+
+`FaceTecIDVProvider` runs FaceTec 10's liveness, document scan with NFC chip
+read and photo match as one session against facetec-api, and returns the
+credential offer. Refusals arrive as typed `IDVError`s. See
+[docs/IDENTITY-VERIFICATION.md](docs/IDENTITY-VERIFICATION.md) for the
+facetec-api contract the provider keeps and the error-code table.
+
 ## Two APIs: orchestrated and low-level
 
 `SirosWallet` runs the whole wallet for you. Hosts that already run the

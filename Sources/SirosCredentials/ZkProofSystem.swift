@@ -27,6 +27,35 @@ import Crypto
 /// platform can reference it unconditionally.
 public let zkPseudonymClaim = "pairwise_pseudonym"
 
+/// The single mdoc namespace ZK proving takes claims from, per supported
+/// docType - shared by every mdoc-based `ZkProofSystem` (`LongfellowZkProofSystem`,
+/// `VegaProofSystem`) AND by the non-iOS-gated wallet layer that assembles
+/// the wire response around whatever proof one of them produced
+/// (`SirosWallet+DCAPI.swift`'s `buildZkPresentationToken`, which cannot
+/// reference either iOS-only proof system type directly to get at their own
+/// private copies of this mapping). Lives here, platform-agnostic, as the
+/// one place this mapping is defined, rather than duplicated per call site -
+/// a real mDL can carry a SECOND, jurisdiction-specific namespace alongside
+/// the primary one here (e.g. an AAMVA-extension US mDL), so every caller
+/// needing "the" namespace a presentation discloses from must resolve it
+/// through this same docType-keyed lookup, never `nameSpaces.keys/values.first`
+/// (unspecified iteration order, and can silently pick the wrong namespace
+/// entirely - confirmed as a real bug via Copilot review on PR #182, in both
+/// `VegaProofSystem.buildWitness` and `buildZkPresentationToken`).
+public let zkMdocNamespaceByDocType: [String: String] = [
+    "org.iso.18013.5.1.mDL": "org.iso.18013.5.1",
+    "eu.europa.ec.eudi.pid.1": "eu.europa.ec.eudi.pid.1",
+]
+
+/// `VegaProofSystem.systemId`'s value, duplicated here (that type itself
+/// aliases this constant rather than the reverse) so the non-iOS-gated
+/// wallet layer can recognize a Vega `ZkSystemSpec` by `spec.system` without
+/// naming the iOS-only `VegaProofSystem` type directly - needed to gate
+/// `buildZkDeviceResponse`'s Vega-only `claimSlotDigestIds` wire field
+/// (confirmed via Copilot review on PR #182: passing it for a Longfellow
+/// presentation too contradicts the builder's own documented wire contract).
+public let vegaZkSystemId = "vega-mc-p256-v1"
+
 /// A verifier's request for one ZK proof system, mirroring multipaz's own
 /// `ZkSystemSpec`/`ZkSystemRepository` design: a generic id/system/params bag
 /// rather than a fixed typed shape, so each proof system (Longfellow today,
