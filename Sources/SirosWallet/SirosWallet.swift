@@ -1160,46 +1160,23 @@ public final class SirosWallet: @unchecked Sendable {
             // after resume), then its registry entry (login after logout, when
             // the account-scoped store has been cleared), then fresh values for
             // a first login on this install. The registry entry counts only if
-            // it is the account the server just confirmed.
+            // it is the account the server just confirmed. Recovered instead
+            // of all that when the local cache didn't know this credential at
+            // all - see `resolveLoginPrf`'s doc comment.
             let cached = assertion.cachedAccount.flatMap { $0.accountId == accountId ? $0 : nil }
-
-            let prfOutput: PrfOutput
-            let prfSaltBytes: Data
-            let hkdfSalt: Data
-            let hkdfInfo: Data
-            // Non-nil exactly when this login recovered the PRF salt from
-            // the account's own privateData container (see
-            // `performPasskeyAssertion`'s doc comment and
-            // `recoverPrfFromPrivateData`) because the local account cache
-            // didn't have this credential on file. Used below to heal that
-            // cache once the unlock these values produce actually succeeds -
-            // not before, so a recovery that turns out to be wrong (e.g. the
-            // wrong privateData was somehow fetched) never gets written back.
-            var recoveredSalt: Data?
-            if let knownPrfOutput = assertion.prfOutput, let knownPrfSalt = assertion.prfSalt {
-                prfOutput = knownPrfOutput
-                prfSaltBytes = knownPrfSalt
-                hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
-                    ?? cached.flatMap { Self.b64Decode($0.hkdfSalt) }
-                    ?? Self.randomBytes(32)
-                hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) }
-                    ?? cached.flatMap { Self.b64Decode($0.hkdfInfo) }
-                    ?? Data(Self.hkdfInfo.utf8)
-            } else {
-                // The recovered values are this credential's own real
-                // registration-time salts - not a guess - so they take
-                // priority over whatever `sessionStore`/`cached` hold (stale,
-                // or simply absent on a device that never completed a normal
-                // login for this account).
-                let recovered = try await recoverPrfFromPrivateData(
-                    credentialId: assertion.credentialId, privateData: privateData
-                )
-                prfOutput = recovered.prfOutput
-                prfSaltBytes = recovered.prfSalt
-                hkdfSalt = recovered.hkdfSalt
-                hkdfInfo = recovered.hkdfInfo
-                recoveredSalt = recovered.prfSalt
-            }
+            let resolved = try await resolveLoginPrf(assertion: assertion, privateData: privateData, cachedAccount: cached)
+            let prfOutput = resolved.prfOutput
+            let prfSaltBytes = resolved.prfSalt
+            let hkdfSalt = resolved.hkdfSalt
+            let hkdfInfo = resolved.hkdfInfo
+            // Non-nil exactly when this login recovered the PRF salt from the
+            // account's own privateData container because the local account
+            // cache didn't have this credential on file. Used below to heal
+            // that cache once the unlock these values produce actually
+            // succeeds - not before, so a recovery that turns out to be wrong
+            // (e.g. the wrong privateData was somehow fetched) never gets
+            // written back.
+            let recoveredSalt = resolved.recoveredSalt
 
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
@@ -1209,36 +1186,17 @@ public final class SirosWallet: @unchecked Sendable {
                 prfSalt: prfSaltBytes
             )
 
-            accountRegistry.activeAccountId = accountId
-            sessionStore.userId = session.uuid
-            sessionStore.displayName = session.displayName
-            sessionStore.tenantId = config.tenantId
-            // See register()'s identical assignment: this is the only thing
-            // that records which passkey this installation logs in with, and
+            // See register()'s identical sessionStore.credentialId
+            // assignment inside this helper: that's the only thing that
+            // records which passkey this installation logs in with, and
             // `generateWIA` needs it to bind the instance to that passkey
-            // (SID-AUTH-06). It is the credential the ceremony actually
-            // resolved to, not a stored guess.
-            if let credentialId = assertion.credential["id"] as? String {
-                sessionStore.credentialId = credentialId
-            }
-            sessionStore.prfSalt = Self.b64Encode(prfSaltBytes)
-            sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
-            sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
-
-            if let recoveredSalt {
-                // The next login for this account is a normal one-tap match
-                // again, instead of repeating this recovery ceremony every
-                // time.
-                healAccountCache(
-                    accountId: accountId,
-                    userId: session.uuid,
-                    displayName: session.displayName,
-                    credentialId: assertion.credentialId,
-                    prfSalt: recoveredSalt,
-                    hkdfSalt: hkdfSalt,
-                    hkdfInfo: hkdfInfo
-                )
-            }
+            // (SID-AUTH-06). Also heals the account cache when this login
+            // recovered its PRF salt from privateData - see `recoveredSalt`'s
+            // doc comment above.
+            recordSuccessfulLogin(
+                accountId: accountId, session: session, assertion: assertion,
+                prfSaltBytes: prfSaltBytes, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo, recoveredSalt: recoveredSalt
+            )
 
             try await connectEngineWithToken(tokens)
 

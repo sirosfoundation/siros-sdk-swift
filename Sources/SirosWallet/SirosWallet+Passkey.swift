@@ -303,6 +303,85 @@ extension SirosWallet {
         return prfKeyInfo
     }
 
+    /// `login()`'s own PRF/HKDF resolution, extracted so the caller stays
+    /// readable: either trusts `assertion`'s own resolved values (the normal
+    /// case - `hkdfSalt`/`hkdfInfo` come from the session store, then the
+    /// confirmed account's registry entry, then fresh random values for a
+    /// first login on this install), or - when the local account cache
+    /// didn't know this credential at all, see `PasskeyAssertion.prfOutput`'s
+    /// doc comment - recovers all four from `privateData` instead.
+    ///
+    /// - Parameter cachedAccount: the registry entry for the account the
+    ///   server just confirmed this login is for (not merely whichever
+    ///   account `assertion.cachedAccount` names - that may be a different
+    ///   account entirely in the recovery case).
+    /// - Returns: `recoveredSalt` is non-nil exactly when recovery happened,
+    ///   so the caller knows to heal the account cache afterward.
+    func resolveLoginPrf(
+        assertion: PasskeyAssertion,
+        privateData: Data,
+        cachedAccount: CachedAccount?
+    ) async throws -> (prfOutput: PrfOutput, prfSalt: Data, hkdfSalt: Data, hkdfInfo: Data, recoveredSalt: Data?) {
+        if let knownPrfOutput = assertion.prfOutput, let knownPrfSalt = assertion.prfSalt {
+            let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
+                ?? cachedAccount.flatMap { Self.b64Decode($0.hkdfSalt) }
+                ?? Self.randomBytes(32)
+            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) }
+                ?? cachedAccount.flatMap { Self.b64Decode($0.hkdfInfo) }
+                ?? Data(Self.hkdfInfo.utf8)
+            return (knownPrfOutput, knownPrfSalt, hkdfSalt, hkdfInfo, nil)
+        }
+        // The recovered values are this credential's own real
+        // registration-time salts - not a guess - so they take priority over
+        // whatever `sessionStore`/`cachedAccount` hold (stale, or simply
+        // absent on a device that never completed a normal login for this
+        // account).
+        let recovered = try await recoverPrfFromPrivateData(
+            credentialId: assertion.credentialId, privateData: privateData
+        )
+        return (recovered.prfOutput, recovered.prfSalt, recovered.hkdfSalt, recovered.hkdfInfo, recovered.prfSalt)
+    }
+
+    /// Session/account bookkeeping once `login()`'s keystore unlock has
+    /// actually succeeded: records which credential/salts this installation
+    /// logs in with (`generateWIA` needs `sessionStore.credentialId` to bind
+    /// the wallet instance to it, SID-AUTH-06), and - when this login
+    /// recovered its PRF salt from `privateData` (`recoveredSalt` non-nil) -
+    /// heals the account cache via `healAccountCache` so the next login for
+    /// this account is a normal one-tap match again.
+    func recordSuccessfulLogin(
+        accountId: String,
+        session: AuthSession,
+        assertion: PasskeyAssertion,
+        prfSaltBytes: Data,
+        hkdfSalt: Data,
+        hkdfInfo: Data,
+        recoveredSalt: Data?
+    ) {
+        accountRegistry.activeAccountId = accountId
+        sessionStore.userId = session.uuid
+        sessionStore.displayName = session.displayName
+        sessionStore.tenantId = config.tenantId
+        if let credentialId = assertion.credential["id"] as? String {
+            sessionStore.credentialId = credentialId
+        }
+        sessionStore.prfSalt = Self.b64Encode(prfSaltBytes)
+        sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
+        sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
+
+        if let recoveredSalt {
+            healAccountCache(
+                accountId: accountId,
+                userId: session.uuid,
+                displayName: session.displayName,
+                credentialId: assertion.credentialId,
+                prfSalt: recoveredSalt,
+                hkdfSalt: hkdfSalt,
+                hkdfInfo: hkdfInfo
+            )
+        }
+    }
+
     /// Heals the local account cache after a successful PRF-salt recovery
     /// (`recoverPrfFromPrivateData`), so the *next* login for this account is
     /// a normal one-tap match again instead of repeating the recovery
