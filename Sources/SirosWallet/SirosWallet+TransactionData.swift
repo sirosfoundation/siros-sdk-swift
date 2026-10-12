@@ -220,26 +220,50 @@ extension SirosWallet {
     }
 
     /// Runs `body` as a task a flow error/completion, logout or peer teardown can cancel.
+    ///
+    /// The task is created AND registered under the wallet lock, and its first act is to wait for that lock,
+    /// so it cannot begin (and cannot prompt or sign) before it is registered. Registration then checks
+    /// whether a teardown, or the end of THIS flow, happened since `body` was requested, and cancels the
+    /// task at once if so.
     func trackedTransaction<T: Sendable>(flowId: String, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
         let epoch = currentTaskEpoch()
-        let task = Task { try await body() }
-        let id = registerTransactionTask(flowId: flowId, epoch: epoch) { task.cancel() }
+        let flowSeq = currentFlowEndSeq(flowId)
+        let id = UUID()
+        lock.lock()
+        let task = Task { [weak self] () async throws -> T in
+            self?.awaitRegistration()
+            try Task.checkCancellation()
+            return try await body()
+        }
+        registerLocked(id: id, flowId: flowId, epoch: epoch, flowSeq: flowSeq) { task.cancel() }
+        lock.unlock()
         defer { unregisterTransactionTask(id) }
         return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
-    /// Registers a cancellable task. If a teardown (logout, destroy) ran between the task's creation and
-    /// now, `epoch` no longer matches: the registry was already cleared, so the task is cancelled here
-    /// instead of being left running unregistered.
-    func registerTransactionTask(flowId: String, epoch: Int, cancel: @escaping @Sendable () -> Void) -> UUID {
+    /// Returns once any registration in progress (made under the wallet lock) has completed.
+    private func awaitRegistration() { lock.lock(); lock.unlock() }
+
+    /// Must be called with the wallet lock held. Registers the task unless a teardown or the end of its
+    /// flow has happened since `epoch` / `flowSeq` were read; then it is cancelled instead.
+    private func registerLocked(id: UUID, flowId: String, epoch: Int, flowSeq: Int, cancel: @escaping @Sendable () -> Void) {
+        if transactionTaskEpoch != epoch || (flowEndSeq[flowId] ?? 0) != flowSeq {
+            cancel()
+        } else {
+            transactionTasks[id] = (flowId: flowId, cancel: cancel)
+        }
+    }
+
+    /// Registers a cancellable task (see `registerLocked`).
+    func registerTransactionTask(flowId: String, epoch: Int, flowSeq: Int = 0, cancel: @escaping @Sendable () -> Void) -> UUID {
         let id = UUID()
         lock.lock()
-        let tornDown = transactionTaskEpoch != epoch
-        if !tornDown { transactionTasks[id] = (flowId: flowId, cancel: cancel) }
+        registerLocked(id: id, flowId: flowId, epoch: epoch, flowSeq: flowSeq, cancel: cancel)
         lock.unlock()
-        if tornDown { cancel() }
         return id
     }
+
+    func currentFlowEndSeq(_ flowId: String) -> Int { lock.lock(); defer { lock.unlock() }; return flowEndSeq[flowId] ?? 0 }
 
     func currentTaskEpoch() -> Int { lock.lock(); defer { lock.unlock() }; return transactionTaskEpoch }
 

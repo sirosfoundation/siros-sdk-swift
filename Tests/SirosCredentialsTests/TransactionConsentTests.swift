@@ -558,6 +558,18 @@ final class TransactionConsentTests: XCTestCase {
         await expectRefusal(.metadataUnavailable, service(source(doc), handler: Handler(.yes)))
     }
 
+    /// `-0` is displayed as written, never as `0`.
+    func testANegativeZeroIsShownAsWritten() async throws {
+        XCTAssertEqual(try StrictJSON.parse("-0"), .decimal("-0"))
+        XCTAssertEqual(try StrictJSON.parse("0"), .int(0))
+        for lexeme in ["-0", "-0.0"] {
+            let h = Handler(.yes)
+            let raw = paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":\#(lexeme)}"#)
+            _ = try await service(source(), handler: h).process(request([raw]), context: context())
+            XCTAssertEqual(h.seen.first?.entries.first?.fields.first?.value, lexeme)
+        }
+    }
+
     func testNumbersAreShownExactly() async throws {
         let h = Handler(.yes)
         let big = paymentRaw(payload: #"{"transaction_id":"t","payee":{"name":"S","id":"1"},"currency":"EUR","amount":1000000}"#)

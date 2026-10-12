@@ -861,6 +861,23 @@ final class TransactionDataEndToEndTests: XCTestCase {
         }
     }
 
+    /// A flow that ends between a task being requested and registered leaves no running task behind.
+    func testATaskForAFlowThatEndedBeforeRegistrationIsCancelled() async throws {
+        let f = try await fixture()
+        let epoch = f.wallet.currentTaskEpoch()
+        let seq = f.wallet.currentFlowEndSeq("gone")
+        f.wallet.cancelTransactionTasks(flowId: "gone")          // the flow ends: nothing is registered yet, so nothing to cancel
+        final class Flag: @unchecked Sendable { let l = NSLock(); var on = false; func set() { l.lock(); on = true; l.unlock() } }
+        let cancelled = Flag()
+        _ = f.wallet.registerTransactionTask(flowId: "gone", epoch: epoch, flowSeq: seq, cancel: { cancelled.set() })
+        XCTAssertTrue(cancelled.on)
+        let other = Flag()
+        _ = f.wallet.registerTransactionTask(flowId: "alive", epoch: epoch, flowSeq: f.wallet.currentFlowEndSeq("alive"), cancel: { other.set() })
+        XCTAssertFalse(other.on, "another flow's task is unaffected")
+        f.wallet.lock.lock(); let registered = f.wallet.transactionTasks.count; f.wallet.lock.unlock()
+        XCTAssertEqual(registered, 1)
+    }
+
     func testTeardownCancelsConsentFlowsInProgress() async throws {
         let f = try await fixture()
         let task = Task<Void, Never> { try? await Task.sleep(nanoseconds: 60_000_000_000) }
