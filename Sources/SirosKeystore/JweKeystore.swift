@@ -202,7 +202,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // MARK: - Unlock / Lock
     // (the four-parameter overload is in JweKeystore+DefaultPrfSaltUnlock.swift)
 
-    // swiftlint:disable:next function_body_length
     public func unlock(
         prfOutput: Data,
         encryptedContainer: Data,
