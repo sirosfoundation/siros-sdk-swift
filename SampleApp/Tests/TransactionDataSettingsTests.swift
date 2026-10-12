@@ -195,7 +195,13 @@ final class TransactionDataLifecycleTests: XCTestCase {
     /// store signals when read 1 is suspended and the view model signals when each load has finished.
     func testAnOlderLogReadDoesNotOverwriteANewerOne() async throws {
         let vm = WalletViewModel()
+        // rebuildWalletIfNeeded starts observing the wallet, whose first state (.disconnected) resets the
+        // account-scoped log state; wait until that has been applied so it cannot land after the reads.
+        let initialState = EventSignal()
+        vm.walletStateApplied = { initialState.fire() }
         vm.rebuildWalletIfNeeded()
+        await initialState.wait()
+        vm.walletStateApplied = nil
         let store = HeldFirstReadStore()
         try XCTUnwrap(vm.wallet).setTransactionLogStore(store)
         let finished = EventSignal()
@@ -212,7 +218,11 @@ final class TransactionDataLifecycleTests: XCTestCase {
     func testALogLoadStartedBeforeLogoutDoesNotRepopulateTheNextSession() async throws {
         let vm = WalletViewModel()
         let store = HeldFirstReadStore()
+        let initialState = EventSignal()
+        vm.walletStateApplied = { initialState.fire() }
         vm.rebuildWalletIfNeeded()          // a wallet exists only after a login/registration builds one
+        await initialState.wait()           // the initial .disconnected state has been applied
+        vm.walletStateApplied = nil
         try XCTUnwrap(vm.wallet).setTransactionLogStore(store)
         let finished = EventSignal()
         vm.transactionLogLoadFinished = { finished.fire() }

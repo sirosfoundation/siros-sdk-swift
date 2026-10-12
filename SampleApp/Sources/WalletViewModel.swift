@@ -217,6 +217,8 @@ final class WalletViewModel: ObservableObject {
     var transactionLogGeneration = 0
     /// Test hook: called when a log load has finished, whether it published or discarded its result.
     var transactionLogLoadFinished: (() -> Void)?
+    /// Test hook: called after each wallet state update has been applied (the first is the initial `.disconnected`).
+    var walletStateApplied: (() -> Void)?
     var transactionConsentBox: TransactionConsentContinuationBox?
     private lazy var transactionConsentBridge = TransactionConsentBridge(viewModel: self)
     /// Non-nil while a FIDO2 ClientPin prompt (see `SampleAppAuthProvider.requestPin`)
@@ -1247,6 +1249,7 @@ final class WalletViewModel: ObservableObject {
     }
 
     private func updateState(_ state: WalletState) {
+        defer { walletStateApplied?() }
         // Every call here is a real state update from the engine (or a
         // reconnect/logout) - whatever the QR-scan/deep-link handoff was
         // waiting on has now either progressed (flowActive), failed
