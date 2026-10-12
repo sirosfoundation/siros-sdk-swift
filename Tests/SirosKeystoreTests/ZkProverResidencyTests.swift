@@ -143,15 +143,35 @@ final class ZkProverResidencyTests: XCTestCase {
         let releaseTask = Task { await residency.release() }
 
         // Give release() a real chance to run if the gate were not
-        // enforcing exclusion - if it were, this would destroy `weakProver`
-        // right now, before the proof is done.
+        // enforcing exclusion.
+        //
+        // NOT checked here via `weakProver`, on purpose: `use`'s own local
+        // `prover` variable AND `block`'s own local `p` both hold a strong
+        // reference to the FakeProver for the entire time `block` is
+        // suspended (right here, inside this very closure) - so even if the
+        // gate failed completely and `release()` raced ahead and cleared
+        // `resident` right now, `weakProver` would NOT go `nil` yet; those
+        // two local references, not the actor's `resident` property alone,
+        // are what keeps it alive mid-proof. A `weakProver`-based assertion
+        // here would therefore pass whether or not the gate actually
+        // excludes `release()` - it cannot distinguish "the gate worked"
+        // from "release() raced ahead but nothing deallocated the object
+        // yet" (Copilot review, PR #194). `residentKey` is actor state
+        // `release()` mutates directly and immediately if it runs, with no
+        // such ARC timing ambiguity - checking it is the real assertion.
         try await Task.sleep(nanoseconds: 100_000_000)
-        XCTAssertNotNil(weakProver, "release() must not destroy the prover while a use() is still running")
+        let keyWhileProofStillRunning = await residency.residentKey
+        XCTAssertEqual(keyWhileProofStillRunning, "a", "release() must not clear the resident key while a use() is still running")
+        XCTAssertNotNil(weakProver, "sanity check: the prover is still reachable through the suspended use()/block call frame")
 
         letProofFinish.fulfill()
         let result = try await proofTask.value
         XCTAssertEqual(result, "done")
 
+        // Now that `use()`'s own call frame has returned, its local
+        // references are gone - `weakProver` going `nil` here (once
+        // `release()`, having waited its turn, also finishes and drops the
+        // actor's own reference) is the real deallocation signal.
         await releaseTask.value
         XCTAssertNil(weakProver, "release(), having waited its turn, must destroy the prover once the proof completes")
         let residentKey = await residency.residentKey

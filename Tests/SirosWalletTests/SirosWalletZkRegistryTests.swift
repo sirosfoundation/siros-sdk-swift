@@ -155,21 +155,56 @@ final class SirosWalletZkRegistryTests: XCTestCase {
             state: BbsHolderState(issuerPublicKey: [1], secretProverBlind: [2], committedMessages: [[3]], keybindPublicKeys: [])
         )
 
+        let credentialTypeId = "urn:eu.europa.ec.eudi:bbs_test:1"
         let wallet = try XCTUnwrap(
             SirosWallet(
-                config: makeConfig(bbsCredentialTypes: ["urn:eu.europa.ec.eudi:bbs_test:1"], credentialStore: credentialStore),
+                config: makeConfig(bbsCredentialTypes: [credentialTypeId], credentialStore: credentialStore),
                 authProvider: StubAuthProvider(),
                 keystore: keystore
             )
         )
         XCTAssertTrue(wallet.zkProofSystemRegistry.registeredSystemIds.contains(BbsProofSystem.systemIdentifier))
-        // The join itself (credential lookup by raw JWP -> vault lookup by
-        // credential id) is exercised indirectly through
-        // `BbsProofSystem.generateProof`, which is covered end-to-end by
-        // `BbsProofSystemTests` in `SirosCredentialsTests` - this test's own
-        // job is only to confirm `SirosWallet.init` wires the SAME vault and
-        // the SAME credential store into it, which registration alone
-        // cannot show.
+
+        // Exercises the actual join `SirosWallet.init` wires in, not just
+        // that something got registered (Copilot review, PR #194: an
+        // earlier version of this test only repeated the assertion above).
+        // Resolve the wallet-registered system exactly as a real
+        // presentation would, then call `generateProof` on it - `jwp` is
+        // not a real, parseable JWP, so this cannot succeed, but
+        // `BbsProofSystem.generateProof` looks up holder state BEFORE
+        // attempting to parse the JWP (`guard let state = try await
+        // holderState(jwp) else { throw .missingHolderState }` runs ahead
+        // of `jwpInspect`) - so whether it fails with `.missingHolderState`
+        // or something else entirely is exactly the signal this test needs:
+        // `.missingHolderState` would mean the join `SirosWallet.init`
+        // assembled (credentialStore lookup by raw JWP -> vault lookup by
+        // the matched credential's id) failed to find the entry this test
+        // put there, which is the one thing registration alone cannot show.
+        guard let (system, spec) = wallet.zkProofSystemRegistry.resolve(
+            credentialType: CredentialTypeRef(format: .jwp, typeId: credentialTypeId),
+            requestedSpecs: [ZkSystemSpec(id: BbsProofSystem.systemIdentifier, system: BbsProofSystem.systemIdentifier)],
+            numAttributes: 0
+        ) else {
+            return XCTFail("expected the wallet-registered BbsProofSystem to resolve '\(credentialTypeId)'")
+        }
+        do {
+            _ = try await system.generateProof(
+                spec: spec,
+                document: .jwp(jwp),
+                sessionTranscript: [],
+                requestedClaims: [],
+                verifierIdentity: nil,
+                signer: { _, _ in [] },
+                priorState: nil
+            )
+            XCTFail("expected generateProof to fail past holder-state lookup (the JWP fixture here is not real)")
+        } catch BbsProofError.missingHolderState {
+            XCTFail("the wallet-wired credentialStore/vault join must have resolved the stored holder state - got .missingHolderState")
+        } catch {
+            // Expected: the fake JWP string fails real parsing further
+            // along (jwpInspect) - the join itself already succeeded by the
+            // time that happens, which is what this test actually checks.
+        }
     }
     #else
     func testRegistryIsEmptyOnNonIOSPlatforms() throws {

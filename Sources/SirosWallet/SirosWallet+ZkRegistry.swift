@@ -10,35 +10,41 @@ extension SirosWallet {
     /// `SirosWallet.swift` under SwiftLint's `file_length` error threshold.
     static func makeIOSZkProofSystemRegistry(
         config: WalletConfig,
-        keystore: KeystoreManager,
         credentialStore: CredentialStore,
-        zkCircuitClient: ZkCircuitClient
+        zkCircuitClient: ZkCircuitClient,
+        bbsHolderStateVault: BbsHolderStateVault?
     ) -> (registry: ZkProofSystemRegistry, residency: ZkProverResidency) {
         // BbsProofSystem (like Longfellow/Vega) is iOS-only - its native
         // zk-cred-bbs XCFramework ships iOS slices only, so the type itself
         // does not exist outside `#if os(iOS)` (see BbsProofSystem.swift's
         // own gating comment).
         //
-        // Its holder state lives in this wallet's own keystore (see
-        // `BbsHolderStateVault`'s doc comment) - unlike
-        // LongfellowZkProofSystem/VegaProofSystem, which need no
-        // wallet-local state at all, so it is assembled here rather than
-        // being a fixed member of the mdoc ZK registry. Mirrors Kotlin's
-        // `SirosWallet.bbsHolderStateVault`/`bbsHolderStateStore`: only
-        // constructed when both the keystore in use can hold extension
-        // entries (`ExtensionStore`) and the deployment actually declares
-        // BBS credential types - an empty `config.bbsCredentialTypes` means
-        // this deployment issues no BBS credentials, so `BbsProofSystem`
-        // should not even be registered (see `WalletConfig.bbsCredentialTypes`'s
-        // doc comment for why "registered but empty" is the wrong shape).
+        // `bbsHolderStateVault` is `self.bbsHolderStateVault` from `init` -
+        // constructed there unconditionally whenever the keystore conforms
+        // to `ExtensionStore` (NOT gated on `config.bbsCredentialTypes`,
+        // because `deleteCredential`/`deleteRenewalSourceBatch` need it too,
+        // to satisfy `BbsHolderStateVault.remove`'s cleanup contract even
+        // after BBS credential types stop being configured - see that
+        // property's own doc comment). This function only DECIDES whether
+        // to register `BbsProofSystem` with it - registration additionally
+        // requires `config.bbsCredentialTypes` to be non-empty, since an
+        // empty set is "this deployment issues no BBS credentials", not
+        // "support nothing in particular" (see `WalletConfig.bbsCredentialTypes`'s
+        // doc comment: `BbsProofSystem.supportedCredentialTypes` maps
+        // straight from this set, and `ZkProofSystemRegistry.resolve`
+        // requires that set to already contain the requested credential
+        // type before `matchingSpec` is even consulted, so an empty set
+        // would make `resolve` reject every BBS request regardless of
+        // whether the system were registered at all - registering it
+        // anyway would just needlessly advertise the system id via
+        // `registeredSystemIds` with nothing it can ever actually serve).
         //
         // The proof system keys on the JWP itself (all it has at
         // presentation time); the vault keys on credential id (privatedata-
         // spec §6.1.1 requires an entry key to name a tracked entity) - this
         // closure is the join between the two, same as Kotlin's.
         var bbsProofSystem: BbsProofSystem?
-        if !config.bbsCredentialTypes.isEmpty, let extensionStore = keystore as? ExtensionStore {
-            let bbsHolderStateVault = BbsHolderStateVault(keystore: extensionStore)
+        if !config.bbsCredentialTypes.isEmpty, let bbsHolderStateVault {
             let bbsHolderStateStore: BbsHolderStateStore = { issuedJwp in
                 guard let credential = await credentialStore.getAll().first(where: { $0.raw == issuedJwp }) else {
                     return nil

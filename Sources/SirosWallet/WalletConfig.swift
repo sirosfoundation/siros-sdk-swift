@@ -211,10 +211,20 @@ public struct WalletConfig: Sendable {
     /// registry. Empty (the default) means this deployment issues no BBS
     /// credentials, and `BbsProofSystem` is not registered at all: an empty
     /// set is not "support nothing in particular", it is "this type does not
-    /// exist here" - registering it anyway would let a verifier's
-    /// `zk_system_type` request for BBS resolve successfully against a
-    /// wallet holding no such credential, only to fail later at
-    /// presentation time with a less specific error.
+    /// exist here" - `BbsProofSystem.supportedCredentialTypes` maps straight
+    /// from this set, and `ZkProofSystemRegistry.resolve` already requires
+    /// that set to contain the requested credential type before
+    /// `matchingSpec` is even consulted, so a verifier's `zk_system_type`
+    /// request for BBS could never actually resolve against an empty set
+    /// regardless of registration (Copilot review, PR #194: an earlier
+    /// version of this comment claimed the opposite - that registering
+    /// anyway would let such a request resolve and only fail later at
+    /// presentation time - which `resolve`'s own logic already rules out).
+    /// The real, observable reason to skip registration is narrower:
+    /// `ZkProofSystemRegistry.registeredSystemIds` is this wallet's
+    /// diagnostics/settings-UI surface for "what can I actually present" -
+    /// advertising a system id there that can never resolve a real request
+    /// would be a pointless, misleading entry.
     public var bbsCredentialTypes: Set<String>
 
     public init(

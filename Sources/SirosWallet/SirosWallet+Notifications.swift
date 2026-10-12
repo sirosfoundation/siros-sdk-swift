@@ -287,6 +287,12 @@ extension SirosWallet {
         let existing = await credentialStore.getAll()
         for cred in existing where cred.batchId == oldBatchId {
             await credentialStore.delete(cred.id)
+            // Same cleanup `deleteCredential` performs - this is a second
+            // credential-deletion path (renewal replacing an old batch),
+            // and `BbsHolderStateVault.remove`'s contract applies here too,
+            // not just to the user-initiated single-credential path
+            // (Copilot review, PR #194).
+            try? await bbsHolderStateVault?.remove(credentialId: String(cred.id))
         }
         await removeCredentialRefreshToken(batchId: oldBatchId)
     }
