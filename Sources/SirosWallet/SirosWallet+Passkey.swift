@@ -121,18 +121,36 @@ extension SirosWallet {
         let knownSalt = options.prfSalt(for: result.credentialId)
             ?? (sessionSaltApplies ? storedPrfSalt : nil)
 
+        // The ceremony's own PRF output, if any, is always authoritative and
+        // checked FIRST, before the cache-miss guard below: a real
+        // authenticator only ever produces one when it was actually given an
+        // input salt for this exact credential (i.e. `knownSalt` could not
+        // really be nil here on a real platform) - but a few test doubles
+        // model `authenticate` more loosely, and in any case trusting data
+        // already in hand is strictly better than discarding it.
+        if let ceremonyPrf = result.prfOutput {
+            return PasskeyAssertion(
+                challengeId: challengeId,
+                credential: credential,
+                prfOutput: ceremonyPrf,
+                prfSalt: knownSalt ?? Self.randomBytes(32),
+                cachedAccount: cachedAccount,
+                credentialId: result.credentialId
+            )
+        }
+
         guard let knownSalt else {
             // Nothing locally known ties this credential to a salt at all -
             // this is the cache-miss condition itself, not merely an
             // authenticator without PRF support (that failure mode is
-            // `resolvePrfOutput`'s, below, and is unaffected: it still runs,
-            // and still fails closed, whenever a salt *is* known). Previously
-            // this fell through to a fresh random salt (or a stale
-            // `storedPrfSalt` belonging to a different account entirely) and
-            // spent a real authenticator ceremony deriving a PRF output from
-            // it - one that could never unwrap the real container, silently
-            // wrong rather than visibly absent. Returning here instead, with
-            // no second ceremony spent on a salt already known to be useless,
+            // below, and is unaffected: it still runs, and still fails
+            // closed, whenever a salt *is* known). Previously this fell
+            // through to a fresh random salt (or a stale `storedPrfSalt`
+            // belonging to a different account entirely) and spent a real
+            // authenticator ceremony deriving a PRF output from it - one
+            // that could never unwrap the real container, silently wrong
+            // rather than visibly absent. Returning here instead, with no
+            // second ceremony spent on a salt already known to be useless,
             // lets the caller recover the real salt from privateData and
             // spend exactly one real recovery ceremony - see `login()`.
             return PasskeyAssertion(
@@ -145,11 +163,7 @@ extension SirosWallet {
             )
         }
 
-        let prfOutput = try await resolvePrfOutput(
-            ceremonyPrf: result.prfOutput,
-            credentialId: result.credentialId,
-            salt: knownSalt
-        )
+        let prfOutput = try await authProvider.getPrfOutput(credentialId: result.credentialId, salt: knownSalt)
         return PasskeyAssertion(
             challengeId: challengeId,
             credential: credential,

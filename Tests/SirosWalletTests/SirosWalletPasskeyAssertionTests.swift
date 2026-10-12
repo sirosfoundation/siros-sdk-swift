@@ -275,7 +275,15 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
 
         let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
 
-        XCTAssertNotEqual(provider.getPrfCalls.first?.salt, activeSalt, "another account's credential never gets the active account's salt")
+        // "other-user"'s own passkey entry carries no real salt at all (so it
+        // never even enters `loginPrfCandidates`'s per-credential map - see
+        // `CachedAccount.hasPrfKeys`), and the active session's salt belongs
+        // to a different account - so this is the cache-miss condition: no
+        // ceremony spent on the active account's salt, which would derive a
+        // real PRF under the wrong one and fail only later, at unwrap.
+        XCTAssertTrue(provider.getPrfCalls.isEmpty, "another account's credential never gets the active account's salt")
+        XCTAssertNil(assertion.prfOutput)
+        XCTAssertNil(assertion.prfSalt)
         XCTAssertEqual(assertion.cachedAccount?.userId, "other-user")
     }
 
