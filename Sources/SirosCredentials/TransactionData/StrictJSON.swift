@@ -329,7 +329,8 @@ public enum StrictJSON {
                 guard pos > expStart else { throw fail("bad exponent") }
             }
             let text = String(decoding: bytes[start..<pos], as: UTF8.self)
-            if isInt, let i = Int64(text) { return .int(i) }
+            // `-0` has no Int64 spelling: as `.int(0)` it would read as `0` where the verifier wrote `-0`.
+            if isInt, text != "-0", let i = Int64(text) { return .int(i) }
             guard let d = Double(text), d.isFinite else { throw fail("number out of range") }
             return .decimal(text)
         }

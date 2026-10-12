@@ -73,6 +73,7 @@ public final class SirosWallet: @unchecked Sendable {
     var transactionLogStoreIsDefault = false
     var transactionLogGeneration = 0
     var transactionTaskEpoch = 0
+    var flowEndSeq: [String: Int] = [:]
     let keystorePersistMutex = AsyncMutex()
     var transactionDataLocaleStorage: String = Locale.preferredLanguages.first ?? "en"
     var transactionDataConsentTimeout: TimeInterval = TransactionDataService.defaultConsentTimeout

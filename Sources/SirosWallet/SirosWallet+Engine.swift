@@ -1361,6 +1361,7 @@ extension SirosWallet {
     /// consented outcome for a flow that no longer exists.
     func cancelTransactionTasks(flowId: String) {
         lock.lock()
+        flowEndSeq[flowId, default: 0] += 1      // a task for this flow still being registered sees that it ended
         let doomed = transactionTasks.filter { $0.value.flowId == flowId }
         for key in doomed.keys { transactionTasks.removeValue(forKey: key) }
         lock.unlock()
