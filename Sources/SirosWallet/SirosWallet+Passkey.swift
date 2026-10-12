@@ -382,6 +382,31 @@ extension SirosWallet {
         }
     }
 
+    /// `unlockKeystore()`'s own PRF/HKDF resolution - the resume-after-logout
+    /// counterpart to `resolveLoginPrf`. Simpler: `encryptedContainer` here is
+    /// always `storedContainer` (this account was already resumed from a
+    /// prior session) and the known-salt branch has nothing to fall back to
+    /// (an absent `sessionStore.hkdfSalt` is a genuine error, not a case for
+    /// a fresh random value, since this isn't a first-time setup). The
+    /// recovery branch needs no extra network round trip: `storedContainer`
+    /// is already in hand.
+    func resolveUnlockKeystorePrf(
+        assertion: PasskeyAssertion,
+        storedContainer: Data
+    ) async throws -> (prfOutput: PrfOutput, hkdfSalt: Data, hkdfInfo: Data, recoveredSalt: Data?) {
+        if let knownPrfOutput = assertion.prfOutput {
+            guard let hkdfSalt = sessionStore.hkdfSalt.flatMap({ Self.b64Decode($0) }) else {
+                throw SirosError.keystore(message: "Missing HKDF salt")
+            }
+            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
+            return (knownPrfOutput, hkdfSalt, hkdfInfo, nil)
+        }
+        let recovered = try await recoverPrfFromPrivateData(
+            credentialId: assertion.credentialId, privateData: storedContainer
+        )
+        return (recovered.prfOutput, recovered.hkdfSalt, recovered.hkdfInfo, recovered.prfSalt)
+    }
+
     /// Heals the local account cache after a successful PRF-salt recovery
     /// (`recoverPrfFromPrivateData`), so the *next* login for this account is
     /// a normal one-tap match again instead of repeating the recovery
