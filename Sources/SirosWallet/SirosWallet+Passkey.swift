@@ -351,7 +351,7 @@ extension SirosWallet {
     /// this account is a normal one-tap match again.
     func recordSuccessfulLogin(
         accountId: String,
-        session: AuthSession,
+        session: LoginFinishResult,
         assertion: PasskeyAssertion,
         prfSaltBytes: Data,
         hkdfSalt: Data,
