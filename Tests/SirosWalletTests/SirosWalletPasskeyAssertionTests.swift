@@ -175,7 +175,7 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
 
         let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
 
-        XCTAssertEqual(assertion.prfOutput.first, Data("from-ceremony".utf8))
+        XCTAssertEqual(assertion.prfOutput?.first, Data("from-ceremony".utf8))
         XCTAssertTrue(provider.getPrfCalls.isEmpty, "no redundant second ceremony when the assertion carried PRF")
         XCTAssertEqual(assertion.challengeId, "challenge-1")
         XCTAssertEqual(assertion.credential["id"] as? String, SirosWallet.b64UrlEncode(provider.credentialId))
@@ -195,7 +195,7 @@ final class SirosWalletPasskeyAssertionTests: XCTestCase {
 
         let assertion = try await wallet.performPasskeyAssertion(asClient: server.makeClient())
 
-        XCTAssertEqual(assertion.prfOutput.first, Data("from-separate".utf8))
+        XCTAssertEqual(assertion.prfOutput?.first, Data("from-separate".utf8))
         XCTAssertEqual(provider.getPrfCalls.count, 1)
         XCTAssertEqual(provider.getPrfCalls.first?.credentialId, provider.credentialId, "never an empty placeholder")
         XCTAssertEqual(provider.getPrfCalls.first?.salt, storedSalt, "the stored PRF salt, so the unwrap key is stable")
