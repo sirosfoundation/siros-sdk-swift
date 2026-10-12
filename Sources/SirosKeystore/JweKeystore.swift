@@ -201,12 +201,31 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
 
     // MARK: - Unlock / Lock
 
-    // swiftlint:disable:next function_body_length
+    /// See `KeystoreManager.unlock(prfOutput:encryptedContainer:hkdfSalt:hkdfInfo:)`.
+    /// Forwards to the `prfSalt`-carrying overload with a fresh random salt -
+    /// identical to this method's own behavior before that overload existed -
+    /// for callers that have no real PRF salt to offer (e.g. an unlock-after-
+    /// resume, where `encryptedContainer` is never empty anyway so no salt is
+    /// ever persisted from it).
     public func unlock(
         prfOutput: Data,
         encryptedContainer: Data,
         hkdfSalt: Data,
         hkdfInfo: Data
+    ) async throws {
+        var prfSalt = Data(count: 32)
+        // swiftlint:disable:next force_unwrapping
+        prfSalt.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
+        try await unlock(prfOutput: prfOutput, encryptedContainer: encryptedContainer, hkdfSalt: hkdfSalt, hkdfInfo: hkdfInfo, prfSalt: prfSalt)
+    }
+
+    // swiftlint:disable:next function_body_length
+    public func unlock(
+        prfOutput: Data,
+        encryptedContainer: Data,
+        hkdfSalt: Data,
+        hkdfInfo: Data,
+        prfSalt: Data
     ) async throws {
         mutex.lock()
         defer { mutex.unlock() }
@@ -258,10 +277,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 mainKey: newMainKey,
                 mainKeyInfo: newMainKeyInfo
             )
-
-            var prfSalt = Data(count: 32)
-            // swiftlint:disable:next force_unwrapping
-            prfSalt.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
 
             containerMetadata = ContainerData(
                 jwe: "",
