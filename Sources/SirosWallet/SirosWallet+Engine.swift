@@ -789,7 +789,7 @@ extension SirosWallet {
                     try Task.checkCancellation()
                     } catch {
                         // A cancelled request is not a signing failure and is not logged as one.
-                        if !Task.isCancelled && !(error is CancellationError) { await Self.shielded { await scaPlan?.plan.complete(signed: false) } }
+                        if !Task.isCancelled && !(error is CancellationError) { await Self.shielded { await scaPlan?.plan.complete(failedWith: error) } }
                         throw error
                     }
                     let vpToken = vpParts.joined(separator: "\n")

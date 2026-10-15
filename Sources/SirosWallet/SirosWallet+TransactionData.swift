@@ -584,7 +584,7 @@ extension SirosWallet {
             await plan.plan.complete(signed: true)
             return SignSubFlowResult(vpToken: parts.joined(separator: "\n"))
         } catch {
-            if !Task.isCancelled && !(error is CancellationError) { await plan.plan.complete(signed: false) }
+            if !Task.isCancelled && !(error is CancellationError) { await plan.plan.complete(failedWith: error) }
             throw error
         }
     }

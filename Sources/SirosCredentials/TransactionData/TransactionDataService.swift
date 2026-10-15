@@ -57,6 +57,15 @@ public final class TransactionDataPlan: @unchecked Sendable {
     ///
     /// - Parameter refusal: the reason to record when `signed` is false;
     ///   `signingFailed` when not given.
+    /// Records signing that ended in `error`: a user's cancellation of the authentication is a
+    /// decline, any other TS12 refusal keeps its own reason, anything else is `signingFailed`.
+    public func complete(failedWith error: Error) async {
+        var refusal: TransactionDataError.Reason?
+        if let e = error as? TransactionDataError { refusal = e.reason }
+        else if case SirosError.transactionData(let e) = error { refusal = e.reason }
+        await complete(signed: false, refusal: refusal)
+    }
+
     public func complete(signed: Bool, refusal: TransactionDataError.Reason? = nil) async {
         lock.lock()
         let first = !completed
@@ -170,7 +179,8 @@ public final class TransactionDataService: @unchecked Sendable {
             return TransactionDataPlan(bindings: bindings) { [log, onLogFailure] signed, reason in
                 let records = TransactionLogEntry.records(
                     rawEntries: raws, verifier: verifier, credentialLabel: label,
-                    outcome: signed ? .consented : .refused, reason: signed ? nil : (reason ?? "signingFailed")
+                    outcome: signed ? .consented : (reason == TransactionDataError.Reason.declined.rawValue ? .declined : .refused),
+                    reason: signed || reason == TransactionDataError.Reason.declined.rawValue ? nil : (reason ?? "signingFailed")
                 )
                 do { try await log.append(records) } catch { onLogFailure?(error) }
             }

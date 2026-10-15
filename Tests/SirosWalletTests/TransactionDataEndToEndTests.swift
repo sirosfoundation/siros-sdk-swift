@@ -476,6 +476,7 @@ final class TransactionDataEndToEndTests: XCTestCase {
         catch SirosError.transactionData(let e) { XCTAssertEqual(e.reason, .insufficientAuthenticationFactors) }
         let log = await f.wallet.transactionLog()
         XCTAssertEqual(log.first?.outcome, .refused)
+        XCTAssertEqual(log.first?.reason, "insufficientAuthenticationFactors")
     }
 
     /// The user backing out of the PIN prompt declines the transaction: the engine is answered at once and no error is shown.
@@ -487,6 +488,9 @@ final class TransactionDataEndToEndTests: XCTestCase {
         XCTAssertEqual(sender.sent.count, 1, "one immediate response")
         XCTAssertNil(sender.sent.first?.vpToken)
         XCTAssertTrue(f.listener.errors.isEmpty, "a decline is not presented as an error")
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.first?.outcome, .declined, "cancelling the PIN prompt is logged as a decline")
+        XCTAssertNil(log.first?.reason)
     }
 
     /// The engine is answered at once when the sign itself refuses, not left to wait out its timeout.
@@ -497,6 +501,9 @@ final class TransactionDataEndToEndTests: XCTestCase {
         await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
         XCTAssertEqual(sender.sent.count, 1, "one immediate response")
         XCTAssertNil(sender.sent.first?.vpToken)
+        let log = await f.wallet.transactionLog()
+        XCTAssertEqual(log.first?.outcome, .refused)
+        XCTAssertEqual(log.first?.reason, "insufficientAuthenticationFactors", "the real reason, not signingFailed")
     }
 
     func testTheDefaultLogIsNotCarriedToTheNextAccount() async throws {
