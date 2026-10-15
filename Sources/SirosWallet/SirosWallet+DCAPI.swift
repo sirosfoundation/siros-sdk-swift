@@ -478,7 +478,7 @@ extension SirosWallet {
             return Self.b64UrlEncode(deviceResponse)
         } else {
             if let transactionData {
-                return try await keystore.signVpToken(
+                return try await signTransactionVpToken(
                     credential: cred.raw,
                     disclosedClaims: disclosedClaims,
                     nonce: request.nonce,

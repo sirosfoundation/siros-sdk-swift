@@ -259,7 +259,9 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     }
 
     public func authenticationCapability(keyId: String) async throws -> SignerFactorCapability {
-        try await onFFIQueue {
+        // The SCA sign has to ask the user for a secret; without a provider it can only fail.
+        guard authProvider != nil else { return .cannot("no authentication provider is configured to ask the user for a PIN") }
+        return try await onFFIQueue {
             let c = try self.ffi.authenticationCapability(kid: keyId)
             return SignerFactorCapability(
                 canReachTwoCategories: c.canReachTwoCategories,

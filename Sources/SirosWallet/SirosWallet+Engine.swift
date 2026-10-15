@@ -987,7 +987,7 @@ extension SirosWallet {
         } else {
             // SD-JWT VP token with KB-JWT
             if let transactionData {
-                return try await keystore.signVpToken(
+                return try await signTransactionVpToken(
                     credential: cred.raw,
                     disclosedClaims: ref.disclosedClaims,
                     nonce: nonce,

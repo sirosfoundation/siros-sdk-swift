@@ -471,9 +471,19 @@ final class TransactionDataEndToEndTests: XCTestCase {
         let f = try await fixture()
         f.keystore.signer.applied = [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.knowledge, "pin_less_than_6_digits")]
         do { _ = try await f.wallet.wmpTransactionPresentation(flowId: "f1", params: try wmpParams()); XCTFail("must not produce a token") }
-        catch let e as TransactionDataError { XCTAssertEqual(e.reason, .insufficientAuthenticationFactors) }
+        catch SirosError.transactionData(let e) { XCTAssertEqual(e.reason, .insufficientAuthenticationFactors) }
         let log = await f.wallet.transactionLog()
         XCTAssertEqual(log.first?.outcome, .refused)
+    }
+
+    /// The engine is answered at once when the sign itself refuses, not left to wait out its timeout.
+    func testEngineAnswersAtOnceWhenTheSignAppliedDifferentFactors() async throws {
+        let f = try await fixture()
+        f.keystore.signer.applied = [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.knowledge, "pin_less_than_6_digits")]
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
+        XCTAssertEqual(sender.sent.count, 1, "one immediate response")
+        XCTAssertNil(sender.sent.first?.vpToken)
     }
 
     func testTheDefaultLogIsNotCarriedToTheNextAccount() async throws {

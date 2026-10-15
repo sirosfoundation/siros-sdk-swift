@@ -41,7 +41,10 @@ enum ScaSignFlow {
     /// anything else a passphrase, classed by character count. `nil` for an
     /// empty or non-UTF-8 secret (the class is then unknown and not guessed).
     static func classifySecret(_ secret: Data) -> String? {
-        guard let s = String(data: secret, encoding: .utf8) else { return nil }
+        // Foundation's decoder drops a leading U+FEFF, which the manager's (Rust) decoding keeps and
+        // counts: validate with Foundation, then decode natively so both measure the same scalars.
+        guard String(data: secret, encoding: .utf8) != nil else { return nil }
+        let s = String(decoding: secret, as: UTF8.self)
         let n = s.unicodeScalars.count
         guard n > 0 else { return nil }
         if s.unicodeScalars.allSatisfy({ $0.value >= 0x30 && $0.value <= 0x39 }) {

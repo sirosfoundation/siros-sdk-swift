@@ -93,6 +93,23 @@ final class ScaPlan: @unchecked Sendable {
 }
 
 extension SirosWallet {
+    /// Signs a transaction presentation's KB-JWT. A TS12 refusal raised while signing (the sign applied
+    /// other factors than it claimed, a key that cannot reach two categories) surfaces as
+    /// `SirosError.transactionData` like every earlier refusal, so each transport answers it at once.
+    func signTransactionVpToken(
+        credential: String, disclosedClaims: [String]?, nonce: String, audience: String,
+        transactionData: TransactionDataBinding, kid: String?
+    ) async throws -> String {
+        do {
+            return try await keystore.signVpToken(
+                credential: credential, disclosedClaims: disclosedClaims, nonce: nonce, audience: audience,
+                transactionData: transactionData, kid: kid
+            )
+        } catch let error as TransactionDataError {
+            throw SirosError.transactionData(error)
+        }
+    }
+
     /// The default `transactionResourceGet`: the hardened fetcher (https, public
     /// hosts, no redirects, no credentials, size and time caps).
     static let secureResourceGet: @Sendable (URL, Int) async -> Data? = { url, maxBytes in
@@ -557,7 +574,7 @@ extension SirosWallet {
             }
             var parts: [String] = []
             for item in toSign {
-                parts.append(try await keystore.signVpToken(
+                parts.append(try await signTransactionVpToken(
                     credential: item.cred.raw, disclosedClaims: item.ref.disclosedClaims, nonce: params.nonce,
                     audience: params.audience, transactionData: item.binding,
                     kid: plan.kid(for: item.queryId, fallback: item.cred.kid)

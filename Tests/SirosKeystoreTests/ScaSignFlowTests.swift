@@ -136,6 +136,8 @@ final class ScaSignFlowTests: XCTestCase {
         XCTAssertNil(ScaSignFlow.classifySecret(Data([0xFF])))
         // Scalars, not grapheme clusters: seven scalars in one cluster is still under eight.
         XCTAssertEqual(ScaSignFlow.classifySecret(Data(("e" + String(repeating: "\u{0301}", count: 7)).utf8)), "passphrase_8_to_11_chars")
+        // A leading BOM is a scalar the manager counts: "\u{FEFF}123456" is seven scalars and not all digits.
+        XCTAssertEqual(ScaSignFlow.classifySecret(Data("\u{FEFF}123456".utf8)), "passphrase_less_than_8_chars")
         // Non-ASCII digits are not a PIN.
         XCTAssertEqual(ScaSignFlow.classifySecret(Data("١٢٣٤٥٦".utf8)), "passphrase_less_than_8_chars")
     }
