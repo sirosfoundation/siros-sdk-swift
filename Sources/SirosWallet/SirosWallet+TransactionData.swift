@@ -65,6 +65,17 @@ final class GenerationBoundLogStore: TransactionLogStore, @unchecked Sendable {
 /// outcome: the bindings, the signing key pinned when the transaction was
 /// validated and shown, and the completion that records consent only once the
 /// presentation exists.
+/// The wallet's answer to "can this key reach two authentication categories?":
+/// the keystore's, which asks the WSCD manager (never prompts, never cached).
+struct KeystoreScaAuthentication: ScaAuthenticationCapability {
+    let keystore: any KeystoreManager
+
+    func canEstablishTwoCategories(keyId: String?) async -> Bool {
+        guard let keyId else { return false }
+        return await keystore.scaAuthenticationCapability(keyId: keyId).canReachTwoCategories
+    }
+}
+
 final class ScaPlan: @unchecked Sendable {
     let plan: TransactionDataPlan
     let kids: [String: String]
@@ -192,7 +203,7 @@ extension SirosWallet {
         TransactionDataService(
             source: WalletTransactionMetadataSource(metadataFetch: transactionMetadataFetch, resourceGet: transactionResourceGet),
             consentHandler: transactionConsentHandler,
-            factorsProvider: authenticationFactorsProvider,
+            authentication: KeystoreScaAuthentication(keystore: keystore),
             log: transactionLogStoreInstance(),
             consentTimeout: transactionDataConsentTimeout,
             onLogFailure: { [weak self] _ in self?.reportTransactionLogFailure() }
@@ -365,7 +376,6 @@ extension SirosWallet {
         do {
             var credentials: [TransactionDataCredential] = []
             var names: [String: String] = [:]
-            var factorContexts: [String: AuthenticationFactorContext] = [:]
             var kids: [String: String] = [:]
             for (queryId, cred) in selected.sorted(by: { $0.key < $1.key }) {
                 // A malformed `...#integrity` claim refuses here (never reads as "no pin"). Only an SD-JWT VC has such
@@ -381,13 +391,10 @@ extension SirosWallet {
                 let keys = keystore.listKeys()
                 let kid = cred.kid ?? keys.first?.keyId
                 if let kid { kids[queryId] = kid }
-                let properties: SignerSecurityProperties? = if let kid { await keystore.securityProperties(keyId: kid) } else { nil }
-                let pluginId = kid.flatMap { id in keys.first(where: { $0.keyId == id })?.pluginId }
-                factorContexts[queryId] = AuthenticationFactorContext(keyStorage: properties?.keyStorage ?? [], pluginId: pluginId, keyId: kid)
             }
             var context = TransactionDataContext(
                 verifier: verifier, requestSigned: requestSigned, locale: transactionDataLocale,
-                credentialNames: names, factorContexts: factorContexts, disclosedClaims: selection.disclosed,
+                credentialNames: names, keyIds: kids, disclosedClaims: selection.disclosed,
                 requireEveryCredentialBound: requireEveryCredentialBound
             )
             context.additionalAttributes = selection.additional
