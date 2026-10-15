@@ -43,7 +43,7 @@ final class RemoteIDVClientTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "raw body")
     }
 
-    func testOtherCodeKeepsStepErrorAndRawBody() {
+    func testPolicyRejectedBecomesVerificationFailedWithTheBackendMessage() {
         let body = #"{"error":"scan rejected by policy","error_code":"policy_rejected"}"#
         let error = RemoteIDVClient.idvError(
             for422ErrorCode: "policy_rejected", errorMessage: "scan rejected by policy", responseBody: body, fallback: fallback
@@ -52,8 +52,17 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case let .verificationFailed(message) = error else {
             return XCTFail("expected verificationFailed, got \(error)")
         }
-        XCTAssertEqual(message, body)
+        XCTAssertEqual(message, "scan rejected by policy")
         XCTAssertEqual(error.errorCode, "idv_verification_failed")
+    }
+
+    func testCodeWithoutOwnErrorBecomesProviderError() {
+        let error = RemoteIDVClient.idvError(
+            for422ErrorCode: "issuance_failed", errorMessage: "credential issuance failed", responseBody: "{}", fallback: fallback
+        )
+
+        XCTAssertEqual(error.errorCode, "idv_provider_issuance_failed")
+        XCTAssertEqual(error.errorDescription, "[issuance_failed] credential issuance failed")
     }
 
     func testBodyWithoutCodeKeepsStepError() {
@@ -63,6 +72,28 @@ final class RemoteIDVClientTests: XCTestCase {
 
         guard case .verificationFailed = error else {
             return XCTFail("expected verificationFailed, got \(error)")
+        }
+    }
+
+    func testChipUntrustedDocumentExpiredAndSessionExpiredHaveTheirOwnErrors() {
+        let expected: [(code: String, errorCode: String)] = [
+            ("chip_untrusted", "idv_chip_untrusted"),
+            ("document_expired", "idv_document_expired"),
+            ("session_expired", "idv_session_expired"),
+        ]
+        for (code, errorCode) in expected {
+            let error = RemoteIDVClient.idvError(
+                for422ErrorCode: code, errorMessage: "the reason", responseBody: "{}", fallback: fallback
+            )
+
+            XCTAssertEqual(error.errorCode, errorCode, code)
+            XCTAssertEqual(error.errorDescription, "the reason", code)
+            switch (code, error) {
+            case ("chip_untrusted", .chipUntrusted), ("document_expired", .documentExpired), ("session_expired", .sessionExpired):
+                break
+            default:
+                XCTFail("\(code): wrong case \(error)")
+            }
         }
     }
 
@@ -106,7 +137,7 @@ final class RemoteIDVClientTests: XCTestCase {
         XCTAssertEqual(error.errorCode, "idv_nfc_skipped")
     }
 
-    func testSubmitDocumentKeepsVerificationFailedForOtherCodes() async throws {
+    func testSubmitDocumentMapsPolicyRejection() async throws {
         let body = #"{"error":"scan rejected by policy","error_code":"policy_rejected"}"#
         let error = try await thrownError(status: 422, body: body) {
             _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"])
@@ -115,10 +146,10 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case let .verificationFailed(message) = error else {
             return XCTFail("expected verificationFailed, got \(error)")
         }
-        XCTAssertEqual(message, body)
+        XCTAssertEqual(message, "scan rejected by policy")
     }
 
-    func testSubmitBiometricKeepsLivenessFailed() async throws {
+    func testSubmitBiometricMapsLivenessFailed() async throws {
         let body = #"{"error":"liveness check did not pass","error_code":"liveness_failed"}"#
         let error = try await thrownError(status: 422, body: body) {
             _ = try await $0.submitBiometric(payload: ["faceScan": "x"])
@@ -127,7 +158,21 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case let .livenessFailed(message) = error else {
             return XCTFail("expected livenessFailed, got \(error)")
         }
-        XCTAssertEqual(message, body)
+        XCTAssertEqual(message, "liveness check did not pass")
+    }
+
+    /// A 422 body without an `error_code` (an older backend) keeps the step's
+    /// own error and the raw body.
+    func testSubmitStepsKeepTheirOwnErrorForABodyWithoutCode() async throws {
+        let document = try await thrownError(status: 422, body: "plain text") {
+            _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"])
+        }
+        let liveness = try await thrownError(status: 422, body: "plain text") {
+            _ = try await $0.submitBiometric(payload: ["faceScan": "x"])
+        }
+
+        guard case .verificationFailed("plain text") = document else { return XCTFail("got \(document)") }
+        guard case .livenessFailed("plain text") = liveness else { return XCTFail("got \(liveness)") }
     }
 
     func testNon422StaysANetworkError() async throws {
@@ -139,5 +184,31 @@ final class RemoteIDVClientTests: XCTestCase {
         guard case .networkError = error else {
             return XCTFail("expected networkError, got \(error)")
         }
+    }
+
+    /// facetec-api v0.16.0 refuses an expired document on `/v1/id-scan` too.
+    func testSubmitDocumentMapsDocumentExpired() async throws {
+        let error = try await thrownError(
+            status: 422,
+            body: #"{"error":"document has expired","error_code":"document_expired"}"#
+        ) { _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"]) }
+
+        guard case let .documentExpired(message) = error else {
+            return XCTFail("expected documentExpired, got \(error)")
+        }
+        XCTAssertEqual(message, "document has expired")
+        XCTAssertEqual(error.errorCode, "idv_document_expired")
+    }
+
+    func testSubmitDocumentMapsSessionExpired() async throws {
+        let error = try await thrownError(
+            status: 422,
+            body: #"{"error":"liveness session expired or not found","error_code":"session_expired"}"#
+        ) { _ = try await $0.submitDocument(payload: ["livenessSessionId": "s"]) }
+
+        guard case .sessionExpired = error else {
+            return XCTFail("expected sessionExpired, got \(error)")
+        }
+        XCTAssertEqual(error.errorCode, "idv_session_expired")
     }
 }

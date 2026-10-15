@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
+  facetec-api's `/process-request`.** One FaceTec session (3D liveness,
+  document scan with NFC chip read, photo match) relays every request blob
+  to facetec-api, which issues the credential; the offer becomes the
+  `IDVResult`. Configured with `FaceTecIDVConfig(processRequestUrl:authToken:deviceKeyIdentifier:)`
+  (`requireNfc` defaults to true; `configureSession` runs after FaceTec has
+  initialized, for customization). Follows siros-sdk-kotlin's
+  `FaceTecIDVProvider` (same flow, config names and dedicated errors for
+  `chip_untrusted`, `document_expired` and `session_expired`). It maps facetec-api's refusal codes to
+  `IDVError`s: `nfc_*` to `documentChipNotVerified`, `liveness_failed` to
+  `livenessFailed`, `match_failed`/`policy_rejected`/`document_unreadable` to
+  `verificationFailed`, `chip_untrusted`/`document_expired`/`session_expired`
+  to `chipUntrusted`/`documentExpired`/`sessionExpired`, anything else
+  (`issuance_failed`, `internal_error`, ...) to `providerError` with the code
+  kept (`errorCode` `idv_provider_<code>`).
+  The provider sends **one `externalDatabaseRefID` per FaceTec session on
+  every `/process-request`**, which facetec-api v0.16.0 requires: it refuses
+  the final result with `liveness_failed` unless that session's liveness was
+  proven under the same ID. See `docs/IDENTITY-VERIFICATION.md`.
+- `HostAppRequirements` now lists, under `.identityVerification`, the NFC chip read's
+  declarations: `NFCReaderUsageDescription`, the `com.apple.developer.nfc.readersession.formats`
+  entitlement and the ISO 7816 select-identifiers (`faceTecChipApplicationIdentifiers`),
+  with a new array-valued requirement kind `infoPlistStrings` that `audit` checks.
+- The sample app uses it (device key from the `FACETEC_DEVICE_KEY_IDENTIFIER`
+  build setting) and shows a localized message per `idv_*` error code (en, sv).
 - **`IDVError.documentChipNotVerified(reason:message:)`: a refused issuance
   because the document's NFC chip was not read and authenticated.**
   facetec-api now issues nothing without an authenticated chip read
@@ -18,6 +43,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only tells verified from not, so the reason there is always
   `nfc_skipped`; any other `nfc_*` code a backend sends maps the same way. Adding a case to `IDVError` breaks exhaustive `switch`es over it
   outside the SDK; add a `default` or handle the new case.
+- **`IDVError.chipUntrusted`, `.documentExpired` and `.sessionExpired`:
+  facetec-api's `chip_untrusted`, `document_expired` and `session_expired`
+  refusals** (facetec-api v0.15.0 / v0.16.0), with `errorCode`s
+  `idv_chip_untrusted`, `idv_document_expired` and `idv_session_expired`,
+  mapped from a 422 by `RemoteIDVClient` like the `nfc_*` codes. They were
+  a generic `verificationFailed` carrying the raw body. Every 422 that carries
+  an `error_code` now goes through one table (`IDVError(refusalCode:message:)`):
+  `liveness_failed` is `livenessFailed`, `match_failed`/`policy_rejected`/
+  `document_unreadable` are `verificationFailed`, any other code is
+  `providerError` with the code kept, all with the backend's `error` text as
+  the message instead of the raw JSON body. A body without a code is unchanged.
+
+### Deprecated
+- **`FaceTecCaptureDelegate`.** It is written against the FaceTec 9 API
+  (`createSessionVC` and the face-scan/ID-scan processors), which FaceTec 10
+  removed, so it cannot compile against the SDK wallet-ios-wrapper ships.
+  Use `FaceTecIDVProvider`. Its FaceTec 9 code is removed: it never compiled
+  with FaceTec linked (it called `IDVError.cancelled(reason:)`, which has no
+  associated value) and, with FaceTec 10 linked, it broke the whole package
+  build. It now always throws `IDVError.unavailable`. `RemoteIDVProvider`
+  is unchanged.
 
 ## [0.14.1] - 2026-09-29
 

@@ -12,6 +12,7 @@ final class HostAppRequirementsTests: XCTestCase {
             "NSBluetoothAlwaysUsageDescription": "ble",
             "NFCReaderUsageDescription": "nfc",
             "NSFaceIDUsageDescription": "face",
+            HostAppRequirements.iso7816SelectIdentifiersKey: HostAppRequirements.faceTecChipApplicationIdentifiers,
         ]
     }
 
@@ -34,8 +35,39 @@ final class HostAppRequirementsTests: XCTestCase {
         XCTAssertTrue(kinds.contains(.infoPlistKey("NFCReaderUsageDescription")))
         XCTAssertTrue(kinds.contains(.infoPlistKey("NSFaceIDUsageDescription")))
         XCTAssertEqual(kinds.filter { $0 == .infoPlistKey("NSCameraUsageDescription") }.count, 2)
+        // The NFC usage description is owed by .nfc and by identity verification's chip read.
+        XCTAssertEqual(kinds.filter { $0 == .infoPlistKey("NFCReaderUsageDescription") }.count, 2)
+        XCTAssertTrue(kinds.contains(.infoPlistStrings(
+            key: HostAppRequirements.iso7816SelectIdentifiersKey,
+            including: HostAppRequirements.faceTecChipApplicationIdentifiers)))
         // Entitlements are documented, never flagged.
         XCTAssertFalse(kinds.contains { if case .entitlement = $0 { return true } else { return false } })
+    }
+
+    func testIdentityVerificationRequiresTheNfcChipReadDeclarations() {
+        let features: Set<HostAppRequirements.Feature> = [.identityVerification]
+        let kinds = HostAppRequirements.requirements(for: features).map(\.kind)
+        XCTAssertTrue(kinds.contains(.infoPlistKey("NFCReaderUsageDescription")))
+        XCTAssertTrue(kinds.contains(.entitlement("com.apple.developer.nfc.readersession.formats")))
+
+        var info = fullyDeclared()
+        XCTAssertEqual(HostAppRequirements.audit(infoDictionary: info, features: features), [])
+
+        info.removeValue(forKey: "NFCReaderUsageDescription")
+        info.removeValue(forKey: HostAppRequirements.iso7816SelectIdentifiersKey)
+        let findings = HostAppRequirements.audit(infoDictionary: info, features: features)
+        XCTAssertEqual(findings.count, 2)
+        XCTAssertTrue(findings.contains { $0.description.contains("NFCReaderUsageDescription") })
+        XCTAssertTrue(findings.contains { $0.description.contains("select-identifiers") })
+    }
+
+    func testAPartialSelectIdentifierListCountsAsMissing() {
+        var info = fullyDeclared()
+        info[HostAppRequirements.iso7816SelectIdentifiersKey] = [HostAppRequirements.faceTecChipApplicationIdentifiers[0]]
+        XCTAssertEqual(HostAppRequirements.audit(infoDictionary: info, features: [.identityVerification]).count, 1)
+        // Extra identifiers the host's other features need do not matter.
+        info[HostAppRequirements.iso7816SelectIdentifiersKey] = HostAppRequirements.faceTecChipApplicationIdentifiers + ["D2760000850101"]
+        XCTAssertEqual(HostAppRequirements.audit(infoDictionary: info, features: [.identityVerification]), [])
     }
 
     func testFeaturesScopeWhatIsChecked() {

@@ -416,6 +416,10 @@ public final class SirosWallet: @unchecked Sendable {
 
     let credentialStore: CredentialStore
 
+    /// A BBS credential's holder state vault - `nil` unless `keystore`
+    /// conforms to `ExtensionStore`. See `removeBbsHolderStateIfAny`.
+    let bbsHolderStateVault: BbsHolderStateVault?
+
     /// Resolves the DID methods the active `config.diipProfile` requires, for
     /// Issuer and Verifier identities. `did:jwk` resolves offline; `did:web`
     /// goes over HTTPS with no wallet credentials attached, since it targets
@@ -461,6 +465,13 @@ public final class SirosWallet: @unchecked Sendable {
     /// request simply finds no matching system there, the same "unsupported"
     /// outcome as any other unregistered proof system.
     public let zkProofSystemRegistry: ZkProofSystemRegistry
+
+    #if os(iOS)
+    /// Retained here (not just handed to `zkProofSystemRegistry`'s systems'
+    /// initializers and otherwise forgotten) so `releaseZkProvers()` has
+    /// something to reach - see `ZkProverResidency`'s own doc comment.
+    let zkProverResidency: ZkProverResidency
+    #endif
 
     /// go-wallet-backend's credential-type registry service base URL, for
     /// `vctmFetcher`/`mddlSchemaFetcher`'s registry-service fetch strategy.
@@ -783,6 +794,7 @@ public final class SirosWallet: @unchecked Sendable {
         #endif
 
         self.credentialStore = config.credentialStore ?? KeystoreBackedCredentialStore(keystore: self.keystore)
+        self.bbsHolderStateVault = (self.keystore as? ExtensionStore).map { BbsHolderStateVault(keystore: $0) }
 
         // Set up new AS-based auth. Moved ahead of the DID resolver below
         // (it used to follow it) so `tokens` already exists to authenticate
@@ -861,9 +873,22 @@ public final class SirosWallet: @unchecked Sendable {
         self.typeMetadataHttpGet = typeMetadataGet
         self.mddlSchemaFetcher = MddlSchemaFetcher(httpGet: typeMetadataGet)
         self.zkCircuitClient = ZkCircuitClient(sources: config.zkCircuitUrls)
+
         #if os(iOS)
-        self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [LongfellowZkProofSystem(zkCircuitClient: self.zkCircuitClient)])
+        // See `makeIOSZkProofSystemRegistry`'s own doc comment for how the
+        // registry and residency are assembled.
+        let (zkProofSystemRegistry, zkProverResidency) = Self.makeIOSZkProofSystemRegistry(
+            config: config,
+            credentialStore: self.credentialStore,
+            zkCircuitClient: self.zkCircuitClient,
+            bbsHolderStateVault: self.bbsHolderStateVault
+        )
+        self.zkProverResidency = zkProverResidency
+        self.zkProofSystemRegistry = zkProofSystemRegistry
         #else
+        // Longfellow/Vega/BBS are all iOS-only (each one's native
+        // XCFramework ships no macOS/Linux slice - see Package.swift), so
+        // there is nothing to register on this platform.
         self.zkProofSystemRegistry = ZkProofSystemRegistry(systems: [])
         #endif
 
@@ -1021,11 +1046,13 @@ public final class SirosWallet: @unchecked Sendable {
                 displayName: displayName
             )
 
+            // prfSalt must land in the new PrfKeyInfo, not a random value.
             try await keystore.unlock(
                 prfOutput: prfOutput.first,
                 encryptedContainer: Data(),
                 hkdfSalt: hkdfSalt,
-                hkdfInfo: hkdfInfo
+                hkdfInfo: hkdfInfo,
+                prfSalt: prfSalt
             )
 
             let encryptedContainer = try await keystore.exportEncryptedContainer()
@@ -1123,10 +1150,9 @@ public final class SirosWallet: @unchecked Sendable {
         // See `handleLifecycleRefusal(_:forAccount:)`.
         var loginAccountId = refusalAccountId
         do {
-            // Steps 1-2: challenge, passkey assertion, PRF (fails closed)
+            // Steps 1-2: challenge, passkey assertion, PRF (handled below).
             let assertion = try await performPasskeyAssertion(asClient: asClient)
             loginAccountId = accountId(owningInScope: assertion.credentialId)
-            let prfOutput = assertion.prfOutput
 
             // Step 3: Complete login with AS
             let session = try await asClient.loginFinish(
@@ -1149,42 +1175,25 @@ public final class SirosWallet: @unchecked Sendable {
             setupApiClientWithTokens(tokens)
             let privateData = try await fetchPrivateData()
 
-            // HKDF parameters: this account's session store first (unlock
-            // after resume), then its registry entry (login after logout, when
-            // the account-scoped store has been cleared), then fresh values for
-            // a first login on this install. The registry entry counts only if
-            // it is the account the server just confirmed.
+            // PRF/HKDF parameters, normal or recovered - see `resolveLoginPrf`.
             let cached = assertion.cachedAccount.flatMap { $0.accountId == accountId ? $0 : nil }
-            let hkdfSalt = sessionStore.hkdfSalt.flatMap { Self.b64Decode($0) }
-                ?? cached.flatMap { Self.b64Decode($0.hkdfSalt) }
-                ?? Self.randomBytes(32)
-            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) }
-                ?? cached.flatMap { Self.b64Decode($0.hkdfInfo) }
-                ?? Data(Self.hkdfInfo.utf8)
-            let prfSaltBytes = assertion.prfSalt
+            let resolved = try await resolveLoginPrf(assertion: assertion, privateData: privateData, cachedAccount: cached)
 
             try await keystore.unlock(
-                prfOutput: prfOutput.first,
+                prfOutput: resolved.prfOutput.first,
                 encryptedContainer: privateData,
-                hkdfSalt: hkdfSalt,
-                hkdfInfo: hkdfInfo
+                hkdfSalt: resolved.hkdfSalt,
+                hkdfInfo: resolved.hkdfInfo,
+                prfSalt: resolved.prfSalt
             )
 
-            accountRegistry.activeAccountId = accountId
-            sessionStore.userId = session.uuid
-            sessionStore.displayName = session.displayName
-            sessionStore.tenantId = config.tenantId
-            // See register()'s identical assignment: this is the only thing
-            // that records which passkey this installation logs in with, and
-            // `generateWIA` needs it to bind the instance to that passkey
-            // (SID-AUTH-06). It is the credential the ceremony actually
-            // resolved to, not a stored guess.
-            if let credentialId = assertion.credential["id"] as? String {
-                sessionStore.credentialId = credentialId
-            }
-            sessionStore.prfSalt = Self.b64Encode(prfSaltBytes)
-            sessionStore.hkdfSalt = Self.b64Encode(hkdfSalt)
-            sessionStore.hkdfInfo = Self.b64Encode(hkdfInfo)
+            // Records credentialId/salts and heals the account cache on
+            // recovery - see `recordSuccessfulLogin`.
+            recordSuccessfulLogin(
+                accountId: accountId, session: session, assertion: assertion,
+                prfSaltBytes: resolved.prfSalt, hkdfSalt: resolved.hkdfSalt, hkdfInfo: resolved.hkdfInfo,
+                recoveredSalt: resolved.recoveredSalt
+            )
 
             try await connectEngineWithToken(tokens)
 
@@ -1300,6 +1309,7 @@ public final class SirosWallet: @unchecked Sendable {
         engine?.disconnect()
         if let peer { Task { try? await peer.close() } }
         cancelEngineTasks()
+        releaseZkProvers()
         keystore.lock()
         resetDefaultTransactionLogStore()
         sessionStore.clear()  // clears active account's session only
@@ -1380,7 +1390,6 @@ public final class SirosWallet: @unchecked Sendable {
             let assertion = try await performPasskeyAssertion(
                 asClient: asClient, accountId: sessionStore.activeAccountId
             )
-            let prfOutput = assertion.prfOutput
             _ = try await asClient.loginFinish(
                 challengeId: assertion.challengeId,
                 credential: assertion.credential
@@ -1397,17 +1406,23 @@ public final class SirosWallet: @unchecked Sendable {
             guard let storedJwe = sessionStore.privateDataJwe else {
                 throw SirosError.keystore(message: "Missing private data")
             }
-            guard let hkdfSalt = sessionStore.hkdfSalt.flatMap({ Self.b64Decode($0) }) else {
-                throw SirosError.keystore(message: "Missing HKDF salt")
-            }
-            let hkdfInfo = sessionStore.hkdfInfo.flatMap { Self.b64Decode($0) } ?? Data(Self.hkdfInfo.utf8)
+            let storedContainer = Data(storedJwe.utf8)
+            let resolved = try await resolveUnlockKeystorePrf(assertion: assertion, storedContainer: storedContainer)
 
             try await keystore.unlock(
-                prfOutput: prfOutput.first,
-                encryptedContainer: Data(storedJwe.utf8),
-                hkdfSalt: hkdfSalt,
-                hkdfInfo: hkdfInfo
+                prfOutput: resolved.prfOutput.first,
+                encryptedContainer: storedContainer,
+                hkdfSalt: resolved.hkdfSalt,
+                hkdfInfo: resolved.hkdfInfo
             )
+
+            if let recoveredSalt = resolved.recoveredSalt, let accountId = sessionStore.activeAccountId {
+                healAccountCache(
+                    accountId: accountId, userId: userId, displayName: displayName,
+                    credentialId: assertion.credentialId, prfSalt: recoveredSalt,
+                    hkdfSalt: resolved.hkdfSalt, hkdfInfo: resolved.hkdfInfo
+                )
+            }
 
             let creds = await credentialStore.getAll()
             setState(.ready(userId: userId, displayName: displayName, credentials: creds))
@@ -1417,4 +1432,11 @@ public final class SirosWallet: @unchecked Sendable {
             setState(.error(message: error.localizedDescription))
         }
     }
+
+    // MARK: - Credentials
+    //
+    // getCredentials/deleteCredential moved to
+    // SirosWallet+CredentialLifecycle.swift (file_length gate - review
+    // finding on PR #194, which also added deleteCredential's BBS-vault
+    // cleanup call; see that file).
 }
