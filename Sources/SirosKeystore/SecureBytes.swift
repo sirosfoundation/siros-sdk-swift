@@ -56,7 +56,7 @@ public final class SecureBytes: @unchecked Sendable {
     public init(_ bytes: [UInt8]) {
         let buf = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: bytes.count)
         _ = buf.initialize(from: bytes)
-        if let base = buf.baseAddress, buf.count > 0 {
+        if let base = buf.baseAddress, !buf.isEmpty {
             // Best-effort: asks the OS not to swap this page. Not available
             // (or not permitted) everywhere - a failure is not reported, since
             // the buffer is still used and still wiped either way.
@@ -73,6 +73,15 @@ public final class SecureBytes: @unchecked Sendable {
     /// already, see `UniFFISigner.swift`).
     public convenience init(utf8 string: String) {
         self.init(Array(string.utf8))
+    }
+
+    /// Copies `data` into a freshly allocated buffer. `data` itself is an
+    /// ordinary `Data` and is NOT wiped by this initializer - this is the one
+    /// for wrapping a `Data` this SDK did not allocate and cannot reach after
+    /// (a host's `WscdAuthProvider.requestPin(pluginId:)` result, see
+    /// `UniFFISigner.swift`), as early as possible after receiving it.
+    public convenience init(_ data: Data) {
+        self.init(Array(data))
     }
 
     /// The number of bytes held, or `0` once wiped.
@@ -103,7 +112,7 @@ public final class SecureBytes: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let buffer else { return }
         buffer.update(repeating: 0)
-        if let base = buffer.baseAddress, buffer.count > 0 {
+        if let base = buffer.baseAddress, !buffer.isEmpty {
             _ = munlock(base, buffer.count)
         }
         buffer.deallocate()
