@@ -718,6 +718,12 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     /// obtain the answer is "cannot" (fail closed).
     public func scaAuthenticationCapability(keyId: String) async -> SignerFactorCapability {
         do {
+            // The manager's probe can answer positively for a key it does not hold (it may route an unknown id to
+            // the default plugin), which would fail only after consent: the key must exist, under this exact id,
+            // which is also what the SCA sign requires.
+            guard try await signer.listKeys().contains(where: { $0.keyId == keyId }) else {
+                return .cannot("the signing key is not held by this keystore")
+            }
             let capability = try await signer.authenticationCapability(keyId: keyId)
             // A factor only the host could supply is not usable: an SCA sign requires a fresh
             // authentication, which the manager refuses for the plugins that need one.

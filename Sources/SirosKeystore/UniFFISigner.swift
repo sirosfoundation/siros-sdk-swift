@@ -275,6 +275,19 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         keyId: String,
         payload: @escaping ([AuthenticationFactor]) throws -> Data
     ) async throws -> SignerScaOutcome {
+        do {
+            return try await signForScaOnQueue(keyId: keyId, payload: payload)
+        } catch FfiWscdError.AuthCancelled {
+            // The user backed out of the PIN prompt (the first one or a retry): that is declining the
+            // transaction, answered at once like any other decline, not a failure of the wallet.
+            throw TransactionDataError(.declined, detail: "the user cancelled the authentication")
+        }
+    }
+
+    private func signForScaOnQueue(
+        keyId: String,
+        payload: @escaping ([AuthenticationFactor]) throws -> Data
+    ) async throws -> SignerScaOutcome {
         try await onFFIQueue {
             let pluginId = try self.ffi.listKeys().first(where: { $0.kid == keyId })?.pluginId
             let capability = try self.ffi.authenticationCapability(kid: keyId)

@@ -230,6 +230,15 @@ final class WscdKeystoreAdapterTransactionDataTests: XCTestCase {
         XCTAssertFalse(no.canReachTwoCategories)
     }
 
+    /// The manager may answer positively for a key it does not hold: an unknown key is refused before consent.
+    func testAnUnknownKeyHasNoScaCapability() async throws {
+        let a = try await adapter(CountingSigner())   // reports a positive capability for any key id
+        let unknown = await a.scaAuthenticationCapability(keyId: "not-a-key")
+        XCTAssertFalse(unknown.canReachTwoCategories)
+        let empty = await a.scaAuthenticationCapability(keyId: "")
+        XCTAssertFalse(empty.canReachTwoCategories)
+    }
+
     /// Presentations without transaction data are byte-for-byte unchanged:
     /// the claim set is exactly the pre-existing one, RFC 8176 amr included.
     func testNonScaClaimSetIsUnchanged() async throws {

@@ -22,11 +22,13 @@ private final class NoAuth: AuthProvider, @unchecked Sendable {
 private final class ZeroSigner: Signer, @unchecked Sendable {
     private let key = P256.Signing.PrivateKey()
     var capability = SignerFactorCapability(canReachTwoCategories: true)
+    /// Thrown by the SCA sign before anything is signed (the user backing out of the PIN prompt, say).
+    var scaError: Error?
     var applied = [AuthenticationFactor(.possession, "key_in_remote_wscd"), AuthenticationFactor(.knowledge, "pin_6_or_more_digits")]
     func authenticationCapability(keyId: String) async throws -> SignerFactorCapability { capability }
     func signForSca(keyId: String, payload: @escaping ([AuthenticationFactor]) throws -> Data) async throws -> SignerScaOutcome {
         try ScaSignFlow.run(
-            pluginId: "r2ps", capability: capability, promptPin: { Data("123456".utf8) }, payload: payload,
+            pluginId: "r2ps", capability: capability, promptPin: { if let e = self.scaError { throw e }; return Data("123456".utf8) }, payload: payload,
             sign: { [applied] _, _ in
                 ScaSignReport(signature: Data(repeating: 2, count: 64), factors: applied,
                               satisfiesTwoCategories: Set(applied.map(\.category)).count >= 2, shortfall: nil)
@@ -474,6 +476,17 @@ final class TransactionDataEndToEndTests: XCTestCase {
         catch SirosError.transactionData(let e) { XCTAssertEqual(e.reason, .insufficientAuthenticationFactors) }
         let log = await f.wallet.transactionLog()
         XCTAssertEqual(log.first?.outcome, .refused)
+    }
+
+    /// The user backing out of the PIN prompt declines the transaction: the engine is answered at once and no error is shown.
+    func testEngineAnswersAtOnceWhenTheUserCancelsThePin() async throws {
+        let f = try await fixture()
+        f.keystore.signer.scaError = TransactionDataError(.declined, detail: "the user cancelled the authentication")
+        let sender = Sender()
+        await f.wallet.handleSignRequest(engine: sender, msg: try engineMessage())
+        XCTAssertEqual(sender.sent.count, 1, "one immediate response")
+        XCTAssertNil(sender.sent.first?.vpToken)
+        XCTAssertTrue(f.listener.errors.isEmpty, "a decline is not presented as an error")
     }
 
     /// The engine is answered at once when the sign itself refuses, not left to wait out its timeout.
