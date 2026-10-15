@@ -301,7 +301,9 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
                 ),
                 promptPin: {
                     guard let provider else { throw FfiWscdError.AuthCancelled(msg: "No AuthProvider configured") }
-                    return try provider.requestPin(pluginId: pluginId ?? "")
+                    // WscdAuthProvider.requestPin throws only when the user cancels, whatever error type it uses.
+                    do { return try provider.requestPin(pluginId: pluginId ?? "") }
+                    catch { throw FfiWscdError.AuthCancelled(msg: "the user cancelled the PIN prompt") }
                 },
                 payload: payload,
                 sign: { data, pin in
