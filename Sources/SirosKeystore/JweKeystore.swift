@@ -9,63 +9,6 @@ import CryptoKit
 import CommonCrypto
 #endif
 
-/// A durable OID4VCI renewal candidate for one credential batch - see
-/// privatedata-spec SPEC.md §6.2 "S.credentialRefreshTokens". `dpopJwk` MUST
-/// be presented back unchanged on every renewal of the same batch (RFC
-/// 9449/ARF ISSU_65 key-binding), never regenerated client-side.
-public struct CredentialRefreshTokenEntry: Sendable, Equatable {
-    public let refreshToken: String
-    public let dpopJwk: String?
-    public let credentialIssuerIdentifier: String
-    public let credentialConfigurationId: String
-    /// Identifier of the client-held DPoP key the token is bound to when this
-    /// wallet signed the DPoP proofs itself (`sign_client_auth`,
-    /// go-wallet-backend#317) - `dpopJwk` is nil in that case. Presented back
-    /// as `dpop_key_id` on renewal so the engine asks this wallet to sign with
-    /// the same key.
-    public let dpopKeyId: String?
-
-    public init(
-        refreshToken: String,
-        dpopJwk: String?,
-        credentialIssuerIdentifier: String,
-        credentialConfigurationId: String,
-        dpopKeyId: String? = nil
-    ) {
-        self.refreshToken = refreshToken
-        self.dpopJwk = dpopJwk
-        self.credentialIssuerIdentifier = credentialIssuerIdentifier
-        self.credentialConfigurationId = credentialConfigurationId
-        self.dpopKeyId = dpopKeyId
-    }
-
-    fileprivate func toJsonObject() -> [String: Any] {
-        var dict: [String: Any] = [
-            "refreshToken": refreshToken,
-            "credentialIssuerIdentifier": credentialIssuerIdentifier,
-            "credentialConfigurationId": credentialConfigurationId,
-        ]
-        if let dpopJwk { dict["dpopJwk"] = dpopJwk }
-        if let dpopKeyId { dict["dpopKeyId"] = dpopKeyId }
-        return dict
-    }
-
-    fileprivate static func fromJsonObject(_ obj: [String: Any]) -> CredentialRefreshTokenEntry? {
-        guard let refreshToken = obj["refreshToken"] as? String,
-              let credentialIssuerIdentifier = obj["credentialIssuerIdentifier"] as? String,
-              let credentialConfigurationId = obj["credentialConfigurationId"] as? String else {
-            return nil
-        }
-        return CredentialRefreshTokenEntry(
-            refreshToken: refreshToken,
-            dpopJwk: obj["dpopJwk"] as? String,
-            credentialIssuerIdentifier: credentialIssuerIdentifier,
-            credentialConfigurationId: credentialConfigurationId,
-            dpopKeyId: obj["dpopKeyId"] as? String
-        )
-    }
-}
-
 /// JWE-based keystore implementation fully compatible with the wallet-frontend
 /// encrypted container format.
 ///
@@ -81,9 +24,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
 
     #if canImport(CryptoKit)
 
-    private let mutex = NSLock()
+    let mutex = NSLock()
     private var keys: [String: P256.Signing.PrivateKey] = [:]
-    private var credentials: [Int64: String] = [:]
+    var credentials: [Int64: String] = [:]
     private var presentationRecords: [Int64: String] = [:]
     private var _mainKey: SymmetricKey?
     private var containerMetadata: ContainerData?
@@ -120,6 +63,16 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // on the client (this field); the backend never persists it, since it
     // only ever needs it ephemerally to forward a single renewal request.
     private var credentialRefreshTokens: [Int64: CredentialRefreshTokenEntry] = [:]
+    // privatedata-spec `S.credentials[].metadata`: per-credential client
+    // metadata `[{type, value}]` (e.g. an issuer-delivered secret seed, later
+    // access tokens), keyed by credentialId. Held as the raw JSON value
+    // exactly as `JSONSerialization` produced it and never interpreted here,
+    // so a value this build cannot read (not an array, say) is written back
+    // verbatim. Deliberately a side map: the credential JSON in `credentials`
+    // is a `StoredCredential` whose own `metadata` key is DISPLAY metadata
+    // (an object, never persisted in the container) - the two must never
+    // meet. Cleared with the credential it belongs to.
+    var credentialMetadata: [Int64: Any] = [:]
 
     // kid -> the DID that key pair is published under. Kept alongside `keys`
     // rather than recomputed on export, because a key read back from the
@@ -299,6 +252,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         wscdCredentials.removeAll()
         extensions.removeAll()
         credentialRefreshTokens.removeAll()
+        credentialMetadata.removeAll()
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
@@ -745,6 +699,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeValue(forKey: id)
+        credentialMetadata.removeValue(forKey: id)
     }
 
     public func clearCredentials() async throws {
@@ -752,6 +707,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeAll()
+        credentialMetadata.removeAll()
     }
 
     // MARK: - Presentation history storage
@@ -838,7 +794,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
 
     // MARK: - Private helpers
 
-    private func requireUnlocked() throws {
+    func requireUnlocked() throws {
         guard _mainKey != nil else {
             throw KeystoreError.locked
         }
@@ -932,6 +888,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             let credFormat = (entry["format"] as? String) ?? ""
             let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
             let credConfigId = entry["credentialConfigurationId"] as? String
+            // Kept apart from `storedDict` below - see `credentialMetadata`.
+            if let metadata = entry["metadata"] { credentialMetadata[credId] = metadata }
             let batchId = Self.asInt64(entry["batchId"]) ?? 0
             let instanceId = Self.asInt(entry["instanceId"]) ?? 0
 
@@ -1118,6 +1076,13 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         "credentialRefreshTokens",
     ]
 
+    /// The `S.credentials[]` members `buildWalletStateV3()` produces from its
+    /// own state; every other member of a loaded entry is carried through.
+    private static let ownedCredentialMembers: Set<String> = [
+        "credentialId", "format", "data", "kid", "instanceId", "batchId",
+        "credentialIssuerIdentifier", "credentialConfigurationId", "metadata",
+    ]
+
     private func buildWalletStateV3() -> [String: Any] {
         // Preserve existing state if available, otherwise initialize fresh.
         // NOTE: this must NOT short-circuit and return existingState verbatim -
@@ -1211,7 +1176,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             let configId = (original?["credentialConfigurationId"] as? String)
                 ?? (parsed?["credential_configuration_id"] as? String) ?? ""
             let credData = (original?["data"] as? String) ?? (parsed?["raw"] as? String) ?? data
-            let entry: [String: Any] = [
+            // Start from the loaded entry so members this build does not know
+            // survive (a rewriting client MUST preserve them), then overlay
+            // the ones it owns. `metadata` comes from the side map only: nil
+            // is omitted, never written as null or [].
+            var entry: [String: Any] = (original ?? [:]).filter { !Self.ownedCredentialMembers.contains($0.key) }
+            entry.merge([
                 "credentialId": id,
                 "format": format,
                 "data": credData,
@@ -1220,7 +1190,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 "batchId": batchId,
                 "credentialIssuerIdentifier": issuerIdent,
                 "credentialConfigurationId": configId,
-            ]
+            ] as [String: Any]) { _, owned in owned }
+            if let metadata = credentialMetadata[id] { entry["metadata"] = metadata }
             return entry
         }
 
