@@ -139,7 +139,8 @@ final class CredentialMetadataTests: XCTestCase {
         try await k.saveCredential(id: 1, json: "{\"id\":1,\"format\":\"dc+sd-jwt\",\"raw\":\"r\",\"batch_id\":1,\"instance_id\":0}")
         let none = await k.credentialMetadata(id: 1)
         XCTAssertNil(none)
-        XCTAssertNil(entry(1, in: try await creds(of: k))?["metadata"])
+        let after = try await creds(of: k)
+        XCTAssertNil(entry(1, in: after)?["metadata"])
     }
 
     func testLockClearsMetadata() async throws {
@@ -169,7 +170,8 @@ final class CredentialMetadataTests: XCTestCase {
             XCTAssertNotNil(try? JSONDecoder().decode(StoredCredential.self, from: Data(XCTUnwrap(json).utf8)))
             let none = await k.credentialMetadata(id: 1)
             XCTAssertNil(none)
-            XCTAssertTrue(ContainerTestSupport.jsonEqual(malformed, entry(1, in: try await creds(of: k))?["metadata"]),
+            let written = try await creds(of: k)
+            XCTAssertTrue(ContainerTestSupport.jsonEqual(malformed, entry(1, in: written)?["metadata"]),
                           "malformed \(malformed) must be written back verbatim")
         }
     }
@@ -177,10 +179,12 @@ final class CredentialMetadataTests: XCTestCase {
     func testSettingNilOrEmptyOmitsMemberAndInvalidEntriesAreRejected() async throws {
         let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": [seedEntry()]])]))
         try await k.setCredentialMetadata(id: 1, [])
-        XCTAssertNil(entry(1, in: try await creds(of: k))?["metadata"])
+        let afterEmpty = try await creds(of: k)
+        XCTAssertNil(entry(1, in: afterEmpty)?["metadata"])
         try await k.setCredentialMetadata(id: 1, [seedEntry()])
         try await k.setCredentialMetadata(id: 1, nil)
-        XCTAssertNil(entry(1, in: try await creds(of: k))?["metadata"])
+        let afterNil = try await creds(of: k)
+        XCTAssertNil(entry(1, in: afterNil)?["metadata"])
 
         do { try await k.setCredentialMetadata(id: 1, [["type": "", "value": "v"]]); XCTFail("empty type") } catch {}
         do { try await k.setCredentialMetadata(id: 1, [["type": "t"]]); XCTFail("missing value") } catch {}
