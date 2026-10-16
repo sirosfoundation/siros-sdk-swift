@@ -120,6 +120,16 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // on the client (this field); the backend never persists it, since it
     // only ever needs it ephemerally to forward a single renewal request.
     private var credentialRefreshTokens: [Int64: CredentialRefreshTokenEntry] = [:]
+    // privatedata-spec `S.credentials[].metadata`: per-credential client
+    // metadata `[{type, value}]` (e.g. an issuer-delivered secret seed, later
+    // access tokens), keyed by credentialId. Held as the raw JSON value
+    // exactly as `JSONSerialization` produced it and never interpreted here,
+    // so a value this build cannot read (not an array, say) is written back
+    // verbatim. Deliberately a side map: the credential JSON in `credentials`
+    // is a `StoredCredential` whose own `metadata` key is DISPLAY metadata
+    // (an object, never persisted in the container) - the two must never
+    // meet. Cleared with the credential it belongs to.
+    private var credentialMetadata: [Int64: Any] = [:]
 
     // kid -> the DID that key pair is published under. Kept alongside `keys`
     // rather than recomputed on export, because a key read back from the
@@ -299,6 +309,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         wscdCredentials.removeAll()
         extensions.removeAll()
         credentialRefreshTokens.removeAll()
+        credentialMetadata.removeAll()
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
@@ -745,6 +756,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeValue(forKey: id)
+        credentialMetadata.removeValue(forKey: id)
     }
 
     public func clearCredentials() async throws {
@@ -752,6 +764,59 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         defer { mutex.unlock() }
         try requireUnlocked()
         credentials.removeAll()
+        credentialMetadata.removeAll()
+    }
+
+    /// The credential's `S.credentials[].metadata` entries, each
+    /// `{"type": String, "value": <any JSON>}`, or nil when it has none - or
+    /// when the stored member is not a well-formed array of such objects
+    /// (it is then still written back verbatim on export, just not
+    /// interpreted).
+    ///
+    /// Values are JSON as `JSONSerialization` models it: strings, booleans,
+    /// null, arrays and objects are exact; numbers are value-exact (integers
+    /// within `Int64`, doubles as the nearest `Double`) but not byte-exact
+    /// (`1.0` comes back `1`, big or high-precision decimals are not kept as
+    /// written), and object key order is not kept.
+    public func credentialMetadata(id: Int64) async -> [[String: Any]]? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        guard let raw = credentialMetadata[id] as? [Any], !raw.isEmpty else { return nil }
+        var entries: [[String: Any]] = []
+        for element in raw {
+            guard let entry = element as? [String: Any],
+                  let type = entry["type"] as? String, !type.isEmpty,
+                  entry["value"] != nil else { return nil }
+            entries.append(entry)
+        }
+        return entries
+    }
+
+    /// Replace the credential's `metadata` entries; nil or empty removes the
+    /// member (it is never written as null or `[]`). Every entry needs a
+    /// non-empty string `type` and a `value` (any JSON, null included),
+    /// and the credential must exist. Written to `S.credentials[].metadata`
+    /// by the next `exportEncryptedContainer`.
+    public func setCredentialMetadata(id: Int64, _ entries: [[String: Any]]?) async throws {
+        mutex.lock()
+        defer { mutex.unlock() }
+        try requireUnlocked()
+        guard credentials[id] != nil else {
+            throw KeystoreError.invalidParameter("no credential \(id)")
+        }
+        guard let entries, !entries.isEmpty else {
+            credentialMetadata.removeValue(forKey: id)
+            return
+        }
+        for entry in entries {
+            guard let type = entry["type"] as? String, !type.isEmpty, entry["value"] != nil else {
+                throw KeystoreError.invalidParameter("metadata entries need a non-empty string `type` and a `value`")
+            }
+        }
+        guard JSONSerialization.isValidJSONObject(entries) else {
+            throw KeystoreError.invalidParameter("metadata is not valid JSON")
+        }
+        credentialMetadata[id] = entries
     }
 
     // MARK: - Presentation history storage
@@ -932,6 +997,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             let credFormat = (entry["format"] as? String) ?? ""
             let credIssuerIdent = entry["credentialIssuerIdentifier"] as? String
             let credConfigId = entry["credentialConfigurationId"] as? String
+            // Kept apart from `storedDict` below - see `credentialMetadata`.
+            if let metadata = entry["metadata"] { credentialMetadata[credId] = metadata }
             let batchId = Self.asInt64(entry["batchId"]) ?? 0
             let instanceId = Self.asInt(entry["instanceId"]) ?? 0
 
@@ -1118,6 +1185,13 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         "credentialRefreshTokens",
     ]
 
+    /// The `S.credentials[]` members `buildWalletStateV3()` produces from its
+    /// own state; every other member of a loaded entry is carried through.
+    private static let ownedCredentialMembers: Set<String> = [
+        "credentialId", "format", "data", "kid", "instanceId", "batchId",
+        "credentialIssuerIdentifier", "credentialConfigurationId", "metadata",
+    ]
+
     private func buildWalletStateV3() -> [String: Any] {
         // Preserve existing state if available, otherwise initialize fresh.
         // NOTE: this must NOT short-circuit and return existingState verbatim -
@@ -1211,7 +1285,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             let configId = (original?["credentialConfigurationId"] as? String)
                 ?? (parsed?["credential_configuration_id"] as? String) ?? ""
             let credData = (original?["data"] as? String) ?? (parsed?["raw"] as? String) ?? data
-            let entry: [String: Any] = [
+            // Start from the loaded entry so members this build does not know
+            // survive (a rewriting client MUST preserve them), then overlay
+            // the ones it owns. `metadata` comes from the side map only: nil
+            // is omitted, never written as null or [].
+            var entry: [String: Any] = (original ?? [:]).filter { !Self.ownedCredentialMembers.contains($0.key) }
+            entry.merge([
                 "credentialId": id,
                 "format": format,
                 "data": credData,
@@ -1220,7 +1299,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 "batchId": batchId,
                 "credentialIssuerIdentifier": issuerIdent,
                 "credentialConfigurationId": configId,
-            ]
+            ] as [String: Any]) { _, owned in owned }
+            if let metadata = credentialMetadata[id] { entry["metadata"] = metadata }
             return entry
         }
 

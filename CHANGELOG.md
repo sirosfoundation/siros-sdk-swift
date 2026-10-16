@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Keystore: per-credential `metadata` in the privatedata container
+  (`S.credentials[].metadata`).** An optional array of
+  `{"type": <non-empty string>, "value": <any JSON>}` entries, stored exactly
+  as received (first use: an issuer-delivered `secret_seed`). `JweKeystore`
+  (and `WscdKeystoreAdapter`) gain `credentialMetadata(id:)` and
+  `setCredentialMetadata(id:_:)`; the member is cleared with the credential
+  (`deleteCredential`, `clearCredentials`, `lock`) and omitted, never
+  null or `[]`, when empty. It is kept apart from `StoredCredential.metadata`,
+  which is display metadata and is not persisted in the container. A
+  malformed (non-array) `metadata` is written back verbatim. `schemaVersion`
+  stays 3. **Rewriting clients now preserve unknown per-credential members**
+  (previously every `S.credentials[]` entry was rebuilt from a closed list of
+  eight fields); unknown top-level `S` members were already preserved. Values
+  are JSON-value-exact, not byte-exact (`JSONSerialization`: `1.0` returns as
+  `1`, key order is not kept). **Older clients drop the `metadata` member the
+  next time they rewrite the container**, which is accepted for this change.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob
