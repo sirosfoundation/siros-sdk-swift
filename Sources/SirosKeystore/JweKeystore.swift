@@ -9,63 +9,6 @@ import CryptoKit
 import CommonCrypto
 #endif
 
-/// A durable OID4VCI renewal candidate for one credential batch - see
-/// privatedata-spec SPEC.md §6.2 "S.credentialRefreshTokens". `dpopJwk` MUST
-/// be presented back unchanged on every renewal of the same batch (RFC
-/// 9449/ARF ISSU_65 key-binding), never regenerated client-side.
-public struct CredentialRefreshTokenEntry: Sendable, Equatable {
-    public let refreshToken: String
-    public let dpopJwk: String?
-    public let credentialIssuerIdentifier: String
-    public let credentialConfigurationId: String
-    /// Identifier of the client-held DPoP key the token is bound to when this
-    /// wallet signed the DPoP proofs itself (`sign_client_auth`,
-    /// go-wallet-backend#317) - `dpopJwk` is nil in that case. Presented back
-    /// as `dpop_key_id` on renewal so the engine asks this wallet to sign with
-    /// the same key.
-    public let dpopKeyId: String?
-
-    public init(
-        refreshToken: String,
-        dpopJwk: String?,
-        credentialIssuerIdentifier: String,
-        credentialConfigurationId: String,
-        dpopKeyId: String? = nil
-    ) {
-        self.refreshToken = refreshToken
-        self.dpopJwk = dpopJwk
-        self.credentialIssuerIdentifier = credentialIssuerIdentifier
-        self.credentialConfigurationId = credentialConfigurationId
-        self.dpopKeyId = dpopKeyId
-    }
-
-    fileprivate func toJsonObject() -> [String: Any] {
-        var dict: [String: Any] = [
-            "refreshToken": refreshToken,
-            "credentialIssuerIdentifier": credentialIssuerIdentifier,
-            "credentialConfigurationId": credentialConfigurationId,
-        ]
-        if let dpopJwk { dict["dpopJwk"] = dpopJwk }
-        if let dpopKeyId { dict["dpopKeyId"] = dpopKeyId }
-        return dict
-    }
-
-    fileprivate static func fromJsonObject(_ obj: [String: Any]) -> CredentialRefreshTokenEntry? {
-        guard let refreshToken = obj["refreshToken"] as? String,
-              let credentialIssuerIdentifier = obj["credentialIssuerIdentifier"] as? String,
-              let credentialConfigurationId = obj["credentialConfigurationId"] as? String else {
-            return nil
-        }
-        return CredentialRefreshTokenEntry(
-            refreshToken: refreshToken,
-            dpopJwk: obj["dpopJwk"] as? String,
-            credentialIssuerIdentifier: credentialIssuerIdentifier,
-            credentialConfigurationId: credentialConfigurationId,
-            dpopKeyId: obj["dpopKeyId"] as? String
-        )
-    }
-}
-
 /// JWE-based keystore implementation fully compatible with the wallet-frontend
 /// encrypted container format.
 ///
@@ -81,9 +24,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
 
     #if canImport(CryptoKit)
 
-    private let mutex = NSLock()
+    let mutex = NSLock()
     private var keys: [String: P256.Signing.PrivateKey] = [:]
-    private var credentials: [Int64: String] = [:]
+    var credentials: [Int64: String] = [:]
     private var presentationRecords: [Int64: String] = [:]
     private var _mainKey: SymmetricKey?
     private var containerMetadata: ContainerData?
@@ -129,7 +72,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // is a `StoredCredential` whose own `metadata` key is DISPLAY metadata
     // (an object, never persisted in the container) - the two must never
     // meet. Cleared with the credential it belongs to.
-    private var credentialMetadata: [Int64: Any] = [:]
+    var credentialMetadata: [Int64: Any] = [:]
 
     // kid -> the DID that key pair is published under. Kept alongside `keys`
     // rather than recomputed on export, because a key read back from the
@@ -767,58 +710,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         credentialMetadata.removeAll()
     }
 
-    /// The credential's `S.credentials[].metadata` entries, each
-    /// `{"type": String, "value": <any JSON>}`, or nil when it has none - or
-    /// when the stored member is not a well-formed array of such objects
-    /// (it is then still written back verbatim on export, just not
-    /// interpreted).
-    ///
-    /// Values are JSON as `JSONSerialization` models it: strings, booleans,
-    /// null, arrays and objects are exact; numbers are value-exact (integers
-    /// within `Int64`, doubles as the nearest `Double`) but not byte-exact
-    /// (`1.0` comes back `1`, big or high-precision decimals are not kept as
-    /// written), and object key order is not kept.
-    public func credentialMetadata(id: Int64) async -> [[String: Any]]? {
-        mutex.lock()
-        defer { mutex.unlock() }
-        guard let raw = credentialMetadata[id] as? [Any], !raw.isEmpty else { return nil }
-        var entries: [[String: Any]] = []
-        for element in raw {
-            guard let entry = element as? [String: Any],
-                  let type = entry["type"] as? String, !type.isEmpty,
-                  entry["value"] != nil else { return nil }
-            entries.append(entry)
-        }
-        return entries
-    }
-
-    /// Replace the credential's `metadata` entries; nil or empty removes the
-    /// member (it is never written as null or `[]`). Every entry needs a
-    /// non-empty string `type` and a `value` (any JSON, null included),
-    /// and the credential must exist. Written to `S.credentials[].metadata`
-    /// by the next `exportEncryptedContainer`.
-    public func setCredentialMetadata(id: Int64, _ entries: [[String: Any]]?) async throws {
-        mutex.lock()
-        defer { mutex.unlock() }
-        try requireUnlocked()
-        guard credentials[id] != nil else {
-            throw KeystoreError.invalidParameter("no credential \(id)")
-        }
-        guard let entries, !entries.isEmpty else {
-            credentialMetadata.removeValue(forKey: id)
-            return
-        }
-        for entry in entries {
-            guard let type = entry["type"] as? String, !type.isEmpty, entry["value"] != nil else {
-                throw KeystoreError.invalidParameter("metadata entries need a non-empty string `type` and a `value`")
-            }
-        }
-        guard JSONSerialization.isValidJSONObject(entries) else {
-            throw KeystoreError.invalidParameter("metadata is not valid JSON")
-        }
-        credentialMetadata[id] = entries
-    }
-
     // MARK: - Presentation history storage
 
     public func savePresentationRecord(id: Int64, json: String) async throws {
@@ -903,7 +794,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
 
     // MARK: - Private helpers
 
-    private func requireUnlocked() throws {
+    func requireUnlocked() throws {
         guard _mainKey != nil else {
             throw KeystoreError.locked
         }
