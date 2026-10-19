@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Keystore: per-credential `metadata` in the privatedata container
   (`S.credentials[].metadata`).** An optional array of
   `{"type": <non-empty string>, "value": <any JSON>}` entries, stored exactly
-  as received (first use: an issuer-delivered `secret_seed`). `JweKeystore`
+  as received (first use: an issuer-delivered `org.siros.secret_seed`; per
+  privatedata-spec 2.5 section 5A.2 one entry per response-level
+  `credential_metadata` member, `value` the member's object verbatim, e.g.
+  `{"<namespace>": "<32 lowercase hex>"}`, not a string; members of an entry
+  beyond `type`/`value` are kept). `JweKeystore`
   (and `WscdKeystoreAdapter`) gain `credentialMetadata(id:)` and
   `setCredentialMetadata(id:_:)`; the member is cleared with the credential
   (`deleteCredential`, `clearCredentials`, `lock`) and omitted, never

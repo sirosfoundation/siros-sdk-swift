@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+import CryptoKit
 import SirosCredentials
 @testable import SirosKeystore
 
@@ -23,8 +24,27 @@ final class CredentialMetadataTests: XCTestCase {
     private let info = Data("SIROS Wallet PRF".utf8)
     private let seedHex = "00112233445566778899aabbccddeeff"
 
+    /// The storage form of a delivered seed (privatedata-spec 2.5 section
+    /// 5A.2): one entry per response-level `credential_metadata` member,
+    /// `type` the member name and `value` the member's OBJECT verbatim
+    /// (namespace -> 32 lowercase hex), not a string.
     private func seedEntry() -> [String: Any] {
-        ["type": "org.siros.NS.secret_seed", "value": seedHex]
+        ["type": "org.siros.secret_seed", "value": ["org.siros.nym_auth": seedHex] as [String: Any]]
+    }
+
+    /// The vendored privatedata-spec vectors (verbatim copy, see
+    /// vectors-credential-metadata.PROVENANCE.txt).
+    private static let vectorsHash = "d9cb6c9b4a49a688de4a49ca0e8e9ec964aee21cddcdec9dea0f3a487ce3d3dd"
+
+    private func specVector(_ id: String) throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors-credential-metadata", withExtension: "jsonl", subdirectory: "privatedata-spec"))
+        for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") {
+            guard let obj = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  obj["id"] as? String == id else { continue }
+            return obj
+        }
+        XCTFail("vector \(id) not in the vendored vectors.jsonl")
+        throw KeystoreError.invalidContainer("vector not found")
     }
 
     private func credEntry(_ id: Int, extra: [String: Any] = [:]) -> [String: Any] {
@@ -89,9 +109,55 @@ final class CredentialMetadataTests: XCTestCase {
         let reopened = try await reopen(try await k.exportEncryptedContainer())
         let back = await reopened.credentialMetadata(id: 1)
         XCTAssertTrue(ContainerTestSupport.jsonEqual(entries, back))
-        XCTAssertEqual((back?[0]["value"] as? String), seedHex)
+        XCTAssertEqual(((back?[0]["value"] as? [String: Any])?["org.siros.nym_auth"] as? String), seedHex)
         let big = ((back?[1]["value"] as? [String: Any])?["n"] as? NSNumber)?.int64Value
         XCTAssertEqual(big, 9007199254740993, "integers beyond 2^53 must stay exact")
+    }
+
+    func testVendoredSpecVectorsAreTheVerbatimCopy() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors-credential-metadata", withExtension: "jsonl", subdirectory: "privatedata-spec"))
+        let digest = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(digest, Self.vectorsHash, "re-copy from privatedata-spec and update PROVENANCE")
+    }
+
+    /// The spec's own metadata vectors, fed through the keystore (the vectors'
+    /// credential ids are strings, which this container does not accept, so the
+    /// vector's `metadata` array is placed on a numerically-identified entry).
+    func testSpecVectorMetadataRoundTripsInOrderWithDuplicateTypes() async throws {
+        let v = try specVector("credential-metadata-001")
+        let inputs = try XCTUnwrap(v["inputs"] as? [String: Any])
+        let S = try XCTUnwrap((inputs["plaintextState"] as? [String: Any])?["S"] as? [String: Any])
+        let metadata = try XCTUnwrap((S["credentials"] as? [[String: Any]])?.first?["metadata"] as? [[String: Any]])
+        XCTAssertEqual(metadata.count, 7)
+        let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": metadata])]))
+        let got = await k.credentialMetadata(id: 1)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(metadata, got), "stored exactly as supplied, order and duplicates kept")
+        let out = try await creds(of: try await reopen(try await k.exportEncryptedContainer()))
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(metadata, entry(1, in: out)?["metadata"]))
+    }
+
+    func testSpecDeliveredSecretStorageFormIsAccepted() async throws {
+        let v = try specVector("delivered-secret-commitment-001")
+        let after = try XCTUnwrap((v["expected"] as? [String: Any])?["credentialAfterAccept"] as? [String: Any])
+        let metadata = try XCTUnwrap(after["metadata"] as? [[String: Any]])
+        XCTAssertEqual(metadata.count, 1)
+        XCTAssertTrue(metadata[0]["value"] is [String: Any], "the seed value is an object, not a string")
+        let k = try await fresh()
+        try await k.saveCredential(id: 1, json: "{\"id\":1,\"format\":\"dc+sd-jwt\",\"raw\":\"r\",\"batch_id\":1,\"instance_id\":0}")
+        try await k.setCredentialMetadata(id: 1, metadata)
+        let out = try await creds(of: try await reopen(try await k.exportEncryptedContainer()))
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(metadata, entry(1, in: out)?["metadata"]))
+    }
+
+    /// Members of a metadata entry other than `type`/`value` are preserved too
+    /// (spec section 6: "likewise every member of a `metadata` entry").
+    func testUnknownMembersOfAMetadataEntrySurvive() async throws {
+        let entryWithExtra: [String: Any] = ["type": "t", "value": "v", "x-future": ["a": [1, 2]] as [String: Any]]
+        let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": [entryWithExtra]])]))
+        let got = await k.credentialMetadata(id: 1)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual([entryWithExtra], got))
+        let out = try await creds(of: try await reopen(try await k.exportEncryptedContainer()))
+        XCTAssertTrue(ContainerTestSupport.jsonEqual([entryWithExtra], entry(1, in: out)?["metadata"]))
     }
 
     func testUnknownPerCredentialMemberSurvivesAndOwnedFieldsStillWin() async throws {
