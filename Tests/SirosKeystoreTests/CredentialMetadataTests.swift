@@ -12,11 +12,8 @@ import CryptoKit
 /// received, plus the rule that a rewriting client preserves per-credential
 /// and top-level members it does not know.
 ///
-/// privatedata-spec's vendored `vectors.jsonl` has no credential carrying
-/// `metadata`, so these cases use local fixtures built here. An upstream
-/// vector would need: a credential with a `metadata` array (one string value,
-/// one object value), an unknown per-credential member, and an expected
-/// byte-identical round trip.
+/// Besides local fixtures, the spec's own vectors (verbatim `vectors.jsonl`,
+/// SPEC 2.6) are run through the keystore.
 final class CredentialMetadataTests: XCTestCase {
 
     private let prf = Data(0..<32)
@@ -33,11 +30,11 @@ final class CredentialMetadataTests: XCTestCase {
     }
 
     /// The vendored privatedata-spec vectors (verbatim copy, see
-    /// vectors-credential-metadata.PROVENANCE.txt).
-    private static let vectorsHash = "d9cb6c9b4a49a688de4a49ca0e8e9ec964aee21cddcdec9dea0f3a487ce3d3dd"
+    /// vectors.PROVENANCE.txt).
+    private static let vectorsHash = "2893c0c68da7735ef17da110405161c2f81d09d9faebc1340f00218c4e3f9ec4"
 
     private func specVector(_ id: String) throws -> [String: Any] {
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors-credential-metadata", withExtension: "jsonl", subdirectory: "privatedata-spec"))
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors", withExtension: "jsonl", subdirectory: "privatedata-spec"))
         for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") {
             guard let obj = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   obj["id"] as? String == id else { continue }
@@ -115,25 +112,39 @@ final class CredentialMetadataTests: XCTestCase {
     }
 
     func testVendoredSpecVectorsAreTheVerbatimCopy() throws {
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors-credential-metadata", withExtension: "jsonl", subdirectory: "privatedata-spec"))
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors", withExtension: "jsonl", subdirectory: "privatedata-spec"))
         let digest = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
         XCTAssertEqual(digest, Self.vectorsHash, "re-copy from privatedata-spec and update PROVENANCE")
     }
 
-    /// The spec's own metadata vectors, fed through the keystore (the vectors'
-    /// credential ids are strings, which this container does not accept, so the
-    /// vector's `metadata` array is placed on a numerically-identified entry).
-    func testSpecVectorMetadataRoundTripsInOrderWithDuplicateTypes() async throws {
-        let v = try specVector("credential-metadata-001")
-        let inputs = try XCTUnwrap(v["inputs"] as? [String: Any])
-        let S = try XCTUnwrap((inputs["plaintextState"] as? [String: Any])?["S"] as? [String: Any])
-        let metadata = try XCTUnwrap((S["credentials"] as? [[String: Any]])?.first?["metadata"] as? [[String: Any]])
-        XCTAssertEqual(metadata.count, 7)
-        let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": metadata])]))
-        let got = await k.credentialMetadata(id: 1)
-        XCTAssertTrue(ContainerTestSupport.jsonEqual(metadata, got), "stored exactly as supplied, order and duplicates kept")
-        let out = try await creds(of: try await reopen(try await k.exportEncryptedContainer()))
-        XCTAssertTrue(ContainerTestSupport.jsonEqual(metadata, entry(1, in: out)?["metadata"]))
+    /// The spec's own round-trip vectors (SPEC 2.6 entry shape), run whole:
+    /// decrypt `inputs.plaintextState`, re-export, and the written `S` must equal
+    /// `expected.roundTripState.S` (metadata kept in order with duplicates, no
+    /// `metadata: []` or null written, unknown members kept).
+    func testSpecRoundTripVectors() async throws {
+        let ids = ["credential-metadata-001", "credential-metadata-absent-001", "credential-metadata-empty-array-001",
+                   "credential-unknown-member-001", "container-unknown-top-level-member-001"]
+        for id in ids {
+            let v = try specVector(id)
+            let inputs = try XCTUnwrap(v["inputs"] as? [String: Any], id)
+            let vPrf = EncryptedContainer.base64UrlDecode(try XCTUnwrap(inputs["prfOutput"] as? String))
+            let vSalt = EncryptedContainer.base64UrlDecode(try XCTUnwrap(inputs["hkdfSalt"] as? String))
+            let vInfo = Data(try XCTUnwrap(inputs["hkdfInfo"] as? String).utf8)
+            let state = try XCTUnwrap(inputs["plaintextState"] as? [String: Any], id)
+            let c = try ContainerTestSupport.buildContainer(prfOutput: vPrf, hkdfSalt: vSalt, hkdfInfo: vInfo, plaintextState: state)
+            let k = JweKeystore()
+            try await k.unlock(prfOutput: vPrf, encryptedContainer: c, hkdfSalt: vSalt, hkdfInfo: vInfo)
+            let out = try ContainerTestSupport.plaintext(
+                of: try await k.exportEncryptedContainer(), prfOutput: vPrf, hkdfSalt: vSalt)
+            let expected = try XCTUnwrap(
+                ((v["expected"] as? [String: Any])?["roundTripState"] as? [String: Any])?["S"] as? [String: Any], id)
+            let written = try XCTUnwrap(out["S"] as? [String: Any], id)
+            // Only the members the vector speaks about: the keystore adds its own
+            // bookkeeping (e.g. keypairs) that these vectors do not model.
+            for key in expected.keys {
+                XCTAssertTrue(ContainerTestSupport.jsonEqual(expected[key], written[key]), "\(id): S.\(key)")
+            }
+        }
     }
 
     func testSpecDeliveredSecretStorageFormIsAccepted() async throws {

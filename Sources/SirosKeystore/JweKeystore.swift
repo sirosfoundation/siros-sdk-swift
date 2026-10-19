@@ -1118,6 +1118,17 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             return result
         }()
 
+        // The position each credential had in the loaded container: a rewrite
+        // keeps the array order it read (credentials new this session follow,
+        // by id), as a dictionary's iteration order would not.
+        let originalCredOrder: [Int64: Int] = {
+            var order: [Int64: Int] = [:]
+            for (index, entry) in ((existingS?["credentials"] as? [[String: Any]]) ?? []).enumerated() {
+                if let credId = Self.asInt64(entry["credentialId"]), order[credId] == nil { order[credId] = index }
+            }
+            return order
+        }()
+
         let keypairs: [[String: Any]] = keys.map { (kid, ecKey) in
             let publicKey = ecKey.publicKey
             let x963 = publicKey.x963Representation
@@ -1164,7 +1175,10 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // a freshly-saved batch credential's batchId/instanceId would
         // silently reset to 0 on every export until the container is
         // reloaded once.
-        let creds: [[String: Any]] = credentials.map { (id, data) in
+        let creds: [[String: Any]] = credentials.sorted { lhs, rhs in
+            let l = originalCredOrder[lhs.key] ?? Int.max, r = originalCredOrder[rhs.key] ?? Int.max
+            return l != r ? l < r : lhs.key < rhs.key
+        }.map { (id, data) in
             let original = originalCredsById[id]
             let parsed = parseJsonObject(data)
             let format = (original?["format"] as? String) ?? (parsed?["format"] as? String) ?? ""
@@ -1191,7 +1205,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 "credentialIssuerIdentifier": issuerIdent,
                 "credentialConfigurationId": configId,
             ] as [String: Any]) { _, owned in owned }
-            if let metadata = credentialMetadata[id] { entry["metadata"] = metadata }
+            // An empty array is "no metadata": never written (SPEC section 6).
+            if let metadata = credentialMetadata[id], (metadata as? [Any])?.isEmpty != true { entry["metadata"] = metadata }
             return entry
         }
 
