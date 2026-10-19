@@ -1,11 +1,11 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
-import CryptoKit
 import SirosCredentials
 @testable import SirosKeystore
 
 #if canImport(CryptoKit)
+import CryptoKit
 
 /// `S.credentials[].metadata` (privatedata-spec, optional core member):
 /// `[{"type": <non-empty string>, "value": <any JSON>}]`, kept exactly as
