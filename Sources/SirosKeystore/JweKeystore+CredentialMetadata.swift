@@ -57,6 +57,31 @@ extension JweKeystore {
         }
         credentialMetadata[id] = entries
     }
+
+    /// Removes the loaded `S.credentials[]` entries of deleted credentials (all when `ids` is
+    /// nil) from the snapshot a rewrite starts from, so a deleted credential's unknown members
+    /// are not attached to a later credential that reuses its id.
+    func dropPreservedCredentialEntries(ids: Set<Int64>?) {
+        guard var state = preservedWalletState, var s = state["S"] as? [String: Any],
+              let entries = s["credentials"] as? [[String: Any]] else { return }
+        s["credentials"] = entries.filter { entry in
+            guard let ids else { return false }
+            return Self.asInt64(entry["credentialId"]).map { !ids.contains($0) } ?? true
+        }
+        state["S"] = s
+        preservedWalletState = state
+    }
+
+    /// The position each credential had in the loaded container: a rewrite keeps
+    /// the array order it read (credentials new this session follow, by id), as a
+    /// dictionary's iteration order would not.
+    static func credentialOrder(in existingS: [String: Any]?) -> [Int64: Int] {
+        var order: [Int64: Int] = [:]
+        for (index, entry) in ((existingS?["credentials"] as? [[String: Any]]) ?? []).enumerated() {
+            if let credId = asInt64(entry["credentialId"]), order[credId] == nil { order[credId] = index }
+        }
+        return order
+    }
 }
 
 #endif

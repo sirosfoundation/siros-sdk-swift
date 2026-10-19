@@ -31,7 +31,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     private var _mainKey: SymmetricKey?
     private var containerMetadata: ContainerData?
     // Preserve full WalletStateContainer for round-trip fidelity
-    private var preservedWalletState: [String: Any]?
+    var preservedWalletState: [String: Any]?
     // Hardware-backed WSCD plugins' exported key metadata (kid ->
     // credential_handle/pubkey mappings, never private key material), keyed
     // by plugin ID - see privatedata-spec SPEC.md §6.1 "S.wscdCredentials".
@@ -712,20 +712,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         dropPreservedCredentialEntries(ids: nil)
     }
 
-    /// Removes the loaded `S.credentials[]` entries of deleted credentials (all when `ids` is
-    /// nil) from the snapshot a rewrite starts from, so a deleted credential's unknown members
-    /// are not attached to a later credential that reuses its id.
-    private func dropPreservedCredentialEntries(ids: Set<Int64>?) {
-        guard var state = preservedWalletState, var s = state["S"] as? [String: Any],
-              let entries = s["credentials"] as? [[String: Any]] else { return }
-        s["credentials"] = entries.filter { entry in
-            guard let ids else { return false }
-            return Self.asInt64(entry["credentialId"]).map { !ids.contains($0) } ?? true
-        }
-        state["S"] = s
-        preservedWalletState = state
-    }
-
     // MARK: - Presentation history storage
 
     public func savePresentationRecord(id: Int64, json: String) async throws {
@@ -1036,7 +1022,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     /// as `NSNumber`) or a string-encoded number into an `Int64`. Accepting
     /// both keeps parsing robust to a not-yet-migrated container where a
     /// privatedata-spec `number` field might still arrive quoted.
-    private static func asInt64(_ value: Any?) -> Int64? {
+    static func asInt64(_ value: Any?) -> Int64? {
         if let n = value as? NSNumber { return n.int64Value }
         if let s = value as? String { return Int64(s) }
         return nil
@@ -1101,16 +1087,6 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         "credentialIssuerIdentifier", "credentialConfigurationId", "metadata",
     ]
 
-    /// The position each credential had in the loaded container: a rewrite keeps
-    /// the array order it read (credentials new this session follow, by id), as a
-    /// dictionary's iteration order would not.
-    private static func credentialOrder(in existingS: [String: Any]?) -> [Int64: Int] {
-        var order: [Int64: Int] = [:]
-        for (index, entry) in ((existingS?["credentials"] as? [[String: Any]]) ?? []).enumerated() {
-            if let credId = asInt64(entry["credentialId"]), order[credId] == nil { order[credId] = index }
-        }
-        return order
-    }
 
     private func buildWalletStateV3() -> [String: Any] {
         // Preserve existing state if available, otherwise initialize fresh.

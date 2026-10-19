@@ -229,7 +229,8 @@ final class CredentialMetadataTests: XCTestCase {
         try await k.unlock(prfOutput: prf, encryptedContainer: try container(credentials: [credEntry(1)]), hkdfSalt: salt, hkdfInfo: info)
         let after = await k.credentialMetadata(id: 1)
         XCTAssertNil(after, "stale metadata must be cleared on reload")
-        XCTAssertNil(entry(1, in: try await creds(of: k))?["metadata"], "and must not be restored by export")
+        let exported = try await creds(of: k)
+        XCTAssertNil(entry(1, in: exported)?["metadata"], "and must not be restored by export")
         // An absent credentials array clears it too.
         let k2 = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": [seedEntry()]])]))
         try await k2.unlock(prfOutput: prf, encryptedContainer: try container(credentials: []), hkdfSalt: salt, hkdfInfo: info)
