@@ -1083,6 +1083,17 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         "credentialIssuerIdentifier", "credentialConfigurationId", "metadata",
     ]
 
+    /// The position each credential had in the loaded container: a rewrite keeps
+    /// the array order it read (credentials new this session follow, by id), as a
+    /// dictionary's iteration order would not.
+    private static func credentialOrder(in existingS: [String: Any]?) -> [Int64: Int] {
+        var order: [Int64: Int] = [:]
+        for (index, entry) in ((existingS?["credentials"] as? [[String: Any]]) ?? []).enumerated() {
+            if let credId = asInt64(entry["credentialId"]), order[credId] == nil { order[credId] = index }
+        }
+        return order
+    }
+
     private func buildWalletStateV3() -> [String: Any] {
         // Preserve existing state if available, otherwise initialize fresh.
         // NOTE: this must NOT short-circuit and return existingState verbatim -
@@ -1118,16 +1129,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             return result
         }()
 
-        // The position each credential had in the loaded container: a rewrite
-        // keeps the array order it read (credentials new this session follow,
-        // by id), as a dictionary's iteration order would not.
-        let originalCredOrder: [Int64: Int] = {
-            var order: [Int64: Int] = [:]
-            for (index, entry) in ((existingS?["credentials"] as? [[String: Any]]) ?? []).enumerated() {
-                if let credId = Self.asInt64(entry["credentialId"]), order[credId] == nil { order[credId] = index }
-            }
-            return order
-        }()
+        let originalCredOrder = Self.credentialOrder(in: existingS)
 
         let keypairs: [[String: Any]] = keys.map { (kid, ecKey) in
             let publicKey = ecKey.publicKey
