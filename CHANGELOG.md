@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously every `S.credentials[]` entry was rebuilt from a closed list of
   eight fields); unknown top-level `S` members were already preserved. Values
   are JSON-value-exact, not byte-exact (`JSONSerialization`: `1.0` returns as
-  `1`, key order is not kept). A rewrite keeps the credential array order it read, and an empty `metadata: []`
+  `1`, key order is not kept). Unlocking an instance again drops metadata the new container omits, and deleting
+  or clearing a credential drops its preserved unknown members too. A rewrite keeps the credential array order it read, and an empty `metadata: []`
   is never written back (SPEC section 6). **Older clients drop the `metadata` member the
   next time they rewrite the container**, which is accepted for this change.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and

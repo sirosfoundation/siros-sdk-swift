@@ -700,6 +700,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         credentials.removeValue(forKey: id)
         credentialMetadata.removeValue(forKey: id)
+        dropPreservedCredentialEntries(ids: [id])
     }
 
     public func clearCredentials() async throws {
@@ -708,6 +709,21 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         credentials.removeAll()
         credentialMetadata.removeAll()
+        dropPreservedCredentialEntries(ids: nil)
+    }
+
+    /// Removes the loaded `S.credentials[]` entries of deleted credentials (all when `ids` is
+    /// nil) from the snapshot a rewrite starts from, so a deleted credential's unknown members
+    /// are not attached to a later credential that reuses its id.
+    private func dropPreservedCredentialEntries(ids: Set<Int64>?) {
+        guard var state = preservedWalletState, var s = state["S"] as? [String: Any],
+              let entries = s["credentials"] as? [[String: Any]] else { return }
+        s["credentials"] = entries.filter { entry in
+            guard let ids else { return false }
+            return Self.asInt64(entry["credentialId"]).map { !ids.contains($0) } ?? true
+        }
+        state["S"] = s
+        preservedWalletState = state
     }
 
     // MARK: - Presentation history storage
@@ -880,6 +896,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // from a not-yet-migrated container) still parses instead of
     // silently dropping the entry.
     private func loadCredentials(from state: [String: Any]) {
+        // A second unlock of this instance must not keep what an earlier container held.
+        credentialMetadata.removeAll()
         guard let credsArray = state["credentials"] as? [[String: Any]] else { return }
         for entry in credsArray {
             guard let credId = Self.asInt64(entry["credentialId"]),

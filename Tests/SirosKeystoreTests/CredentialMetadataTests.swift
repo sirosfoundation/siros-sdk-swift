@@ -220,6 +220,43 @@ final class CredentialMetadataTests: XCTestCase {
         XCTAssertNil(entry(1, in: after)?["metadata"])
     }
 
+    /// Review: unlocking the same instance with a newer container must not keep metadata the
+    /// newer container no longer has (a removed secret seed would otherwise come back on export).
+    func testReunlockingTheSameInstanceDropsMetadataTheNewContainerOmits() async throws {
+        let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": [seedEntry()]])]))
+        let before = await k.credentialMetadata(id: 1)
+        XCTAssertNotNil(before)
+        try await k.unlock(prfOutput: prf, encryptedContainer: try container(credentials: [credEntry(1)]), hkdfSalt: salt, hkdfInfo: info)
+        let after = await k.credentialMetadata(id: 1)
+        XCTAssertNil(after, "stale metadata must be cleared on reload")
+        XCTAssertNil(entry(1, in: try await creds(of: k))?["metadata"], "and must not be restored by export")
+        // An absent credentials array clears it too.
+        let k2 = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": [seedEntry()]])]))
+        try await k2.unlock(prfOutput: prf, encryptedContainer: try container(credentials: []), hkdfSalt: salt, hkdfInfo: info)
+        let gone = await k2.credentialMetadata(id: 1)
+        XCTAssertNil(gone)
+    }
+
+    /// Review: a deleted credential's unknown members must not attach to a later credential
+    /// that reuses its id.
+    func testDeletedOrClearedCredentialsUnknownMembersDoNotReattach() async throws {
+        let json = "{\"id\":1,\"format\":\"dc+sd-jwt\",\"raw\":\"r\",\"batch_id\":1,\"instance_id\":0}"
+        for clear in [false, true] {
+            let k = try await reopen(try container(credentials: [credEntry(1, extra: ["futureMember": ["a": 1]])]))
+            if clear { try await k.clearCredentials() } else { try await k.deleteCredential(id: 1) }
+            try await k.saveCredential(id: 1, json: json)
+            let out = try await creds(of: k)
+            XCTAssertNil(entry(1, in: out)?["futureMember"], clear ? "clearCredentials" : "deleteCredential")
+        }
+        // Unrelated credentials keep theirs.
+        let k = try await reopen(try container(credentials: [
+            credEntry(1, extra: ["futureMember": 1]), credEntry(2, extra: ["futureMember": 2]),
+        ]))
+        try await k.deleteCredential(id: 1)
+        let out = try await creds(of: k)
+        XCTAssertEqual(entry(2, in: out)?["futureMember"] as? Int, 2)
+    }
+
     func testLockClearsMetadata() async throws {
         let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": [seedEntry()]])]))
         k.lock()
