@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **WMP HTTP+SSE transport: SSE event ids, `Last-Event-ID` and replay dedupe.** The
+  transport now parses `text/event-stream` with `SseEventParser` (the `id` field, a
+  persistent last event id, comments, multi-line `data`), sends `Last-Event-ID` when it
+  reconnects, and drops an event whose id it already delivered (`SseReplayFilter`), so a
+  replayed `wmp.flow.complete` is never handled twice. It also splits the byte stream
+  itself (`SseLineSplitter`): `URLSession.AsyncBytes.lines` omits the blank line that
+  ends an event. The parser, splitter and filter are pure and tested on Linux; the
+  transport's use of them is Apple-only and not exercised by a test. An event's
+  `description` never prints its data.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob

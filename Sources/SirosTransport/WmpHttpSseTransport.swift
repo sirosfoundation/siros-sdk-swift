@@ -27,6 +27,11 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     private let incomingCont: AsyncStream<Data>.Continuation
     private let _incoming: AsyncStream<Data>
     private var sseTask: Task<Void, Never>?
+    // The SSE event-id state outlives a single connection: a reconnect presents the last id seen
+    // (`Last-Event-ID`) and an event whose id was already delivered is dropped, so a replayed
+    // completion is never handed to the wallet twice.
+    private var eventParser = SseEventParser()
+    private var replayFilter = SseReplayFilter()
 
     public init(
         sendUrl: URL,
@@ -57,6 +62,9 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
         for (key, value) in extraHeaders {
             request.setValue(value, forHTTPHeaderField: key)
         }
+        if let lastEventId = eventParser.lastEventId {
+            request.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID")
+        }
 
         sseTask = Task { [weak self] in
             guard let self else { return }
@@ -69,17 +77,14 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 }
                 self.setState(.connected)
 
-                var currentData = ""
-                for try await line in bytes.lines {
-                    if line.isEmpty {
-                        if !currentData.isEmpty, let data = currentData.data(using: .utf8) {
-                            self.incomingCont.yield(data)
-                        }
-                        currentData = ""
-                    } else if line.hasPrefix("data: ") {
-                        let payload = String(line.dropFirst(6))
-                        currentData = currentData.isEmpty ? payload : currentData + "\n" + payload
-                    }
+                // Split the bytes ourselves: `bytes.lines` omits the blank line that ends an event.
+                var splitter = SseLineSplitter()
+                for try await byte in bytes {
+                    guard let line = splitter.feed(byte: byte),
+                          let event = self.eventParser.feed(line: line),
+                          self.replayFilter.admit(event),
+                          let data = event.data.data(using: .utf8) else { continue }
+                    self.incomingCont.yield(data)
                 }
                 self.setState(.disconnected)
             } catch {
