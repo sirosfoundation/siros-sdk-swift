@@ -141,6 +141,66 @@ final class ScaSignFlowTests: XCTestCase {
                                                   payload: { _ in Data() }, sign: { _, _ in throw Boom() })) { XCTAssertTrue($0 is Boom) }
     }
 
+    // MARK: - The supplied PIN is wiped by `run` itself on every exit path
+    //
+    // Each test RETAINS the `SecureBytes` it hands `run`, so `deinit` cannot mask a missing
+    // explicit wipe: the buffer must already be wiped when `run` returns or throws.
+
+    private struct Boom: Error {}
+
+    private func assertWiped(_ pin: SecureBytes, _ message: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(pin.isWiped, message, file: file, line: line)
+        XCTAssertEqual(pin.count, 0, message, file: file, line: line)
+        XCTAssertEqual(pin.dataCopy(), Data(), message, file: file, line: line)
+    }
+
+    func testThePinIsWipedAfterASuccessfulSign() throws {
+        let pin = SecureBytes(utf8: "123456")
+        var seenBySign: Data?
+        _ = try ScaSignFlow.run(pluginId: "r2ps", capability: can, promptPin: { pin },
+                                payload: { _ in Data([1]) },
+                                sign: { _, p in
+            seenBySign = p.dataCopy()
+            return ScaSignReport(signature: Data([9]), factors: [self.remote, self.pin6], satisfiesTwoCategories: true, shortfall: nil)
+        })
+        XCTAssertEqual(seenBySign, Data("123456".utf8), "the sign still received the live PIN")
+        assertWiped(pin, "wiped on success")
+    }
+
+    func testThePinIsWipedWhenTheSecretIsRejected() {
+        for bytes: [UInt8] in [[], [0xFF, 0xFE]] {
+            let pin = SecureBytes(bytes)
+            expectRefusal {
+                _ = try ScaSignFlow.run(pluginId: "r2ps", capability: can, promptPin: { pin },
+                                        payload: { _ in Data() }, sign: { _, _ in fatalError("must not sign") })
+            }
+            assertWiped(pin, "wiped on invalid-secret rejection \(bytes)")
+        }
+    }
+
+    func testThePinIsWipedWhenThePayloadThrows() {
+        let pin = SecureBytes(utf8: "123456")
+        XCTAssertThrowsError(try ScaSignFlow.run(pluginId: "r2ps", capability: can, promptPin: { pin },
+                                                 payload: { _ in throw Boom() }, sign: { _, _ in fatalError("must not sign") }))
+        assertWiped(pin, "wiped on payload error")
+    }
+
+    func testThePinIsWipedWhenTheSignThrows() {
+        let pin = SecureBytes(utf8: "123456")
+        XCTAssertThrowsError(try ScaSignFlow.run(pluginId: "r2ps", capability: can, promptPin: { pin },
+                                                 payload: { _ in Data() }, sign: { _, _ in throw Boom() }))
+        assertWiped(pin, "wiped on sign error")
+    }
+
+    func testThePinIsWipedWhenTheSignReportMismatchesTheClaim() {
+        let pin = SecureBytes(utf8: "123456")
+        expectRefusal {
+            _ = try ScaSignFlow.run(pluginId: "r2ps", capability: can, promptPin: { pin }, payload: { _ in Data() },
+                                    sign: { _, _ in ScaSignReport(signature: Data([1]), factors: [self.remote], satisfiesTwoCategories: false, shortfall: "x") })
+        }
+        assertWiped(pin, "wiped on a refused sign report")
+    }
+
     /// The same boundaries the manager measures (`classify_secret` in siros-wscd-manager).
     func testSecretClassesAreMeasuredAtTheVocabularyBoundaries() {
         let cases: [(String, String?)] = [

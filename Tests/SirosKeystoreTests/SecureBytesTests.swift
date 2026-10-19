@@ -52,4 +52,29 @@ final class SecureBytesTests: XCTestCase {
         s.wipe()
         XCTAssertEqual(s.count, 0)
     }
+
+    func testDataInitializerRoundTrips() {
+        let s = SecureBytes(Data([0x31, 0x32, 0x33]))
+        XCTAssertEqual(s.dataCopy(), Data([0x31, 0x32, 0x33]))
+        XCTAssertEqual(SecureBytes(Data()).count, 0)
+    }
+
+    func testNonAsciiUtf8RoundTrips() {
+        let text = "pässwörd-\u{1F510}"
+        XCTAssertEqual(SecureBytes(utf8: text).dataCopy(), Data(text.utf8))
+    }
+
+    /// Larger than a page and many live at once: each buffer owns its pages, so wiping one must
+    /// neither disturb nor unlock another.
+    func testManyLiveBuffersAreIndependentAcrossPageBoundaries() {
+        let sizes = [1, 17, 4095, 4096, 4097, 20_000]
+        let live = sizes.enumerated().map { i, n in (SecureBytes(Data(repeating: UInt8(i + 1), count: n)), UInt8(i + 1), n) }
+        for (idx, (buf, _, _)) in live.enumerated() {
+            buf.wipe()
+            XCTAssertTrue(buf.isWiped)
+            for (j, (other, byte, n)) in live.enumerated() where j > idx {
+                XCTAssertEqual(other.dataCopy(), Data(repeating: byte, count: n), "wiping #\(idx) disturbed #\(j)")
+            }
+        }
+    }
 }
