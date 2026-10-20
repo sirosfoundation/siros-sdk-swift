@@ -49,7 +49,11 @@ final class SseEventParserTests: XCTestCase {
     func testAnIdWithNulIsIgnored() {
         var parser = SseEventParser()
         _ = parser.feed(line: "id: a\u{0}b")
+        _ = parser.feed(line: "data: x")
+        let event = parser.feed(line: "")   // the blank line commits the block: only then could an accepted id show
         XCTAssertNil(parser.lastEventId)
+        XCTAssertNil(event?.id)
+        XCTAssertEqual(event?.data, "x")
     }
 
     func testReplayFilterDropsAReplayedIdAndNeverEventsWithoutOne() {
