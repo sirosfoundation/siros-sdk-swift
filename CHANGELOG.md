@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`circuit_zk` response shape: `CircuitZkX5Chain` and `CircuitZkResponseValidator`.** The
+  presentation now carries `x5chain`, the holder-supplied issuer chain: the credential's own
+  Document Signer chain from `issuerAuth`'s unprotected header (COSE label 33), leaf first,
+  padded STANDARD base64 of each DER certificate, at most 8 certificates and 4096 bytes each
+  (a chain that breaks a limit is never built). `CircuitZkResponseValidator` checks the shape of a
+  `circuit_zk` entry in a `vp_token` and its binding to the request (offer, handles, result
+  shapes; a JSON `null` is a type error everywhere, duplicates are judged on the raw text,
+  unknown functions and members are refused) and is run by a wallet on the response it built.
+  Tested against the 80 shared vectors of siros-dc-matcher 932b07a, copied verbatim. The
+  verification time `T` is not part of this change. Not wired into the wallet.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob

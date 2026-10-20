@@ -1,0 +1,6 @@
+These files are VERBATIM copies of crates/siros-dc-matcher-core/tests/vectors/circuit_zk_response/ in
+sirosfoundation/siros-dc-matcher at merged commit 932b07afe1c74b70bd9b55e99c6db4501485e9ab
+(circuit_zk response: require x5chain, #49). Never edit by hand; re-copy and update the manifest hash in
+CircuitZkResponseVectorsTests when the source changes. README.md is the vectors' own.
+
+manifest hash: sha256 over the lines "<sha256 of file>  <name>\n" of README.md and every ok_* and err_* file, sorted by name (LC_ALL=C). The files sit directly in Resources/ (the bundle is flattened).
