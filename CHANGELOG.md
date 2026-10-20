@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replayed `wmp.flow.complete` is never handled twice. It also splits the byte stream
   itself (`SseLineSplitter`): `URLSession.AsyncBytes.lines` omits the blank line that
   ends an event. The parser, splitter and filter are pure and tested on Linux; the
-  transport's use of them is Apple-only and not exercised by a test. An event's
+  transport's use of them is Apple-only and not exercised by a test. The resume cursor advances only when a block's blank line arrives, an empty `id` resets it and is never a dedupe key, one leading byte order mark is ignored per response, and each response starts with clean buffers (a disconnect mid-event never joins two responses' data). An event's
   `description` never prints its data.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,

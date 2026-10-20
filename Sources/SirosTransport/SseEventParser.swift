@@ -23,20 +23,41 @@ extension SseEvent: CustomStringConvertible, CustomDebugStringConvertible, Custo
 /// fed one line at a time (without its line terminator). Pure, so it is testable off
 /// Apple platforms; the HTTP+SSE transport drives it.
 ///
-/// Tracks the stream's `lastEventId` as the specification says: it is set by an `id`
-/// field that has no NUL, persists across events (an event without an `id` does not reset
-/// it) and is what a reconnect sends as `Last-Event-ID`.
+/// Tracks the stream's `lastEventId` as the specification says: an `id` field (without NUL)
+/// fills a buffer that is COMMITTED to `lastEventId` only when the block's terminating blank
+/// line arrives, so an unfinished block never advances the resume cursor (a server resuming
+/// after it could skip an event that was never delivered). It persists across events (an
+/// event without an `id` does not reset it) and is what a reconnect sends as `Last-Event-ID`;
+/// an empty `id` resets it to nil. Call ``beginResponse()`` at the start of each HTTP response.
 public struct SseEventParser: Sendable {
     private var dataLines: [String] = []
     private var eventType: String?
+    /// The `id` field of the block being read (nil when it has none).
     private var pendingId: String?
-    /// The last event id seen on this stream, for `Last-Event-ID` on reconnect.
+    private var atStartOfResponse = true
+    /// The last COMMITTED event id of this stream, for `Last-Event-ID` on reconnect. Nil when none, or after
+    /// an empty `id` reset it.
     public private(set) var lastEventId: String?
 
     public init() {}
 
+    /// Starts a new HTTP response: discards a block the previous response left unfinished (its data, event
+    /// type and pending id; joining it with the next response's data would corrupt both), and expects the
+    /// response's one optional leading byte order mark. The committed ``lastEventId`` is kept.
+    public mutating func beginResponse() {
+        dataLines = []
+        eventType = nil
+        pendingId = nil
+        atStartOfResponse = true
+    }
+
     /// Feeds one line. Returns an event when the line is the blank line that dispatches one.
     public mutating func feed(line rawLine: String) -> SseEvent? {
+        var rawLine = rawLine
+        if atStartOfResponse {
+            atStartOfResponse = false
+            if rawLine.hasPrefix("\u{FEFF}") { rawLine.removeFirst() } // one BOM, at the start of the response only
+        }
         let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
         if line.isEmpty { return dispatch() }
         if line.hasPrefix(":") { return nil } // comment / keep-alive
@@ -54,10 +75,7 @@ public struct SseEventParser: Sendable {
         case "data": dataLines.append(value)
         case "event": eventType = value
         case "id":
-            if !value.contains("\u{0}") {
-                pendingId = value
-                lastEventId = value
-            }
+            if !value.contains("\u{0}") { pendingId = value }
         default: break // retry and unknown fields are ignored
         }
         return nil
@@ -65,9 +83,12 @@ public struct SseEventParser: Sendable {
 
     private mutating func dispatch() -> SseEvent? {
         defer { dataLines = []; eventType = nil; pendingId = nil }
-        // An event with no data is not dispatched (an id alone only updates lastEventId).
+        // The id is committed by the blank line, also for a block that carries no data; an empty id resets the cursor.
+        if let pendingId { lastEventId = pendingId.isEmpty ? nil : pendingId }
+        // An event with no data is not dispatched.
         guard !dataLines.isEmpty else { return nil }
-        return SseEvent(id: pendingId, event: eventType, data: dataLines.joined(separator: "\n"))
+        // An empty `id` is a cursor reset, not an identifier: it is never used to drop a later event.
+        return SseEvent(id: pendingId.flatMap { $0.isEmpty ? nil : $0 }, event: eventType, data: dataLines.joined(separator: "\n"))
     }
 }
 

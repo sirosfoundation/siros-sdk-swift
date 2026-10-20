@@ -78,6 +78,8 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 self.setState(.connected)
 
                 // Split the bytes ourselves: `bytes.lines` omits the blank line that ends an event.
+                // A new response never continues a block the previous one left unfinished.
+                self.eventParser.beginResponse()
                 var splitter = SseLineSplitter()
                 for try await byte in bytes {
                     guard let line = splitter.feed(byte: byte),
