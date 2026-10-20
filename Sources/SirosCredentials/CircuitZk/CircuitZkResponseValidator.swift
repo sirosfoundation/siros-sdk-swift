@@ -235,7 +235,7 @@ enum Base64Strict {
         let padding = bytes.reversed().prefix(while: { $0 == 0x3D }).count
         guard padding <= 2 else { return nil }
         let values = bytes.dropLast(padding).map { value($0, url: false) }
-        guard values.allSatisfy({ $0 != nil }), let last = values.last ?? nil else { return nil }
+        guard values.allSatisfy({ $0 != nil }), let last = values.last.flatMap({ $0 }) else { return nil }
         let canonical = padding == 1 ? last & 0x03 == 0 : padding == 2 ? last & 0x0F == 0 : true
         return canonical ? bytes.count / 4 * 3 - padding : nil
     }
@@ -246,7 +246,7 @@ enum Base64Strict {
         guard bytes.count % 4 != 1 else { return nil }
         let values = bytes.map { value($0, url: true) }
         guard values.allSatisfy({ $0 != nil }) else { return nil }
-        if let last = values.last ?? nil {
+        if let last = values.last.flatMap({ $0 }) {
             // Trailing bits of the last character must be zero (canonical encoding).
             switch bytes.count % 4 {
             case 2: guard last & 0x0F == 0 else { return nil }
@@ -309,27 +309,34 @@ indirect enum RawJSON {
             return result
         }
 
+        /// Consumes one or more digits; false when there is none.
+        mutating func digits(_ range: ClosedRange<UInt8> = 0x30...0x39) -> Bool {
+            let start = index
+            while index < bytes.count, range.contains(bytes[index]) { index += 1 }
+            return index > start
+        }
+
+        mutating func accept(_ candidates: UInt8...) -> Bool {
+            guard index < bytes.count, candidates.contains(bytes[index]) else { return false }
+            index += 1
+            return true
+        }
+
         mutating func number() -> RawJSON? {
             let start = index
-            if index < bytes.count, bytes[index] == UInt8(ascii: "-") { index += 1 }
+            _ = accept(UInt8(ascii: "-"))
             guard index < bytes.count else { return nil }
             if bytes[index] == UInt8(ascii: "0") {
                 index += 1
-            } else if (0x31...0x39).contains(bytes[index]) {
-                while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
-            } else { return nil }
-            if index < bytes.count, bytes[index] == UInt8(ascii: ".") {
-                index += 1
-                let digits = index
-                while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
-                guard index > digits else { return nil }
+            } else if digits(0x31...0x39) {
+                _ = digits()
+            } else {
+                return nil
             }
-            if index < bytes.count, bytes[index] == UInt8(ascii: "e") || bytes[index] == UInt8(ascii: "E") {
-                index += 1
-                if index < bytes.count, bytes[index] == UInt8(ascii: "+") || bytes[index] == UInt8(ascii: "-") { index += 1 }
-                let digits = index
-                while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
-                guard index > digits else { return nil }
+            if accept(UInt8(ascii: ".")), !digits() { return nil }
+            if accept(UInt8(ascii: "e"), UInt8(ascii: "E")) {
+                _ = accept(UInt8(ascii: "+"), UInt8(ascii: "-"))
+                guard digits() else { return nil }
             }
             return index > start ? .number : nil
         }
@@ -341,38 +348,43 @@ indirect enum RawJSON {
             while index < bytes.count {
                 let c = bytes[index]
                 index += 1
-                switch c {
-                case UInt8(ascii: "\""): return String(bytes: out, encoding: .utf8)
-                case 0x00..<0x20: return nil
-                case UInt8(ascii: "\\"):
-                    guard index < bytes.count else { return nil }
-                    let e = bytes[index]
-                    index += 1
-                    switch e {
-                    case UInt8(ascii: "\""): out.append(0x22)
-                    case UInt8(ascii: "\\"): out.append(0x5C)
-                    case UInt8(ascii: "/"): out.append(0x2F)
-                    case UInt8(ascii: "b"): out.append(0x08)
-                    case UInt8(ascii: "f"): out.append(0x0C)
-                    case UInt8(ascii: "n"): out.append(0x0A)
-                    case UInt8(ascii: "r"): out.append(0x0D)
-                    case UInt8(ascii: "t"): out.append(0x09)
-                    case UInt8(ascii: "u"):
-                        guard var unit = hex4() else { return nil }
-                        if (0xD800..<0xDC00).contains(unit) {
-                            guard index + 1 < bytes.count, bytes[index] == UInt8(ascii: "\\"), bytes[index + 1] == UInt8(ascii: "u") else { return nil }
-                            index += 2
-                            guard let low = hex4(), (0xDC00..<0xE000).contains(low) else { return nil }
-                            unit = 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
-                        } else if (0xDC00..<0xE000).contains(unit) { return nil }
-                        guard let scalar = Unicode.Scalar(unit) else { return nil }
-                        out.append(contentsOf: Array(String(Character(scalar)).utf8))
-                    default: return nil
-                    }
-                default: out.append(c)
+                if c == UInt8(ascii: "\"") { return String(bytes: out, encoding: .utf8) }
+                if c < 0x20 { return nil }
+                if c == UInt8(ascii: "\\") {
+                    guard let escaped = escape() else { return nil }
+                    out.append(contentsOf: escaped)
+                } else {
+                    out.append(c)
                 }
             }
             return nil
+        }
+
+        /// The bytes of the escape sequence after a backslash.
+        mutating func escape() -> [UInt8]? {
+            guard index < bytes.count else { return nil }
+            let e = bytes[index]
+            index += 1
+            let simple: [UInt8: UInt8] = [
+                UInt8(ascii: "\""): 0x22, UInt8(ascii: "\\"): 0x5C, UInt8(ascii: "/"): 0x2F, UInt8(ascii: "b"): 0x08,
+                UInt8(ascii: "f"): 0x0C, UInt8(ascii: "n"): 0x0A, UInt8(ascii: "r"): 0x0D, UInt8(ascii: "t"): 0x09,
+            ]
+            if let byte = simple[e] { return [byte] }
+            guard e == UInt8(ascii: "u"), let scalar = unicodeEscape() else { return nil }
+            return Array(String(Character(scalar)).utf8)
+        }
+
+        /// The scalar of a `\uXXXX` escape (the `\u` is consumed), joining a surrogate pair.
+        mutating func unicodeEscape() -> Unicode.Scalar? {
+            guard var unit = hex4() else { return nil }
+            if (0xDC00..<0xE000).contains(unit) { return nil }
+            if (0xD800..<0xDC00).contains(unit) {
+                guard index + 1 < bytes.count, bytes[index] == UInt8(ascii: "\\"), bytes[index + 1] == UInt8(ascii: "u") else { return nil }
+                index += 2
+                guard let low = hex4(), (0xDC00..<0xE000).contains(low) else { return nil }
+                unit = 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
+            }
+            return Unicode.Scalar(unit)
         }
 
         mutating func hex4() -> UInt32? {
