@@ -136,9 +136,8 @@ public enum WalletStateSchema {
             guard let version = integer(rawVersion), rewritableVersions.contains(version) else {
                 return UnsupportedSchemaVersion(subject: .event(index: index), found: describe(rawVersion))
             }
-            // `set_extension` is a version 4 event: carried at an older version it is refused.
-            guard let type = event["type"] as? String, knownEventTypes.contains(type),
-                  !eventTypesFromVersion4.contains(type) || version >= 4 else {
+            // `set_extension` stamped 3 is accepted (spec section 6: pre-3.0 containers have it); a writer never emits one.
+            guard let type = event["type"] as? String, knownEventTypes.contains(type) else {
                 return UnsupportedSchemaVersion(
                     subject: .eventType(index: index, type: (event["type"] as? String) ?? describe(event["type"])),
                     found: describe(event["type"])

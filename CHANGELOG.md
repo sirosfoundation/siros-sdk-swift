@@ -32,12 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   members, which dropped everything else), the array keeps the container's order
   (new entries are appended by id; it used to follow dictionary order), keypair
   entries and their members survive likewise, and a keypair entry this build could
-  not load, including one that is not an object, is carried verbatim in place. Presentation entries and the members of a key's JWKs are written back unchanged too, so a 3 to 4 migration changes only `schemaVersion`; `set_extension` at an event `schemaVersion` below 4 and a present `S` that is not an object are refused. `metadata: null` and `metadata: []` are not
+  not load, including one that is not an object, is carried verbatim in place. Presentation entries and the members of a key's JWKs are written back unchanged too, so a 3 to 4 migration changes only `schemaVersion`; a present `S` that is not an object is refused, and `set_extension` stamped 3 is accepted (a writer emits 4). `metadata: null` and `metadata: []` are not
   written back (spec section 6.0). This overlaps the credential-metadata work in
   progress (#202), which adds the `metadata` accessors.
 - Test vectors: `Tests/SirosKeystoreTests/Resources/privatedata-spec/` is a
   verbatim copy of privatedata-spec `test-vectors/` at pull request 9, head
-  `f393ccbb18731dabe776440b0a0dcafabcff2260`, with a recorded source and a
+  `64315a5eae50e08a93772488217bbc913c82dd56`, with a recorded source and a
   digest check (`vectors.PROVENANCE.txt`, `vectors.SHA256SUMS`).
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
@@ -91,10 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readers (older SDKs, a wallet-frontend before spec 3.0) crash on or drop
   `S.extensions` and `S.credentials[].metadata`, which is why spec 3.0 moves them
   to version 4; they will not rewrite a version 4 container, which is the
-  intended effect. The SDK still writes `S.extensions` directly rather than as
-  `set_extension` events (spec 6.1.3), and still writes the legacy
-  `wscdCredentials` and `credentialRefreshTokens` members (spec 6.2 says writers
-  MUST NOT); both are unchanged by this change. **Rollout (spec 3.0):** this SDK writes version 4 on every
+  intended effect. Changing `S.extensions`
+  (`setExtensionEntry`, `removeExtensionEntry`) now also appends a `set_extension`
+  event (schemaVersion 4, a tombstone with `value` null for a removal) to
+  `events`, chained by `parentHash` as wallet-frontend chains them (SHA-256 hex of
+  the previous event's key-sorted JSON; `lastEventHash` for the first), as spec
+  6.1.3 requires of a client with no event log; the SDK still has no event
+  merger. It still writes the legacy `wscdCredentials` and
+  `credentialRefreshTokens` members, which spec 6.2 forbids: replacing them means
+  re-shaping per-plugin state into per-`kid` `org.siros.wscd` entries and defining
+  the `org.siros.oid4vci.refresh` value, which the spec does not specify and which
+  would have to match siros-sdk-kotlin, so that is left for its own change. **Rollout (spec 3.0):** this SDK writes version 4 on every
   write; a wallet-frontend that implements only version 3 refuses a version 4
   container (nothing is lost, the user cannot open the wallet there). No
   compatibility shim is provided. **Older native SDK releases are not

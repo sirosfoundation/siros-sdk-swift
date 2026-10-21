@@ -96,6 +96,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // represent. Nil for a container this build may rewrite, for a first-time
     // setup, and while locked.
     private var rewriteRefusal: UnsupportedSchemaVersion?
+    // Changes to `extensions` not yet exported. Each becomes a chained
+    // `set_extension` event at export (privatedata-spec section 6.1.3).
+    private var pendingExtensionEvents: [PendingExtensionEvent] = []
     // Hardware-backed WSCD plugins' exported key metadata (kid ->
     // credential_handle/pubkey mappings, never private key material), keyed
     // by plugin ID - see privatedata-spec SPEC.md §6.1 "S.wscdCredentials".
@@ -250,11 +253,13 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
                 preservedWalletState = jweDict
             }
             rewriteRefusal = WalletStateSchema.rewriteRefusal(of: jwePayload)
+            pendingExtensionEvents.removeAll()
             loadWalletState(jwePayload)
             containerMetadata = container
         } else {
             // First-time setup
             rewriteRefusal = nil
+            pendingExtensionEvents.removeAll()
             let (newMainKey, newMainKeyInfo) = EncryptedContainer.generateMainKey()
             _mainKey = newMainKey
 
@@ -312,6 +317,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         containerMetadata = nil
         preservedWalletState = nil
         rewriteRefusal = nil
+        pendingExtensionEvents.removeAll()
     }
 
     // MARK: - Key operations
@@ -606,6 +612,15 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         }
         meta.jwe = jweString
         containerMetadata = meta
+        // The events just written are now the container's history; a later export
+        // appends to them rather than writing the same changes again.
+        if !pendingExtensionEvents.isEmpty {
+            var state = preservedWalletState ?? [:]
+            state["events"] = walletState["events"]
+            state["lastEventHash"] = walletState["lastEventHash"]
+            preservedWalletState = state
+            pendingExtensionEvents.removeAll()
+        }
 
         return try EncryptedContainer.serialize(meta)
     }
@@ -678,6 +693,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         try requireRewritable()
         extensions[namespace, default: [:]][key] = value
+        pendingExtensionEvents.append(PendingExtensionEvent(namespace: namespace, key: key, value: value))
     }
 
     /// Remove one entry.
@@ -699,6 +715,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         guard var ns = extensions[namespace] else { return }
         ns.removeValue(forKey: key)
         extensions[namespace] = ns.isEmpty ? nil : ns
+        // The tombstone (`value` null) that deletes the key when histories are merged.
+        pendingExtensionEvents.append(PendingExtensionEvent(namespace: namespace, key: key, value: nil))
     }
 
     /// Every credential batch's durable renewal candidate, keyed by
@@ -1205,7 +1223,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         let presentations = WalletStateEntries.presentationEntries(records: presentationRecords, existingS: existingS)
 
         let lastEventHash = existingState?["lastEventHash"] as? String ?? ""
-        let events = existingState?["events"] as? [Any] ?? []
+        let events = PendingExtensionEvent.appending(
+            pendingExtensionEvents, to: existingState?["events"] as? [Any] ?? [], lastEventHash: lastEventHash
+        )
         let settings = existingS?["settings"] as? [String: Any] ?? [
             "openidRefreshTokenMaxAgeInSeconds": "0",
         ]

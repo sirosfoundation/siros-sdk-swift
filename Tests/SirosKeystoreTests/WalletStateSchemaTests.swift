@@ -116,9 +116,9 @@ final class WalletStateSchemaTests: XCTestCase {
         }
     }
 
-    func testSetExtensionAtSchemaVersionThreeIsRefused() throws {
+    func testSetExtensionStampedThreeIsAcceptedBecauseContainersBeforeSpec30HaveIt() {
         let c = container(events: [["type": "set_extension", "schemaVersion": 3, "eventId": 1]])
-        XCTAssertEqual(WalletStateSchema.rewriteRefusal(of: c)?.subject, .eventType(index: 0, type: "set_extension"))
+        XCTAssertNil(WalletStateSchema.rewriteRefusal(of: c))
     }
 
     func testTheLegacyContainerWithoutSIsStillAccepted() throws {

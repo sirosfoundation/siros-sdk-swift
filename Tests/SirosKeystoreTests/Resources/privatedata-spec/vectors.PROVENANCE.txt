@@ -1,13 +1,10 @@
 Every file in this directory except this one and vectors.SHA256SUMS is a VERBATIM
 copy of the file of the same relative path under test-vectors/ of
-sirosfoundation/privatedata-spec, pull request 10 ("make the vectors match the spec", draft, stacked on pull request 9
-"spec 3.0: extensions and set_extension", head 04e53b10c1772dea45276b395a17dfc3fd6fb935),
-head commit f393ccbb18731dabe776440b0a0dcafabcff2260 (SPEC 3.0, S.schemaVersion 4). Never edit one by hand; re-copy from the spec, regenerate
-vectors.SHA256SUMS (sha256sum, paths relative to this directory) and update the
-two digests pinned in PrivateDataSchemaVectorTests.
+sirosfoundation/privatedata-spec, main, merge commit
+64315a5eae50e08a93772488217bbc913c82dd56 (SPEC 3.0, S.schemaVersion 4). Never edit
+one by hand; re-copy from the spec, regenerate vectors.SHA256SUMS (sha256sum, paths
+relative to this directory) and update the two digests pinned in
+PrivateDataSchemaVectorTests.
 
-  sha256 of vectors.jsonl:       a06ec5a21c0b74aaae16595a685c38aa538fa65b46ece7dfe50f9286d839c0ba
-  sha256 of vectors.SHA256SUMS:  bbc0dc2b115599b4de873a0489deac90220544c3b6aa2083fa3e6c74e68665a2
-
-This is a pull request head, not a merge commit: when the spec PRs merge, re-vendor
-from main and record that commit instead.
+  sha256 of vectors.jsonl:       9505e976b4fd44b9ce645cec952506ccfcd823627f99c50c9023125c90519021
+  sha256 of vectors.SHA256SUMS:  22c55ef0a0f4eb132d4bdb7a1d7fabf36ac18137725ea7e08f2ae2fe518978db

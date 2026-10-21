@@ -13,8 +13,8 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
 
     /// SHA-256 of the vendored files. Re-vendoring changes them; see
     /// `Resources/privatedata-spec/vectors.PROVENANCE.txt`.
-    private static let vectorsSha256 = "a06ec5a21c0b74aaae16595a685c38aa538fa65b46ece7dfe50f9286d839c0ba"
-    private static let sumsSha256 = "bbc0dc2b115599b4de873a0489deac90220544c3b6aa2083fa3e6c74e68665a2"
+    private static let vectorsSha256 = "9505e976b4fd44b9ce645cec952506ccfcd823627f99c50c9023125c90519021"
+    private static let sumsSha256 = "22c55ef0a0f4eb132d4bdb7a1d7fabf36ac18137725ea7e08f2ae2fe518978db"
 
     private let prf = Data(repeating: 0x42, count: 32)
     private let salt = Data(repeating: 0x07, count: 32)
@@ -374,6 +374,53 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         let output = try await rewritten(keystore)
         XCTAssertTrue(ContainerTestSupport.jsonEqual(s(output)["presentations"], presentations))
         XCTAssertTrue(ContainerTestSupport.jsonEqual(s(output)["keypairs"], [keypair]))
+    }
+
+    /// The chain is wallet-frontend's: pinned against the real chain in the spec's
+    /// `schema-version-event-types-001`, which covers all ten types including `new_keypair`
+    /// (hashed with `wrappedPrivateKey` null) and `set_extension`.
+    func testTheEventHashReproducesTheSpecsParentHashChain() throws {
+        let input = try XCTUnwrap(plaintextState(of: try vector("schema-version-event-types-001")))
+        let events = try XCTUnwrap(input["events"] as? [[String: Any]])
+        XCTAssertEqual(events.count, 13)
+        XCTAssertEqual(events[0]["parentHash"] as? String, input["lastEventHash"] as? String)
+        for index in 1..<events.count {
+            XCTAssertEqual(WalletStateEvents.hash(events[index - 1]), events[index]["parentHash"] as? String, "event \(index)")
+        }
+    }
+
+    func testChangingAnExtensionAppendsAChainedSetExtensionEventAtVersionFour() async throws {
+        let input = try XCTUnwrap(plaintextState(of: try vector("schema-version-event-types-001")))
+        let before = try XCTUnwrap(input["events"] as? [[String: Any]])
+        let (keystore, _) = try await open(input)
+        try await keystore.setExtensionEntry(namespace: "org.siros.wscd", key: "kid-a", value: "v1")
+        try await keystore.removeExtensionEntry(namespace: "org.siros.wscd", key: "kid-a")
+        let output = try await rewritten(keystore)
+        let events = try XCTUnwrap(output["events"] as? [[String: Any]])
+        XCTAssertEqual(events.count, before.count + 2)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(Array(events.prefix(before.count)), before), "history untouched")
+        let set = events[before.count], tombstone = events[before.count + 1]
+        XCTAssertEqual(set["type"] as? String, "set_extension")
+        XCTAssertEqual(set["schemaVersion"] as? Int, 4)
+        XCTAssertEqual(set["namespace"] as? String, "org.siros.wscd")
+        XCTAssertEqual(set["key"] as? String, "kid-a")
+        XCTAssertEqual(set["value"] as? String, "v1")
+        XCTAssertEqual(set["parentHash"] as? String, WalletStateEvents.hash(before[before.count - 1]))
+        XCTAssertTrue(tombstone["value"] is NSNull, "removal is a tombstone")
+        XCTAssertEqual(tombstone["parentHash"] as? String, WalletStateEvents.hash(set))
+        XCTAssertNil(WalletStateSchema.rewriteRefusal(of: output))
+        // Exporting again appends nothing: the history is now the container's.
+        let again = try await rewritten(keystore)
+        XCTAssertEqual((again["events"] as? [Any])?.count, events.count)
+    }
+
+    func testAFreshContainerChainsItsFirstExtensionEventFromLastEventHash() async throws {
+        let (keystore, _) = try await open(state())   // lastEventHash "h-0", no events
+        try await keystore.setExtensionEntry(namespace: "ns", key: "k", value: "v")
+        let output = try await rewritten(keystore)
+        let events = try XCTUnwrap(output["events"] as? [[String: Any]])
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events[0]["parentHash"] as? String, "h-0")
     }
 
     func testUnknownKeypairMembersAndAnUnloadableKeypairSurvive() async throws {
