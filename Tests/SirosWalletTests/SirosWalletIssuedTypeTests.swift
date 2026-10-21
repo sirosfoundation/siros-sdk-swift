@@ -320,6 +320,30 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         XCTAssertTrue(saved.isEmpty)
     }
 
+    /// A consumption is recorded in memory only when the container is read-only, so reopening
+    /// would make a used one-time instance eligible again: it must not be offered.
+    func testConsumingInstancesAreNotOfferedWhileTheContainerIsUnsupported() {
+        let keystore = StubKeystoreManager()
+        keystore.keyIds = ["k1"]
+        let w = SirosWallet(
+            config: WalletConfig(backendUrl: "https://example.invalid"),
+            authProvider: StubAuthProvider(), keystore: keystore, accountRegistry: .inMemory()
+        )!
+        let instances = [StoredCredential(id: 1, format: "dc+sd-jwt", raw: "r", kid: "k1", batchId: 1, instanceId: 0)]
+        for policy in CredentialConsumptionPolicy.allCases {
+            w.credentialConsumptionPolicy = policy
+            XCTAssertEqual(w.eligibleInstances(from: instances).count, 1, "\(policy) offers it while writable")
+        }
+        keystore.refusal = UnsupportedSchemaVersion(subject: .state, found: "5")
+        w.credentialConsumptionPolicy = .consumeAll
+        XCTAssertTrue(w.eligibleInstances(from: instances).isEmpty)
+        w.credentialConsumptionPolicy = .consumeNonZkp
+        XCTAssertTrue(w.eligibleInstances(from: instances).isEmpty, "raw disclosure consumes")
+        XCTAssertEqual(w.eligibleInstances(from: instances, isZkPresentation: { _ in true }).count, 1, "a ZK proof does not consume")
+        w.credentialConsumptionPolicy = .neverConsume
+        XCTAssertEqual(w.eligibleInstances(from: instances).count, 1)
+    }
+
     /// A document carrying a `display` entry, since that is where
     /// `CredentialUtils.buildMetadata` takes the stored name from.
     private func displayDocument(_ vct: String, displayName: String) -> VctmDocument {
@@ -371,7 +395,8 @@ private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
     func signPresentation(nonce: String, audience: String, credentialIds: [Int64], kid: String?) async throws -> String { "" }
     func signVpToken(credential: String, disclosedClaims: [String]?, nonce: String, audience: String, kid: String?) async throws -> String { "" }
     func exportEncryptedContainer() async throws -> Data { Data() }
-    func listKeys() -> [KeyInfo] { [] }
+    var keyIds: [String] = []
+    func listKeys() -> [KeyInfo] { keyIds.map { KeyInfo(keyId: $0, algorithm: "ES256") } }
     func saveCredential(id: Int64, json: String) async throws {}
     func getCredential(id: Int64) async throws -> String? { nil }
     func getAllCredentials() async throws -> [Int64: String] { [:] }

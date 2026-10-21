@@ -108,7 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Keystore: an issued credential is not stored, nor reported accepted to the
   issuer, while the container is unsupported** (`storeIssuedCredential` checks the
   new `KeystoreManager.unsupportedSchemaVersion`, default nil), because
-  `CredentialStore.save` does not throw. Deleting or clearing a credential now also
+  `CredentialStore.save` does not throw. Likewise `SirosWallet.eligibleInstances`
+  offers no instance whose presentation the consumption policy would consume
+  (all under `consumeAll`, raw disclosures under `consumeNonZkp`), since a
+  consumption could not be persisted and the instance would become eligible
+  again on reopening. Deleting or clearing a credential now also
   forgets its preserved container entry, so a credential later saved under the same
   id does not inherit the deleted one's `metadata`.
 - **EC TS12 payment SCA: the `amr` now comes from the WSCD manager's own sign.**
