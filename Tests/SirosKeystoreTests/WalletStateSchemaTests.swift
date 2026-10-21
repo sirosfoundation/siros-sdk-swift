@@ -110,6 +110,17 @@ final class WalletStateSchemaTests: XCTestCase {
         XCTAssertNotNil(WalletStateSchema.rewriteRefusal(of: try parse("{\"S\":{\"schemaVersion\":4},\"events\":{}}")))
     }
 
+    func testAPresentSThatIsNotAnObjectIsRefused() throws {
+        for bad in ["null", "[]", "\"x\"", "4"] {
+            XCTAssertNotNil(WalletStateSchema.rewriteRefusal(of: try parse("{\"S\":\(bad),\"events\":[]}")), "S \(bad)")
+        }
+    }
+
+    func testSetExtensionAtSchemaVersionThreeIsRefused() throws {
+        let c = container(events: [["type": "set_extension", "schemaVersion": 3, "eventId": 1]])
+        XCTAssertEqual(WalletStateSchema.rewriteRefusal(of: c)?.subject, .eventType(index: 0, type: "set_extension"))
+    }
+
     func testTheLegacyContainerWithoutSIsStillAccepted() throws {
         XCTAssertNil(WalletStateSchema.rewriteRefusal(of: try parse("{\"keys\":[]}")))
     }

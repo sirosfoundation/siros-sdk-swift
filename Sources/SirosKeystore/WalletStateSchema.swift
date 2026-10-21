@@ -107,6 +107,11 @@ public enum WalletStateSchema {
     /// A container without `S` is the legacy Kotlin-only layout, which has no
     /// schema version at all; it is accepted, as it always was.
     public static func rewriteRefusal(of container: [String: Any]) -> UnsupportedSchemaVersion? {
+        // Only an ABSENT `S` is the legacy layout; a present `S` that is not an object
+        // (`null`, an array) would otherwise be replaced by an empty one on export.
+        if let rawS = container["S"], !(rawS is [String: Any]) {
+            return UnsupportedSchemaVersion(subject: .state, found: describe(rawS))
+        }
         if let s = container["S"] as? [String: Any] {
             if s["schemaVersion"] == nil {
                 // Absent reads as version 1 (wallet-frontend), which this build does not rewrite.
@@ -131,7 +136,9 @@ public enum WalletStateSchema {
             guard let version = integer(rawVersion), rewritableVersions.contains(version) else {
                 return UnsupportedSchemaVersion(subject: .event(index: index), found: describe(rawVersion))
             }
-            guard let type = event["type"] as? String, knownEventTypes.contains(type) else {
+            // `set_extension` is a version 4 event: carried at an older version it is refused.
+            guard let type = event["type"] as? String, knownEventTypes.contains(type),
+                  !eventTypesFromVersion4.contains(type) || version >= 4 else {
                 return UnsupportedSchemaVersion(
                     subject: .eventType(index: index, type: (event["type"] as? String) ?? describe(event["type"])),
                     found: describe(event["type"])

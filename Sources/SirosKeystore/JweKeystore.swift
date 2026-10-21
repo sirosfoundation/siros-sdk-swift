@@ -1202,21 +1202,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // (recorded at credential-selection time, before the VP is actually
         // signed) - written as "" rather than restructuring that flow, a
         // known, deliberate gap.
-        let presentations: [[String: Any]] = presentationRecords.map { (id, data) in
-            let parsed = parseJsonObject(data)
-            let usedCredentialIds = (parsed?["credential_ids"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
-            let timestampMillis = Self.asInt64(parsed?["timestamp"]) ?? 0
-            let audience = (parsed?["verifier_name"] as? String) ?? ""
-
-            return [
-                "presentationId": id,
-                "transactionId": id,
-                "data": "",
-                "usedCredentialIds": usedCredentialIds,
-                "presentationTimestampSeconds": timestampMillis / 1000,
-                "audience": audience,
-            ] as [String: Any]
-        }
+        let presentations = WalletStateEntries.presentationEntries(records: presentationRecords, existingS: existingS)
 
         let lastEventHash = existingState?["lastEventHash"] as? String ?? ""
         let events = existingState?["events"] as? [Any] ?? []

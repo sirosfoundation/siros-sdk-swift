@@ -53,6 +53,40 @@ enum WalletStateEntries {
         return entry
     }
 
+    // MARK: - Presentations
+
+    /// `S.presentations[]`, driven by the in-memory records (a record removed from
+    /// memory is removed). A presentation the container already had is written
+    /// back as it was, in place: rebuilding it from the record would blank `data`
+    /// and replace a distinct `transactionId`, which a version 3 to 4 migration
+    /// must not change. An entry this build cannot read is carried verbatim. A
+    /// record recorded THIS session has no VP and no transaction of its own, so it
+    /// is written as its own single-VP transaction (`transactionId` = id, `data`
+    /// = ""), a known, deliberate gap (see `PresentationRecord`).
+    static func presentationEntries(records: [Int64: String], existingS: [String: Any]?) -> [Any] {
+        var entries: [Any] = []
+        var seen = Set<Int64>()
+        for element in (existingS?["presentations"] as? [Any]) ?? [] {
+            guard let entry = element as? [String: Any], let id = int64(entry["presentationId"]) else {
+                entries.append(element)
+                continue
+            }
+            if records[id] != nil, seen.insert(id).inserted { entries.append(entry) }
+        }
+        for id in records.keys.sorted() where !seen.contains(id) {
+            let parsed = records[id].flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
+            entries.append([
+                "presentationId": id,
+                "transactionId": id,
+                "data": "",
+                "usedCredentialIds": (parsed?["credential_ids"] as? [Any])?.compactMap { int64($0) } ?? [],
+                "presentationTimestampSeconds": (int64(parsed?["timestamp"]) ?? 0) / 1000,
+                "audience": (parsed?["verifier_name"] as? String) ?? "",
+            ] as [String: Any])
+        }
+        return entries
+    }
+
     // MARK: - Keypairs
 
     #if canImport(CryptoKit)
@@ -95,11 +129,15 @@ enum WalletStateEntries {
         keypair["kid"] = kid
         keypair["did"] = did ?? originalKeypair?["did"] as? String ?? ""
         keypair["alg"] = "ES256"
-        keypair["publicKey"] = ["kty": "EC", "crv": "P-256", "x": x, "y": y]
-        keypair["privateKey"] = [
-            "kty": "EC", "crv": "P-256", "x": x, "y": y,
-            "d": EncryptedContainer.base64UrlEncode(key.rawRepresentation),
-        ]
+        // Each JWK starts from the original, so members this build does not know
+        // (`key_ops`, `use`, peer-defined ones) survive; only the key material is set.
+        var publicJwk = originalKeypair?["publicKey"] as? [String: Any] ?? [:]
+        publicJwk["kty"] = "EC"; publicJwk["crv"] = "P-256"; publicJwk["x"] = x; publicJwk["y"] = y
+        var privateJwk = originalKeypair?["privateKey"] as? [String: Any] ?? [:]
+        privateJwk["kty"] = "EC"; privateJwk["crv"] = "P-256"; privateJwk["x"] = x; privateJwk["y"] = y
+        privateJwk["d"] = EncryptedContainer.base64UrlEncode(key.rawRepresentation)
+        keypair["publicKey"] = publicJwk
+        keypair["privateKey"] = privateJwk
         var entry = original ?? [:]
         entry["kid"] = kid
         entry["keypair"] = keypair

@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   members, which dropped everything else), the array keeps the container's order
   (new entries are appended by id; it used to follow dictionary order), keypair
   entries and their members survive likewise, and a keypair entry this build could
-  not load, including one that is not an object, is carried verbatim in place. `metadata: null` and `metadata: []` are not
+  not load, including one that is not an object, is carried verbatim in place. Presentation entries and the members of a key's JWKs are written back unchanged too, so a 3 to 4 migration changes only `schemaVersion`; `set_extension` at an event `schemaVersion` below 4 and a present `S` that is not an object are refused. `metadata: null` and `metadata: []` are not
   written back (spec section 6.0). This overlaps the credential-metadata work in
   progress (#202), which adds the `metadata` accessors.
 - Test vectors: `Tests/SirosKeystoreTests/Resources/privatedata-spec/` is a

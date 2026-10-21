@@ -353,6 +353,29 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         XCTAssertTrue(ContainerTestSupport.jsonEqual(entries[0], first))
     }
 
+    func testPresentationsAndJwkMembersSurviveAVersionOnlyMigration() async throws {
+        let key = P256.Signing.PrivateKey()
+        let x963 = key.publicKey.x963Representation
+        let b64 = EncryptedContainer.base64UrlEncode
+        let x = b64(Data(x963[1..<33])), y = b64(Data(x963[33..<65]))
+        let keypair: [String: Any] = ["kid": "kp", "keypair": [
+            "kid": "kp", "did": "did:example:kp", "alg": "ES256",
+            "publicKey": ["kty": "EC", "crv": "P-256", "x": x, "y": y, "key_ops": ["verify"], "x-peer": 1],
+            "privateKey": ["kty": "EC", "crv": "P-256", "x": x, "y": y, "d": b64(key.rawRepresentation), "use": "sig", "ext": true],
+        ] as [String: Any]]
+        let presentations: [[String: Any]] = [
+            ["presentationId": 9, "transactionId": 77, "data": "vp-token", "usedCredentialIds": [1],
+             "presentationTimestampSeconds": 5, "audience": "a", "x-unknown": 1],
+            ["presentationId": 3, "transactionId": 3, "data": "", "usedCredentialIds": [] as [Any],
+             "presentationTimestampSeconds": 6, "audience": "b"],
+        ]
+        let input = state(version: 3, extra: ["keypairs": [keypair], "presentations": presentations])
+        let (keystore, _) = try await open(input)
+        let output = try await rewritten(keystore)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(s(output)["presentations"], presentations))
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(s(output)["keypairs"], [keypair]))
+    }
+
     func testUnknownKeypairMembersAndAnUnloadableKeypairSurvive() async throws {
         let stub: [String: Any] = ["kid": "hw-1", "keypair": ["kid": "hw-1", "alg": "ES384", "x-future": ["a": 1]] as [String: Any], "x-entry": true]
         let (keystore, _) = try await open(state(extra: ["keypairs": [stub]]))
