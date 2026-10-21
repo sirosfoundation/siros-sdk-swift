@@ -29,9 +29,7 @@ final class CredentialMetadataTests: XCTestCase {
         ["type": "org.siros.secret_seed", "value": ["org.siros.nym_auth": seedHex] as [String: Any]]
     }
 
-    /// The vendored privatedata-spec vectors (verbatim copy, see
-    /// vectors.PROVENANCE.txt).
-    private static let vectorsHash = "2893c0c68da7735ef17da110405161c2f81d09d9faebc1340f00218c4e3f9ec4"
+    // The vendored privatedata-spec vectors are pinned by digest in PrivateDataSchemaVectorTests.
 
     private func specVector(_ id: String) throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors", withExtension: "jsonl", subdirectory: "privatedata-spec"))
@@ -109,12 +107,6 @@ final class CredentialMetadataTests: XCTestCase {
         XCTAssertEqual(((back?[0]["value"] as? [String: Any])?["org.siros.nym_auth"] as? String), seedHex)
         let big = ((back?[1]["value"] as? [String: Any])?["n"] as? NSNumber)?.int64Value
         XCTAssertEqual(big, 9007199254740993, "integers beyond 2^53 must stay exact")
-    }
-
-    func testVendoredSpecVectorsAreTheVerbatimCopy() throws {
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "vectors", withExtension: "jsonl", subdirectory: "privatedata-spec"))
-        let digest = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(digest, Self.vectorsHash, "re-copy from privatedata-spec and update PROVENANCE")
     }
 
     /// The spec's own round-trip vectors (SPEC 2.6 entry shape), run whole:
@@ -279,7 +271,7 @@ final class CredentialMetadataTests: XCTestCase {
     }
 
     func testMalformedMetadataIsPreservedVerbatimAndNotInterpreted() async throws {
-        for malformed in [["oops": 1] as [String: Any], "str", 7, NSNull()] as [Any] {
+        for malformed in [["oops": 1] as [String: Any], "str", 7] as [Any] {
             let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": malformed])]))
             let json = try await k.getCredential(id: 1)
             XCTAssertNotNil(try? JSONDecoder().decode(StoredCredential.self, from: Data(XCTUnwrap(json).utf8)))
@@ -288,6 +280,88 @@ final class CredentialMetadataTests: XCTestCase {
             let written = try await creds(of: k)
             XCTAssertTrue(ContainerTestSupport.jsonEqual(malformed, entry(1, in: written)?["metadata"]),
                           "malformed \(malformed) must be written back verbatim")
+        }
+    }
+
+    /// `metadata: null` reads as no metadata and a writer MUST NOT emit it (spec section 6.0).
+    func testNullMetadataIsNotWrittenBack() async throws {
+        let k = try await reopen(try container(credentials: [credEntry(1, extra: ["metadata": NSNull()])]))
+        let written = try await creds(of: k)
+        XCTAssertNil(entry(1, in: written)?["metadata"])
+    }
+
+    /// Metadata is a version 4 member: a version 3 container that gets some is written as version 4.
+    func testWritingMetadataIntoAVersionThreeContainerWritesVersionFour() async throws {
+        let k = try await reopen(try container(credentials: [credEntry(1)]))
+        try await k.setCredentialMetadata(id: 1, [seedEntry()])
+        let state = try ContainerTestSupport.plaintext(of: try await k.exportEncryptedContainer(), prfOutput: prf, hkdfSalt: salt)
+        let s = try XCTUnwrap(state["S"] as? [String: Any])
+        XCTAssertEqual(s["schemaVersion"] as? Int, 4)
+        XCTAssertNotNil(entry(1, in: (s["credentials"] as? [[String: Any]]) ?? [])?["metadata"])
+    }
+
+    func testAContainerThisBuildMustNotRewriteRefusesMetadataChanges() async throws {
+        var s: [String: Any] = [
+            "schemaVersion": 5, "keypairs": [] as [Any], "credentials": [credEntry(1)],
+            "presentations": [] as [Any], "settings": ["openidRefreshTokenMaxAgeInSeconds": "0"],
+            "credentialIssuanceSessions": [] as [Any],
+        ]
+        s["futureMember"] = 1
+        let container = try ContainerTestSupport.buildContainer(
+            prfOutput: prf, hkdfSalt: salt, hkdfInfo: info, plaintextState: ["lastEventHash": "", "events": [] as [Any], "S": s]
+        )
+        let k = try await reopen(container)
+        do {
+            try await k.setCredentialMetadata(id: 1, [seedEntry()])
+            XCTFail("a container of a newer schema is not rewritten")
+        } catch KeystoreError.unsupportedSchemaVersion { /* expected */ }
+    }
+
+    /// Review: what is stored is an independent copy. Mutating the caller's objects afterwards changes
+    /// nothing, and neither does mutating what an accessor returned.
+    func testMetadataIsSnapshottedNotShared() async throws {
+        let k = try await reopen(try container(credentials: [credEntry(1)]))
+        let value = NSMutableDictionary(dictionary: ["org.siros.nym_auth": seedHex])
+        let entry: [String: Any] = ["type": "org.siros.secret_seed", "value": value]
+        try await k.setCredentialMetadata(id: 1, [entry])
+        value["org.siros.nym_auth"] = "tampered-after-set"
+        value["extra"] = "added-after-set"
+        let readOpt = await k.credentialMetadata(id: 1)
+        let read = try XCTUnwrap(readOpt)
+        XCTAssertEqual((read[0]["value"] as? [String: Any])?["org.siros.nym_auth"] as? String, seedHex)
+        XCTAssertNil((read[0]["value"] as? [String: Any])?["extra"])
+        let written = try await creds(of: k)
+        XCTAssertEqual(((entry1(written)?["value"]) as? [String: Any])?["org.siros.nym_auth"] as? String, seedHex)
+        // The accessor returns a copy too.
+        if let again = await k.credentialMetadata(id: 1), let mutable = again[0]["value"] as? NSMutableDictionary {
+            mutable["org.siros.nym_auth"] = "tampered-after-get"
+        }
+        let afterOpt = await k.credentialMetadata(id: 1)
+        let after = try XCTUnwrap(afterOpt)
+        XCTAssertEqual((after[0]["value"] as? [String: Any])?["org.siros.nym_auth"] as? String, seedHex)
+    }
+
+    private func entry1(_ written: [[String: Any]]) -> [String: Any]? {
+        ((entry(1, in: written)?["metadata"]) as? [[String: Any]])?.first
+    }
+
+    /// Review: EVERY successful replacement of the container clears the metadata, including a legacy
+    /// container (no `S`) and a first-time empty one, not only a current one.
+    func testEveryKindOfContainerReplacementClearsMetadata() async throws {
+        let withMetadata = try container(credentials: [credEntry(1, extra: ["metadata": [seedEntry()]])])
+        let legacy = try ContainerTestSupport.buildContainer(
+            prfOutput: prf, hkdfSalt: salt, hkdfInfo: info, plaintextState: ["keys": [] as [Any]]
+        )
+        for (name, next) in [("legacy", legacy), ("first-time", Data()), ("without credentials", try container(credentials: []))] {
+            let k = try await reopen(withMetadata)
+            let before = await k.credentialMetadata(id: 1)
+            XCTAssertNotNil(before, name)
+            try await k.unlock(prfOutput: prf, encryptedContainer: next, hkdfSalt: salt, hkdfInfo: info)
+            let after = await k.credentialMetadata(id: 1)
+            XCTAssertNil(after, "\(name): a replaced container carries nothing over")
+            try await k.saveCredential(id: 1, json: "{\"id\":1,\"format\":\"dc+sd-jwt\",\"raw\":\"r\"}")
+            let written = try await creds(of: k)
+            XCTAssertNil(entry(1, in: written)?["metadata"], "\(name): and nothing is written back")
         }
     }
 

@@ -6,17 +6,9 @@ import Foundation
 
 extension JweKeystore {
 
-    /// The credential's `S.credentials[].metadata` entries, each
-    /// `{"type": String, "value": <any JSON>}`, or nil when it has none - or
-    /// when the stored member is not a well-formed array of such objects
-    /// (it is then still written back verbatim on export, just not
-    /// interpreted).
-    ///
-    /// Values are JSON as `JSONSerialization` models it: strings, booleans,
-    /// null, arrays and objects are exact; numbers are value-exact (integers
-    /// within `Int64`, doubles as the nearest `Double`) but not byte-exact
-    /// (`1.0` comes back `1`, big or high-precision decimals are not kept as
-    /// written), and object key order is not kept.
+    /// The `{type, value}` metadata entries of one credential (privatedata-spec `S.credentials[].metadata`,
+    /// version 4), or nil when there are none or what is stored is not that shape. The result is a deep
+    /// copy: the caller can neither alter the keystore's state through it nor see it change.
     public func credentialMetadata(id: Int64) async -> [[String: Any]]? {
         mutex.lock()
         defer { mutex.unlock() }
@@ -28,18 +20,18 @@ extension JweKeystore {
                   entry["value"] != nil else { return nil }
             entries.append(entry)
         }
-        return entries
+        return Self.jsonCopy(entries) as? [[String: Any]]
     }
 
-    /// Replace the credential's `metadata` entries; nil or empty removes the
-    /// member (it is never written as null or `[]`). Every entry needs a
-    /// non-empty string `type` and a `value` (any JSON, null included),
-    /// and the credential must exist. Written to `S.credentials[].metadata`
-    /// by the next `exportEncryptedContainer`.
+    /// Replace (or, with nil or empty, remove) one credential's metadata. It is stored exactly as given, as an
+    /// independent copy, so a later change to the caller's objects cannot alter what is written to the container.
+    /// - Throws: `KeystoreError.locked`, `.unsupportedSchemaVersion` for a container this build must not
+    ///   rewrite, and `.invalidParameter` for an unknown credential or a malformed entry.
     public func setCredentialMetadata(id: Int64, _ entries: [[String: Any]]?) async throws {
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         guard credentials[id] != nil else {
             throw KeystoreError.invalidParameter("no credential \(id)")
         }
@@ -52,35 +44,17 @@ extension JweKeystore {
                 throw KeystoreError.invalidParameter("metadata entries need a non-empty string `type` and a `value`")
             }
         }
-        guard JSONSerialization.isValidJSONObject(entries) else {
+        guard JSONSerialization.isValidJSONObject(entries), let copy = Self.jsonCopy(entries) else {
             throw KeystoreError.invalidParameter("metadata is not valid JSON")
         }
-        credentialMetadata[id] = entries
+        credentialMetadata[id] = copy
     }
 
-    /// Removes the loaded `S.credentials[]` entries of deleted credentials (all when `ids` is
-    /// nil) from the snapshot a rewrite starts from, so a deleted credential's unknown members
-    /// are not attached to a later credential that reuses its id.
-    func dropPreservedCredentialEntries(ids: Set<Int64>?) {
-        guard var state = preservedWalletState, var s = state["S"] as? [String: Any],
-              let entries = s["credentials"] as? [[String: Any]] else { return }
-        s["credentials"] = entries.filter { entry in
-            guard let ids else { return false }
-            return Self.asInt64(entry["credentialId"]).map { !ids.contains($0) } ?? true
-        }
-        state["S"] = s
-        preservedWalletState = state
-    }
-
-    /// The position each credential had in the loaded container: a rewrite keeps
-    /// the array order it read (credentials new this session follow, by id), as a
-    /// dictionary's iteration order would not.
-    static func credentialOrder(in existingS: [String: Any]?) -> [Int64: Int] {
-        var order: [Int64: Int] = [:]
-        for (index, entry) in ((existingS?["credentials"] as? [[String: Any]]) ?? []).enumerated() {
-            if let credId = asInt64(entry["credentialId"]), order[credId] == nil { order[credId] = index }
-        }
-        return order
+    /// An independent copy of a JSON value: no shared (possibly mutable) Foundation objects.
+    static func jsonCopy(_ value: Any) -> Any? {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
     }
 }
 
