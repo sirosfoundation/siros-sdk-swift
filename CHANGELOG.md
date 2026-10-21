@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   progress (#202), which adds the `metadata` accessors.
 - Test vectors: `Tests/SirosKeystoreTests/Resources/privatedata-spec/` is a
   verbatim copy of privatedata-spec `test-vectors/` at pull request 9, head
-  `8ca88606d44b1f580781d3c5bfd20bfba8b4d9c8`, with a recorded source and a
+  `f393ccbb18731dabe776440b0a0dcafabcff2260`, with a recorded source and a
   digest check (`vectors.PROVENANCE.txt`, `vectors.SHA256SUMS`).
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
