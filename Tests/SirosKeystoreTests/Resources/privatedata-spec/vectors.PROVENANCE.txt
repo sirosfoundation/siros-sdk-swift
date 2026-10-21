@@ -1,0 +1,13 @@
+Every file in this directory except this one and vectors.SHA256SUMS is a VERBATIM
+copy of the file of the same relative path under test-vectors/ of
+sirosfoundation/privatedata-spec, pull request 9 ("spec v2.8: extensions and
+set_extension"), head commit 901a9a132c27471e8b89467667c3221fa3e91d28 (SPEC 2.8,
+S.schemaVersion 4). Never edit one by hand; re-copy from the spec, regenerate
+vectors.SHA256SUMS (sha256sum, paths relative to this directory) and update the
+two digests pinned in PrivateDataSchemaVectorTests.
+
+  sha256 of vectors.jsonl:       50e8f8bd53372ea3e6339a5a3c92609a71407c6e979c2392b5bed60641f73faf
+  sha256 of vectors.SHA256SUMS:  1e17e9c92775bb713968248ac20486c1750294d54490d3fac6b4c5ffc4643b73
+
+This is a pull request head, not a merge commit: when the spec PR merges, re-vendor
+from main and record that commit instead.

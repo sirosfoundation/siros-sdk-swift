@@ -89,6 +89,13 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     private var containerMetadata: ContainerData?
     // Preserve full WalletStateContainer for round-trip fidelity
     private var preservedWalletState: [String: Any]?
+    // Why this container must not be rewritten (privatedata-spec section 6),
+    // decided once at unlock from the decrypted container. Reading is
+    // unaffected; `exportEncryptedContainer` and the stores that exist only to
+    // be exported throw it instead of overwriting state this build cannot
+    // represent. Nil for a container this build may rewrite, for a first-time
+    // setup, and while locked.
+    private var rewriteRefusal: UnsupportedSchemaVersion?
     // Hardware-backed WSCD plugins' exported key metadata (kid ->
     // credential_handle/pubkey mappings, never private key material), keyed
     // by plugin ID - see privatedata-spec SPEC.md §6.1 "S.wscdCredentials".
@@ -242,10 +249,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             if let jweDict = jwePayload as? [String: Any] {
                 preservedWalletState = jweDict
             }
+            rewriteRefusal = WalletStateSchema.rewriteRefusal(of: jwePayload)
             loadWalletState(jwePayload)
             containerMetadata = container
         } else {
             // First-time setup
+            rewriteRefusal = nil
             let (newMainKey, newMainKeyInfo) = EncryptedContainer.generateMainKey()
             _mainKey = newMainKey
 
@@ -302,6 +311,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         _mainKey = nil
         containerMetadata = nil
         preservedWalletState = nil
+        rewriteRefusal = nil
     }
 
     // MARK: - Key operations
@@ -582,10 +592,12 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
 
         // swiftlint:disable:next force_unwrapping
         let currentMainKey = _mainKey! // safe: requireUnlocked() above guarantees non-nil
         let walletState = buildWalletStateV3()
+        try WalletStateSchema.requireWriterRules(walletState)
         let payload = try JSONSerialization.data(withJSONObject: walletState)
 
         let jweString = try encryptJwe(payload, mainKey: currentMainKey)
@@ -664,6 +676,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         extensions[namespace, default: [:]][key] = value
     }
 
@@ -682,6 +695,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         guard var ns = extensions[namespace] else { return }
         ns.removeValue(forKey: key)
         extensions[namespace] = ns.isEmpty ? nil : ns
@@ -723,6 +737,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         credentials[id] = json
     }
 
@@ -744,6 +759,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         credentials.removeValue(forKey: id)
     }
 
@@ -751,6 +767,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         credentials.removeAll()
     }
 
@@ -760,6 +777,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         presentationRecords[id] = json
     }
 
@@ -774,6 +792,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         mutex.lock()
         defer { mutex.unlock() }
         try requireUnlocked()
+        try requireRewritable()
         presentationRecords.removeAll()
     }
 
@@ -842,6 +861,24 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         guard _mainKey != nil else {
             throw KeystoreError.locked
         }
+    }
+
+    /// Throws `KeystoreError.unsupportedSchemaVersion` when the container this
+    /// session was unlocked against must not be rewritten (see `rewriteRefusal`).
+    /// Called by every store whose only purpose is to reach the next export, so
+    /// the failure surfaces where the caller asked for the change, not later.
+    private func requireRewritable() throws {
+        if let rewriteRefusal {
+            throw KeystoreError.unsupportedSchemaVersion(rewriteRefusal)
+        }
+    }
+
+    /// Why the unlocked container will not be rewritten, or nil when it can be.
+    /// Reading from it still works; see `KeystoreError.unsupportedSchemaVersion`.
+    public var unsupportedSchemaVersion: UnsupportedSchemaVersion? {
+        mutex.lock()
+        defer { mutex.unlock() }
+        return rewriteRefusal
     }
 
     /// Pick the key to sign a presentation with. See
@@ -1129,100 +1166,10 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         let existingState = preservedWalletState
         let existingS = existingState?["S"] as? [String: Any]
 
-        let originalKeypairsByKid: [String: [String: Any]] = {
-            guard let arr = existingS?["keypairs"] as? [[String: Any]] else { return [:] }
-            var result: [String: [String: Any]] = [:]
-            for entry in arr {
-                if let kid = (entry["keypair"] as? [String: Any])?["kid"] as? String {
-                    result[kid] = entry
-                }
-            }
-            return result
-        }()
-
-        // credentialId is a privatedata-spec number on the wire (matching
-        // wallet-frontend), so compare it numerically rather than as a string.
-        let originalCredsById: [Int64: [String: Any]] = {
-            guard let arr = existingS?["credentials"] as? [[String: Any]] else { return [:] }
-            var result: [Int64: [String: Any]] = [:]
-            for entry in arr {
-                if let credId = Self.asInt64(entry["credentialId"]) {
-                    result[credId] = entry
-                }
-            }
-            return result
-        }()
-
-        let keypairs: [[String: Any]] = keys.map { (kid, ecKey) in
-            let publicKey = ecKey.publicKey
-            let x963 = publicKey.x963Representation
-            let x = Data(x963[1..<33])
-            let y = Data(x963[33..<65])
-            let d = ecKey.rawRepresentation
-
-            let pubJwk: [String: Any] = [
-                "kty": "EC",
-                "crv": "P-256",
-                "x": EncryptedContainer.base64UrlEncode(x),
-                "y": EncryptedContainer.base64UrlEncode(y),
-            ]
-            let privJwk: [String: Any] = [
-                "kty": "EC",
-                "crv": "P-256",
-                "x": EncryptedContainer.base64UrlEncode(x),
-                "y": EncryptedContainer.base64UrlEncode(y),
-                "d": EncryptedContainer.base64UrlEncode(d),
-            ]
-            // A key generated this session knows its own DID; otherwise
-            // preserve whatever the loaded container recorded. Never
-            // recomputed, so a wallet reconfigured to a different
-            // `didKeyVersion` cannot re-identify an existing key.
-            let originalKeypair = originalKeypairsByKid[kid]?["keypair"] as? [String: Any]
-            let did = keyDids[kid] ?? originalKeypair?["did"] as? String ?? ""
-            return [
-                "kid": kid,
-                "keypair": [
-                    "kid": kid,
-                    "did": did,
-                    "alg": "ES256",
-                    "publicKey": pubJwk,
-                    "privateKey": privJwk,
-                ] as [String: Any],
-            ]
-        }
-
-        // Preserve all metadata fields from the original entry (if this
-        // credential already existed in the loaded container); fall back to
-        // the credential's own saved JSON (parsed) for a credential added
-        // THIS session (saveCredential() then export, with no matching entry
-        // in the previously-imported container yet) - without this fallback,
-        // a freshly-saved batch credential's batchId/instanceId would
-        // silently reset to 0 on every export until the container is
-        // reloaded once.
-        let creds: [[String: Any]] = credentials.map { (id, data) in
-            let original = originalCredsById[id]
-            let parsed = parseJsonObject(data)
-            let format = (original?["format"] as? String) ?? (parsed?["format"] as? String) ?? ""
-            let kid = (original?["kid"] as? String) ?? (parsed?["kid"] as? String) ?? ""
-            let instanceId = Self.asInt(original?["instanceId"]) ?? Self.asInt(parsed?["instance_id"]) ?? 0
-            let batchId = Self.asInt64(original?["batchId"]) ?? Self.asInt64(parsed?["batch_id"]) ?? 0
-            let issuerIdent = (original?["credentialIssuerIdentifier"] as? String)
-                ?? (parsed?["credential_issuer_identifier"] as? String) ?? ""
-            let configId = (original?["credentialConfigurationId"] as? String)
-                ?? (parsed?["credential_configuration_id"] as? String) ?? ""
-            let credData = (original?["data"] as? String) ?? (parsed?["raw"] as? String) ?? data
-            let entry: [String: Any] = [
-                "credentialId": id,
-                "format": format,
-                "data": credData,
-                "kid": kid,
-                "instanceId": instanceId,
-                "batchId": batchId,
-                "credentialIssuerIdentifier": issuerIdent,
-                "credentialConfigurationId": configId,
-            ]
-            return entry
-        }
+        // Both lists start from the loaded container's entries, so unknown members
+        // and `metadata` survive, and keep its order: see `WalletStateEntries`.
+        let keypairs = WalletStateEntries.keypairEntries(keys: keys, keyDids: keyDids, existingS: existingS)
+        let creds = WalletStateEntries.credentialEntries(credentials: credentials, existingS: existingS)
 
         // presentations is privatedata-spec's normative S.presentations[]
         // (wallet-frontend's WalletStatePresentation) - genuinely built from
@@ -1259,8 +1206,11 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         ]
         let credentialIssuanceSessions = existingS?["credentialIssuanceSessions"] as? [Any] ?? []
 
+        // Always the current version: a version 3 container read here is
+        // migrated by changing this number and nothing else (privatedata-spec
+        // section 6), and `metadata` / `extensions` are version 4 members.
         var sDict: [String: Any] = [
-            "schemaVersion": 3,
+            "schemaVersion": WalletStateSchema.currentVersion,
             "keypairs": keypairs,
             "credentials": creds,
             "presentations": presentations,
@@ -1456,6 +1406,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         throw KeystoreError.cryptoError("CryptoKit not available on this platform")
     }
     public func listKeys() -> [KeyInfo] { [] }
+    public var unsupportedSchemaVersion: UnsupportedSchemaVersion? { nil }
     public func exportWscdCredentials() async -> [String: String] { [:] }
     public func setWscdCredentials(pluginId: String, state: String) async {}
     public func extensionEntries(namespace: String) async -> [String: String] { [:] }

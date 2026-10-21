@@ -513,6 +513,11 @@ public enum KeystoreError: Error, Sendable {
     case cryptoError(String)
     case invalidContainer(String)
     case invalidParameter(String)
+    /// The container carries a schema version, event schema version or event
+    /// type this build does not implement, so it will not rewrite it
+    /// (privatedata-spec section 6). Reading is unaffected. Not a failed merge
+    /// and not a transient error: retrying does not help, updating the app does.
+    case unsupportedSchemaVersion(UnsupportedSchemaVersion)
 }
 
 extension KeystoreError: LocalizedError {
@@ -524,6 +529,7 @@ extension KeystoreError: LocalizedError {
         case .cryptoError(let msg): return "Crypto error: \(msg)"
         case .invalidContainer(let msg): return "Invalid container: \(msg)"
         case .invalidParameter(let msg): return "Invalid parameter: \(msg)"
+        case .unsupportedSchemaVersion(let unsupported): return unsupported.errorDescription
         }
     }
 }

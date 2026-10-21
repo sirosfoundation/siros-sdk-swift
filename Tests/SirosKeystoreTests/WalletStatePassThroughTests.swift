@@ -63,8 +63,13 @@ final class WalletStatePassThroughTests: XCTestCase {
         let twice = try await reopen(once).exportEncryptedContainer()
 
         let redecrypted = try ContainerTestSupport.plaintext(of: twice, prfOutput: fakePrfOutput, hkdfSalt: hkdfSalt)
-        let expectedS = original["S"] as! [String: Any]
+        var expectedS = original["S"] as! [String: Any]
         let actualS = redecrypted["S"] as! [String: Any]
+        // `peerWrittenState` is a version 3 container; a rewrite migrates it to
+        // version 4 by changing the version number and nothing else.
+        XCTAssertEqual(expectedS["schemaVersion"] as? Int, 3)
+        XCTAssertEqual(actualS["schemaVersion"] as? Int, 4)
+        expectedS["schemaVersion"] = 4
 
         XCTAssertTrue(
             ContainerTestSupport.jsonEqual(expectedS["someFuture"], actualS["someFuture"]),
