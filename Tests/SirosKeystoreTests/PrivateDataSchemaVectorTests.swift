@@ -423,6 +423,43 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         XCTAssertEqual(events[0]["parentHash"] as? String, "h-0")
     }
 
+    func testClearingPresentationsRemovesTheLoadedHistoryAndASavedRecordUpdatesItsEntry() async throws {
+        let presentations: [Any] = [
+            ["presentationId": 9, "transactionId": 77, "data": "vp-token", "usedCredentialIds": [1],
+             "presentationTimestampSeconds": 5, "audience": "old", "x-unknown": 1] as [String: Any],
+            "unreadable entry",
+            ["presentationId": 3, "transactionId": 3, "data": "", "usedCredentialIds": [] as [Any],
+             "presentationTimestampSeconds": 6, "audience": "b"] as [String: Any],
+        ]
+        // A record saved under a loaded id updates that entry; the rest stay as they were.
+        let (updating, _) = try await open(state(extra: ["presentations": presentations]))
+        try await updating.savePresentationRecord(
+            id: 9, json: "{\"id\":9,\"flow_id\":\"\",\"credential_ids\":[2],\"timestamp\":7000,\"verifier_name\":\"new\"}"
+        )
+        let out = (s(try await rewritten(updating))["presentations"] as? [Any]) ?? []
+        XCTAssertEqual(out.count, 3)
+        let first = try XCTUnwrap(out[0] as? [String: Any])
+        XCTAssertEqual(first["audience"] as? String, "new")
+        XCTAssertEqual(first["presentationTimestampSeconds"] as? Int, 7)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(first["usedCredentialIds"], [2]))
+        XCTAssertEqual(first["data"] as? String, "vp-token")
+        XCTAssertEqual(first["transactionId"] as? Int, 77)
+        XCTAssertEqual(first["x-unknown"] as? Int, 1)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(out[1], presentations[1]))
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(out[2], presentations[2]))
+
+        // Clearing removes everything, including the unreadable entry; a reused id starts fresh.
+        let (clearing, _) = try await open(state(extra: ["presentations": presentations]))
+        try await clearing.clearPresentationRecords()
+        let cleared = try await rewritten(clearing)
+        XCTAssertTrue(((s(cleared)["presentations"] as? [Any]) ?? [1]).isEmpty)
+        try await clearing.savePresentationRecord(id: 9, json: "{\"id\":9,\"credential_ids\":[],\"timestamp\":1000}")
+        let reused = (s(try await rewritten(clearing))["presentations"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(reused.count, 1)
+        XCTAssertEqual(reused.first?["data"] as? String, "")
+        XCTAssertNil(reused.first?["x-unknown"])
+    }
+
     func testUnknownKeypairMembersAndAnUnloadableKeypairSurvive() async throws {
         let stub: [String: Any] = ["kid": "hw-1", "keypair": ["kid": "hw-1", "alg": "ES384", "x-future": ["a": 1]] as [String: Any], "x-entry": true]
         let (keystore, _) = try await open(state(extra: ["keypairs": [stub]]))

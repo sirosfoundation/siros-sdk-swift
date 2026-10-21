@@ -63,7 +63,7 @@ enum WalletStateEntries {
     /// record recorded THIS session has no VP and no transaction of its own, so it
     /// is written as its own single-VP transaction (`transactionId` = id, `data`
     /// = ""), a known, deliberate gap (see `PresentationRecord`).
-    static func presentationEntries(records: [Int64: String], existingS: [String: Any]?) -> [Any] {
+    static func presentationEntries(records: [Int64: String], modified: Set<Int64> = [], existingS: [String: Any]?) -> [Any] {
         var entries: [Any] = []
         var seen = Set<Int64>()
         for element in (existingS?["presentations"] as? [Any]) ?? [] {
@@ -71,20 +71,25 @@ enum WalletStateEntries {
                 entries.append(element)
                 continue
             }
-            if records[id] != nil, seen.insert(id).inserted { entries.append(entry) }
+            guard records[id] != nil, seen.insert(id).inserted else { continue }
+            // Saved again this session: the record's current fields replace the entry's,
+            // and what the record cannot express (`data`, `transactionId`, unknown members) stays.
+            entries.append(modified.contains(id) ? presentationEntry(id: id, record: records[id], original: entry) : entry)
         }
         for id in records.keys.sorted() where !seen.contains(id) {
-            let parsed = records[id].flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
-            entries.append([
-                "presentationId": id,
-                "transactionId": id,
-                "data": "",
-                "usedCredentialIds": (parsed?["credential_ids"] as? [Any])?.compactMap { int64($0) } ?? [],
-                "presentationTimestampSeconds": (int64(parsed?["timestamp"]) ?? 0) / 1000,
-                "audience": (parsed?["verifier_name"] as? String) ?? "",
-            ] as [String: Any])
+            entries.append(presentationEntry(id: id, record: records[id], original: nil))
         }
         return entries
+    }
+
+    private static func presentationEntry(id: Int64, record: String?, original: [String: Any]?) -> [String: Any] {
+        let parsed = record.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
+        var entry = original ?? ["transactionId": id, "data": ""]
+        entry["presentationId"] = id
+        entry["usedCredentialIds"] = (parsed?["credential_ids"] as? [Any])?.compactMap { int64($0) } ?? []
+        entry["presentationTimestampSeconds"] = (int64(parsed?["timestamp"]) ?? 0) / 1000
+        entry["audience"] = (parsed?["verifier_name"] as? String) ?? ""
+        return entry
     }
 
     // MARK: - Keypairs

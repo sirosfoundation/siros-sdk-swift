@@ -99,6 +99,10 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // Changes to `extensions` not yet exported. Each becomes a chained
     // `set_extension` event at export (privatedata-spec section 6.1.3).
     private var pendingExtensionEvents: [PendingExtensionEvent] = []
+    // Presentation ids saved this session. A loaded presentation is exported as the
+    // container had it, unless it is in here: then the record's current fields are
+    // merged into the preserved entry (see `WalletStateEntries.presentationEntries`).
+    private var modifiedPresentationIds: Set<Int64> = []
     // Hardware-backed WSCD plugins' exported key metadata (kid ->
     // credential_handle/pubkey mappings, never private key material), keyed
     // by plugin ID - see privatedata-spec SPEC.md §6.1 "S.wscdCredentials".
@@ -254,12 +258,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
             }
             rewriteRefusal = WalletStateSchema.rewriteRefusal(of: jwePayload)
             pendingExtensionEvents.removeAll()
+            modifiedPresentationIds.removeAll()
             loadWalletState(jwePayload)
             containerMetadata = container
         } else {
             // First-time setup
             rewriteRefusal = nil
             pendingExtensionEvents.removeAll()
+            modifiedPresentationIds.removeAll()
             let (newMainKey, newMainKeyInfo) = EncryptedContainer.generateMainKey()
             _mainKey = newMainKey
 
@@ -318,6 +324,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         preservedWalletState = nil
         rewriteRefusal = nil
         pendingExtensionEvents.removeAll()
+        modifiedPresentationIds.removeAll()
     }
 
     // MARK: - Key operations
@@ -815,6 +822,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         try requireRewritable()
         presentationRecords[id] = json
+        modifiedPresentationIds.insert(id)
     }
 
     public func getAllPresentationRecords() async throws -> [Int64: String] {
@@ -830,6 +838,14 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         try requireRewritable()
         presentationRecords.removeAll()
+        modifiedPresentationIds.removeAll()
+        // The history is gone: forget the container's entries too, including any this
+        // build cannot read, or export would bring them back.
+        if var state = preservedWalletState, var s = state["S"] as? [String: Any] {
+            s["presentations"] = [] as [Any]
+            state["S"] = s
+            preservedWalletState = state
+        }
     }
 
     public func generateKeypairs(count: Int) async throws -> [KeypairInfo] {
@@ -998,8 +1014,8 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // from a not-yet-migrated container) still parses instead of
     // silently dropping the entry.
     private func loadCredentials(from state: [String: Any]) {
-        guard let credsArray = state["credentials"] as? [[String: Any]] else { return }
-        for entry in credsArray {
+        guard let credsArray = state["credentials"] as? [Any] else { return }
+        for case let entry as [String: Any] in credsArray {
             guard let credId = Self.asInt64(entry["credentialId"]),
                   let data = entry["data"] as? String else { continue }
             let credKid = entry["kid"] as? String
@@ -1046,8 +1062,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     // PresentationRecord counterpart (see its doc comment) and are
     // intentionally dropped on reload, not round-tripped.
     private func loadPresentations(from state: [String: Any]) {
-        guard let presentationsArray = state["presentations"] as? [[String: Any]] else { return }
-        for entry in presentationsArray {
+        // Elements, not objects: one entry that is not an object must not hide the rest.
+        guard let presentationsArray = state["presentations"] as? [Any] else { return }
+        for case let entry as [String: Any] in presentationsArray {
             guard let presId = Self.asInt64(entry["presentationId"]) else { continue }
             let usedCredentialIds = (entry["usedCredentialIds"] as? [Any])?.compactMap { Self.asInt64($0) } ?? []
             let timestampSeconds = Self.asInt64(entry["presentationTimestampSeconds"]) ?? 0
@@ -1220,7 +1237,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         // (recorded at credential-selection time, before the VP is actually
         // signed) - written as "" rather than restructuring that flow, a
         // known, deliberate gap.
-        let presentations = WalletStateEntries.presentationEntries(records: presentationRecords, existingS: existingS)
+        let presentations = WalletStateEntries.presentationEntries(
+            records: presentationRecords, modified: modifiedPresentationIds, existingS: existingS
+        )
 
         let lastEventHash = existingState?["lastEventHash"] as? String ?? ""
         let events = PendingExtensionEvent.appending(
