@@ -40,7 +40,7 @@ final class WalletStatePassThroughTests: XCTestCase {
         ]
         return [
             "lastEventHash": "peer-hash",
-            "events": [["type": "peer-event", "at": 1] as [String: Any]],
+            "events": [["type": "alter_settings", "schemaVersion": 3, "eventId": 1, "parentHash": "", "timestampSeconds": 1, "settings": ["openidRefreshTokenMaxAgeInSeconds": "3600"]] as [String: Any]],
             "S": s,
         ]
     }

@@ -98,13 +98,11 @@ public enum WalletStateSchema {
     ///
     /// - `S.schemaVersion` is read the way `wallet-frontend` reads it: absent
     ///   means 1. It must be an integral JSON number inside `rewritableVersions`.
-    /// - Every event that carries a `schemaVersion` must carry an integral one
-    ///   inside `rewritableVersions`, and its `type` must be a type some
-    ///   implemented version defines.
-    /// - An event with NO `schemaVersion` predates schema versioning. It is
-    ///   preserved verbatim and its type is not judged: the spec's own test
-    ///   vectors carry such events (`credential-added`), and refusing them would
-    ///   make the vectors unrewritable.
+    /// - Every event must carry an integral `schemaVersion` inside
+    ///   `rewritableVersions`, and its `type` must be one of the ten types the
+    ///   implemented versions define.
+    /// - An event with no integer `schemaVersion` is refused (spec section 6: every
+    ///   event MUST carry one).
     ///
     /// A container without `S` is the legacy Kotlin-only layout, which has no
     /// schema version at all; it is accepted, as it always was.
@@ -127,7 +125,9 @@ public enum WalletStateSchema {
             guard let event = element as? [String: Any] else {
                 return UnsupportedSchemaVersion(subject: .event(index: index), found: "event is not an object")
             }
-            guard let rawVersion = event["schemaVersion"] else { continue }
+            // Every event MUST carry an integer schemaVersion (spec section 6); an
+            // unversioned one cannot be attributed to an implemented version.
+            let rawVersion = event["schemaVersion"]
             guard let version = integer(rawVersion), rewritableVersions.contains(version) else {
                 return UnsupportedSchemaVersion(subject: .event(index: index), found: describe(rawVersion))
             }

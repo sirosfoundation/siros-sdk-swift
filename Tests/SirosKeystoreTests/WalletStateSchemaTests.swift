@@ -94,10 +94,15 @@ final class WalletStateSchemaTests: XCTestCase {
         }
     }
 
-    func testAnEventWithoutASchemaVersionIsCarriedAndNotJudged() {
-        // The spec's own vectors carry events like this (`credential-added`).
-        let c = container(events: [["type": "credential-added", "timestamp": "2026-10-16T10:00:00Z"]])
-        XCTAssertNil(WalletStateSchema.rewriteRefusal(of: c))
+    func testAnEventWithoutAnIntegerSchemaVersionIsRefused() throws {
+        for event: [String: Any] in [
+            ["type": "alter_settings", "eventId": 1],
+            ["type": "alter_settings", "schemaVersion": "4"],
+            ["type": "alter_settings", "schemaVersion": NSNull()],
+        ] {
+            let refusal = try XCTUnwrap(WalletStateSchema.rewriteRefusal(of: container(events: [event])))
+            XCTAssertEqual(refusal.subject, .event(index: 0))
+        }
     }
 
     func testAnEventThatIsNotAnObjectOrEventsThatAreNotAnArrayIsRefused() throws {

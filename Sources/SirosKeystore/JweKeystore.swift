@@ -956,8 +956,9 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
     }
 
     private func loadKeypairs(from state: [String: Any]) {
-        guard let keypairsArray = state["keypairs"] as? [[String: Any]] else { return }
-        for entry in keypairsArray {
+        // Elements, not objects: one entry that is not an object must not hide the rest.
+        guard let keypairsArray = state["keypairs"] as? [Any] else { return }
+        for case let entry as [String: Any] in keypairsArray {
             guard let keypairObj = entry["keypair"] as? [String: Any],
                   let kid = keypairObj["kid"] as? String,
                   let privateKeyJwk = keypairObj["privateKey"] as? [String: Any],

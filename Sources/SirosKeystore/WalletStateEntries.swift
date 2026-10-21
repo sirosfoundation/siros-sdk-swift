@@ -60,16 +60,18 @@ enum WalletStateEntries {
         keys: [String: P256.Signing.PrivateKey],
         keyDids: [String: String],
         existingS: [String: Any]?
-    ) -> [[String: Any]] {
-        let existing = (existingS?["keypairs"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
+    ) -> [Any] {
+        // Elements, not objects: an entry that is not an object (or not parseable) is
+        // preserved verbatim too (spec section 6).
+        let existing: [Any] = (existingS?["keypairs"] as? [Any]) ?? []
         func kid(_ entry: [String: Any]) -> String? { (entry["keypair"] as? [String: Any])?["kid"] as? String }
         // Existing entries stay where they were, rebuilt when this build loaded the
         // key and carried verbatim when it could not (not a P-256 JWK, say; nothing
         // removes keys, so such an entry is not dropped). Keys new this session
         // follow, by kid.
         var seen = Set<String>()
-        var entries: [[String: Any]] = existing.map { entry in
-            guard let k = kid(entry), let key = keys[k] else { return entry }
+        var entries: [Any] = existing.map { element in
+            guard let entry = element as? [String: Any], let k = kid(entry), let key = keys[k] else { return element }
             seen.insert(k)
             return keypairEntry(kid: k, key: key, did: keyDids[k], original: entry)
         }

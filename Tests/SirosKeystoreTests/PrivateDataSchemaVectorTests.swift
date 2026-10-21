@@ -13,8 +13,8 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
 
     /// SHA-256 of the vendored files. Re-vendoring changes them; see
     /// `Resources/privatedata-spec/vectors.PROVENANCE.txt`.
-    private static let vectorsSha256 = "45baed8e08b8643c6bd427bedbbe8fbea6e67ebe181383eee19b17584a02b4e4"
-    private static let sumsSha256 = "868a399d77c0e05bb72690d1c67812b955e57036bdd2a980e753911247a26a73"
+    private static let vectorsSha256 = "a06ec5a21c0b74aaae16595a685c38aa538fa65b46ece7dfe50f9286d839c0ba"
+    private static let sumsSha256 = "bbc0dc2b115599b4de873a0489deac90220544c3b6aa2083fa3e6c74e68665a2"
 
     private let prf = Data(repeating: 0x42, count: 32)
     private let salt = Data(repeating: 0x07, count: 32)
@@ -116,11 +116,10 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
     /// histories; see the PR description). Listed so a NEW vector id is a decision.
     private static let refusalVectors: Set<String> = [
         "schema-version-unknown-state-001", "schema-version-unknown-event-version-001",
-        "schema-version-unknown-event-type-001",
+        "schema-version-unknown-event-type-001", "schema-version-event-missing-version-001",
     ]
 
     private static let notContainerRoundTrips: Set<String> = [
-        "multi-passkey-v3-001",
         "schema-version-v3-writer-001",   // driven separately below
         "extensions-unknown-event-001", "extensions-concurrent-keys-001", "extensions-tombstone-001",
         "extensions-stale-peer-001", "extensions-size-accounting-001", "extensions-lww-fold-order-001",
@@ -159,6 +158,9 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         XCTAssertTrue(roundTripped.contains("credential-unknown-member-001"))
         XCTAssertTrue(roundTripped.contains("container-unknown-top-level-member-001"))
         XCTAssertTrue(roundTripped.contains("single-credential-v3-001"))
+        XCTAssertTrue(roundTripped.contains("multi-passkey-v3-001"))
+        XCTAssertTrue(roundTripped.contains("schema-version-event-types-001"))
+        XCTAssertTrue(roundTripped.contains("keypair-unknown-entry-001"))
     }
 
     func testTheRefusalVectorsAreRefusedAsUnsupportedAndNothingIsRewritten() async throws {
@@ -166,6 +168,7 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
             "schema-version-unknown-state-001": .state,
             "schema-version-unknown-event-version-001": .event(index: 0),
             "schema-version-unknown-event-type-001": .eventType(index: 0, type: "a_type_this_reader_does_not_know"),
+            "schema-version-event-missing-version-001": .event(index: 0),
         ]
         XCTAssertEqual(Set(expectedSubjects.keys), Self.refusalVectors)
         for (id, subject) in expectedSubjects {
