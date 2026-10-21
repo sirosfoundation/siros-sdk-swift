@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Keystore: privatedata-spec 2.8, `S.schemaVersion` 4.** `JweKeystore` (and
+- **Keystore: privatedata-spec 3.0, `S.schemaVersion` 4.** `JweKeystore` (and
   `WscdKeystoreAdapter` through it) now writes `S.schemaVersion` 4; migrating a
   version 3 container changes that number and nothing else. It reads versions 1
   to 4 and **rewrites 3 and 4 only**. A container whose `S.schemaVersion`, or any
@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   progress (#202), which adds the `metadata` accessors.
 - Test vectors: `Tests/SirosKeystoreTests/Resources/privatedata-spec/` is a
   verbatim copy of privatedata-spec `test-vectors/` at pull request 9, head
-  `901a9a132c27471e8b89467667c3221fa3e91d28`, with a recorded source and a
+  `8ca88606d44b1f580781d3c5bfd20bfba8b4d9c8`, with a recorded source and a
   digest check (`vectors.PROVENANCE.txt`, `vectors.SHA256SUMS`).
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
@@ -88,13 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Keystore: containers are written at `S.schemaVersion` 4 (was 3).** Version 3
-  readers (older SDKs, a wallet-frontend before spec 2.8) crash on or drop
-  `S.extensions` and `S.credentials[].metadata`, which is why spec 2.8 moves them
+  readers (older SDKs, a wallet-frontend before spec 3.0) crash on or drop
+  `S.extensions` and `S.credentials[].metadata`, which is why spec 3.0 moves them
   to version 4; they will not rewrite a version 4 container, which is the
   intended effect. The SDK still writes `S.extensions` directly rather than as
   `set_extension` events (spec 6.1.3), and still writes the legacy
   `wscdCredentials` and `credentialRefreshTokens` members (spec 6.2 says writers
-  MUST NOT); both are unchanged by this change.
+  MUST NOT); both are unchanged by this change. **Rollout order (spec 3.0):**
+  this SDK writes version 4 on every write, so `wallet-frontend` with version 4
+  support has to ship before, or together with, this change: a frontend that
+  implements only version 3 refuses a version 4 container (the user cannot open
+  the wallet there, but nothing is lost).
 - **EC TS12 payment SCA: the `amr` now comes from the WSCD manager's own sign.**
   `siros-wscd-manager` XCFramework 0.9.1 -> 0.10.0 (vendored bindings
   regenerated). Before the user is shown a transaction the wallet asks the

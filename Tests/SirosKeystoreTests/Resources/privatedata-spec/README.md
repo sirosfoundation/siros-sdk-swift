@@ -120,6 +120,10 @@ Vectors with `expected.roundTripState` state the state a conforming reader write
 
 The delivered-secret vectors (SPEC.md Section 5A) are cases of the form `{response, jweEncrypted, commitmentNamespace, sscHex, expected}`, where `response` is an OpenID4VCI Credential Response using the response-level `credential_metadata` object. `delivered-secret-wire-001` (accept: single and multiple namespaces, batch, unknown member preserved), `delivered-secret-malformed-001` (refuse: hex case, length, over-cap, wrong types) and `delivered-secret-refusal-001` (refuse: plain response, missing `notification_id`, commitment mismatch, absent namespace, `credential_metadata` an array, deferred response carrying a seed). `delivered-secret-strip-001` (seed stripped before the merge into display metadata, seed absent from the merged result) and `delivered-secret-advertise-001` (issuer metadata lists namespace names only; hex values in issuer metadata are malformed) cover Sections 5A.3 and 5A.4. `check-vectors.sh` evaluates every case against the Section 5A rules.
 
+### Schema-version vectors
+
+The `schema-version-*` vectors cover the version rules of SPEC.md Section 6. A reader refuses to rewrite a container with an unknown `S.schemaVersion` (`schema-version-unknown-state-001`), an unknown event `schemaVersion` (`schema-version-unknown-event-version-001`) or an unknown event type (`schema-version-unknown-event-type-001`). Migrating version 3 to version 4 only sets `S.schemaVersion` (`schema-version-migrate-v3-001`), also when a version 3 container written before Spec 3.0 already carries `metadata` and `S.extensions` (`schema-version-v3-legacy-members-001`). A writer that stores `metadata` or an extension never leaves the container at version 3 (`schema-version-v3-writer-001`). `check-vectors.sh` checks that the two migration vectors change nothing but `S.schemaVersion`.
+
 ## Vector Maintenance
 
 When adding new test vectors:

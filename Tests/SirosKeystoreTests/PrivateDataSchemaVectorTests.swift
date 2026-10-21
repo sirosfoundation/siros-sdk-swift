@@ -6,15 +6,15 @@ import XCTest
 #if canImport(CryptoKit)
 import CryptoKit
 
-/// privatedata-spec 2.8 (`S.schemaVersion` 4) at the keystore: the spec's vendored
+/// privatedata-spec 3.0 (`S.schemaVersion` 4) at the keystore: the spec's vendored
 /// vectors, and the rules the vectors do not exercise (refusal, migration,
 /// writer rules, preservation).
 final class PrivateDataSchemaVectorTests: XCTestCase {
 
     /// SHA-256 of the vendored files. Re-vendoring changes them; see
     /// `Resources/privatedata-spec/vectors.PROVENANCE.txt`.
-    private static let vectorsSha256 = "50e8f8bd53372ea3e6339a5a3c92609a71407c6e979c2392b5bed60641f73faf"
-    private static let sumsSha256 = "1e17e9c92775bb713968248ac20486c1750294d54490d3fac6b4c5ffc4643b73"
+    private static let vectorsSha256 = "45baed8e08b8643c6bd427bedbbe8fbea6e67ebe181383eee19b17584a02b4e4"
+    private static let sumsSha256 = "868a399d77c0e05bb72690d1c67812b955e57036bdd2a980e753911247a26a73"
 
     private let prf = Data(repeating: 0x42, count: 32)
     private let salt = Data(repeating: 0x07, count: 32)
@@ -114,8 +114,14 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
     /// vectors are the receipt's (siros-sdk-swift DeliveredSecretReceipt), and the
     /// merge vectors need an event merger this SDK does not have (it never merges
     /// histories; see the PR description). Listed so a NEW vector id is a decision.
+    private static let refusalVectors: Set<String> = [
+        "schema-version-unknown-state-001", "schema-version-unknown-event-version-001",
+        "schema-version-unknown-event-type-001",
+    ]
+
     private static let notContainerRoundTrips: Set<String> = [
         "multi-passkey-v3-001",
+        "schema-version-v3-writer-001",   // driven separately below
         "extensions-unknown-event-001", "extensions-concurrent-keys-001", "extensions-tombstone-001",
         "extensions-stale-peer-001", "extensions-size-accounting-001", "extensions-lww-fold-order-001",
         "extensions-lww-tiebreak-001", "extensions-unknown-namespace-retained-001",
@@ -128,7 +134,7 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         var roundTripped: [String] = []
         for vector in try vectors() {
             let id = try XCTUnwrap(vector["id"] as? String)
-            guard !Self.notContainerRoundTrips.contains(id) else { continue }
+            guard !Self.notContainerRoundTrips.contains(id), !Self.refusalVectors.contains(id) else { continue }
             let input = try XCTUnwrap(plaintextState(of: vector), "vector \(id) has no plaintextState; classify it")
             let (keystore, _) = try await open(input)
             XCTAssertNil(keystore.unsupportedSchemaVersion, id)
@@ -155,16 +161,42 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         XCTAssertTrue(roundTripped.contains("single-credential-v3-001"))
     }
 
-    func testTheUnknownEventVectorIsRefusedAsUnsupportedAndNothingIsRewritten() async throws {
-        let v = try vector("extensions-unknown-event-001")
-        let history = try XCTUnwrap(((v["inputs"] as? [String: Any])?["historyA"]) as? [[String: Any]])
-        let (keystore, container) = try await open(state(events: history))
-        // Reading is unaffected; rewriting is refused, typed.
-        XCTAssertNotNil(keystore.unsupportedSchemaVersion)
-        await assertRefused(keystore, subject: .eventType(index: 0, type: "a_type_this_reader_does_not_know"))
-        // The container the caller holds is untouched, so nothing was overwritten.
-        let still = try ContainerTestSupport.plaintext(of: container, prfOutput: prf, hkdfSalt: salt)
-        XCTAssertTrue(ContainerTestSupport.jsonEqual(still["events"], history))
+    func testTheRefusalVectorsAreRefusedAsUnsupportedAndNothingIsRewritten() async throws {
+        let expectedSubjects: [String: UnsupportedSchemaVersion.Subject] = [
+            "schema-version-unknown-state-001": .state,
+            "schema-version-unknown-event-version-001": .event(index: 0),
+            "schema-version-unknown-event-type-001": .eventType(index: 0, type: "a_type_this_reader_does_not_know"),
+        ]
+        XCTAssertEqual(Set(expectedSubjects.keys), Self.refusalVectors)
+        for (id, subject) in expectedSubjects {
+            let input = try XCTUnwrap(plaintextState(of: try vector(id)))
+            let (keystore, container) = try await open(input)
+            // Reading is unaffected; rewriting is refused, typed, with the right part named.
+            await assertRefused(keystore, subject: subject)
+            // The container the caller holds is untouched, so nothing was overwritten.
+            let still = try ContainerTestSupport.plaintext(of: container, prfOutput: prf, hkdfSalt: salt)
+            XCTAssertTrue(ContainerTestSupport.jsonEqual(still["S"], input["S"]), id)
+            XCTAssertTrue(ContainerTestSupport.jsonEqual(still["events"], input["events"]), id)
+        }
+    }
+
+    /// `schema-version-v3-writer-001`: storing into a version 3 container writes version 4. The
+    /// `credentialMetadata` write needs the per-credential metadata accessor (siros-sdk-swift #202,
+    /// not on main); the extension write is exercised here.
+    func testTheWriterVectorWritesVersionFourWhenStoringAnExtension() async throws {
+        let v = try vector("schema-version-v3-writer-001")
+        let input = try XCTUnwrap(plaintextState(of: v))
+        XCTAssertEqual(s(input)["schemaVersion"] as? Int, 3)
+        let write = try XCTUnwrap((v["inputs"] as? [String: Any])?["write"] as? [String: Any])
+        let ext = try XCTUnwrap(write["setExtension"] as? [String: String])
+        let expected = try XCTUnwrap(v["expected"] as? [String: Any])
+        let (keystore, _) = try await open(input)
+        try await keystore.setExtensionEntry(
+            namespace: try XCTUnwrap(ext["namespace"]), key: try XCTUnwrap(ext["key"]), value: try XCTUnwrap(ext["value"])
+        )
+        let output = try await rewritten(keystore)
+        XCTAssertEqual(s(output)["schemaVersion"] as? Int, expected["writtenSchemaVersion"] as? Int)
+        XCTAssertNoThrow(try WalletStateSchema.requireWriterRules(output))
     }
 
     // MARK: - Refusal
@@ -191,25 +223,11 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         }
     }
 
-    func testStateSchemaVersionFiveIsReadableButRefusedOnRewrite() async throws {
+    func testRefusedStateStillReadsAtSchemaVersionFive() async throws {
         let (keystore, _) = try await open(state(version: 5, credentials: [credential(id: 1)]))
-        XCTAssertTrue(keystore.isUnlocked)
         let readable = try await keystore.getCredential(id: 1)
         XCTAssertNotNil(readable, "reading still works")
-        await assertRefused(keystore, subject: .state)
         XCTAssertEqual(keystore.unsupportedSchemaVersion?.found, "5")
-    }
-
-    func testAnEventWithSchemaVersionFiveIsRefusedOnRewrite() async throws {
-        let events: [[String: Any]] = [["type": "alter_settings", "schemaVersion": 5, "eventId": 1]]
-        let (keystore, _) = try await open(state(version: 4, events: events))
-        await assertRefused(keystore, subject: .event(index: 0))
-    }
-
-    func testAnUnknownEventTypeIsRefusedOnRewrite() async throws {
-        let events: [[String: Any]] = [["type": "from_the_future", "schemaVersion": 4, "eventId": 1]]
-        let (keystore, _) = try await open(state(version: 4, events: events))
-        await assertRefused(keystore, subject: .eventType(index: 0, type: "from_the_future"))
     }
 
     func testVersionTwoIsReadableButNotRewritten() async throws {
@@ -233,46 +251,6 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
     }
 
     // MARK: - Migration and writer rules
-
-    func testMigratingVersionThreeToFourChangesOnlySchemaVersion() async throws {
-        let input = try XCTUnwrap(plaintextState(of: try vector("single-credential-v3-001")))
-        XCTAssertEqual(s(input)["schemaVersion"] as? Int, 3)
-        let (keystore, _) = try await open(input)
-        let output = try await rewritten(keystore)
-
-        XCTAssertEqual(s(output)["schemaVersion"] as? Int, 4)
-        var inputS = s(input)
-        inputS["schemaVersion"] = 4
-        for member in Set(inputS.keys).union(s(output).keys) {
-            XCTAssertTrue(ContainerTestSupport.jsonEqual(inputS[member], s(output)[member]), "S.\(member) changed")
-        }
-        XCTAssertEqual(output["lastEventHash"] as? String, input["lastEventHash"] as? String)
-        XCTAssertTrue(ContainerTestSupport.jsonEqual(output["events"], input["events"]))
-        XCTAssertEqual(Set(output.keys), Set(input.keys))
-    }
-
-    func testNoVersionThreeContainerIsEverWrittenWithMetadataOrExtensions() async throws {
-        // Pre-existing version 3 containers can carry both (spec section 6); they are read as 4
-        // and written as 4, never as 3.
-        let withBoth = state(
-            version: 3,
-            credentials: [credential(id: 1, extra: ["metadata": [["type": "org.siros.secret_seed", "value": ["ns": "00"]]]])],
-            extra: ["extensions": ["org.siros.bbs": ["1": "opaque"]]]
-        )
-        let (keystore, _) = try await open(withBoth)
-        // ... and a store that adds extensions to a plain version 3 container.
-        try await keystore.setExtensionEntry(namespace: "org.siros.wscd", key: "kid-a", value: "v")
-        let output = try await rewritten(keystore)
-        XCTAssertEqual(s(output)["schemaVersion"] as? Int, 4)
-        XCTAssertNotNil(s(output)["extensions"])
-        XCTAssertTrue(WalletStateSchema.versionFourMembers(in: output).contains("S.extensions"))
-        XCTAssertNoThrow(try WalletStateSchema.requireWriterRules(output))
-
-        let (plain, _) = try await open(state(version: 3))
-        try await plain.setExtensionEntry(namespace: "org.siros.wscd", key: "kid-a", value: "v")
-        let plainOut = try await rewritten(plain)
-        XCTAssertEqual(s(plainOut)["schemaVersion"] as? Int, 4)
-    }
 
     func testAFreshContainerIsWrittenAtVersionFour() async throws {
         let keystore = JweKeystore()
