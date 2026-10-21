@@ -98,7 +98,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this SDK writes version 4 on every write, so `wallet-frontend` with version 4
   support has to ship before, or together with, this change: a frontend that
   implements only version 3 refuses a version 4 container (the user cannot open
-  the wallet there, but nothing is lost).
+  the wallet there, but nothing is lost). **Older native SDK releases are not
+  protected by this:** they always wrote version 3 and rebuilt every credential
+  entry from a closed list of members, so one that rewrites a version 4 container
+  drops `metadata` and unknown credential members, with no refusal. Upgrade (or
+  block from writing) every native client that shares an account before a
+  version 4 container, or a delivered secret, exists in it; the version number
+  alone cannot stop them.
+- **Keystore: an issued credential is not stored, nor reported accepted to the
+  issuer, while the container is unsupported** (`storeIssuedCredential` checks the
+  new `KeystoreManager.unsupportedSchemaVersion`, default nil), because
+  `CredentialStore.save` does not throw. Deleting or clearing a credential now also
+  forgets its preserved container entry, so a credential later saved under the same
+  id does not inherit the deleted one's `metadata`.
 - **EC TS12 payment SCA: the `amr` now comes from the WSCD manager's own sign.**
   `siros-wscd-manager` XCFramework 0.9.1 -> 0.10.0 (vendored bindings
   regenerated). Before the user is shown a transaction the wallet asks the

@@ -63,16 +63,19 @@ enum WalletStateEntries {
     ) -> [[String: Any]] {
         let existing = (existingS?["keypairs"] as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
         func kid(_ entry: [String: Any]) -> String? { (entry["keypair"] as? [String: Any])?["kid"] as? String }
-        var originals: [String: [String: Any]] = [:]
-        for entry in existing { if let k = kid(entry) { originals[k] = entry } }
-        let order = positions(of: existingS?["keypairs"]) { kid($0) }
-
-        var entries = keys.keys.sorted { inOrder($0, $1, order) }.compactMap { k -> [String: Any]? in
-            keys[k].map { keypairEntry(kid: k, key: $0, did: keyDids[k], original: originals[k]) }
+        // Existing entries stay where they were, rebuilt when this build loaded the
+        // key and carried verbatim when it could not (not a P-256 JWK, say; nothing
+        // removes keys, so such an entry is not dropped). Keys new this session
+        // follow, by kid.
+        var seen = Set<String>()
+        var entries: [[String: Any]] = existing.map { entry in
+            guard let k = kid(entry), let key = keys[k] else { return entry }
+            seen.insert(k)
+            return keypairEntry(kid: k, key: key, did: keyDids[k], original: entry)
         }
-        // An entry this build could not load (not a P-256 JWK, say) is not in
-        // `keys`. Nothing removes keys, so it is carried verbatim, not dropped.
-        for entry in existing where kid(entry).map({ keys[$0] == nil }) ?? true { entries.append(entry) }
+        for k in keys.keys.sorted() where !seen.contains(k) {
+            if let key = keys[k] { entries.append(keypairEntry(kid: k, key: key, did: keyDids[k], original: nil)) }
+        }
         return entries
     }
 

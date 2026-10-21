@@ -13,6 +13,13 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Whether the keystore is currently unlocked and usable.
     var isUnlocked: Bool { get }
 
+    /// Why the unlocked container will not be rewritten, or nil when it can be
+    /// (privatedata-spec section 6). While this is non-nil the container is
+    /// read-only: stores that would have to be exported throw
+    /// `KeystoreError.unsupportedSchemaVersion`, and a flow that would store
+    /// something and then report success must check this first. Defaults to nil.
+    var unsupportedSchemaVersion: UnsupportedSchemaVersion? { get }
+
     /// Unlock the keystore using PRF-derived key material.
     ///
     /// - Parameters:
@@ -535,6 +542,8 @@ extension KeystoreError: LocalizedError {
 }
 
 extension KeystoreManager {
+    public var unsupportedSchemaVersion: UnsupportedSchemaVersion? { nil }
+
     public func signVpToken(
         credential: String,
         disclosedClaims: [String]?,

@@ -761,6 +761,7 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         try requireRewritable()
         credentials.removeValue(forKey: id)
+        dropPreservedCredentialEntries(ids: [id])
     }
 
     public func clearCredentials() async throws {
@@ -769,6 +770,23 @@ public final class JweKeystore: @unchecked Sendable, KeystoreManager, ExtensionS
         try requireUnlocked()
         try requireRewritable()
         credentials.removeAll()
+        dropPreservedCredentialEntries(ids: nil)
+    }
+
+    /// Forget the loaded container's entries for these credentials (all when
+    /// nil). Export starts each entry from the loaded one, so an entry left
+    /// behind would put a deleted credential's `metadata` (a delivered secret)
+    /// and unknown members onto a different credential saved under the same id.
+    private func dropPreservedCredentialEntries(ids: Set<Int64>?) {
+        guard var state = preservedWalletState, var s = state["S"] as? [String: Any],
+              let entries = s["credentials"] as? [Any] else { return }
+        s["credentials"] = entries.filter { element in
+            guard let ids else { return false }
+            let id = (element as? [String: Any]).flatMap { Self.asInt64($0["credentialId"]) }
+            return id.map { !ids.contains($0) } ?? true
+        }
+        state["S"] = s
+        preservedWalletState = state
     }
 
     // MARK: - Presentation history storage

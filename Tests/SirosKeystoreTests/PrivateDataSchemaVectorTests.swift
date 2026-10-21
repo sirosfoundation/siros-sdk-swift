@@ -312,6 +312,44 @@ final class PrivateDataSchemaVectorTests: XCTestCase {
         XCTAssertTrue(out.allSatisfy { $0["metadata"] == nil && $0["x-unknown"] == nil })
     }
 
+    /// Export starts each entry from the loaded one, so a deleted credential's entry must be
+    /// forgotten, or a different credential saved under the same id inherits its metadata.
+    func testASavedCredentialDoesNotInheritADeletedOnesMetadataOrUnknownMembers() async throws {
+        let seeded = credential(id: 1, extra: ["metadata": [["type": "org.siros.secret_seed", "value": ["ns": "00"]]], "x-unknown": 1])
+        let json = "{\"id\":1,\"format\":\"dc+sd-jwt\",\"raw\":\"new\"}"
+        for clear in [false, true] {
+            let (keystore, _) = try await open(state(credentials: [seeded, credential(id: 2)]))
+            if clear { try await keystore.clearCredentials() } else { try await keystore.deleteCredential(id: 1) }
+            try await keystore.saveCredential(id: 1, json: json)
+            let output = try await rewritten(keystore)
+            let out = (s(output)["credentials"] as? [[String: Any]]) ?? []
+            let reused = try XCTUnwrap(out.first { ($0["credentialId"] as? NSNumber)?.int64Value == 1 })
+            XCTAssertNil(reused["metadata"], "clear=\(clear)")
+            XCTAssertNil(reused["x-unknown"], "clear=\(clear)")
+            XCTAssertEqual(reused["data"] as? String, "new")
+        }
+    }
+
+    func testKeypairEntriesKeepTheirPositionsWhenLoadedAndUnloadableEntriesAreMixed() async throws {
+        let first: [String: Any] = ["kid": "z-hw", "keypair": ["kid": "z-hw", "alg": "ES384"] as [String: Any]]
+        let key = P256.Signing.PrivateKey()
+        let x963 = key.publicKey.x963Representation
+        let b64 = EncryptedContainer.base64UrlEncode
+        let loaded: [String: Any] = ["kid": "a-sw", "x-entry": 1, "keypair": [
+            "kid": "a-sw", "did": "did:example:a", "alg": "ES256",
+            "publicKey": ["kty": "EC", "crv": "P-256", "x": b64(Data(x963[1..<33])), "y": b64(Data(x963[33..<65]))],
+            "privateKey": ["kty": "EC", "crv": "P-256", "x": b64(Data(x963[1..<33])), "y": b64(Data(x963[33..<65])), "d": b64(key.rawRepresentation)],
+        ] as [String: Any]]
+        let (keystore, _) = try await open(state(extra: ["keypairs": [first, loaded]]))
+        let newKid = try await keystore.generateKey()
+        let output = try await rewritten(keystore)
+        let kids = ((s(output)["keypairs"] as? [[String: Any]]) ?? []).compactMap { $0["kid"] as? String }
+        XCTAssertEqual(kids, ["z-hw", "a-sw", newKid])
+        let entries = (s(output)["keypairs"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(entries[1]["x-entry"] as? Int, 1)
+        XCTAssertTrue(ContainerTestSupport.jsonEqual(entries[0], first))
+    }
+
     func testUnknownKeypairMembersAndAnUnloadableKeypairSurvive() async throws {
         let stub: [String: Any] = ["kid": "hw-1", "keypair": ["kid": "hw-1", "alg": "ES384", "x-future": ["a": 1]] as [String: Any], "x-entry": true]
         let (keystore, _) = try await open(state(extra: ["keypairs": [stub]]))

@@ -298,6 +298,28 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
         )
     }
 
+    /// A container this build must not rewrite is read-only, so an issued credential is
+    /// not "accepted": `CredentialStore.save` does not throw, and without this check the
+    /// credential would be dropped and the issuer told it was accepted.
+    func testNothingIsStoredOrAcceptedWhileTheContainerIsUnsupported() async {
+        let store = InMemoryCredentialStore()
+        let keystore = StubKeystoreManager()
+        keystore.refusal = UnsupportedSchemaVersion(subject: .state, found: "5")
+        let w = SirosWallet(
+            config: WalletConfig(backendUrl: "https://example.invalid", credentialStore: store),
+            authProvider: StubAuthProvider(), keystore: keystore, accountRegistry: .inMemory()
+        )!
+        let outcome = await w.storeIssuedCredential(
+            credentialResult(format: "dc+sd-jwt", credential: sdJwt(vct: "urn:eudi:pid:1")),
+            index: 0, flowId: "flow-1", offer: offer(vct: "urn:eudi:pid:1"),
+            vctm: nil, vctmDocument: nil, attestedKeyIds: nil, batchId: 1
+        )
+        XCTAssertFalse(outcome.stored)
+        XCTAssertNotNil(outcome.failureReason)
+        let saved = await store.getAll()
+        XCTAssertTrue(saved.isEmpty)
+    }
+
     /// A document carrying a `display` entry, since that is where
     /// `CredentialUtils.buildMetadata` takes the stored name from.
     private func displayDocument(_ vct: String, displayName: String) -> VctmDocument {
@@ -338,6 +360,8 @@ final class SirosWalletIssuedTypeTests: XCTestCase {
 }
 
 private final class StubKeystoreManager: KeystoreManager, @unchecked Sendable {
+    var refusal: UnsupportedSchemaVersion?
+    var unsupportedSchemaVersion: UnsupportedSchemaVersion? { refusal }
     var isUnlocked: Bool { true }
     func unlock(prfOutput: Data, encryptedContainer: Data, hkdfSalt: Data, hkdfInfo: Data) async throws {}
     func lock() {}
