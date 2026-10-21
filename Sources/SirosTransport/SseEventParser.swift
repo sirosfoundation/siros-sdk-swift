@@ -52,30 +52,35 @@ public struct SseEventParser: Sendable {
     }
 
     /// Feeds one line. Returns an event when the line is the blank line that dispatches one.
+    ///
+    /// The line is read as Unicode SCALARS, never as Swift `Character`s: the colon and the one optional
+    /// space are scalars, and a combining mark after either belongs to the value, not to the delimiter
+    /// (`id:\u{0301}x` is the field `id` with the value `\u{0301}x`).
     public mutating func feed(line rawLine: String) -> SseEvent? {
-        var rawLine = rawLine
+        var scalars = Substring(rawLine).unicodeScalars
         if atStartOfResponse {
             atStartOfResponse = false
-            if rawLine.hasPrefix("\u{FEFF}") { rawLine.removeFirst() } // one BOM, at the start of the response only
+            if scalars.first == "\u{FEFF}" { scalars.removeFirst() } // one BOM, at the start of the response only
         }
-        let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
-        if line.isEmpty { return dispatch() }
-        if line.hasPrefix(":") { return nil } // comment / keep-alive
+        if scalars.last == "\r" { scalars.removeLast() }
+        if scalars.isEmpty { return dispatch() }
+        if scalars.first == ":" { return nil } // comment / keep-alive
         let field: String
-        var value: String
-        if let colon = line.firstIndex(of: ":") {
-            field = String(line[..<colon])
-            value = String(line[line.index(after: colon)...])
-            if value.hasPrefix(" ") { value.removeFirst() }
+        var value: Substring.UnicodeScalarView
+        if let colon = scalars.firstIndex(of: ":") {
+            field = String(scalars[..<colon])
+            value = scalars[scalars.index(after: colon)...]
+            if value.first == " " { value.removeFirst() }
         } else {
-            field = line
-            value = ""
+            field = String(scalars)
+            value = Substring("").unicodeScalars
         }
+        let text = String(value)
         switch field {
-        case "data": dataLines.append(value)
-        case "event": eventType = value
+        case "data": dataLines.append(text)
+        case "event": eventType = text
         case "id":
-            if !value.contains("\u{0}") { pendingId = value }
+            if !value.contains("\u{0}") { pendingId = text }
         default: break // retry and unknown fields are ignored
         }
         return nil
@@ -96,8 +101,10 @@ public struct SseEventParser: Sendable {
 /// never hands the same completion to the wallet twice. Events without an id are never
 /// treated as duplicates. Remembers only the most recent `capacity` ids.
 public struct SseReplayFilter: Sendable {
-    private var order: [String] = []
-    private var seen: Set<String> = []
+    // Keyed by the id's UTF-8 BYTES: an id is an opaque identifier, and Swift `String` equality would treat
+    // canonically equivalent but different byte strings (`\u{00E9}` and `e\u{0301}`) as one id and drop a distinct event.
+    private var order: [[UInt8]] = []
+    private var seen: Set<[UInt8]> = []
     private let capacity: Int
 
     public init(capacity: Int = 1024) {
@@ -106,7 +113,8 @@ public struct SseReplayFilter: Sendable {
 
     /// True when `event` is new (deliver it); false for a replayed id.
     public mutating func admit(_ event: SseEvent) -> Bool {
-        guard let id = event.id else { return true }
+        guard let text = event.id else { return true }
+        let id = Array(text.utf8)
         if seen.contains(id) { return false }
         seen.insert(id)
         order.append(id)
@@ -145,5 +153,43 @@ public struct SseLineSplitter: Sendable {
     private mutating func takeLine() -> String {
         defer { buffer.removeAll(keepingCapacity: true) }
         return String(decoding: buffer, as: UTF8.self)
+    }
+}
+
+/// Lets exactly one SSE reader run at a time. Two overlapping `connect()` calls would otherwise start two
+/// readers feeding one parser and one replay filter, corrupting both. `tryStart()` hands a generation to
+/// the first caller only; a reader that finishes calls `finish` with its generation, which frees the gate
+/// only if it is still the current reader.
+public final class SseReaderGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Int?
+    private var next = 0
+
+    public init() {}
+
+    /// The generation of the reader that may start, or nil when one is already running.
+    public func tryStart() -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        guard current == nil else { return nil }
+        next += 1
+        current = next
+        return next
+    }
+
+    /// Whether `generation` is the reader that may still act.
+    public func isCurrent(_ generation: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return current == generation
+    }
+
+    public func finish(_ generation: Int) {
+        lock.lock(); defer { lock.unlock() }
+        if current == generation { current = nil }
+    }
+
+    /// Stops whichever reader is running (for `disconnect`): it is no longer current.
+    public func cancelCurrent() {
+        lock.lock(); defer { lock.unlock() }
+        current = nil
     }
 }

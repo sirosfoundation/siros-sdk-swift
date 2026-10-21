@@ -47,7 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself (`SseLineSplitter`): `URLSession.AsyncBytes.lines` omits the blank line that
   ends an event. The parser, splitter and filter are pure and tested on Linux; the
   transport's use of them is Apple-only and not exercised by a test. The resume cursor advances only when a block's blank line arrives, an empty `id` resets it and is never a dedupe key, one leading byte order mark is ignored per response, and each response starts with clean buffers (a disconnect mid-event never joins two responses' data). An event's
-  `description` never prints its data.
+  `description` never prints its data. The parser reads each line as Unicode scalars (the colon and the one optional
+  space are delimiters even before a combining mark), the replay filter keys ids by their UTF-8 bytes
+  (canonically equivalent but different ids are different events), and an `SseReaderGate` lets only one
+  reader run, so two overlapping `connect()` calls cannot feed one parser from two tasks.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob

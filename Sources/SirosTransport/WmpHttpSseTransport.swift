@@ -32,6 +32,8 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     // completion is never handed to the wallet twice.
     private var eventParser = SseEventParser()
     private var replayFilter = SseReplayFilter()
+    // One reader at a time: two overlapping connects must not feed one parser from two tasks.
+    private let readerGate = SseReaderGate()
 
     public init(
         sendUrl: URL,
@@ -54,7 +56,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     }
 
     public func connect() async throws {
-        guard _state != .connected else { return }
+        guard let generation = readerGate.tryStart() else { return }   // already connecting or connected
         setState(.connecting)
 
         var request = URLRequest(url: sseUrl)
@@ -68,6 +70,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
 
         sseTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.readerGate.finish(generation) }
             do {
                 let (bytes, response) = try await self.urlSession.bytes(for: request)
                 guard let httpResponse = response as? HTTPURLResponse,
@@ -82,6 +85,8 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 self.eventParser.beginResponse()
                 var splitter = SseLineSplitter()
                 for try await byte in bytes {
+                    // A reader that was replaced or stopped must not touch the shared parser or the stream.
+                    guard self.readerGate.isCurrent(generation) else { break }
                     guard let line = splitter.feed(byte: byte),
                           let event = self.eventParser.feed(line: line),
                           self.replayFilter.admit(event),
@@ -117,6 +122,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     public func incoming() -> AsyncStream<Data> { _incoming }
 
     public func disconnect() async {
+        readerGate.cancelCurrent()
         sseTask?.cancel()
         sseTask = nil
         setState(.disconnected)

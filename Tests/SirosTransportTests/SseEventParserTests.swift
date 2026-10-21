@@ -138,4 +138,66 @@ final class SseEventParserTests: XCTestCase {
         dump(event, to: &dumped)
         for text in ["\(event)", String(reflecting: event), dumped] { XCTAssertFalse(text.contains("SECRET-SEED"), text) }
     }
+
+    // MARK: - Unicode: delimiters are scalars, ids are bytes
+
+    /// A combining mark after the colon or the space belongs to the value, not to the delimiter.
+    func testTheDelimiterIsAScalarEvenBeforeACombiningMark() {
+        var parser = SseEventParser()
+        _ = parser.feed(line: "id:\u{0301}x")                  // field `id`, value "\u{0301}x"
+        _ = parser.feed(line: "data: \u{0301}y")                // one space stripped, the mark kept
+        let event = parser.feed(line: "")
+        XCTAssertEqual(event?.id, "\u{0301}x")
+        XCTAssertEqual(parser.lastEventId, "\u{0301}x")
+        XCTAssertEqual(event?.data, "\u{0301}y")
+        // A comment line is a colon scalar first, even with a mark after it.
+        var commented = SseEventParser()
+        XCTAssertNil(commented.feed(line: ":\u{0301}keep-alive"))
+        _ = commented.feed(line: "data: d")
+        XCTAssertEqual(commented.feed(line: "")?.data, "d")
+    }
+
+    func testTheSpaceAfterTheColonIsStrippedOnlyOnce() {
+        var parser = SseEventParser()
+        _ = parser.feed(line: "data:  two")
+        XCTAssertEqual(parser.feed(line: "")?.data, " two")
+    }
+
+    /// Ids are opaque: canonically equivalent but different byte strings are different ids.
+    func testReplayFilterComparesIdsByTheirBytes() {
+        var filter = SseReplayFilter()
+        let composed = SseEvent(id: "\u{00E9}", event: nil, data: "a")
+        let decomposed = SseEvent(id: "e\u{0301}", event: nil, data: "b")
+        XCTAssertEqual(composed.id, decomposed.id, "Swift String equality would call these the same id")
+        XCTAssertTrue(filter.admit(composed))
+        XCTAssertTrue(filter.admit(decomposed), "a different byte string is a different event")
+        XCTAssertFalse(filter.admit(composed))
+        XCTAssertFalse(filter.admit(decomposed))
+    }
+
+    // MARK: - One reader at a time
+
+    func testOnlyOneOfManyConcurrentConnectsGetsToRead() async {
+        let gate = SseReaderGate()
+        let winners = await withTaskGroup(of: Int?.self) { group in
+            for _ in 0..<64 { group.addTask { gate.tryStart() } }
+            return await group.reduce(into: [Int]()) { if let generation = $1 { $0.append(generation) } }
+        }
+        XCTAssertEqual(winners.count, 1)
+        XCTAssertTrue(gate.isCurrent(winners[0]))
+    }
+
+    func testAFinishedOrStoppedReaderFreesTheGateAndAStaleOneCannotFreeAnother() throws {
+        let gate = SseReaderGate()
+        let first = try XCTUnwrap(gate.tryStart())
+        XCTAssertNil(gate.tryStart())
+        gate.finish(first)
+        let second = try XCTUnwrap(gate.tryStart(), "a finished reader frees the gate (a reconnect)")
+        gate.finish(first)                                    // a stale generation
+        XCTAssertTrue(gate.isCurrent(second))
+        XCTAssertNil(gate.tryStart())
+        gate.cancelCurrent()
+        XCTAssertFalse(gate.isCurrent(second), "a stopped reader is no longer current")
+        XCTAssertNotNil(gate.tryStart())
+    }
 }
