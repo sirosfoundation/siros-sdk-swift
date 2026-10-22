@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `description` never prints its data. The parser reads each line as Unicode scalars (the colon and the one optional
   space are delimiters even before a combining mark), the replay filter keys ids by their UTF-8 bytes
   (canonically equivalent but different ids are different events), and an `SseReaderGate` lets only one
-  reader run, so two overlapping `connect()` calls cannot feed one parser from two tasks; a reader touches the parser and the replay filter only inside `ifCurrent`, which holds the gate for the step, and frees the gate and publishes `.disconnected` or `.failed` as one step under the gate lock (a consumer that reconnects at once finds it open, and a stale reader never overwrites its successor's state).
+  reader run, so two overlapping `connect()` calls cannot feed one parser from two tasks; a reader touches the parser and the replay filter only inside `ifCurrent`, which holds the gate for the step, and frees the gate and publishes `.disconnected` or `.failed` as one step under the gate lock (a consumer that reconnects at once finds it open, and a stale reader never overwrites its successor's state); a reader is claimed and installed in one step (`start`) and `disconnect()` invalidates it, cancels its task and publishes in one step (`stop`), so a reconnect cannot be cancelled by an earlier disconnect; `.connected` is published only while the reader is still current.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob

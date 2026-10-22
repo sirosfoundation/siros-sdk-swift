@@ -244,4 +244,33 @@ final class SseEventParserTests: XCTestCase {
         gate.finish(second) { published.append("second") }
         XCTAssertEqual(published, ["first", "second"])
     }
+
+    /// `start` installs the reader under the lock and `stop` tears it down under the same lock: a stop that is
+    /// racing a start either sees the installed reader or runs first, never in between.
+    func testStartInstallsAndStopTearsDownWithoutInterleaving() throws {
+        let gate = SseReaderGate()
+        var installed: [Int] = []
+        var torn: [String] = []
+        XCTAssertTrue(gate.start { installed.append($0) })
+        XCTAssertFalse(gate.start { installed.append($0) }, "a second start while one runs installs nothing")
+        XCTAssertEqual(installed.count, 1)
+        gate.stop { torn.append("first") }
+        XCTAssertTrue(gate.start { installed.append($0) }, "after a stop a new reader may start")
+        XCTAssertEqual(installed.count, 2)
+        // A stop issued while a start's install is running waits for it, so it tears down the NEW reader.
+        let gate2 = SseReaderGate()
+        let inInstall = DispatchSemaphore(value: 0)
+        let finishInstall = DispatchSemaphore(value: 0)
+        var order: [String] = []
+        let starter = Thread { _ = gate2.start { _ in inInstall.signal(); finishInstall.wait(); order.append("installed") } }
+        starter.start()
+        inInstall.wait()
+        let stopped = expectation(description: "stop returns")
+        DispatchQueue.global().async { gate2.stop { order.append("stopped") }; stopped.fulfill() }
+        usleep(50_000)
+        XCTAssertEqual(order, [], "the stop has not got in between")
+        finishInstall.signal()
+        wait(for: [stopped], timeout: 5)
+        XCTAssertEqual(order, ["installed", "stopped"])
+    }
 }

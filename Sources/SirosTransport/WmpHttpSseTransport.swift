@@ -56,8 +56,8 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     }
 
     public func connect() async throws {
-        guard let generation = readerGate.tryStart() else { return }   // already connecting or connected
-        setState(.connecting)
+        // The request is built first; the reader is claimed and installed in ONE step under the gate lock, so a
+        // concurrent `disconnect()` always finds the reader it has to cancel.
 
         var request = URLRequest(url: sseUrl)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -68,8 +68,18 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
             request.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID")
         }
 
-        sseTask = Task { [weak self] in
-            guard let self else { return }
+        let finalRequest = request   // a `let` for the task: the request is not changed after this point
+        let started = readerGate.start { generation in
+            setState(.connecting)
+            sseTask = Task { [weak self] in
+                guard let self else { return }
+                await self.runReader(generation: generation, request: finalRequest)
+            }
+        }
+        _ = started   // false: a reader is already connecting or connected
+    }
+
+    private func runReader(generation: Int, request: URLRequest) async {
             do {
                 let (bytes, response) = try await self.urlSession.bytes(for: request)
                 guard let httpResponse = response as? HTTPURLResponse,
@@ -77,11 +87,11 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                     self.readerGate.finish(generation) { self.setState(.failed) }
                     return
                 }
-                self.setState(.connected)
-
+                // Checking that this reader is still current, publishing `.connected` and starting the response
+                // are one step: a stop that lands before it leaves no `.connected` behind.
                 // Split the bytes ourselves: `bytes.lines` omits the blank line that ends an event.
                 // A new response never continues a block the previous one left unfinished.
-                guard self.readerGate.ifCurrent(generation, { self.eventParser.beginResponse() }) != nil else { return }
+                guard self.readerGate.ifCurrent(generation, { self.setState(.connected); self.eventParser.beginResponse() }) != nil else { return }
                 var splitter = SseLineSplitter()
                 for try await byte in bytes {
                     guard let line = splitter.feed(byte: byte) else { continue }
@@ -102,7 +112,6 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                     if self._state != .disconnected { self.setState(.failed) }
                 }
             }
-        }
     }
 
     public func send(_ message: Data) async throws {
@@ -125,10 +134,13 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     public func incoming() -> AsyncStream<Data> { _incoming }
 
     public func disconnect() async {
-        readerGate.cancelCurrent()
-        sseTask?.cancel()
-        sseTask = nil
-        setState(.disconnected)
+        // Invalidating the reader, cancelling ITS task and publishing the state are one step under the gate lock:
+        // a `connect()` that follows cannot install a task this disconnect then cancels instead.
+        readerGate.stop {
+            sseTask?.cancel()
+            sseTask = nil
+            setState(.disconnected)
+        }
         incomingCont.finish()
         stateCont.finish()
     }

@@ -176,6 +176,26 @@ public final class SseReaderGate: @unchecked Sendable {
         return next
     }
 
+    /// Claims the gate and installs the reader in one step under the lock: `install` receives the new
+    /// generation and runs before any `stop` can interleave, so a stop always finds the reader it must cancel.
+    /// False when a reader is already running.
+    public func start(install: (Int) -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard current == nil else { return false }
+        next += 1
+        current = next
+        install(next)
+        return true
+    }
+
+    /// Invalidates the current reader and runs `teardown` (cancel its task, publish the state) in the same step,
+    /// so a `start` that follows can never be cancelled by it, nor have its state overwritten.
+    public func stop(teardown: () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        current = nil
+        teardown()
+    }
+
     /// Whether `generation` is the reader that may still act.
     public func isCurrent(_ generation: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
