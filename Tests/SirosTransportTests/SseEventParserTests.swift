@@ -200,4 +200,32 @@ final class SseEventParserTests: XCTestCase {
         XCTAssertFalse(gate.isCurrent(second), "a stopped reader is no longer current")
         XCTAssertNotNil(gate.tryStart())
     }
+
+    /// A reader's shared-state step runs only while it is current, and holds the gate for that whole step.
+    func testIfCurrentRunsOnlyForTheCurrentReaderAndHoldsTheGateWhileRunning() throws {
+        let gate = SseReaderGate()
+        let first = try XCTUnwrap(gate.tryStart())
+        XCTAssertEqual(gate.ifCurrent(first) { 7 }, 7)
+        // While the body runs, a stop from another thread waits, so the step completes against current state.
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        var ran = false
+        let worker = Thread {
+            _ = gate.ifCurrent(first) { started.signal(); release.wait(); ran = true }
+        }
+        worker.start()
+        started.wait()
+        let stopper = DispatchQueue.global()
+        let stopped = expectation(description: "cancelCurrent returns after the step")
+        stopper.async { gate.cancelCurrent(); stopped.fulfill() }
+        usleep(50_000)
+        XCTAssertFalse(ran)
+        release.signal()
+        wait(for: [stopped], timeout: 5)
+        XCTAssertTrue(ran)
+        XCTAssertNil(gate.ifCurrent(first) { 8 }, "a stopped reader runs nothing")
+        let second = try XCTUnwrap(gate.tryStart())
+        XCTAssertNil(gate.ifCurrent(first) { 9 }, "and neither does a replaced one")
+        XCTAssertEqual(gate.ifCurrent(second) { 10 }, 10)
+    }
 }

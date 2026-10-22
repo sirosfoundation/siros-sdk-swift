@@ -70,11 +70,11 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
 
         sseTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.readerGate.finish(generation) }
             do {
                 let (bytes, response) = try await self.urlSession.bytes(for: request)
                 guard let httpResponse = response as? HTTPURLResponse,
                       (200..<300).contains(httpResponse.statusCode) else {
+                    self.readerGate.finish(generation)
                     self.setState(.failed)
                     return
                 }
@@ -82,19 +82,25 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
 
                 // Split the bytes ourselves: `bytes.lines` omits the blank line that ends an event.
                 // A new response never continues a block the previous one left unfinished.
-                self.eventParser.beginResponse()
+                guard self.readerGate.ifCurrent(generation, { self.eventParser.beginResponse() }) != nil else { return }
                 var splitter = SseLineSplitter()
                 for try await byte in bytes {
-                    // A reader that was replaced or stopped must not touch the shared parser or the stream.
-                    guard self.readerGate.isCurrent(generation) else { break }
-                    guard let line = splitter.feed(byte: byte),
-                          let event = self.eventParser.feed(line: line),
-                          self.replayFilter.admit(event),
-                          let data = event.data.data(using: .utf8) else { continue }
-                    self.incomingCont.yield(data)
+                    guard let line = splitter.feed(byte: byte) else { continue }
+                    // The parser and filter are touched only while this reader is the current one, and the gate
+                    // is held for that whole step: a replaced or stopped reader never mutates its successor's state.
+                    let delivered: Data?? = self.readerGate.ifCurrent(generation) { () -> Data? in
+                        guard let event = self.eventParser.feed(line: line), self.replayFilter.admit(event) else { return Data?.none }
+                        return event.data.data(using: .utf8)
+                    }
+                    guard let delivered else { break }          // stale: stop reading
+                    if let data = delivered { self.incomingCont.yield(data) }
                 }
+                // Free the gate BEFORE publishing the state: a consumer that reconnects as soon as it sees
+                // `.disconnected` must find the gate open.
+                self.readerGate.finish(generation)
                 self.setState(.disconnected)
             } catch {
+                self.readerGate.finish(generation)
                 if self._state != .disconnected {
                     self.setState(.failed)
                 }

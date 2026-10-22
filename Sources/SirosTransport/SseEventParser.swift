@@ -182,6 +182,14 @@ public final class SseReaderGate: @unchecked Sendable {
         return current == generation
     }
 
+    /// Runs `body` only if `generation` is still the current reader, and holds the gate for its whole run, so
+    /// a reader that is replaced or stopped can never be inside `body` while a successor starts. nil when stale.
+    public func ifCurrent<T>(_ generation: Int, _ body: () -> T) -> T? {
+        lock.lock(); defer { lock.unlock() }
+        guard current == generation else { return nil }
+        return body()
+    }
+
     public func finish(_ generation: Int) {
         lock.lock(); defer { lock.unlock() }
         if current == generation { current = nil }
