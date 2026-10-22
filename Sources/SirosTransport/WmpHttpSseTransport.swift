@@ -74,8 +74,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 let (bytes, response) = try await self.urlSession.bytes(for: request)
                 guard let httpResponse = response as? HTTPURLResponse,
                       (200..<300).contains(httpResponse.statusCode) else {
-                    self.readerGate.finish(generation)
-                    self.setState(.failed)
+                    self.readerGate.finish(generation) { self.setState(.failed) }
                     return
                 }
                 self.setState(.connected)
@@ -95,14 +94,12 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                     guard let delivered else { break }          // stale: stop reading
                     if let data = delivered { self.incomingCont.yield(data) }
                 }
-                // Free the gate BEFORE publishing the state: a consumer that reconnects as soon as it sees
-                // `.disconnected` must find the gate open.
-                self.readerGate.finish(generation)
-                self.setState(.disconnected)
+                // Free the gate and publish the state as one step: a consumer that reconnects as soon as it sees
+                // `.disconnected` finds the gate open, and a stale reader never overwrites its successor's state.
+                self.readerGate.finish(generation) { self.setState(.disconnected) }
             } catch {
-                self.readerGate.finish(generation)
-                if self._state != .disconnected {
-                    self.setState(.failed)
+                self.readerGate.finish(generation) {
+                    if self._state != .disconnected { self.setState(.failed) }
                 }
             }
         }

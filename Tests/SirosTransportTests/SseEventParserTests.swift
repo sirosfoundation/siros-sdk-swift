@@ -228,4 +228,20 @@ final class SseEventParserTests: XCTestCase {
         XCTAssertNil(gate.ifCurrent(first) { 9 }, "and neither does a replaced one")
         XCTAssertEqual(gate.ifCurrent(second) { 10 }, 10)
     }
+
+    /// Releasing the gate and publishing the terminal state are one step: a stale reader publishes nothing,
+    /// and the current one publishes with the gate already open.
+    func testFinishingPublishesOnlyForTheCurrentReaderAndWithTheGateOpen() throws {
+        let gate = SseReaderGate()
+        var published: [String] = []
+        let first = try XCTUnwrap(gate.tryStart())
+        gate.finish(first) { published.append("first") }
+        XCTAssertEqual(published, ["first"])
+        XCTAssertFalse(gate.isCurrent(first), "the gate was freed in the same step")
+        let second = try XCTUnwrap(gate.tryStart(), "the gate is open for a successor")
+        gate.finish(first) { published.append("stale") }       // the old reader's late terminal state
+        XCTAssertEqual(published, ["first"], "a stale reader publishes nothing over its successor")
+        gate.finish(second) { published.append("second") }
+        XCTAssertEqual(published, ["first", "second"])
+    }
 }

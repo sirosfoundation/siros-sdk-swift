@@ -195,6 +195,17 @@ public final class SseReaderGate: @unchecked Sendable {
         if current == generation { current = nil }
     }
 
+    /// Frees the gate AND publishes the reader's terminal state as ONE step under the gate lock, only if
+    /// `generation` is still current. A successor that starts right after sees the gate open, and its own
+    /// `.connecting` / `.connected` is never overwritten by a stale `.disconnected` or `.failed`. A stale
+    /// reader publishes nothing.
+    public func finish(_ generation: Int, publishing publish: () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        guard current == generation else { return }
+        current = nil
+        publish()
+    }
+
     /// Stops whichever reader is running (for `disconnect`): it is no longer current.
     public func cancelCurrent() {
         lock.lock(); defer { lock.unlock() }
