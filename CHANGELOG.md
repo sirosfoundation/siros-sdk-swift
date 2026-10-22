@@ -51,6 +51,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   space are delimiters even before a combining mark), the replay filter keys ids by their UTF-8 bytes
   (canonically equivalent but different ids are different events), and an `SseReaderGate` lets only one
   reader run, so two overlapping `connect()` calls cannot feed one parser from two tasks; a reader touches the parser and the replay filter only inside `ifCurrent`, which holds the gate for the step, and frees the gate and publishes `.disconnected` or `.failed` as one step under the gate lock (a consumer that reconnects at once finds it open, and a stale reader never overwrites its successor's state); a reader is claimed and installed in one step (`start`) and `disconnect()` invalidates it, cancels its task and publishes in one step (`stop`), so a reconnect cannot be cancelled by an earlier disconnect; `.connected` is published only while the reader is still current.
+- **Keystore: per-credential `metadata` in the privatedata container
+  (`S.credentials[].metadata`, schema version 4).** An optional array of
+  `{"type": <non-empty string>, "value": <any JSON>}` entries, stored exactly as received (first use: an
+  issuer-delivered `org.siros.secret_seed`; per privatedata-spec section 5A.2 one entry per response-level
+  `credential_metadata` member, `value` the member's object verbatim, not a string; members of an entry
+  beyond `type`/`value` are kept). `JweKeystore` (and `WscdKeystoreAdapter`) gain
+  `credentialMetadata(id:)` and `setCredentialMetadata(id:_:)`. What is stored is an independent copy, and
+  so is what the accessor returns. The container is always written at `S.schemaVersion` 4 (the member is a
+  version 4 one), a container of a schema this build must not rewrite refuses `setCredentialMetadata` with
+  `KeystoreError.unsupportedSchemaVersion`, and `null` or `[]` is never written. The member is the keystore's
+  source of truth once unlocked: loaded with the container, replaced by the setter, and removed with the
+  credential (`deleteCredential`, `clearCredentials`, `lock`). EVERY successful replacement of the container
+  (a current one, a legacy one with no `S`, a first-time empty one) starts from no metadata. It is kept apart
+  from `StoredCredential.metadata`, which is display metadata and is not persisted in the container. A
+  malformed (non-array) `metadata` is written back verbatim. **Older clients drop the `metadata` member the
+  next time they rewrite the container**, which is accepted for this change.
 - **`FaceTecIDVProvider`: identity verification with the FaceTec 10 SDK and
   facetec-api's `/process-request`.** One FaceTec session (3D liveness,
   document scan with NFC chip read, photo match) relays every request blob
