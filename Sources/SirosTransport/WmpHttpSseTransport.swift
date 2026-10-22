@@ -94,7 +94,13 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 // are one step: a stop that lands before it leaves no `.connected` behind.
                 // Split the bytes ourselves: `bytes.lines` omits the blank line that ends an event.
                 // A new response never continues a block the previous one left unfinished.
-                guard self.readerGate.ifCurrent(generation, { self.setState(.connected); self.eventParser.beginResponse() }) != nil else { return }
+                // The closure names its type: with two statements and no annotation the older toolchain CodeQL builds with cannot
+                // infer `T` ("missing return in closure").
+                let stillCurrent: Void? = self.readerGate.ifCurrent(generation) { () -> Void in
+                    self.setState(.connected)
+                    self.eventParser.beginResponse()
+                }
+                guard stillCurrent != nil else { return }
                 var splitter = SseLineSplitter()
                 for try await byte in bytes {
                     guard let line = splitter.feed(byte: byte) else { continue }
