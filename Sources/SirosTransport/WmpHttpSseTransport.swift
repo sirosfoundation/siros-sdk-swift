@@ -64,16 +64,19 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
         for (key, value) in extraHeaders {
             request.setValue(value, forHTTPHeaderField: key)
         }
-        if let lastEventId = eventParser.lastEventId {
-            request.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID")
-        }
-
-        let finalRequest = request   // a `let` for the task: the request is not changed after this point
+        let baseRequest = request   // a `let` for the closure: not changed after this point
         let started = readerGate.start { generation in
+            // The resume cursor is read under the gate lock, where readers update it, so it is the one the
+            // previous reader left, not a value torn between two readers.
+            var finalRequest = baseRequest
+            if let lastEventId = eventParser.lastEventId {
+                finalRequest.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID")
+            }
+            let sent = finalRequest
             setState(.connecting)
             sseTask = Task { [weak self] in
                 guard let self else { return }
-                await self.runReader(generation: generation, request: finalRequest)
+                await self.runReader(generation: generation, request: sent)
             }
         }
         _ = started   // false: a reader is already connecting or connected
