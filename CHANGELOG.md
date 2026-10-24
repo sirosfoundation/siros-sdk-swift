@@ -156,6 +156,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider is gone.
 
 ### Added
+- **`LogoSanitizer` / `DisplayLogo`: safe rendering of credential and issuer
+  display logos, including `data:image/...` URIs.** `LogoSanitizer.sanitize(_:)`
+  returns `.image(pngBytes)`, `.remote(httpsURL)` or a typed `LogoRejection`
+  (fail closed). `data:` logos must be `data:<type>;base64,...` with type
+  `image/png|jpeg|webp|gif|svg+xml`, at most 256 KiB decoded and 2048 px per
+  side; rasters are decoded with ImageIO, checked to be the declared type, and
+  re-encoded as a fresh PNG, so metadata and trailing/polyglot payloads are
+  dropped. **SVG** is first run through a deny-by-default allowlist guard (XMLParser): only
+  `svg` (root), `g`, `defs`, `title`, `desc`, `path`, `rect`, `circle`, `ellipse`,
+  `line`, `polyline`, `polygon`, `linearGradient`, `radialGradient`, `stop` and
+  `clipPath` with validated geometry, paint (`url(#id)` only), stroke, opacity,
+  transform and gradient attributes are accepted; style attributes/elements, text and
+  fonts, `use`, `image`, `pattern`, `mask`, `filter`, `marker`, animation, scripts,
+  links, DOCTYPE/entities, namespaced content and anything not understood are refused,
+  never repaired. (SwiftDraw 0.29.0 crashes or hangs on five input classes we found, so
+  a denylist is not enough.) What passes is rasterized by
+  [SwiftDraw](https://github.com/swhitty/SwiftDraw) (pinned exactly, 0.29.0,
+  zlib licence) to at most 512 px and re-encoded like any raster. Same policy
+  as siros-sdk-kotlin. `LogoSanitizer.fetchAndSanitize` and `LogoCache` fetch
+  and sanitize `https` SVG logos the same way. Only `https:` remote logos pass
+  (`http:` and other schemes are refused). Without ImageIO (Linux) every
+  `data:` logo is refused. `LogoCache` sanitizes off the main actor and caches
+  by URI (a cancelled fetch is not cached); the sample app shows the issuer initial
+  until ready or on failure. Remote fetches validate the URL and every redirect
+  target (https, no userinfo) and stop reading at the 256 KiB cap. SVG `pattern`
+  and `mask` are refused (SwiftDraw 0.29.0 overflows the stack on self-referencing
+  ones), and width/height/viewBox are range-checked before SwiftDraw sees them
+  (it traps on values like `1e30`). Nested `<svg>` is refused (SwiftDraw re-processes
+  nested children at every level: 20 levels took 55 s), and element count (5000) and
+  depth (64) are capped. Remote fetches have one 15 s wall-clock budget for request
+  and body (a non-finite or non-positive `timeout:` is refused, large ones clamped to 120 s),
+  and concurrent resolves of one URI share a single download. `width`/`height` in an
+  `<svg style="...">` are range-checked like the attributes.
 - **`IDVError.chipPhotoMismatch` (`chip_photo_mismatch`, `errorCode`
   `idv_chip_photo_mismatch`):** facetec-api now refuses a scan whose face does
   not match the photo stored on the document's chip
