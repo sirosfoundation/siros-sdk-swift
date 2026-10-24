@@ -464,4 +464,137 @@ final class EngineTypesTests: XCTestCase {
             event: CredentialNotificationEvent.accepted
         )
     }
-}
+
+    // MARK: - Engine-blind issuance wire shapes
+
+    func testSignRequestParamsDecodeTheResponseEncryptionAndDecryptMembers() throws {
+        let generate = try JSONDecoder().decode(SignRequestParams.self, from: Data(#"""
+        {"audience":"https://i.example","nonce":"n","credential_response_encryption":{"alg":"ECDH-ES+A256KW","enc":"A256GCM","required":true}}
+        """#.utf8))
+        XCTAssertEqual(generate.credentialResponseEncryption, CredentialResponseEncryptionRequest(alg: "ECDH-ES+A256KW", enc: "A256GCM", required: true))
+        let decrypt = try JSONDecoder().decode(SignRequestParams.self, from: Data(#"{"jwe":"a.b.c.d.e","deferred":false}"#.utf8))
+        XCTAssertEqual(decrypt.jwe, "a.b.c.d.e")
+        XCTAssertEqual(decrypt.deferred, false)
+        XCTAssertNil(decrypt.credentialResponseEncryption)
+    }
+
+    func testSignResponseCarriesOnlyWhatWasSet() throws {
+        func object(_ m: SignResponseMessage) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(m)) as? [String: Any])
+        }
+        let jwk = ["kty": "EC", "crv": "P-256", "x": "X", "y": "Y", "use": "enc", "alg": "ECDH-ES"]
+        let proof = try object(SignResponseMessage(flowId: "f", credentialResponseEncryptionJwk: jwk))
+        XCTAssertEqual(proof["credential_response_encryption_jwk"] as? [String: String], jwk)
+        XCTAssertNil(proof["transaction_id"])
+        XCTAssertNil(proof["error"])
+        let control = try object(SignResponseMessage(flowId: "f", transactionId: "tx", interval: 3))
+        XCTAssertEqual(control["transaction_id"] as? String, "tx")
+        XCTAssertEqual(control["interval"] as? Int, 3)
+        XCTAssertNil(control["credential_response_encryption_jwk"])
+        let failure = try object(SignResponseMessage(flowId: "f", error: "no", errorCode: "DECRYPT_FAILED"))
+        XCTAssertEqual(failure["error_code"] as? String, "DECRYPT_FAILED")
+        let plain = try object(SignResponseMessage(flowId: "f"))
+        for member in ["credential_response_encryption_jwk", "transaction_id", "interval", "error", "error_code"] {
+            XCTAssertNil(plain[member], member)
+        }
+    }
+
+    func testFlowCompleteOfAnEncryptedResponseHasNoCredentialValues() throws {
+        let message = try JSONDecoder().decode(FlowCompleteMessage.self, from: Data(#"""
+        {"type":"flow_complete","flow_id":"f","credential_response_encrypted":true,
+         "credentials":[{"format":"dc+sd-jwt","vct":"urn:eudi:pid:1"},{"format":"dc+sd-jwt"}]}
+        """#.utf8))
+        XCTAssertEqual(message.credentialResponseEncrypted, true)
+        XCTAssertEqual(message.credentials?.count, 2)
+        XCTAssertNil(message.credentials?.first?.credential)
+        // A plain response still decodes as before.
+        let plain = try JSONDecoder().decode(FlowCompleteMessage.self, from: Data(#"""
+        {"type":"flow_complete","flow_id":"f","credentials":[{"format":"dc+sd-jwt","credential":"x.y.z"}]}
+        """#.utf8))
+        XCTAssertNil(plain.credentialResponseEncrypted)
+        XCTAssertEqual(plain.credentials?.first?.credential, "x.y.z")
+    }
+
+    func testFlowCompleteKeepsOnlyDisplayAndClaimsOfCredentialMetadata() throws {
+        let message = try JSONDecoder().decode(FlowCompleteMessage.self, from: Data(#"""
+        {"type":"flow_complete","flow_id":"f","credentials":[{"format":"dc+sd-jwt","credential":"x.y.z"}],
+         "credential_metadata":{
+           "display":[{"name":"Nym","locale":"en"}],
+           "claims":[{"path":["a"]}],
+           "org.siros.secret_seed":{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"},
+           "x-other":{"k":1}}}
+        """#.utf8))
+        let metadata = try XCTUnwrap(message.credentialMetadata)
+        XCTAssertEqual(metadata.display?.arrayValue?.first?.objectValue?["name"]?.stringValue, "Nym")
+        XCTAssertNotNil(metadata.claims)
+        // Nothing but display and claims is held, so nothing else can be logged or re-encoded from it.
+        let reencoded = String(decoding: try JSONEncoder().encode(metadata), as: UTF8.self)
+        XCTAssertFalse(reencoded.contains("secret_seed"))
+        XCTAssertFalse(reencoded.contains("00112233445566778899aabbccddeeff"))
+        XCTAssertFalse(reencoded.contains("x-other"))
+        let whole = String(decoding: try JSONEncoder().encode(message), as: UTF8.self)
+        XCTAssertFalse(whole.contains("00112233445566778899aabbccddeeff"))
+    }
+
+    func testCredentialMetadataOfTheWrongShapeNeverFailsTheFlow() throws {
+        for raw in ["null", "[1]", "\"s\"", "7", #"{"display":"not an array","claims":3}"#, "{}"] {
+            let message = try JSONDecoder().decode(
+                FlowCompleteMessage.self,
+                from: Data(#"{"type":"flow_complete","flow_id":"f","credential_metadata":\#(raw)}"#.utf8)
+            )
+            if !raw.hasPrefix("{") {
+                XCTAssertNil(message.credentialMetadata?.display, raw)
+                XCTAssertNil(message.credentialMetadata?.claims, raw)
+            }
+        }
+        let absent = try JSONDecoder().decode(FlowCompleteMessage.self, from: Data(#"{"type":"flow_complete","flow_id":"f"}"#.utf8))
+        XCTAssertNil(absent.credentialMetadata)
+    }
+
+    // MARK: - Engine-blind presentation wire shapes
+
+    func testSignPresentationParamsCarryTheResponseEncryptionStateAndVerifiedRequest() throws {
+        let params = try JSONDecoder().decode(SignRequestParams.self, from: Data(#"""
+        {"audience":"a","nonce":"n","state":"st",
+         "response_encryption":{"jwk":{"kty":"EC","crv":"P-256","x":"X","y":"Y","kid":"k1"},"alg":"ECDH-ES","enc":"A128GCM"},
+         "verified_request":{"client_id":"x509_san_dns:v.example","client_id_scheme":"x509_san_dns","response_mode":"direct_post.jwt",
+                             "response_uri":"https://v.example/cb","signed":true,"signature_verification":"verified"}}
+        """#.utf8))
+        XCTAssertEqual(params.state, "st")
+        XCTAssertEqual(params.responseEncryption?.alg, "ECDH-ES")
+        XCTAssertEqual(params.responseEncryption?.enc, "A128GCM")
+        XCTAssertEqual(params.responseEncryption?.jwkStrings["kid"], "k1")
+        XCTAssertEqual(params.verifiedRequest?.clientId, "x509_san_dns:v.example")
+        XCTAssertEqual(params.verifiedRequest?.signed, true)
+        let plain = try JSONDecoder().decode(SignRequestParams.self, from: Data(#"{"audience":"a","nonce":"n"}"#.utf8))
+        XCTAssertNil(plain.responseEncryption)
+        XCTAssertNil(plain.state)
+        XCTAssertNil(plain.verifiedRequest)
+    }
+
+    func testAResponseJweIsSentWithNoVpToken() throws {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(SignResponseMessage(flowId: "f", responseJwe: "a..b.c.d"))
+        ) as? [String: Any])
+        XCTAssertEqual(object["response_jwe"] as? String, "a..b.c.d")
+        XCTAssertNil(object["vp_token"])
+        XCTAssertNil(object["error"])
+    }
+
+    /// Losing a connection tells the owner once, before a replacement is attempted, so what it keeps for the flows
+    /// that ran on the old socket can go. A session that was told to disconnect says nothing, even when a late
+    /// failure from its old socket arrives after a replacement session has begun.
+        /// A loss tells the owner EVERY time, not only the first (the attempt counter is not reset by a successful
+    /// reconnect), and opening the replacement socket does too, so a path that bumps the connection without a state
+    /// change still drops the old flows' state. The first socket is not a replacement.
+        /// Each loss tells the owner, not only the first: the attempt counter is not reset by a successful reconnect.
+        /// A recovered connection starts a fresh retry budget: after the budget was used up once and the socket
+    /// recovered (`handshake_complete`), the next loss reconnects again instead of failing at once.
+        /// A failure reported by a socket that has since been replaced (forceReconnect) says nothing about the current
+    /// one: it neither tells the owner nor schedules a reconnect.
+        /// A frame a replaced socket delivers late (its receive succeeded just before `forceReconnect`) is dropped before
+    /// dispatch, and a request received on the current socket is stamped with that socket's generation.
+        /// A request received on a LOST socket is obsolete from the loss itself: the generation advances at once (during the
+    /// backoff) and again on every further loss, including when the retry budget is exhausted and no replacement
+    /// ever opens, so a request stamped before the loss never matches the current generation.
+        }

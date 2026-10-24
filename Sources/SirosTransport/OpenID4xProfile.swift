@@ -295,9 +295,30 @@ public struct SignSubFlowParams: Codable, Sendable {
     public var dpopNonce: String?
     public var ath: String?
     public var keyId: String?
+    /// `generate_proof`: the response encryption the engine negotiated (see `SignRequestParams`).
+    public var credentialResponseEncryption: CredentialResponseEncryptionRequest?
+    /// `decrypt_credential_response`: the Credential Response JWE and whether it is a deferred one.
+    public var jwe: String?
+    public var deferred: Bool?
+    /// `generate_proof` over WMP, when the peer sends it: an EMPTY object with
+    /// `credential_response_encryption` means the request is for the key alone (no proofs).
+    public var proofTypesSupported: [String: AnyCodable]?
+    /// `sign_presentation` for `direct_post.jwt`: see `SignRequestParams.responseEncryption`.
+    public var responseEncryption: ResponseEncryptionRequest?
+    public var state: String?
+    public var verifiedRequest: VerifiedRequest?
+    /// `sign_presentation` over a ZK or mdoc credential: where the response goes and the verifier key's thumbprint.
+    public var responseUri: String?
+    public var verifierJwkThumbprint: String?
 
     enum CodingKeys: String, CodingKey {
-        case action, nonce, audience, count, issuer, htm, htu, ath
+        case action, nonce, audience, count, issuer, htm, htu, ath, jwe, deferred, state
+        case responseUri = "response_uri"
+        case verifierJwkThumbprint = "verifier_jwk_thumbprint"
+        case responseEncryption = "response_encryption"
+        case verifiedRequest = "verified_request"
+        case proofTypesSupported = "proof_types_supported"
+        case credentialResponseEncryption = "credential_response_encryption"
         case proofType = "proof_type"
         case parentFlowId = "parent_flow_id"
         case transactionDataMember = "transaction_data"
@@ -324,8 +345,26 @@ public struct SignSubFlowParams: Codable, Sendable {
         htu: String? = nil,
         dpopNonce: String? = nil,
         ath: String? = nil,
-        keyId: String? = nil
+        keyId: String? = nil,
+        credentialResponseEncryption: CredentialResponseEncryptionRequest? = nil,
+        jwe: String? = nil,
+        deferred: Bool? = nil,
+        proofTypesSupported: [String: AnyCodable]? = nil,
+        responseEncryption: ResponseEncryptionRequest? = nil,
+        state: String? = nil,
+        verifiedRequest: VerifiedRequest? = nil,
+        responseUri: String? = nil,
+        verifierJwkThumbprint: String? = nil
     ) {
+        self.responseUri = responseUri
+        self.verifierJwkThumbprint = verifierJwkThumbprint
+        self.responseEncryption = responseEncryption
+        self.state = state
+        self.verifiedRequest = verifiedRequest
+        self.proofTypesSupported = proofTypesSupported
+        self.credentialResponseEncryption = credentialResponseEncryption
+        self.jwe = jwe
+        self.deferred = deferred
         self.action = action
         self.nonce = nonce
         self.audience = audience
@@ -368,6 +407,26 @@ public struct SignSubFlowParams: Codable, Sendable {
         dpopNonce = try c.decodeIfPresent(String.self, forKey: .dpopNonce)
         ath = try c.decodeIfPresent(String.self, forKey: .ath)
         keyId = try c.decodeIfPresent(String.self, forKey: .keyId)
+        credentialResponseEncryption = try c.decodeIfPresent(CredentialResponseEncryptionRequest.self, forKey: .credentialResponseEncryption)
+        jwe = try c.decodeIfPresent(String.self, forKey: .jwe)
+        deferred = try c.decodeIfPresent(Bool.self, forKey: .deferred)
+        proofTypesSupported = try? c.decodeIfPresent([String: AnyCodable].self, forKey: .proofTypesSupported)
+        // Present but unusable (malformed, or null) is an error, never "absent": absent selects the plain
+        // vp_token path, which would hand the engine a presentation the verifier asked to be encrypted.
+        if c.contains(.responseEncryption) {
+            guard try !c.decodeNil(forKey: .responseEncryption) else {
+                throw DecodingError.dataCorruptedError(forKey: .responseEncryption, in: c, debugDescription: "null response_encryption")
+            }
+            responseEncryption = try c.decode(ResponseEncryptionRequest.self, forKey: .responseEncryption)
+        } else {
+            responseEncryption = nil
+        }
+        responseUri = try c.decodeIfPresent(String.self, forKey: .responseUri)
+        verifierJwkThumbprint = try c.decodeIfPresent(String.self, forKey: .verifierJwkThumbprint)
+        // Strict: a malformed `state` or `verified_request` must fail the request (INVALID_PARAMS), never be read as
+        // absent: with `response_encryption` omitted that would send a plaintext vp_token for a direct_post.jwt request.
+        state = try c.decodeIfPresent(String.self, forKey: .state)
+        verifiedRequest = try c.decodeIfPresent(VerifiedRequest.self, forKey: .verifiedRequest)
     }
 }
 
@@ -421,6 +480,14 @@ public struct SignSubFlowResult: Sendable {
     public var clientAttestationPoP: String?
     public var dpopKeyId: String?
     public var dpopProof: String?
+    /// `generate_proof`: the public JWK of this proof request's response-encryption key.
+    public var credentialResponseEncryptionJwk: [String: String]?
+    /// `decrypt_credential_response`: only the control fields of the decrypted response.
+    public var credentialCount: Int?
+    public var transactionId: String?
+    public var interval: Int?
+    /// `sign_presentation` answer for `direct_post.jwt`: the compact JWE, with no `vpToken`.
+    public var responseJwe: String?
 
     public init(
         proofs: [ProofObject]? = nil,
@@ -429,8 +496,18 @@ public struct SignSubFlowResult: Sendable {
         clientAttestation: String? = nil,
         clientAttestationPoP: String? = nil,
         dpopKeyId: String? = nil,
-        dpopProof: String? = nil
+        dpopProof: String? = nil,
+        credentialResponseEncryptionJwk: [String: String]? = nil,
+        transactionId: String? = nil,
+        interval: Int? = nil,
+        credentialCount: Int? = nil,
+        responseJwe: String? = nil
     ) {
+        self.responseJwe = responseJwe
+        self.credentialCount = credentialCount
+        self.credentialResponseEncryptionJwk = credentialResponseEncryptionJwk
+        self.transactionId = transactionId
+        self.interval = interval
         self.proofs = proofs
         self.vpToken = vpToken
         self.credentialRequestExtras = credentialRequestExtras
@@ -481,6 +558,9 @@ public struct OpenID4xConfig: @unchecked Sendable {
     public var onTrustEvaluation: ((String, AnyCodable?) async throws -> TrustResult)?
     public var onComplete: ((String, AnyCodable?) async -> Void)?
     public var onError: ((String, String?, String?) async -> Void)?
+    /// The peer cancelled the flow (`wmp.flow.cancel`).
+    /// A flow of its own was cancelled: its id and the flow type it was started as (nil when this profile never saw it start).
+    public var onCancel: ((String, String?) async -> Void)?
     public var attestationProvider: ClientAttestationProvider?
     /// The profile was shut down (the session ended, or failed for good): called synchronously on each shutdown.
     public var onShutdown: (() -> Void)?
@@ -494,11 +574,13 @@ public struct OpenID4xConfig: @unchecked Sendable {
         onMatchRequest: ((String, AnyCodable?) async throws -> MatchResult)? = nil,
         onTrustEvaluation: ((String, AnyCodable?) async throws -> TrustResult)? = nil,
         onComplete: ((String, AnyCodable?) async -> Void)? = nil,
+        onCancel: ((String, String?) async -> Void)? = nil,
         onError: ((String, String?, String?) async -> Void)? = nil,
         attestationProvider: ClientAttestationProvider? = nil,
         onShutdown: (() -> Void)? = nil,
         sendRetryDelaysMs: [Int] = [1_000, 2_000, 4_000, 8_000]
     ) {
+        self.onCancel = onCancel
         self.onShutdown = onShutdown
         self.sendRetryDelaysMs = sendRetryDelaysMs
         self.onProgress = onProgress
@@ -521,7 +603,7 @@ private let trustEvaluationRequired = "trust_evaluation_required"
 /// Handles server-initiated flows: the backend engine starts flows and
 /// the SDK responds to progress events, sign requests, match requests,
 /// and trust evaluations.
-public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfile, WmpResumeProfile, @unchecked Sendable {
+public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfile, WmpResumeProfile, WmpLocalCancelProfile, @unchecked Sendable {
     public let name: String = "openid4x"
     public let capabilities: [String] = ["oid4vci", "oid4vp"]
     public let flowTypes: [String] = [OID4FlowTypes.oid4vci, OID4FlowTypes.oid4vp, WmpSubFlowTypes.sign, WmpSubFlowTypes.match]
@@ -550,6 +632,9 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
     private var endedParents: [String] = []
     private let maxEndedParents = 256
     /// Children whose terminal answer was sent: a redelivered start for one runs nothing. Bounded, oldest dropped.
+    /// The flow type each non-child flow was started as, for `onCancel` (an `oid4vp` parent's cancel must not reset an
+    /// issuance's guards). Dropped when the flow completes, fails or is cancelled.
+    private var parentFlowTypes: [String: String] = [:]
     private var completedChildren: Set<String> = []
     private var completedOrder: [String] = []
     private let maxCompletedChildren = 4096
@@ -595,6 +680,8 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
             // A start that is refused for good (its flow ended, or the profile stopped) has no task that would ever
             // release the route the peer registered for it; a duplicate of a tracked child keeps its own.
             if ended { peer?.releaseFlow(flowId: params.flowId) }
+        } else {
+            childLock.lock(); parentFlowTypes[params.flowId] = params.flowType; childLock.unlock()
         }
         return FlowStartResult(flowId: params.flowId, flowType: params.flowType)
     }
@@ -800,11 +887,15 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
     }
 
     /// Cancels the child flows that belong to `flowId` (or are `flowId`): a flow that has ended gets no more
-    /// answers from handlers still suspended for it.
-    private func cancelChildren(of flowId: String) {
+    /// answers from handlers still suspended for it. True when `flowId` itself is a child flow.
+    @discardableResult
+    private func cancelChildren(of flowId: String) -> Bool {
         childLock.lock()
         var running: [Task<Void, Never>] = []
         var ids: [String] = []
+        // A child whose answer is queued for the resume is still a child, though it no longer has a task.
+        let wasChild = childTasks[flowId] != nil || unsentAnswers[flowId] != nil || replaying[flowId] != nil
+            || completedChildren.contains(flowId)
         endedParents.append(flowId)
         if endedParents.count > maxEndedParents { endedParents.removeFirst(endedParents.count - maxEndedParents) }
         for (childId, answer) in unsentAnswers where childId == flowId || answer.parent == flowId {
@@ -828,6 +919,11 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
         // The peer forgets only the flow that ended; its children are released here, without waiting for a
         // suspended handler to return (which may be never).
         for id in ids { peer?.releaseFlow(flowId: id) }
+        return wasChild
+    }
+
+    public func cancelLocally(flowId: String) {
+        cancelChildren(of: flowId)
     }
 
     public func shutdown() {
@@ -854,18 +950,23 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
     }
 
     public func handleComplete(params: FlowCompleteParams) async {
+        childLock.lock(); parentFlowTypes.removeValue(forKey: params.flowId); childLock.unlock()
         cancelChildren(of: params.flowId)
         await config.onComplete?(params.flowId, params.result)
     }
 
     public func handleError(params: FlowErrorParams) async {
+        childLock.lock(); parentFlowTypes.removeValue(forKey: params.flowId); childLock.unlock()
         cancelChildren(of: params.flowId)
         await config.onError?(params.flowId, params.code, params.message)
     }
 
     public func handleCancel(params: FlowCancelParams) async {
-        // A cancelled child answers nothing, even if its handler ignores the cancellation.
-        cancelChildren(of: params.flowId)
+        // A cancelled child answers nothing, even if its handler ignores the cancellation. Cancelling a child
+        // stops that operation; only a flow of its own is cleaned up by the wallet.
+        let wasChild = cancelChildren(of: params.flowId)
+        childLock.lock(); let flowType = parentFlowTypes.removeValue(forKey: params.flowId); childLock.unlock()
+        if !wasChild { await config.onCancel?(params.flowId, flowType) }
     }
 
     // MARK: - Sub-flow Handlers
@@ -915,6 +1016,13 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
         if let pop = result.clientAttestationPoP { params["client_attestation_pop"] = .string(pop) }
         if let keyId = result.dpopKeyId { params["dpop_key_id"] = .string(keyId) }
         if let proof = result.dpopProof { params["dpop_proof"] = .string(proof) }
+        if let jwk = result.credentialResponseEncryptionJwk {
+            params["credential_response_encryption_jwk"] = .object_(jwk.mapValues { .string($0) })
+        }
+        if let jwe = result.responseJwe { params["response_jwe"] = .string(jwe) }
+        if let count = result.credentialCount { params["credential_count"] = .int(count) }
+        if let transactionId = result.transactionId { params["transaction_id"] = .string(transactionId) }
+        if let interval = result.interval { params["interval"] = .int(interval) }
         return params
     }
 

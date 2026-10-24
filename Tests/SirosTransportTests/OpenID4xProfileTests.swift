@@ -128,6 +128,76 @@ final class OpenID4xProfileTests: XCTestCase {
         XCTAssertEqual(ctx.notifications[0].params?["result"]?.objectValue?["dpop_proof"], .string("dpop"))
     }
 
+    /// Engine-blind issuance over WMP: `generate_proof` carries the negotiated pair and is answered with
+    /// the wallet's public JWK; `decrypt_credential_response` carries the JWE and is answered with the
+    /// control fields only.
+    func testWmpCarriesCredentialResponseEncryptionBothWays() async throws {
+        let ctx = MockPeerContext()
+        var seen: [SignSubFlowParams] = []
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, params in
+                seen.append(params)
+                if params.action == "generate_proof" {
+                    return SignSubFlowResult(
+                        proofs: [ProofObject(proofType: "jwt", jwt: "a.b.c")],
+                        credentialResponseEncryptionJwk: ["kty": "EC", "crv": "P-256", "x": "X", "y": "Y", "use": "enc", "alg": "ECDH-ES+A256KW"]
+                    )
+                }
+                return SignSubFlowResult(transactionId: "tx-1", interval: 5)
+            }
+        ))
+        profile.initialize(ctx: ctx)
+
+        await profile.runChildFlow(params: childStart(flowType: "sign", flowId: "c1", params: [
+            "parent_flow_id": .string("f"),
+            "action": .string("generate_proof"), "nonce": .string("n"), "audience": .string("https://i.example"),
+            "credential_response_encryption": .object_([
+                "alg": .string("ECDH-ES+A256KW"), "enc": .string("A256GCM"), "required": .bool(true),
+            ]),
+        ]))
+        XCTAssertEqual(seen[0].credentialResponseEncryption, CredentialResponseEncryptionRequest(alg: "ECDH-ES+A256KW", enc: "A256GCM", required: true))
+        let proofReply = ctx.notifications[0].params?["result"]?.objectValue
+        XCTAssertEqual(proofReply?["credential_response_encryption_jwk"]?.objectValue?["alg"], .string("ECDH-ES+A256KW"))
+        XCTAssertEqual(proofReply?["credential_response_encryption_jwk"]?.objectValue?["use"], .string("enc"))
+
+        await profile.runChildFlow(params: childStart(flowType: "sign", flowId: "c2", params: [
+            "parent_flow_id": .string("f"),
+            "action": .string("decrypt_credential_response"), "jwe": .string("a.b.c.d.e"), "deferred": .bool(true),
+        ]))
+        XCTAssertEqual(seen[1].jwe, "a.b.c.d.e")
+        XCTAssertEqual(seen[1].deferred, true)
+        let decryptReply = ctx.notifications[1].params?["result"]?.objectValue
+        XCTAssertEqual(decryptReply?["transaction_id"], .string("tx-1"))
+        XCTAssertEqual(decryptReply?["interval"], .int(5))
+        XCTAssertNil(decryptReply?["credentials"])
+        XCTAssertNil(decryptReply?["credential_response_encryption_jwk"])
+    }
+
+    func testWmpSignPresentationCarriesResponseEncryptionAndAnswersWithResponseJwe() async throws {
+        let ctx = MockPeerContext()
+        var seen: SignSubFlowParams?
+        let profile = OpenID4xProfile(config: OpenID4xConfig(onSignRequest: { _, params in
+            seen = params
+            return SignSubFlowResult(responseJwe: "h..i.c.t")
+        }))
+        profile.initialize(ctx: ctx)
+        await profile.runChildFlow(params: childStart(flowType: "sign", params: [
+            "parent_flow_id": .string("f"),
+            "action": .string("sign_presentation"), "nonce": .string("n"), "audience": .string("a"), "state": .string("st"),
+            "response_encryption": .object_([
+                "jwk": .object_(["kty": .string("EC"), "crv": .string("P-256"), "x": .string("X"), "y": .string("Y")]),
+                "alg": .string("ECDH-ES"), "enc": .string("A128GCM"),
+            ]),
+            "verified_request": .object_(["client_id": .string("c1")]),
+        ]))
+        XCTAssertEqual(seen?.responseEncryption?.enc, "A128GCM")
+        XCTAssertEqual(seen?.state, "st")
+        XCTAssertEqual(seen?.verifiedRequest?.clientId, "c1")
+        let reply = ctx.notifications[0].params?["result"]?.objectValue
+        XCTAssertEqual(reply?["response_jwe"], .string("h..i.c.t"))
+        XCTAssertNil(reply?["vp_token"])
+    }
+
     // MARK: - Child flows (the orchestrator's nested sign / match flows)
 
     /// A child start carrying `payload`'s members plus the `parent_flow_id` the engine adds.
@@ -167,6 +237,84 @@ final class OpenID4xProfileTests: XCTestCase {
         XCTAssertNotNil(result["proofs"])
         XCTAssertNil(result["action"], "the result is the response JSON, not an action")
         XCTAssertNil(params?["action"])
+    }
+
+    /// The engine-blind issuance answers travel the child-flow route: the key's JWK with the proofs, and
+    /// exactly one of `credential_count` / `transaction_id` + `interval` for `decrypt_credential_response`.
+    func testEngineBlindIssuanceAnswersAreTheResultOfTheChildFlow() async throws {
+        let ctx = MockPeerContext()
+        let profile = OpenID4xProfile(config: OpenID4xConfig(onSignRequest: { _, params in
+            params.action == "generate_proof"
+                ? SignSubFlowResult(
+                    credentialResponseEncryptionJwk: ["kty": "EC", "crv": "P-256", "x": "X", "y": "Y", "use": "enc", "alg": "ECDH-ES"]
+                )
+                : SignSubFlowResult(credentialCount: 2)
+        }))
+        profile.initialize(ctx: ctx)
+        await profile.runChildFlow(params: childStart(flowType: "sign", flowId: "c-a", params: [
+            "action": .string("generate_proof"), "parent_flow_id": .string("vci-1"),
+            "credential_response_encryption": .object_(["alg": .string("ECDH-ES"), "enc": .string("A256GCM"), "required": .bool(true)]),
+        ]))
+        await profile.runChildFlow(params: childStart(flowType: "sign", flowId: "c-b", params: [
+            "action": .string("decrypt_credential_response"), "parent_flow_id": .string("vci-1"),
+            "jwe": .string("a.b.c.d.e"), "deferred": .bool(false),
+        ]))
+        let keyResult = ctx.notifications[0].params?["result"]?.objectValue
+        XCTAssertEqual(keyResult?["credential_response_encryption_jwk"]?.objectValue?["use"], .string("enc"))
+        XCTAssertNil(keyResult?["proofs"], "a key-only answer has no proofs")
+        let decryptResult = ctx.notifications[1].params?["result"]?.objectValue
+        XCTAssertEqual(decryptResult?["credential_count"], .int(2))
+        XCTAssertNil(decryptResult?["transaction_id"])
+        XCTAssertEqual(ctx.notifications[1].method, WmpMethods.flowComplete)
+    }
+
+    /// Engine-blind presentation over WMP: `response_encryption`, `state` and `verified_request` arrive in the
+    /// child flow's params, and the answer is `response_jwe` in the child's `result`, with no `vp_token`.
+    func testAPresentationChildFlowAnswersWithResponseJweAndNoVpToken() async throws {
+        let ctx = MockPeerContext()
+        var seen: SignSubFlowParams?
+        var seenFlow: String?
+        let profile = OpenID4xProfile(config: OpenID4xConfig(onSignRequest: { flowId, params in
+            seenFlow = flowId
+            seen = params
+            return SignSubFlowResult(responseJwe: "h..i.c.t")
+        }))
+        profile.initialize(ctx: ctx)
+        await profile.runChildFlow(params: childStart(flowType: "sign", flowId: "c-p", params: [
+            "action": .string("sign_presentation"), "nonce": .string("n"), "audience": .string("a"), "state": .string("st"),
+            "parent_flow_id": .string("vp-9"),
+            "response_encryption": .object_([
+                "jwk": .object_(["kty": .string("EC"), "crv": .string("P-256"), "x": .string("X"), "y": .string("Y"), "kid": .string("k")]),
+                "alg": .string("ECDH-ES"), "enc": .string("A128GCM"),
+            ]),
+            "verified_request": .object_(["client_id": .string("c1")]),
+        ]))
+        XCTAssertEqual(seenFlow, "vp-9")
+        XCTAssertEqual(seen?.verifiedRequest?.clientId, "c1")
+        XCTAssertEqual(ctx.notifications[0].method, WmpMethods.flowComplete)
+        let result = ctx.notifications[0].params?["result"]?.objectValue
+        XCTAssertEqual(result?["response_jwe"], .string("h..i.c.t"))
+        XCTAssertNil(result?["vp_token"])
+    }
+
+    /// A `response_encryption` that is present but unusable is an error, never "absent": absent would select
+    /// the plain vp_token path and hand the engine a presentation the verifier asked to be encrypted.
+    func testAPresentButMalformedResponseEncryptionNeverReachesTheSigner() async throws {
+        for bad in [AnyCodable.null_, .object_(["jwk": .object_([:]), "alg": .string("ECDH-ES")]), .string("x")] {
+            let ctx = MockPeerContext()
+            var signed = false
+            let profile = OpenID4xProfile(config: OpenID4xConfig(onSignRequest: { _, _ in
+                signed = true
+                return SignSubFlowResult(vpToken: "plain")
+            }))
+            profile.initialize(ctx: ctx)
+            await profile.runChildFlow(params: childStart(flowType: "sign", params: [
+                "action": .string("sign_presentation"), "response_encryption": bad,
+            ]))
+            XCTAssertFalse(signed, "\(bad)")
+            XCTAssertEqual(ctx.notifications.count, 1)
+            XCTAssertEqual(ctx.notifications[0].method, WmpMethods.flowError, "\(bad)")
+        }
     }
 
     func testARefusedSignChildFlowIsAFlowErrorOnTheChildWithReasonRejected() async throws {
@@ -251,6 +399,25 @@ final class OpenID4xProfileTests: XCTestCase {
             try await Task.sleep(nanoseconds: 200_000_000)
             XCTAssertEqual(ctx.sentFlowIds, [first], "\(ending): only the send already under way completes; \(second) is not sent")
         }
+    }
+
+    /// Cancelling a child whose answer is queued for the resume is a child cancel: the wallet's parent-flow
+    /// cancellation callback is not invoked (it would reset the parent's guards).
+    func testCancellingAChildWithAQueuedAnswerDoesNotCancelTheParentInTheWallet() async throws {
+        let ctx = ReplayPeerContext()           // every send fails: the answer is queued
+        var cancelled: [String] = []
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, _ in SignSubFlowResult(vpToken: "t") },
+            onCancel: { id, _ in cancelled.append(id) }
+        ))
+        profile.initialize(ctx: ctx)
+        await profile.runChildFlow(params: childStart(flowType: "sign", flowId: "c1", params: [
+            "action": .string("sign_presentation"), "parent_flow_id": .string("p1"),
+        ]))
+        await profile.handleCancel(params: FlowCancelParams(flowId: "c1"))
+        XCTAssertTrue(cancelled.isEmpty, "only a child operation was cancelled")
+        await profile.handleCancel(params: FlowCancelParams(flowId: "p1"))
+        XCTAssertEqual(cancelled, ["p1"], "a flow of its own still is")
     }
 
     /// A second resume while the first replay send is suspended does not send the same answer again.
@@ -372,6 +539,29 @@ final class OpenID4xProfileTests: XCTestCase {
         XCTAssertTrue(ctx.released.contains("later"), "and so is a start after shutdown")
     }
 
+    /// A malformed `verified_request` (or `state`) fails the sign request as INVALID_PARAMS instead of being read as
+    /// absent, which with `response_encryption` omitted would have answered a direct_post.jwt request in plaintext.
+    func testAMalformedVerifiedRequestIsInvalidParamsAndSignsNothing() async throws {
+        let ctx = MockPeerContext()
+        let profile = OpenID4xProfile(config: OpenID4xConfig(onSignRequest: { _, _ in
+            XCTFail("a malformed request is never signed"); return SignSubFlowResult(vpToken: "plaintext")
+        }))
+        profile.initialize(ctx: ctx)
+        for bad in [
+            ["verified_request": AnyCodable.object_(["client_id": .string("c"), "response_mode": .string("direct_post.jwt"), "signed": .string("yes")])],
+            ["state": AnyCodable.int(7)],
+        ] {
+            var members: [String: AnyCodable] = ["action": .string("sign_presentation"), "nonce": .string("n"), "audience": .string("a"), "parent_flow_id": .string("p")]
+            for (k, v) in bad { members[k] = v }
+            await profile.runChildFlow(params: FlowStartParams(wmp: WmpMeta(), flowId: "c1", flowType: "sign", params: .object_(members)))
+        }
+        XCTAssertEqual(ctx.notifications.count, 2)
+        for message in ctx.notifications {
+            XCTAssertEqual(message.method, WmpMethods.flowError)
+            XCTAssertEqual(message.params?["data"]?.objectValue?["error_code"], .string("INVALID_PARAMS"))
+        }
+    }
+
     private func signStart(_ child: String = "c1", parent: String = "p1") -> FlowStartParams {
         childStart(flowType: "sign", flowId: child, params: ["action": .string("sign_presentation"), "parent_flow_id": .string(parent)])
     }
@@ -417,6 +607,23 @@ final class OpenID4xProfileTests: XCTestCase {
         profile.sessionResumed()
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertTrue(ctx.sent.isEmpty, "a cancelled child's answer is never sent")
+    }
+
+    /// Cancelling a child whose answer a replay is sending is a child cancel: the wallet's parent-flow callback is
+    /// not invoked (it would reset the parent's guards).
+    func testCancellingAReplayingChildDoesNotCancelTheParentInTheWallet() async throws {
+        let ctx = ScriptedPeerContext([.fail, .blockThenFail, .succeed])
+        var cancelled: [String] = []
+        let profile = OpenID4xProfile(config: OpenID4xConfig(
+            onSignRequest: { _, _ in SignSubFlowResult(vpToken: "t") }, onCancel: { id, _ in cancelled.append(id) }
+        ))
+        profile.initialize(ctx: ctx)
+        await profile.runChildFlow(params: signStart())
+        profile.sessionResumed()
+        for _ in 0..<200 where !ctx.blockedNow { try await Task.sleep(nanoseconds: 10_000_000) }
+        await profile.handleCancel(params: FlowCancelParams(flowId: "c1"))
+        XCTAssertTrue(cancelled.isEmpty, "only the child operation was cancelled")
+        ctx.releaseBlocked()
     }
 
     /// A send that fails while the connection stays healthy (a failed POST on a live stream) brings no resume event:
@@ -562,6 +769,22 @@ final class OpenID4xProfileTests: XCTestCase {
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(b.attemptedIds.filter { $0 == "c2" }.count, 2, "B: its original and its replay only; \(b.attemptedIds)")
         XCTAssertEqual(b.attemptedIds.filter { $0 == "c1" }.count, 3, "A: original, replay and its own catch-up; \(b.attemptedIds)")
+    }
+
+    /// `onCancel` is told the flow type the flow was started as: an `oid4vp` parent's cancel is recognisable as one.
+    func testOnCancelCarriesTheFlowTypeTheFlowStartedAs() async throws {
+        let ctx = MockPeerContext()
+        let seen = Counter()
+        var received: [(String, String?)] = []
+        let profile = OpenID4xProfile(config: OpenID4xConfig(onCancel: { id, type in received.append((id, type)); seen.bump() }))
+        profile.initialize(ctx: ctx)
+        _ = try await profile.startFlow(params: FlowStartParams(wmp: WmpMeta(), flowId: "v1", flowType: "oid4vp"))
+        _ = try await profile.startFlow(params: FlowStartParams(wmp: WmpMeta(), flowId: "i1", flowType: "oid4vci"))
+        await profile.handleCancel(params: FlowCancelParams(flowId: "v1"))
+        await profile.handleCancel(params: FlowCancelParams(flowId: "i1"))
+        await profile.handleCancel(params: FlowCancelParams(flowId: "never-started"))
+        XCTAssertEqual(received.map(\.0), ["v1", "i1", "never-started"])
+        XCTAssertEqual(received.map { $0.1 ?? "nil" }, ["oid4vp", "oid4vci", "nil"])
     }
 
     func testRepeatedShutdownNotifiesTheApplicationOnce() {

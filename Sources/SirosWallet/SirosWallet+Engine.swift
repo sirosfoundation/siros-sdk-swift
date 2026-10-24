@@ -40,6 +40,8 @@ extension SignResponseSender {
         clientAttestationPoP: String? = nil,
         dpopKeyId: String? = nil,
         dpopProof: String? = nil,
+        credentialResponseEncryptionJwk: [String: String]? = nil, credentialCount: Int? = nil,
+        responseJwe: String? = nil, transactionId: String? = nil, interval: Int? = nil, error: String? = nil, errorCode: String? = nil,
         messageId: String? = nil
     ) {
         sendSignResponse(SignResponseMessage(
@@ -51,7 +53,9 @@ extension SignResponseSender {
             clientAttestation: clientAttestation,
             clientAttestationPoP: clientAttestationPoP,
             dpopKeyId: dpopKeyId,
-            dpopProof: dpopProof
+            dpopProof: dpopProof,
+            credentialResponseEncryptionJwk: credentialResponseEncryptionJwk, credentialCount: credentialCount,
+            transactionId: transactionId, interval: interval, responseJwe: responseJwe, error: error, errorCode: errorCode
         ))
     }
 }
@@ -67,6 +71,9 @@ extension WalletEngineSession: SignResponseSender {
             clientAttestationPoP: message.clientAttestationPoP,
             dpopKeyId: message.dpopKeyId,
             dpopProof: message.dpopProof,
+            credentialResponseEncryptionJwk: message.credentialResponseEncryptionJwk, credentialCount: message.credentialCount,
+            responseJwe: message.responseJwe, transactionId: message.transactionId, interval: message.interval,
+            error: message.error, errorCode: message.errorCode,
             messageId: message.messageId
         )
     }
@@ -96,7 +103,8 @@ extension SirosWallet {
 
     // MARK: - WMP Protocol Path
 
-    private func connectViaWmp(appToken: String) async throws {
+    func connectViaWmp(appToken: String) async throws {
+        markSessionEnded(false)
         // Resolve engine base URL
         let engineBase: String
         if !config.engineUrl.isEmpty {
@@ -129,17 +137,21 @@ extension SirosWallet {
                 guard let self else { return SirosTransport.TrustResult(trusted: false, reason: "Wallet deallocated") }
                 return await self.handleWmpTrustEvaluation(flowId: flowId, payload: payload)
             },
-            onComplete: { [weak self] flowId, _ in
-                // Terminal path for this issuance over the WMP transport too -
-                // see `resetIssuanceGuards()`.
-                self?.resetIssuanceGuards()
-                self?.cancelTransactionTasks(flowId: flowId)
-                self?.eventListener?.onFlowComplete(flowId: flowId, redirectUri: nil)
+            onComplete: { [weak self] flowId, result in
+                await self?.handleWmpFlowComplete(flowId: flowId, result: result)
+            },
+            onCancel: { [weak self] flowId, flowType in
+                self?.handleWmpFlowCancel(flowId: flowId, flowType: flowType)
             },
             onError: { [weak self] flowId, code, message in
                 self?.resetIssuanceGuards()
                 self?.cancelTransactionTasks(flowId: flowId)
                 self?.eventListener?.onFlowError(flowId: flowId, errorMessage: "\(code ?? ""): \(message ?? "")", redirectUri: nil)
+            },
+            onShutdown: { [weak self] in
+                // The WMP session ended (closed, or failed for good): what blind issuance holds goes with it.
+                self?.clearBlindIssuanceState()
+                self?.resetIssuanceGuards()
             }
         ))
         peer.use(profile)
@@ -149,7 +161,7 @@ extension SirosWallet {
             authToken: appToken,
             capabilitiesOffered: TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: offerTransactionData)
         )
-        lock.lock(); wmpPeer = peer; lock.unlock()
+        lock.lock(); wmpPeer = peer; credentialNotifier = WmpCredentialNotifier(peer: peer); lock.unlock()
 
         #if canImport(os)
         logger.info("Connected via WMP protocol to \(wsUrl)")
@@ -307,25 +319,10 @@ extension SirosWallet {
     func handleWmpSignRequest(flowId: String, params: SignSubFlowParams) async throws -> SignSubFlowResult {
         switch params.action {
         case "generate_proof":
-            let count = params.count ?? 1
-            let generated = try await generateProofs(
-                audience: params.audience,
-                nonce: params.nonce,
-                count: count,
-                proofTypesSupported: nil,
-                proofTypeHint: params.proofType
-            )
-            // The "attestation" proof type returns a single GeneratedProofData
-            // whose attestedKeyIds already covers the whole batch in order; the
-            // "jwt" proof type returns one GeneratedProofData PER credential,
-            // each carrying its own single-element attestedKeyIds - flatMap
-            // concatenates either shape into one batch-order list. Taking only
-            // the first entry's list (as this used to) silently dropped every
-            // index past 0 for a "jwt" batch of more than one credential.
-            let flattenedKeyIds = generated.flatMap { $0.attestedKeyIds ?? [] }
-            lock.lock(); activeAttestedKeyIds = flattenedKeyIds.isEmpty ? nil : flattenedKeyIds; lock.unlock()
-            let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
-            return SignSubFlowResult(proofs: proofs)
+            return try await wmpGenerateProof(flowId: flowId, params: params)
+
+        case "decrypt_credential_response":
+            return try await wmpDecryptCredentialResponse(flowId: flowId, params: params)
 
         case "sign_presentation":
             // Same defense-in-depth audience check as the legacy engine
@@ -339,23 +336,19 @@ extension SirosWallet {
                 let verifier = Self.transactionVerifierLabel(trust: evaluated, fallback: params.audience)
                 return try await trackedTransaction(flowId: flowId) { try await self.wmpTransactionPresentation(flowId: flowId, params: params, verifier: verifier) }
             }
-            // NOTE (pre-existing, separate gap - not addressed by this
-            // change): unlike the legacy engine transport's
-            // SignRequestParams, WMP's SignSubFlowParams carries no
-            // credentials_to_include equivalent at all, so there is no way
-            // for this handler to know which credential(s)
-            // handleWmpMatchRequest matched/the user selected, or to build a
-            // real per-credential vp_token (mso_mdoc/SD-JWT/ZK) for this
-            // transport - it always falls back to the credential-less
-            // legacy signPresentation path below. Fixing this needs a wire
-            // protocol change to SignSubFlowParams, out of scope here.
+            // The WMP path has no credential selection or consent step, so it cannot present the credentials a
+            // request names: an encrypted response for such a request is refused rather than built around a
+            // credential-less token (which would be a wrong vp_token the engine cannot repair inside the JWE).
+            if params.responseEncryption != nil, !(params.credentialsToInclude ?? []).isEmpty {
+                throw SirosError.wallet(message: "WMP sign_presentation cannot present credentials: no selection step")
+            }
             let vpToken = try await keystore.signPresentation(
                 nonce: params.nonce,
                 audience: params.audience,
                 credentialIds: [],
                 kid: nil
             )
-            return SignSubFlowResult(vpToken: vpToken)
+            return try wmpPresentationResult(params: params, parts: [(nil, vpToken)])
 
         // Client authentication, same semantics as the legacy transport's
         // request_attestation / sign_client_auth cases in handleSignRequest:
@@ -589,6 +582,7 @@ extension SirosWallet {
     // MARK: - Legacy Engine Path
 
     func connectEngine(appToken: String) async throws {
+        markSessionEnded(false)
         // Resolve engine base URL: explicit config > discovery > same as backend
         let engineBase: String
         if !config.engineUrl.isEmpty {
@@ -600,6 +594,8 @@ extension SirosWallet {
         }
         let engine = Self.createEngineSession(engineBase, config.tenantId)
         lock.lock(); engineSession = engine; credentialNotifier = engine; lock.unlock()
+        // A replaced socket ends the flows that ran on the old one: their response keys and opened responses go too.
+        installSocketReplacedHook(on: engine)
         engine.connect(appToken: appToken, tokenProvider: { [weak self] in
             guard let tokens = self?.authTokens else {
                 throw SirosError.wallet(message: "Not connected")
@@ -706,25 +702,10 @@ extension SirosWallet {
         do {
             switch msg.action {
             case "generate_proof":
-                let count = msg.params.count ?? 1
-                let generated = try await generateProofs(
-                    audience: msg.params.audience ?? "",
-                    nonce: msg.params.nonce ?? "",
-                    count: count,
-                    proofTypesSupported: msg.params.proofTypesSupported,
-                    proofTypeHint: msg.params.proofType
-                )
-                // The "attestation" proof type returns a single GeneratedProofData
-                // whose attestedKeyIds already covers the whole batch in order; the
-                // "jwt" proof type returns one GeneratedProofData PER credential,
-                // each carrying its own single-element attestedKeyIds - flatMap
-                // concatenates either shape into one batch-order list. Taking only
-                // the first entry's list (as this used to) silently dropped every
-                // index past 0 for a "jwt" batch of more than one credential.
-                let flattenedKeyIds = generated.flatMap { $0.attestedKeyIds ?? [] }
-                lock.lock(); activeAttestedKeyIds = flattenedKeyIds.isEmpty ? nil : flattenedKeyIds; lock.unlock()
-                let proofs = generated.map { ProofObject(proofType: $0.proofType, jwt: $0.jwt, attestation: $0.attestation) }
-                engine.sendSignResponse(flowId: msg.flowId, proofs: proofs, messageId: msg.messageId)
+                try await answerGenerateProof(engine: engine, msg: msg)
+
+            case "decrypt_credential_response":
+                await answerDecryptCredentialResponse(engine: engine, msg: msg)
 
             case "sign_presentation":
                 // Claim this flow's enablement record whether or not it carries a
@@ -761,7 +742,8 @@ extension SirosWallet {
                     lock.lock()
                     let storedMatchResults = pendingMatchResultsByFlow.removeValue(forKey: msg.flowId)
                     lock.unlock()
-                    var vpParts: [String] = []
+                    var vpParts: [PresentationPart] = []
+                    var answer: SignResponseMessage?
                     do {
                     for ref in credsToInclude {
                         // A flow that ended (or a logout) while the user decided must not sign.
@@ -769,31 +751,36 @@ extension SirosWallet {
                         // ref.credentialId is the WMP wire-protocol identifier
                         // (String) - parse it back to the numeric
                         // StoredCredential.id it refers to.
-                        guard let cred = allCreds.first(where: { $0.id == Int64(ref.credentialId) }) else { continue }
+                        // A selected credential that is gone from the store is a refusal, not a silently shorter
+                        // presentation: exactly one token per selected reference, or none.
+                        guard let cred = allCreds.first(where: { $0.id == Int64(ref.credentialId) }) else {
+                            throw SirosError.wallet(message: "A selected credential is no longer available")
+                        }
                         let matchResult = storedMatchResults?.first(where: { result in
                             result.queryId == ref.credentialQueryId || result.candidates.contains(where: { $0.id == cred.id })
                         })
-                        vpParts.append(try await buildSignPresentationVpPart(
+                        vpParts.append((ref.credentialQueryId, try await buildSignPresentationVpPart(
                             cred: cred,
                             ref: ref,
                             matchResult: matchResult,
                             nonce: nonce,
                             audience: audience,
-                            msg: msg,
+                            context: SignPresentationContext(msg.params),
                             transactionData: ref.credentialQueryId.flatMap { scaPlan?.bindings[$0] },
                             transactionKid: scaPlan?.kid(for: ref.credentialQueryId, fallback: nil)
-                        ))
+                        )))
                     }
                     // A signer need not observe cancellation: recheck after the FINAL signing await,
                     // so an ended flow's token is never sent and its consent never recorded.
                     try Task.checkCancellation()
+                    // Built here, so a response that cannot be encrypted finalizes the plan as failed.
+                    answer = try presentationAnswer(msg: msg, parts: vpParts)
                     } catch {
                         // A cancelled request is not a signing failure and is not logged as one.
                         if !Task.isCancelled && !(error is CancellationError) { await Self.shielded { await scaPlan?.plan.complete(failedWith: error) } }
                         throw error
                     }
-                    let vpToken = vpParts.joined(separator: "\n")
-                    engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
+                    if let answer { engine.sendSignResponse(answer) }
                     // The record of a presentation that was sent must be written even if the flow's
                     // completion cancels this task meanwhile.
                     await Self.shielded { await scaPlan?.plan.complete(signed: true) }
@@ -801,7 +788,7 @@ extension SirosWallet {
                     let vpToken = try await keystore.signPresentation(
                         nonce: nonce, audience: audience, credentialIds: [], kid: nil
                     )
-                    engine.sendSignResponse(flowId: msg.flowId, vpToken: vpToken, messageId: msg.messageId)
+                    try sendPresentationResponse(engine: engine, msg: msg, parts: [(nil, vpToken)])
                 }
 
             case "request_attestation":
@@ -865,6 +852,10 @@ extension SirosWallet {
                 engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
                 reportSignFailure(flowId: msg.flowId, message: refusal.verifierErrorCode, notifyError: refusal.reason != .declined)
             } else {
+                // The engine waits for an answer to this request: say that it failed (with the original
+                // `message_id`) instead of leaving it to its sign timeout. Nothing of the failure's detail is sent.
+                let code = (error as? PresentationResponseError)?.code ?? "SIGN_ERROR"
+                engine.sendSignResponse(flowId: msg.flowId, error: "the request could not be answered", errorCode: code, messageId: msg.messageId)
                 reportSignFailure(flowId: msg.flowId, message: error.localizedDescription)
             }
         }
@@ -881,13 +872,13 @@ extension SirosWallet {
     /// `nil` if none was cached for this credential (falls back to
     /// `cred.format` alone to decide the branch, same as before this was
     /// extracted).
-    private func buildSignPresentationVpPart(
+    func buildSignPresentationVpPart(
         cred: StoredCredential,
         ref: CredentialRef,
         matchResult: CredentialMatcher.MatchResult?,
         nonce: String,
         audience: String,
-        msg: SignRequestMessage,
+        context: SignPresentationContext,
         transactionData: TransactionDataBinding? = nil,
         transactionKid: String? = nil
     ) async throws -> String {
@@ -932,14 +923,14 @@ extension SirosWallet {
                     // verifier_context binding input for the WS-engine
                     // transport, where (unlike DC API) go-wallet-backend
                     // forwards it from the original request_uri.
-                    sessionId: msg.params.verifierSessionId
+                    sessionId: context.verifierSessionId
                 )
                 : nil
             let sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
                 clientId: audience,
                 nonce: nonce,
-                responseUri: msg.params.responseUri ?? "",
-                verifierJwkThumbprint: msg.params.verifierJwkThumbprint
+                responseUri: context.responseUri ?? "",
+                verifierJwkThumbprint: context.verifierJwkThumbprint
             )
             let result = try await system.generateProof(
                 spec: spec,
@@ -976,8 +967,8 @@ extension SirosWallet {
                 disclosedClaims: ref.disclosedClaims,
                 nonce: nonce,
                 audience: audience,
-                responseUri: msg.params.responseUri ?? "",
-                verifierJwkThumbprint: msg.params.verifierJwkThumbprint,
+                responseUri: context.responseUri ?? "",
+                verifierJwkThumbprint: context.verifierJwkThumbprint,
                 kid: cred.kid
             )
             return deviceResponse.base64EncodedString()
@@ -1320,11 +1311,17 @@ extension SirosWallet {
     /// handleSignRequest's catch block previously only logged
     /// (logger.error), so the engine waited indefinitely for a sign_response
     /// that would never arrive.
-    private func reportSignFailure(flowId: String, message: String, notifyError: Bool = true) {
+    func reportSignFailure(flowId: String, message: String, notifyError: Bool = true) {
         lock.lock()
         let listener = eventListener
+        // The flow ends here: a buffered request for it is refused and a previously captured generation is stale.
+        flowEndSeq[flowId, default: 0] += 1
         pendingMatchResultsByFlow.removeValue(forKey: flowId)
         legacyFlowSnapshots.removeValue(forKey: flowId)
+        credentialResponseKeys.removeValue(forKey: flowId)
+        decryptedCredentialResponses.removeValue(forKey: flowId)
+        offeredResponseKeyFlows.remove(flowId)
+        wmpFlowIssuanceEpochs.removeValue(forKey: flowId)
         lock.unlock()
         if notifyError { listener?.onFlowError(flowId: flowId, errorMessage: message, redirectUri: nil) }
 
@@ -1353,6 +1350,11 @@ extension SirosWallet {
         flowEndSeq[flowId, default: 0] += 1      // a task for this flow still being registered sees that it ended
         let doomed = transactionTasks.filter { $0.value.flowId == flowId }
         for key in doomed.keys { transactionTasks.removeValue(forKey: key) }
+        // The flow's response key and anything decrypted with it end with the flow.
+        credentialResponseKeys.removeValue(forKey: flowId)
+        decryptedCredentialResponses.removeValue(forKey: flowId)
+        offeredResponseKeyFlows.remove(flowId)
+        wmpFlowIssuanceEpochs.removeValue(forKey: flowId)
         lock.unlock()
         for entry in doomed.values { entry.cancel() }
     }
@@ -1456,5 +1458,40 @@ extension SirosWallet {
         fclose(f)
         return read == count ? 0 : -1
         #endif
+    }
+}
+
+extension SirosWallet {
+    /// `wmp.flow.cancel` from the peer for a flow of its own: the flow's own cleanup, and the issuance guards only when
+    /// the flow can be the issuance. An `oid4vp` parent being cancelled must not reset the guards, offer and attested key
+    /// ids of an unrelated issuance that is in progress.
+    func handleWmpFlowCancel(flowId: String, flowType: String?) {
+        cancelTransactionTasks(flowId: flowId)
+        discardCredentialResponseState(flowId: flowId)
+        if flowType != "oid4vp" { resetIssuanceGuards() }
+    }
+
+    /// What the engine session reports when its connection is lost or replaced. The cleanup runs on its own task, never
+    /// inside the callback: `forceReconnect` is called while the wallet holds its lock (the issuance start's commit), and
+    /// the cleanup takes that lock. It is scoped to the engine that reported and to the keys that engine's earlier sockets
+    /// created, so a key a replacement socket's request already advertised is left alone, and a late report from an
+    /// engine that logout and a new login have replaced touches nothing.
+    func installSocketReplacedHook(on engine: WalletEngineSession) {
+        engine.onSocketReplaced = { [weak self, weak engine] in
+            guard let self, let engine else { return }
+            Task { self.cleanupAfterSocketReplacement(of: engine) }
+        }
+    }
+
+    func cleanupAfterSocketReplacement(of engine: WalletEngineSession) {
+        let current = engine.socketGeneration
+        let id = ObjectIdentifier(engine)
+        lock.lock(); defer { lock.unlock() }
+        guard let live = engineSession, live === engine else { return }
+        for (flowId, origin) in responseKeyOrigin where origin.engine == id && origin.generation < current {
+            credentialResponseKeys.removeValue(forKey: flowId)
+            decryptedCredentialResponses.removeValue(forKey: flowId)
+            responseKeyOrigin.removeValue(forKey: flowId)
+        }
     }
 }
