@@ -52,7 +52,7 @@ let package = Package(
         // own), for the same reason: use a well-tested library for this
         // rather than hand-rolling extended-Euclidean-algorithm code in a
         // cryptographic path.
-        .package(url: "https://github.com/attaswift/BigInt.git", from: "5.3.0"),
+        .package(url: "https://github.com/attaswift/BigInt.git", from: "6.0.1"),
         // SVG logo rasterization (pure Swift, zlib licence). Exact pin: it
         // parses untrusted issuer-supplied SVG, so upgrades are deliberate.
         // The refusal guard in SvgLogoRenderer.swift runs BEFORE it.
