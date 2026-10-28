@@ -67,8 +67,9 @@ import FaceTecSDK
 /// - ``IDVError/livenessFailed(message:)``, ``IDVError/verificationFailed(message:)``:
 ///   liveness, face match, policy or unreadable-document refusals.
 /// - ``IDVError/chipUntrusted(message:)``, ``IDVError/chipPhotoMismatch(message:)``,
+///   ``IDVError/chipDataUnverified(message:)``,
 ///   ``IDVError/documentExpired(message:)``, ``IDVError/sessionExpired(message:)``:
-///   facetec-api's `chip_untrusted`, `chip_photo_mismatch`, `document_expired`
+///   facetec-api's `chip_untrusted`, `chip_photo_mismatch`, `chip_data_unverified`, `document_expired`
 ///   and `session_expired`.
 /// - ``IDVError/providerError(code:message:)``: any other refusal code
 ///   (`issuance_failed`, `internal_error`, ...) or FaceTec status, with the

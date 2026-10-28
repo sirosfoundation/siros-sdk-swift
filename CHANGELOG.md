@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`IDVError.chipDataUnverified` (`chip_data_unverified`, `errorCode` `idv_chip_data_unverified`):** facetec-api now refuses to issue a credential whose identity claims would have come from OCR of the printed page rather than from the document's cryptographically verified, trusted chip (sirosfoundation/facetec-api#85). Distinct from `chipUntrusted`, which means the chip was verified but its signer is not trusted; this means there was no verified chip identity at all — a chip format the backend does not parse, such as an ISO 18013 driving licence, or a chip whose signed MRZ could not be read. Until now the code reached the app as `providerError` carrying the backend's raw text. **Breaking:** adding a case breaks exhaustive `switch`es over `IDVError`. The sample app has a message for it in en and sv.
+
 ### Breaking
 - **`RemoteIDVClient.Config`'s three endpoint paths are required.** `sessionTokenPath`, `livenessPath` and `idScanPath` defaulted to `/v1/session-token`, `/v1/liveness` and `/v1/id-scan` — facetec-api's legacy split API, which it no longer serves (sirosfoundation/facetec-api#82). The defaults therefore pointed at routes that 404, while the class itself is a generic client for any backend following the session → liveness → document pattern, so there is no one URL set for it to default to. Pass the three paths your backend serves. For facetec-api use `FaceTecIDVProvider`, which speaks its `/v1/process-request` contract. The doc comment on `IDVError.documentChipNotVerified` no longer describes facetec-api's removed `/v1/id-scan` behaviour, and `docs/IDENTITY-VERIFICATION.md` no longer calls that flow "the legacy `/v1` endpoints" as though facetec-api still answered them.
 
