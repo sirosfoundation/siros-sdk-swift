@@ -15,6 +15,11 @@ jobs:
   sonarcloud:
     name: SonarCloud Scan
     runs-on: ubuntu-latest
+    # Dependabot-triggered workflow runs do not receive repository/org Actions
+    # secrets (GitHub security measure), so SONAR_TOKEN is empty here and the
+    # scan would always fail with exit code 3. Skip the job entirely for
+    # dependabot PRs rather than report a false failure.
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
