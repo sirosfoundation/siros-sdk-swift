@@ -15,6 +15,11 @@ import FoundationNetworking
 /// Provider-agnostic — any backend following the session → liveness → document
 /// pattern works. The app provides a ``BiometricCaptureDelegate`` for
 /// vendor-specific UI capture.
+///
+/// The three endpoint paths are required, with no defaults: the client
+/// describes a pattern rather than one vendor's URLs, and SIROS's own backend
+/// does not serve this flow. For facetec-api use ``FaceTecIDVProvider``, which
+/// speaks its single `/v1/process-request` contract.
 public final class RemoteIDVClient: @unchecked Sendable {
 
     /// Configuration for the remote IDV backend.
@@ -33,9 +38,9 @@ public final class RemoteIDVClient: @unchecked Sendable {
         public init(
             serverUrl: String,
             authToken: String,
-            sessionTokenPath: String = "/v1/session-token",
-            livenessPath: String = "/v1/liveness",
-            idScanPath: String = "/v1/id-scan"
+            sessionTokenPath: String,
+            livenessPath: String,
+            idScanPath: String
         ) {
             self.serverUrl = serverUrl.hasSuffix("/") ? String(serverUrl.dropLast()) : serverUrl
             self.authToken = authToken
@@ -197,7 +202,10 @@ public protocol BiometricCaptureDelegate: AnyObject, Sendable {
 /// a pluggable ``BiometricCaptureDelegate``.
 ///
 /// ```swift
-/// let client = RemoteIDVClient(config: .init(serverUrl: "...", authToken: "..."))
+/// let client = RemoteIDVClient(config: .init(
+///     serverUrl: "...", authToken: "...",
+///     sessionTokenPath: "...", livenessPath: "...", idScanPath: "..."
+/// ))
 /// let delegate = MyCaptureDelegate() // your BiometricCaptureDelegate
 /// let provider = RemoteIDVProvider(client: client, delegate: delegate)
 /// try await wallet.verifyIdentityAndIssue(provider: provider, presentingViewController: vc)
