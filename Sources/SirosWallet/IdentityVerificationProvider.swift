@@ -56,6 +56,20 @@ public enum IDVError: Error, Sendable {
     /// Matching the photo printed on the document is not enough: only the chip
     /// photo ties the chip, and so the identity, to the person scanned.
     case chipPhotoMismatch(message: String)
+    /// The backend refused to issue because there was no cryptographically
+    /// verified chip identity to issue from (facetec-api's
+    /// `chip_data_unverified`). Only data the document's chip signed, under a
+    /// signer the backend trusts, may become a credential claim; data read by
+    /// OCR from the printed page is trivially forgeable.
+    ///
+    /// Distinct from ``chipUntrusted(message:)``, which means the chip was read
+    /// and verified but its signer is not trusted. This means there was no
+    /// verified chip identity at all -- a chip format the backend does not
+    /// parse, such as an ISO 18013 driving licence, or a chip whose signed MRZ
+    /// could not be read. Retrying the same document will not help; the user
+    /// needs a document whose chip the backend supports, typically a passport
+    /// or a national ID card.
+    case chipDataUnverified(message: String)
     /// The backend refused to issue because the document has expired or its
     /// expiry date could not be read as unexpired (facetec-api's
     /// `document_expired`). The user needs a valid document.
@@ -78,6 +92,7 @@ public enum IDVError: Error, Sendable {
         case .documentChipNotVerified(let reason, _): return "idv_\(reason)"
         case .chipUntrusted: return "idv_chip_untrusted"
         case .chipPhotoMismatch: return "idv_chip_photo_mismatch"
+        case .chipDataUnverified: return "idv_chip_data_unverified"
         case .documentExpired: return "idv_document_expired"
         case .sessionExpired: return "idv_session_expired"
         case .providerError(let code, _): return "idv_provider_\(code)"
@@ -96,6 +111,7 @@ extension IDVError: LocalizedError {
         case .documentChipNotVerified(_, let message): return message
         case .chipUntrusted(let message): return message
         case .chipPhotoMismatch(let message): return message
+        case .chipDataUnverified(let message): return message
         case .documentExpired(let message): return message
         case .sessionExpired(let message): return message
         case .providerError(let code, let message): return "[\(code)] \(message)"
@@ -162,10 +178,10 @@ extension IDVError {
     ///
     /// - `nfc_*`: the document's chip was not read and authenticated
     ///   (``documentChipNotVerified(reason:message:)``).
-    /// - `chip_untrusted`, `chip_photo_mismatch`, `document_expired`,
-    ///   `session_expired`: ``chipUntrusted(message:)``,
-    ///   ``chipPhotoMismatch(message:)``, ``documentExpired(message:)``,
-    ///   ``sessionExpired(message:)``.
+    /// - `chip_untrusted`, `chip_photo_mismatch`, `chip_data_unverified`,
+    ///   `document_expired`, `session_expired`: ``chipUntrusted(message:)``,
+    ///   ``chipPhotoMismatch(message:)``, ``chipDataUnverified(message:)``,
+    ///   ``documentExpired(message:)``, ``sessionExpired(message:)``.
     /// - `liveness_failed`: ``livenessFailed(message:)``.
     /// - `match_failed`, `policy_rejected`, `document_unreadable`:
     ///   ``verificationFailed(message:)``.
@@ -182,6 +198,8 @@ extension IDVError {
             self = .chipUntrusted(message: text)
         case "chip_photo_mismatch":
             self = .chipPhotoMismatch(message: text)
+        case "chip_data_unverified":
+            self = .chipDataUnverified(message: text)
         case "document_expired":
             self = .documentExpired(message: text)
         case "session_expired":
