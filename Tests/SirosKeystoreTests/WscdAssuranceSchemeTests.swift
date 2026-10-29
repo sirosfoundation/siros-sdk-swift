@@ -8,10 +8,9 @@ import XCTest
 /// see `WscdAssuranceScheme`'s doc comment for the bug (two independently-
 /// guessed tables silently disagreeing) this collapses. These tests prove
 /// two things: (a) `Iso18045AssuranceScheme.default`'s practical values match
-/// what the two tables it replaces used to produce (except the one
-/// deliberate, documented fix - the stray `"iso_18045_enhanced-basic"`
-/// string), and (b) a deployment can genuinely override every axis with its
-/// own data, not just read a hardcoded default under a new name.
+/// what the two tables it replaces used to produce, and (b) a deployment can
+/// genuinely override every axis with its own data, not just read a
+/// hardcoded default under a new name.
 final class WscdAssuranceSchemeTests: XCTestCase {
 
     // MARK: - default matches the previous (now-removed) tables' practical values
@@ -25,22 +24,45 @@ final class WscdAssuranceSchemeTests: XCTestCase {
         XCTAssertNil(scheme.nominalLabel(forPluginId: "some-future-plugin"))
     }
 
-    func testDefaultKeyStorageTypeLabelsMatchPreviousAttackPotentialMapping_exceptTheDocumentedFix() {
+    func testDefaultKeyStorageTypeLabelsMatchPreviousAttackPotentialMapping() {
         let scheme = Iso18045AssuranceScheme.default
         // Unchanged from the previous `toIso18045AttackPotential` switch:
         XCTAssertEqual(scheme.label(forKeyStorageType: "software"), "iso_18045_basic")
         XCTAssertEqual(scheme.label(forKeyStorageType: "hardware"), "iso_18045_moderate")
         XCTAssertEqual(scheme.label(forKeyStorageType: "remote_hsm"), "iso_18045_high")
-        // The deliberate fix: "trusted_execution" used to map to the stray,
-        // non-canonical "iso_18045_enhanced-basic" string (never part of the
-        // 3-tier vocabulary anywhere else in this codebase or the wire
-        // format) - now resolved to "iso_18045_moderate", the most
-        // defensible of the three REAL tiers (see this type's doc comment).
-        XCTAssertEqual(scheme.label(forKeyStorageType: "trusted_execution"), "iso_18045_moderate")
+        // Also unchanged: "iso_18045_enhanced-basic" is a REAL, registered
+        // OID4VCI value (Appendix D.2, VAN.3) - not a stray string. A TEE
+        // shares silicon with the main CPU, so it is precisely
+        // enhanced-basic, not the coarser "moderate" a dedicated secure
+        // element ("hardware") reads as.
+        XCTAssertEqual(scheme.label(forKeyStorageType: "trusted_execution"), "iso_18045_enhanced-basic")
         // Already-spec-compliant strings pass through unchanged.
         XCTAssertEqual(scheme.label(forKeyStorageType: "iso_18045_high"), "iso_18045_high")
         // Unrecognized raw strings fail closed to the lowest tier, same as before.
         XCTAssertEqual(scheme.label(forKeyStorageType: "pin"), "iso_18045_basic")
+    }
+
+    func testMisconfiguredKeyStorageTypeLabelFallsBackToBasic() {
+        // Regression test for a real Copilot finding: a deployment
+        // misconfiguring Iso18045AssuranceScheme with a non-ISO-18045 value
+        // (a typo, or a label copied from a different vocabulary) must never
+        // reach the OID4VCI Key Attestation JWT as an unrecognized
+        // key_storage value.
+        let misconfigured = Iso18045AssuranceScheme(keyStorageTypeLabels: ["hardware": "aal2"])
+        XCTAssertEqual(misconfigured.label(forKeyStorageType: "hardware"), "iso_18045_basic")
+    }
+
+    func testARawStringAlreadyClaimingIso18045PrefixIsStillValidated() {
+        // The "already spec-compliant, pass through" fast path must not
+        // trust an arbitrary "iso_18045_"-prefixed string blindly - only one
+        // of the four REAL, OID4VCI-registered tiers passes through
+        // unchanged; a made-up one (even with the right prefix) does not.
+        let scheme = Iso18045AssuranceScheme.default
+        XCTAssertEqual(scheme.label(forKeyStorageType: "iso_18045_bogus"), "iso_18045_basic")
+        // "enhanced-basic" IS one of the four real tiers - it passes through
+        // unchanged, not clamped to basic.
+        XCTAssertEqual(scheme.label(forKeyStorageType: "iso_18045_enhanced-basic"), "iso_18045_enhanced-basic")
+        XCTAssertEqual(scheme.label(forKeyStorageType: "iso_18045_high"), "iso_18045_high")
     }
 
     func testDefaultMeetsIsReflexiveAndFailsClosedForUnrecognizedTiers() {

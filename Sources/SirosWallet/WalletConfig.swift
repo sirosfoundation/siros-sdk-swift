@@ -90,6 +90,26 @@ public struct WalletConfig: Sendable {
     /// `availableKeystores` is set.
     public var requestWscdChoice: RequestWscdChoice?
 
+    /// The assurance-label vocabulary `SirosWallet`'s internal
+    /// `WscdSelectionPolicy` compares a plugin's nominal tier against a
+    /// credential type's declared requirement with - `Iso18045AssuranceScheme.default`
+    /// unless overridden. A deployment whose audit should map a plugin id to
+    /// a different ISO-18045 tier - or that speaks an entirely different
+    /// assurance vocabulary - sets this to its own `WscdAssuranceScheme` (an
+    /// `Iso18045AssuranceScheme` with different mapping tables, or a wholly
+    /// different implementation). See `WscdAssuranceScheme`'s doc comment
+    /// for why this is a deployment decision the SDK (never
+    /// `siros-wscd-manager`) owns.
+    ///
+    /// A stored property with its own default, not an `init` parameter: a
+    /// Copilot review on this same change caught that adding a new
+    /// positional-or-keyword `init` parameter to an existing public type can
+    /// break callers that construct it by order or forward its full argument
+    /// list - this is a value-type `struct` with mutable `var` properties
+    /// specifically so a caller can set just this one (`config.wscdAssuranceScheme = ...`)
+    /// without touching `init` at all.
+    public var wscdAssuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.default
+
     /// Base URL for go-wallet-backend's credential-type registry service
     /// (TS11-backed, cached, includes `attestation_los`/required-key-storage-
     /// tier data) - queried as `<registryUrl>/type-metadata?vct=<id>` for

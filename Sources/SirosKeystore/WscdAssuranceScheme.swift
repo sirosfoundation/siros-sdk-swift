@@ -45,14 +45,19 @@ import Foundation
 ///
 /// The OID4VCI Key Attestation JWT is the one call site that is NOT free to
 /// swap vocabularies: `key_storage`/`user_authentication` are a registered
-/// external wire format whose values ARE `iso_18045_basic`/
-/// `iso_18045_moderate`/`iso_18045_high` by spec, not a deployment's choice -
-/// so `WscdKeystoreAdapter` always builds those two claims through an
-/// `Iso18045AssuranceScheme` specifically (never an arbitrary
-/// `WscdAssuranceScheme` a deployment might otherwise be using for plugin
-/// selection), even though exactly which key-storage type maps to which of
-/// the three real ISO 18045 tiers remains deployment-configurable DATA on
-/// that type.
+/// external wire format whose values ARE the four ISO 18045 AVA_VAN tiers
+/// `iso_18045_basic`/`iso_18045_enhanced-basic`/`iso_18045_moderate`/
+/// `iso_18045_high` (OID4VCI Appendix D.2, "Attack Potential Resistance") by
+/// spec, not a deployment's choice - so `WscdKeystoreAdapter` always builds
+/// those two claims through an `Iso18045AssuranceScheme` specifically (never
+/// an arbitrary `WscdAssuranceScheme` a deployment might otherwise be using
+/// for plugin selection), even though exactly which key-storage type maps to
+/// which of those four real ISO 18045 tiers remains deployment-configurable
+/// DATA on that type. Note this four-tier wire vocabulary is BROADER than
+/// the three-tier scale (`Iso18045AssuranceScheme.defaultTierOrder`: basic/
+/// moderate/high) plugin SELECTION uses - a credential catalog here never
+/// REQUIRES enhanced-basic, but a confirmed hardware fact may legitimately
+/// be REPORTED as it.
 ///
 /// This SDK does not yet wrap `siros-wscd-manager`'s
 /// `generate_key_for_level`/`FfiCertificationLevel` the way the Kotlin SDK
@@ -101,11 +106,30 @@ public protocol WscdAssuranceScheme: Sendable {
 /// automatically unless a deployment supplies its own instance.
 public struct Iso18045AssuranceScheme: WscdAssuranceScheme {
     public static let basic = "iso_18045_basic"
+    public static let enhancedBasic = "iso_18045_enhanced-basic"
     public static let moderate = "iso_18045_moderate"
     public static let high = "iso_18045_high"
 
-    /// Ascending assurance order for `meets`/`rank(ofTier:)`.
+    /// Ascending assurance order for plugin-SELECTION eligibility
+    /// (`meets`/`rank(ofTier:)`) - the SDK's own three-tier scale, matching
+    /// the wire's `attestation_los` field and `WscdPluginCapabilities`'s
+    /// original, deliberate scope: this ecosystem's credential catalog/
+    /// issuers never declare `enhancedBasic` as a REQUIREMENT, so it is
+    /// intentionally absent from this list - NOT the same thing as
+    /// `wireLabels` below, which is what a CONFIRMED hardware fact may be
+    /// reported AS.
     public static let defaultTierOrder = [basic, moderate, high]
+
+    /// The full OID4VCI-registered ISO 18045 AVA_VAN wire vocabulary
+    /// (Appendix D.2, "Attack Potential Resistance") `label(forKeyStorageType:)`
+    /// is allowed to emit - see `validated(_:)`. FOUR tiers, not three:
+    /// broader than `defaultTierOrder` (the SDK's own narrower plugin-
+    /// SELECTION scale) because the external wire format defines
+    /// `enhancedBasic` as a real, registered tier between `basic` and
+    /// `moderate` that a confirmed hardware fact can legitimately be
+    /// reported as, even though no credential catalog in this ecosystem ever
+    /// REQUIRES it.
+    private static let wireLabels: Set<String> = [basic, enhancedBasic, moderate, high]
 
     /// The raw key-storage-type strings `Signer.securityProperties` reports
     /// (`software`/`hardware`/`trusted_execution`/`remote_hsm`), as this
@@ -117,24 +141,18 @@ public struct Iso18045AssuranceScheme: WscdAssuranceScheme {
     /// behavior the mapping this replaced had, since overclaiming
     /// resistance this scheme can't back up is worse than underclaiming it.
     ///
-    /// `"trusted_execution"` reads as `moderate` here - NOT the stray
-    /// `"iso_18045_enhanced-basic"` string the mapping this replaced used:
-    /// that string was never part of the three-tier `iso_18045_basic`/
-    /// `moderate`/`high` vocabulary used anywhere else in this codebase or
-    /// registered for the OID4VCI Key Attestation JWT's `key_storage` claim,
-    /// so a strict validator has no meaning for it at all - the exact class
-    /// of bug a real conformance-test issuer already caught once for the
-    /// `"software"` case (see this type's git history). A TEE-backed key is
-    /// real hardware isolation from the OS, clearly above a pure software
-    /// key, so `basic` would underclaim it; `moderate` - the same tier
-    /// `"hardware"` reads as - is the most defensible of the three REAL
-    /// tiers for it (not `high`: unlike a dedicated secure element, a TEE
-    /// shares silicon with the main CPU and has its own attack surface, so
-    /// this default does not overclaim resistance a TEE cannot back up).
+    /// `"trusted_execution"` reads as `enhancedBasic` here - a REAL,
+    /// registered OID4VCI tier (VAN.3, between `basic`/VAN.2 and
+    /// `moderate`/VAN.4), not a stray string: a TEE-backed key is real
+    /// hardware isolation from the OS, clearly above a pure software key,
+    /// but (unlike a dedicated secure element) a TEE shares silicon with the
+    /// main CPU and has its own attack surface, so this default does not
+    /// overclaim it as fully `moderate` either - `enhancedBasic` is the
+    /// precise, correct fit, not a compromise between two coarser choices.
     public static let defaultKeyStorageTypeLabels: [String: String] = [
         "software": basic,
         "hardware": moderate,
-        "trusted_execution": moderate,
+        "trusted_execution": enhancedBasic,
         "remote_hsm": high,
     ]
 
@@ -181,8 +199,33 @@ public struct Iso18045AssuranceScheme: WscdAssuranceScheme {
     }
 
     public func label(forKeyStorageType rawKeyStorageType: String) -> String {
-        if rawKeyStorageType.hasPrefix("iso_18045_") { return rawKeyStorageType }
-        return keyStorageTypeLabels[rawKeyStorageType.lowercased()] ?? Self.basic
+        let candidate: String?
+        if rawKeyStorageType.hasPrefix("iso_18045_") {
+            // Already claims to be spec-compliant - still validated below, not trusted blindly.
+            candidate = rawKeyStorageType
+        } else {
+            candidate = keyStorageTypeLabels[rawKeyStorageType.lowercased()]
+        }
+        return Self.validated(candidate)
+    }
+
+    /// `candidate` if it is one of the four real, registered ISO-18045 wire
+    /// labels (`basic`/`enhancedBasic`/`moderate`/`high`), else `basic`.
+    ///
+    /// This type ALWAYS emits one of exactly those four strings, however
+    /// `keyStorageTypeLabels` was configured - `WscdKeystoreAdapter` builds
+    /// the OID4VCI Key Attestation JWT's `key_storage`/`user_authentication`
+    /// claims from this type specifically (never the generic
+    /// `WscdAssuranceScheme` protocol) precisely because that wire format's
+    /// registered values ARE these four strings by spec, not a deployment's
+    /// free choice - a misconfigured map entry (a typo, or a value copied
+    /// from a different vocabulary entirely) must never reach an issuer as
+    /// an unrecognized `key_storage` value, which a real conformance-test
+    /// issuer has already been confirmed to reject once (see
+    /// `defaultKeyStorageTypeLabels`'s doc comment).
+    private static func validated(_ candidate: String?) -> String {
+        guard let candidate, wireLabels.contains(candidate) else { return basic }
+        return candidate
     }
 
     public func nominalLabel(forPluginId pluginId: String) -> String? {

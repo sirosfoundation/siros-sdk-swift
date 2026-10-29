@@ -167,13 +167,15 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertNil(claims?["user_authentication"])
     }
 
-    /// Regression test for the fix documented on
-    /// `Iso18045AssuranceScheme.defaultKeyStorageTypeLabels`: the previous,
-    /// now-removed `toIso18045AttackPotential` switch mapped
-    /// `"trusted_execution"` to the non-canonical `"iso_18045_enhanced-basic"`
-    /// string, which is not part of the 3-tier `iso_18045_basic`/`moderate`/
-    /// `high` vocabulary registered for this JWT's `key_storage` claim at all.
-    func testGenerateKeyAttestationMapsTrustedExecutionToModerate_notTheStrayEnhancedBasicString() async throws {
+    /// "iso_18045_enhanced-basic" is a REAL, OID4VCI-registered value
+    /// (Appendix D.2, VAN.3, between basic/VAN.2 and moderate/VAN.4) - see
+    /// `Iso18045AssuranceScheme.defaultKeyStorageTypeLabels`'s doc comment.
+    /// This regression test proves the single shared scheme still produces
+    /// this value (unchanged from the previous, separate
+    /// `toIso18045AttackPotential` table this replaced) rather than
+    /// collapsing it into the coarser "moderate" the SDK's own narrower
+    /// plugin-SELECTION scale uses.
+    func testGenerateKeyAttestationMapsTrustedExecutionToEnhancedBasic() async throws {
         let signer = MockSigner()
         signer.securityPropertiesResult = .success(
             SignerSecurityProperties(keyStorage: ["trusted_execution"], userAuthentication: [])
@@ -182,7 +184,7 @@ final class WscdKeystoreAdapterTest: XCTestCase {
 
         let jwt = try await adapter.generateKeyAttestation(nonce: "n", count: 1)
         let claims = JwtHelpers.parseJwtPayload(jwt)
-        XCTAssertEqual(claims?["key_storage"] as? [String], ["iso_18045_moderate"])
+        XCTAssertEqual(claims?["key_storage"] as? [String], ["iso_18045_enhanced-basic"])
     }
 
     /// Proves the Key Attestation JWT's `key_storage` claim is genuinely

@@ -299,6 +299,55 @@ final class SirosWalletWscdSelectionTests: XCTestCase {
         XCTAssertEqual(defaultKeystore.generateKeypairsCallCount, 0)
     }
 
+    /// Regression test for a real Copilot finding: `SirosWallet` constructed
+    /// its internal `WscdSelectionPolicy` without ever reading
+    /// `config.wscdAssuranceScheme`, so a deployment's custom mapping had no
+    /// effect on real wallet issuance no matter what it configured. Unlike
+    /// `WscdSelectionPolicyTests`' isolated coverage of the policy's own
+    /// branch logic, this constructs a REAL `SirosWallet` from `config` (no
+    /// stand-in policy injected) and drives it through
+    /// `requestBackendKeyAttestation`, proving the wiring end to end.
+    func testCustomAssuranceSchemeInWalletConfigDemotesFido2BelowRequiredTier() async throws {
+        let defaultKeystore = StubKeystoreManager(label: "softkey")
+        let fidoKeystore = StubKeystoreManager(label: "fido2")
+        var config = WalletConfig(backendUrl: "https://example.invalid")
+        config.availableKeystores = ["fido2": fidoKeystore]
+        // This deployment's audit treats "fido2" as only iso_18045_moderate
+        // (NOT Iso18045AssuranceScheme.default's iso_18045_high).
+        config.wscdAssuranceScheme = Iso18045AssuranceScheme(nominalPluginLabels: ["fido2": Iso18045AssuranceScheme.moderate])
+        let w = SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: defaultKeystore)!
+        w.apiClient = fakeApiClient()
+        w.activeVctm = Vctm(vct: "urn:example:pid", requiredKeyStorage: "iso_18045_high")
+
+        do {
+            _ = try await w.requestBackendKeyAttestation(audience: "https://issuer.example.com", nonce: "n", count: 1)
+            XCTFail("expected WscdSelectionError.noEligiblePlugin: this deployment's scheme caps fido2 at iso_18045_moderate")
+        } catch WscdSelectionError.noEligiblePlugin {
+            // expected
+        }
+        XCTAssertEqual(fidoKeystore.generateKeypairsCallCount, 0)
+        XCTAssertEqual(defaultKeystore.generateKeypairsCallCount, 0)
+    }
+
+    /// Same custom scheme as above, but the credential only requires
+    /// iso_18045_moderate - fido2 (capped at moderate by this deployment's
+    /// own scheme) is still eligible, proving the override is a real
+    /// re-ranking (genuinely read from `config`), not merely "always
+    /// ineligible" or a hardcoded default still winning underneath.
+    func testCustomAssuranceSchemeInWalletConfigStillAllowsFido2ForLowerRequirement() async throws {
+        let defaultKeystore = StubKeystoreManager(label: "softkey")
+        let fidoKeystore = StubKeystoreManager(label: "fido2")
+        var config = WalletConfig(backendUrl: "https://example.invalid")
+        config.availableKeystores = ["fido2": fidoKeystore]
+        config.wscdAssuranceScheme = Iso18045AssuranceScheme(nominalPluginLabels: ["fido2": Iso18045AssuranceScheme.moderate])
+        let w = SirosWallet(config: config, authProvider: StubAuthProvider(), keystore: defaultKeystore)!
+        w.apiClient = fakeApiClient()
+        w.activeVctm = Vctm(vct: "urn:example:pid", requiredKeyStorage: "iso_18045_moderate")
+
+        let (result, _) = try await w.requestBackendKeyAttestation(audience: "https://issuer.example.com", nonce: "n", count: 1)
+        XCTAssertEqual(result?.keyIds.first, "fido2-key-0")
+    }
+
     func testNoRequirementDeclaredUsesDefaultKeystoreEvenWithAvailableKeystoresSet() async throws {
         let defaultKeystore = StubKeystoreManager(label: "softkey")
         let fidoKeystore = StubKeystoreManager(label: "fido2")
