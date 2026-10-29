@@ -950,7 +950,23 @@ final class SecureEnclaveCallbackBridge: FfiSecureEnclaveCallback, @unchecked Se
     /// so treat this mapping as best-effort/documented, not hardware-proven
     /// end to end.
     static func mapError(_ error: Error) -> FfiWscdError {
-        if let laError = error as? LAError {
+        // `SecureEnclaveKeystoreError.keyGenerationFailed`/`.signingFailed`
+        // wrap the ORIGINAL CryptoKit error (an `LAError`, most commonly, for
+        // a declined biometric/passcode prompt) - unwrap first, so an
+        // `LAError` reaches the check below whether it arrived bare (a test
+        // fake can throw one directly) or wrapped by the real backend
+        // (`SystemSecureEnclaveKeyStore` always wraps). A Copilot review
+        // finding on this PR: checking only the outer `error` here meant
+        // the real backend's wrapping made this LAError check permanently
+        // unreachable in production, even though it worked in tests that
+        // threw an unwrapped `LAError` directly.
+        let unwrapped: Error
+        switch error {
+        case SecureEnclaveKeystoreError.keyGenerationFailed(let inner): unwrapped = inner
+        case SecureEnclaveKeystoreError.signingFailed(let inner): unwrapped = inner
+        default: unwrapped = error
+        }
+        if let laError = unwrapped as? LAError {
             switch laError.code {
             case .userCancel, .appCancel, .systemCancel:
                 return .AuthCancelled(msg: String(describing: laError))

@@ -63,8 +63,17 @@ public enum SecureEnclaveKeystoreError: Error, Sendable {
     /// compile on Linux, where `Security` (and the real `OSStatus` name)
     /// doesn't exist at all).
     case keychainError(Int32)
-    case keyGenerationFailed(String)
-    case signingFailed(String)
+    /// Carries the original error (an `LAError` for a declined biometric/
+    /// passcode prompt, most commonly), not a stringified description - a
+    /// Copilot review finding on this PR: `SecureEnclaveCallbackBridge.mapError`
+    /// needs the real typed error to classify a cancellation as
+    /// `AuthCancelled`/`AuthRequired` rather than a generic `Callback`
+    /// failure, and `error as? LAError` can never succeed once the error
+    /// has already been flattened to a `String`. Same precedent as
+    /// `AppAttestProvider.AppAttestError.keyGenerationFailed(Error)`.
+    case keyGenerationFailed(Error)
+    /// See `keyGenerationFailed`'s doc comment - same reasoning.
+    case signingFailed(Error)
 }
 
 extension SecureEnclaveKeystoreError: LocalizedError {
@@ -76,10 +85,10 @@ extension SecureEnclaveKeystoreError: LocalizedError {
             return "Secure Enclave key not found: \(tag)"
         case .keychainError(let status):
             return "Keychain error: \(status)"
-        case .keyGenerationFailed(let message):
-            return "Secure Enclave key generation failed: \(message)"
-        case .signingFailed(let message):
-            return "Secure Enclave signing failed: \(message)"
+        case .keyGenerationFailed(let error):
+            return "Secure Enclave key generation failed: \(error.localizedDescription)"
+        case .signingFailed(let error):
+            return "Secure Enclave signing failed: \(error.localizedDescription)"
         }
     }
 }
@@ -148,7 +157,7 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
             // re-enrollment and still allows passcode fallback.
             key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: accessControl)
         } catch {
-            throw SecureEnclaveKeystoreError.keyGenerationFailed(String(describing: error))
+            throw SecureEnclaveKeystoreError.keyGenerationFailed(error)
         }
         try writeDataRepresentation(key.dataRepresentation, forTag: keyTag, accessControl: accessControl)
         let raw = key.publicKey.rawRepresentation
@@ -169,7 +178,11 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
             &acError
         ) else {
             throw SecureEnclaveKeystoreError.keyGenerationFailed(
-                "failed to create access control: \(String(describing: acError))"
+                acError?.takeRetainedValue() ?? NSError(
+                    domain: "org.siros.wscd.apple-se",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "SecAccessControlCreateWithFlags failed"]
+                )
             )
         }
         return accessControl
@@ -181,7 +194,7 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
         do {
             return try key.signature(for: data).rawRepresentation
         } catch {
-            throw SecureEnclaveKeystoreError.signingFailed(String(describing: error))
+            throw SecureEnclaveKeystoreError.signingFailed(error)
         }
     }
 
@@ -195,7 +208,7 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
         // authentication - confirmed Apple Keychain behavior: access
         // control only gates `kSecReturnData`, not existence/attribute
         // queries.
-        guard keyExists(forTag: keyTag) else {
+        guard try keyExists(forTag: keyTag) else {
             throw SecureEnclaveKeystoreError.keyNotFound(keyTag)
         }
         try deleteDataRepresentation(forTag: keyTag)
@@ -204,7 +217,7 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
     // MARK: - Reconstructing a key from its persisted `dataRepresentation`
 
     private func loadKey(forTag tag: String) throws -> SecureEnclave.P256.Signing.PrivateKey {
-        guard let data = readDataRepresentation(forTag: tag) else {
+        guard let data = try readDataRepresentation(forTag: tag) else {
             throw SecureEnclaveKeystoreError.keyNotFound(tag)
         }
         do {
@@ -214,7 +227,7 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
             // rejected it (corrupt blob, wrong device/Secure Enclave,
             // biometry/access-control failure) - a different failure mode
             // the caller should not treat as "retry generate instead".
-            throw SecureEnclaveKeystoreError.signingFailed(String(describing: error))
+            throw SecureEnclaveKeystoreError.signingFailed(error)
         }
     }
 
@@ -222,7 +235,17 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
 
     /// Whether a Keychain item exists under `tag`, without ever requesting
     /// its (access-control-gated) value - see `deleteKey`'s doc comment.
-    private func keyExists(forTag tag: String) -> Bool {
+    ///
+    /// Throwing (not just returning `false`) on any status other than
+    /// success/not-found matters, not just style - a Copilot review finding
+    /// on this PR: a query failure for another reason entirely (missing
+    /// entitlements, a transient Keychain error) previously looked
+    /// identical to "genuinely absent", so `deleteKey` would treat the key
+    /// as already gone and `AppleSecureEnclavePlugin::delete_key`'s
+    /// idempotent-on-`KeyNotFound` fix (Rust side) would then drop the
+    /// registry entry for a key that's still actually there - permanently
+    /// orphaning it.
+    private func keyExists(forTag tag: String) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -232,10 +255,20 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         let status = SecItemCopyMatching(query as CFDictionary, nil)
-        return status == errSecSuccess
+        switch status {
+        case errSecSuccess: return true
+        case errSecItemNotFound: return false
+        default: throw SecureEnclaveKeystoreError.keychainError(status)
+        }
     }
 
-    private func readDataRepresentation(forTag tag: String) -> Data? {
+    /// Returns `nil` only when the item is genuinely absent
+    /// (`errSecItemNotFound`) - any other status is thrown as
+    /// `keychainError`, not silently treated as "not found". Same reasoning
+    /// as `keyExists`'s doc comment: callers (`loadKey`, and transitively
+    /// `sign`) must be able to tell "this key doesn't exist" from "this
+    /// key's Keychain item exists but couldn't be read right now".
+    private func readDataRepresentation(forTag tag: String) throws -> Data? {
         lock.lock(); defer { lock.unlock() }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -247,8 +280,17 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return data
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data else {
+                throw SecureEnclaveKeystoreError.keychainError(status)
+            }
+            return data
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw SecureEnclaveKeystoreError.keychainError(status)
+        }
     }
 
     /// `accessControl` is required (not defaulted to plain

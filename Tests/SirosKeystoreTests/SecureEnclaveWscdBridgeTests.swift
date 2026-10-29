@@ -52,6 +52,17 @@ final class SecureEnclaveWscdBridgeTests: XCTestCase {
                 throw SecureEnclaveKeystoreError.keyNotFound(keyTag)
             }
         }
+
+        /// Test-only: lets a test confirm `deleteKey` actually reached this
+        /// fake and removed its entry, not just that the plugin-level call
+        /// returned success - a Copilot review finding on this PR: without
+        /// this, a bug passing the wrong identifier to the delete callback
+        /// (or not calling it at all) could still leave every assertion in
+        /// `testGenerateSignDeleteRoundTripThroughTheRealFfiBoundary` green.
+        var keyCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return keys.count
+        }
     }
 
     private func signer(_ backend: SecureEnclaveKeystoreBackend) throws -> UniFFISigner {
@@ -69,11 +80,31 @@ final class SecureEnclaveWscdBridgeTests: XCTestCase {
         let kid = try await signer.generateKey(algorithm: "ES256")
         let signature = try await signer.sign(keyId: kid, data: Data("hello".utf8))
         XCTAssertEqual(signature.prefix(5), Data("hello".utf8))
+        XCTAssertEqual(backend.keyCount, 1, "sanity: exactly the one generated key should be live in the backend")
 
         // A key that never existed must fail, not silently succeed.
         do {
             _ = try await signer.sign(keyId: "apple-se-does-not-exist", data: Data())
             XCTFail("signing an unknown kid must fail, not silently succeed")
+        } catch {
+            // Any error is the right outcome here - KeyNotFound specifically,
+            // in practice.
+        }
+
+        // The delete itself must actually reach the fake backend and remove
+        // its entry - not just report success at the plugin level while
+        // leaving the real (fake, here) key material untouched. A bug
+        // passing the wrong identifier to the delete callback, or never
+        // calling it, would leave `keyCount` at 1 even though `deleteKey`
+        // returned without throwing.
+        try await signer.deleteKey(keyId: kid)
+        XCTAssertEqual(backend.keyCount, 0, "deleteKey must actually remove the key from the backend, not just report success")
+
+        // And the same kid must now fail to sign - proves the deletion was
+        // real from the caller's point of view too, not just internally.
+        do {
+            _ = try await signer.sign(keyId: kid, data: Data("hello".utf8))
+            XCTFail("signing a deleted kid must fail, not silently succeed")
         } catch {
             // Any error is the right outcome here - KeyNotFound specifically,
             // in practice.

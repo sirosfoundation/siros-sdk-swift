@@ -1062,6 +1062,21 @@ final class WalletViewModel: ObservableObject {
                 try signer.registerFido2Plugin(transport: NfcCtap2Transport())
             }
 
+            if pluginId == "apple-se" {
+                // A Copilot review finding: `WscdPluginCapabilities.pluginTiers`
+                // (and so `pluginIdsToTry` below) already lists "apple-se",
+                // advertising it as an available keystore choice, but nothing
+                // registered the actual backend - every generate/sign call
+                // would have failed with `NoPlugin`. `SystemSecureEnclaveKeyStore`
+                // is always safe to register unconditionally here, the same
+                // way `fido2`'s `NfcCtap2Transport` is: if the device has no
+                // Secure Enclave, `generateKey`/`sign` throw `.notAvailable`
+                // (mapped to `Unsupported`) at call time, not registration
+                // time - the same graceful-failure shape every other plugin
+                // here already has.
+                try signer.registerAppleSecureEnclavePlugin(backend: SystemSecureEnclaveKeyStore())
+            }
+
             if pluginId == "r2ps" {
                 // Ephemeral P-256 key pair for the R2PS message envelope
                 // (JWS/JWE identity) - required regardless of auth mode.
