@@ -149,6 +149,18 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
         try requireWscdManager().registerR2psPlugin(config: config, transport: transport)
     }
 
+    public func registerAppleSecureEnclavePlugin(backend: SecureEnclaveKeystoreBackend) throws {
+        try requireWscdManager().registerAppleSecureEnclavePlugin(backend: backend)
+    }
+
+    public func registerAppleSecureEnclavePluginWithState(backend: SecureEnclaveKeystoreBackend, state: Data) throws {
+        try requireWscdManager().registerAppleSecureEnclavePluginWithState(backend: backend, state: state)
+    }
+
+    public func exportAppleSecureEnclaveState() throws -> Data {
+        try requireWscdManager().exportAppleSecureEnclaveState()
+    }
+
     // MARK: - KeystoreManager conformance
 
     public var isUnlocked: Bool {

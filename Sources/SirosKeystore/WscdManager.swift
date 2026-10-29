@@ -34,6 +34,29 @@ public protocol WscdManager: SignerLifecycleManager {
 
     /// Register the R2PS remote HSM plugin.
     func registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) throws
+
+    /// Register the Apple Secure Enclave (`apple-se`) plugin.
+    ///
+    /// `backend` drives CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` +
+    /// Keychain directly (`SystemSecureEnclaveKeyStore` in production).
+    /// **Staged release:** keys this plugin generates carry no per-key
+    /// attestation chain yet - see `SecureEnclaveKeystoreBackend`'s and
+    /// `siros-wscd-manager`'s `SecureEnclaveCallback`'s doc comments.
+    func registerAppleSecureEnclavePlugin(backend: SecureEnclaveKeystoreBackend) throws
+
+    /// Register the Apple Secure Enclave plugin, restoring a previously-
+    /// enrolled key's metadata (`state`, from a prior
+    /// `exportAppleSecureEnclaveState()` call) instead of starting with no
+    /// known keys. The Secure Enclave keys themselves live in `backend`'s
+    /// own Keychain storage and are unaffected by this call - `state` only
+    /// restores the Rust plugin's `kid -> key_tag` registry.
+    func registerAppleSecureEnclavePluginWithState(backend: SecureEnclaveKeystoreBackend, state: Data) throws
+
+    /// Export the Apple Secure Enclave plugin's current key metadata
+    /// (Keychain tags + public keys only, never private key material) for
+    /// persisting via `SirosWallet.saveWscdCredentials`, so it survives to
+    /// the next `registerAppleSecureEnclavePluginWithState` call.
+    func exportAppleSecureEnclaveState() throws -> Data
 }
 
 /// R2PS server connection parameters.

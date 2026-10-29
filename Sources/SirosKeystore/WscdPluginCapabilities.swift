@@ -27,12 +27,26 @@ public enum WscdPluginCapabilities {
     /// Known plugin ID -> nominal ISO 18045 tier. Plugin IDs match the
     /// ones `FfiWscdConfig(defaultPlugin:)` accepts and the sample app's
     /// plugin chooser offers (`WscaDeveloperView`): `"softkey"`, `"r2ps"`,
-    /// `"fido2"`.
+    /// `"fido2"`, `"apple-se"`.
     public static let pluginTiers: [String: String] = [
         "softkey": "iso_18045_basic",
         "fido2": "iso_18045_high",
         // Best-effort/config-dependent - see the type's doc comment above.
         "r2ps": "iso_18045_high",
+        // `apple-se` (Secure Enclave): a real hardware-isolated key, more
+        // than `softkey`'s "basic" - but, as of this staged release, with
+        // NO per-key attestation chain backing that claim (confirmed on
+        // real Xcode 26.6 / iOS 26.5 SDK headers, 2026-10-29:
+        // `SecKeyCreateAttestation` does not exist on this SDK at all, and
+        // no CryptoKit type exposes any attestation API). `fido2` gets a
+        // real per-key attestation statement from the authenticator today;
+        // `apple-se` does not, so it is deliberately one tier below
+        // `fido2` here, not equal to it. Raise this to `iso_18045_high`
+        // only once a real attestation path exists and is wired through
+        // `security_properties().certification` - see
+        // `SecureEnclaveKeystoreBackend`'s doc comment and
+        // sirosfoundation/siros-wscd-manager#134.
+        "apple-se": "iso_18045_moderate",
     ]
 
     /// Plugins with an enrollment ("onboarding") step: the user must register a
