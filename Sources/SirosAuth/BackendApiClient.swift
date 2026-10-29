@@ -419,7 +419,9 @@ public final class BackendApiClient: @unchecked Sendable {
     /// - Parameters:
     ///   - walletInstanceId: The WIA JWK Thumbprint (`cnf.jkt`) this key belongs to.
     ///   - attestationObject: The raw CTAP2 makeCredential attestation object
-    ///     (siros-wscd-manager's `AttestationChain.certificates[0]`).
+    ///     (siros-wscd-manager's `AttestationChain.opaqueAttestation`, for a
+    ///     chain whose `format` is `.opaque` - not `certificates[0]`, which
+    ///     holds a real X.509 chain's leaf cert when `format` is `.x509Chain`).
     ///   - clientDataHash: The 32-byte hash the attestation signature was computed
     ///     over (`AttestationChain.clientDataHash`).
     public func registerFido2Attestation(

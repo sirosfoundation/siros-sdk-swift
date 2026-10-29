@@ -10,6 +10,7 @@ import SirosCredentials
 // platform-scoped dependency.
 #if os(iOS)
 import siros_wscd_managerFFI
+import LocalAuthentication
 
 /// Provides user authentication credentials when requested by the WSCD.
 ///
@@ -167,6 +168,41 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         try ffi.exportFido2State()
     }
 
+    /// Register the Apple Secure Enclave (`apple-se`) plugin.
+    ///
+    /// `backend` drives CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` +
+    /// Keychain directly - see `SecureEnclaveKeystoreBackend`'s doc comment.
+    /// **Staged release:** keys this plugin generates carry no per-key
+    /// attestation chain yet - see
+    /// `siros-wscd-manager`'s `SecureEnclaveCallback` doc comment.
+    public func registerAppleSecureEnclavePlugin(backend: SecureEnclaveKeystoreBackend) throws {
+        try ffi.registerAppleSecureEnclavePlugin(callback: SecureEnclaveCallbackBridge(backend))
+    }
+
+    /// Register the Apple Secure Enclave plugin, restoring a previously-
+    /// enrolled key's metadata (`state`, from a prior
+    /// `exportAppleSecureEnclaveState()` call) instead of starting with no
+    /// known keys. The Secure Enclave keys themselves live in `backend`'s
+    /// own Keychain storage (see `SystemSecureEnclaveKeyStore`) and are
+    /// unaffected by this call - `state` only restores the Rust plugin's
+    /// `kid -> key_tag` registry, the same split `registerFido2PluginWithState`
+    /// has for FIDO2 credential handles.
+    public func registerAppleSecureEnclavePluginWithState(backend: SecureEnclaveKeystoreBackend, state: Data) throws {
+        try ffi.registerAppleSecureEnclavePluginWithState(
+            callback: SecureEnclaveCallbackBridge(backend),
+            state: state
+        )
+    }
+
+    /// Export the Apple Secure Enclave plugin's current key metadata
+    /// (Keychain tags + public keys only, never private key material - the
+    /// Secure Enclave never releases that) for persisting via
+    /// `SirosWallet.saveWscdCredentials`, so it survives to the next
+    /// `registerAppleSecureEnclavePluginWithState` call.
+    public func exportAppleSecureEnclaveState() throws -> Data {
+        try ffi.exportAppleSecureEnclaveState()
+    }
+
     // MARK: - Signer conformance
 
     public func generateKey(algorithm: String) async throws -> String {
@@ -217,7 +253,17 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     public func attestationChain(keyId: String) async throws -> AttestationChain? {
         try await onFFIQueue {
             try self.ffi.attestationChain(kid: keyId).map {
-                AttestationChain(certificates: $0.certificates, clientDataHash: $0.clientDataHash)
+                // `format`/`opaqueAttestation` carried through, not dropped -
+                // this used to assume every attestation was a real X.509
+                // chain, which silently mis-shaped the fido2 plugin's CTAP2
+                // attestation object (CBOR, not DER) into `certificates[0]`.
+                // See `AttestationFormat`'s doc comment.
+                AttestationChain(
+                    format: $0.format == .x509Chain ? .x509Chain : .opaque,
+                    certificates: $0.certificates,
+                    clientDataHash: $0.clientDataHash,
+                    opaqueAttestation: $0.opaqueAttestation
+                )
             }
         }
     }
@@ -826,6 +872,115 @@ private final class R2psTransportBridge: FfiHttpTransport, @unchecked Sendable {
         switch result {
         case .success(let data): return data
         case .failure(let error): throw error
+        }
+    }
+}
+
+// MARK: - Secure Enclave bridge
+
+/// Bridges the SDK's `SecureEnclaveKeystoreBackend` to the UniFFI
+/// `FfiSecureEnclaveCallback` callback.
+///
+/// Unlike `Ctap2TransportBridge`/`R2psTransportBridge`, no async-to-sync
+/// `DispatchSemaphore` dance is needed here: `FfiSecureEnclaveCallback`'s
+/// methods are synchronous/throwing (called from Rust's FFI queue thread,
+/// same as every other FFI callback), and so is
+/// `SecureEnclaveKeystoreBackend` - CryptoKit's own Secure Enclave API is
+/// synchronous, so there is no `async` boundary to cross in either
+/// direction.
+///
+/// **Error mapping matters here, not just style.** UniFFI's generated
+/// callback-interface glue (`uniffiTraitInterfaceCallWithError`) only
+/// converts a thrown error into the matching `FfiWscdError` Rust variant
+/// when the Swift side throws a literal `FfiWscdError` instance
+/// (`catch let error as FfiWscdError`) - anything else falls into its
+/// `CALL_UNEXPECTED_ERROR` path instead, which the Rust manager surfaces
+/// as an opaque unexpected-error string, bypassing
+/// `secure_enclave_callback_error`'s `AuthCancelled`/`AuthRequired`
+/// handling entirely. So every method here explicitly maps
+/// `SecureEnclaveKeystoreError` (and the `LAError` CryptoKit's Secure
+/// Enclave calls can throw underneath it, e.g. a declined biometric
+/// prompt) to an `FfiWscdError` case, rather than letting the original
+/// Swift error propagate as-is.
+final class SecureEnclaveCallbackBridge: FfiSecureEnclaveCallback, @unchecked Sendable {
+    private let backend: SecureEnclaveKeystoreBackend
+
+    init(_ backend: SecureEnclaveKeystoreBackend) {
+        self.backend = backend
+    }
+
+    func generateKey(keyTag: String) throws -> FfiSecureEnclavePublicKey {
+        do {
+            let (x, y) = try backend.generateKey(keyTag: keyTag)
+            return FfiSecureEnclavePublicKey(x: x, y: y)
+        } catch {
+            throw Self.mapError(error)
+        }
+    }
+
+    func sign(keyTag: String, data: Data) throws -> Data {
+        do {
+            return try backend.sign(keyTag: keyTag, data: data)
+        } catch {
+            throw Self.mapError(error)
+        }
+    }
+
+    func deleteKey(keyTag: String) throws {
+        do {
+            try backend.deleteKey(keyTag: keyTag)
+        } catch {
+            throw Self.mapError(error)
+        }
+    }
+
+    /// Maps any error a `SecureEnclaveKeystoreBackend` can throw to the
+    /// `FfiWscdError` variant the Rust side's `secure_enclave_callback_error`
+    /// branches on.
+    ///
+    /// `LAError` cancellation codes are checked FIRST and independently of
+    /// `SecureEnclaveKeystoreError`'s own cases, because CryptoKit's Secure
+    /// Enclave calls can throw a raw `LAError` directly (not wrapped in one
+    /// of this SDK's own error types) when the user declines the
+    /// biometric/passcode prompt that gates the key - this has not been
+    /// exercised against a real interactive prompt in this program yet
+    /// (Secure Enclave key generation needs a real user session, which an
+    /// SSH session to the Mac mini builder does not have - confirmed
+    /// failing the same way `LocalAuthProviderTests` already does there),
+    /// so treat this mapping as best-effort/documented, not hardware-proven
+    /// end to end.
+    static func mapError(_ error: Error) -> FfiWscdError {
+        // `SecureEnclaveKeystoreError.keyGenerationFailed`/`.signingFailed`
+        // wrap the ORIGINAL CryptoKit error (an `LAError`, most commonly, for
+        // a declined biometric/passcode prompt) - unwrap first, so an
+        // `LAError` reaches the check below whether it arrived bare (a test
+        // fake can throw one directly) or wrapped by the real backend
+        // (`SystemSecureEnclaveKeyStore` always wraps). A Copilot review
+        // finding on this PR: checking only the outer `error` here meant
+        // the real backend's wrapping made this LAError check permanently
+        // unreachable in production, even though it worked in tests that
+        // threw an unwrapped `LAError` directly.
+        let unwrapped: Error
+        switch error {
+        case SecureEnclaveKeystoreError.keyGenerationFailed(let inner): unwrapped = inner
+        case SecureEnclaveKeystoreError.signingFailed(let inner): unwrapped = inner
+        default: unwrapped = error
+        }
+        if let laError = unwrapped as? LAError {
+            switch laError.code {
+            case .userCancel, .appCancel, .systemCancel:
+                return .AuthCancelled(msg: String(describing: laError))
+            default:
+                return .AuthRequired(msg: String(describing: laError))
+            }
+        }
+        switch error {
+        case SecureEnclaveKeystoreError.notAvailable:
+            return .Unsupported(msg: "Secure Enclave is not available on this device")
+        case SecureEnclaveKeystoreError.keyNotFound(let tag):
+            return .KeyNotFound(msg: tag)
+        default:
+            return .Callback(msg: String(describing: error))
         }
     }
 }

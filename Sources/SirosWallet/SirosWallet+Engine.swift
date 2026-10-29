@@ -307,8 +307,17 @@ extension SirosWallet {
               let cnf = CredentialUtils.parseJwtPayload(wia)?["cnf"] as? [String: Any],
               let walletInstanceId = cnf["jkt"] as? String else { return }
         for kp in keypairs {
+            // The fido2 plugin's attestation is `.opaque` (its raw CTAP2
+            // makeCredential attestation object, CBOR - not an X.509
+            // chain), so `attestationObject` comes from `opaqueAttestation`,
+            // not `certificates.first` - see `AttestationFormat`'s doc
+            // comment. A key attested with any other format (or none) has
+            // nothing meaningful to register here, so this skips it rather
+            // than registering the wrong bytes.
             guard let chain = try? await keystore.attestationChain(keyId: kp.keyId),
-                  let attestationObject = chain.certificates.first else { continue }
+                  chain.format == .opaque,
+                  !chain.opaqueAttestation.isEmpty else { continue }
+            let attestationObject = chain.opaqueAttestation
             do {
                 try await client.registerFido2Attestation(
                     walletInstanceId: walletInstanceId,

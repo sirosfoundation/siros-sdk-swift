@@ -624,9 +624,33 @@ public protocol FfiWscdManagerProtocol: AnyObject, Sendable {
     func deleteKey(kid: String) throws 
     
     /**
+     * Read-only description of the FIDO2 authenticator behind the
+     * registered `plugin_id` plugin (must be `"fido2"`; any other plugin
+     * gives `Unsupported`). Sends CTAP2 getInfo and, only when a PIN is set,
+     * getPinRetries (which consumes no retry). Never asks for a PIN, never
+     * sets one, never requests a token. Uses the registered transport as is:
+     * the library opens no connection of its own, so an already-open USB
+     * connection is reused.
+     */
+    func describeAuthenticator(pluginId: String) throws  -> FfiAuthenticatorInfo
+    
+    /**
      * Destroy lifecycle bindings for a context.
      */
     func destroyLifecycle(request: FfiDestroyLifecycleRequest, auth: FfiAuthCallback, progress: FfiProgressCallback) throws  -> FfiDestructionOutcome
+    
+    /**
+     * Export the Android Keystore plugin's key state for the host app to
+     * persist and later restore via [`register_android_keystore_plugin_with_state`].
+     */
+    func exportAndroidKeystoreState() throws  -> Data
+    
+    /**
+     * Export the Apple Secure Enclave plugin's key state (Keychain tags +
+     * public keys) for the host app to persist and later restore via
+     * [`register_apple_secure_enclave_plugin_with_state`].
+     */
+    func exportAppleSecureEnclaveState() throws  -> Data
     
     /**
      * Export the FIDO2 plugin's key state (credential handles + public
@@ -655,9 +679,70 @@ public protocol FfiWscdManagerProtocol: AnyObject, Sendable {
     func exportSoftkeyContainer() throws  -> Data
     
     /**
+     * Generate a key with the Android Keystore plugin under a
+     * CALLER-SUPPLIED attestation challenge, instead of the random one
+     * `generate_key`/`generate_key_for_level` use.
+     *
+     * **This is what Wallet Instance Attestation's instance-key
+     * provisioning must use.** Per siros-sdk-kotlin #312's
+     * `InstanceKeyEvidence`, the Android Key Attestation challenge for a
+     * WIA instance key is `SHA-256("siros-instance-key-v1" || C)` (`C` the
+     * server-issued challenge, exactly as issued) - compute that hash on
+     * the host side and pass it here as `attestation_challenge`. Never use
+     * `generate_key_with_plugin("android-keystore", ...)` for WIA: it
+     * would attest under a random challenge the backend's fixed formula
+     * cannot reproduce, making the attestation unverifiable.
+     */
+    func generateAndroidKeystoreKeyWithChallenge(attestationChallenge: Data, algorithm: FfiAlgorithm, progress: FfiProgressCallback) throws  -> FfiGeneratedKey
+    
+    /**
      * Generate a new key pair.
      */
     func generateKey(algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: FfiProgressCallback) throws  -> FfiGeneratedKey
+    
+    /**
+     * Generate a key that actually meets `required_level`, trying each of
+     * `candidate_plugin_ids` in order and confirming the real outcome
+     * rather than trusting any plugin's self-reported capability - see
+     * `WscdManager::generate_key_for_level`'s doc comment for the full
+     * generate → confirm → delete-and-retry-next-candidate contract.
+     *
+     * `candidate_plugin_ids` is the ORDERED list the host SDK's own
+     * selection policy computed (e.g. `WscdSelectionPolicy.resolve()` on
+     * Kotlin/Swift) - this method does no ranking of its own, it only
+     * consumes the order it is given. This is Key Attestation's pluggable
+     * path; never use it for Wallet Instance Attestation's fixed hardware
+     * root (see [`generate_key_with_plugin`]'s doc comment).
+     */
+    func generateKeyForLevel(requiredLevel: FfiCertificationLevel, candidatePluginIds: [String], algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: FfiProgressCallback) throws  -> FfiGeneratedKey
+    
+    /**
+     * Generate a key with a SPECIFIC registered plugin, bypassing the
+     * default-plugin resolution chain (`resolve_for_generate`) entirely,
+     * with a RANDOM attestation challenge (the plugin's own, same as the
+     * plain `generate_key`).
+     *
+     * This is the generic forced-plugin path: for a plugin whose generation
+     * has no external challenge-binding contract to satisfy, call this with
+     * that plugin's id directly rather than going through
+     * `resolve_for_generate`/`generate_key_for_level`'s selection-among-
+     * candidates logic.
+     *
+     * **This is NOT what Android Keystore's Wallet Instance Attestation
+     * path needs** - WIA's Android Key Attestation challenge must be
+     * `SHA-256("siros-instance-key-v1" || C)` for a server-issued `C`
+     * (see `AndroidKeystorePlugin`'s doc comment), and this method's
+     * random challenge cannot satisfy that fixed formula. Use
+     * [`generate_android_keystore_key_with_challenge`] for that case
+     * specifically. Never call the plain `generate_key` (which goes
+     * through `resolve_for_generate`) or `generate_key_for_level` (which
+     * tries several candidates) for a WIA-style forced hardware root
+     * either way: both exist for Key Attestation's pluggable path, where
+     * trying a different plugin on a later call is fine; a forced
+     * hardware root must not move around depending on manager
+     * configuration or plugin registration order.
+     */
+    func generateKeyWithPlugin(pluginId: String, algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: FfiProgressCallback) throws  -> FfiGeneratedKey
     
     /**
      * Import a softkey container (JSON bytes), replacing the current softkey state.
@@ -681,6 +766,53 @@ public protocol FfiWscdManagerProtocol: AnyObject, Sendable {
      * credential binding is needed with the issuer.
      */
     func migrateKey(kid: String, targetPluginId: String, auth: FfiAuthCallback) throws  -> FfiMigrationResult
+    
+    /**
+     * Register the Android Keystore plugin under
+     * [`crate::plugins::android_keystore::PLUGIN_ID`] (`"android-keystore"`).
+     *
+     * One instance serves both WIA's forced path
+     * (`get_plugin_by_id("android-keystore")`/`generate_key_with_plugin`)
+     * and KA's pluggable path (`generate_key_for_level`/`resolve_for_generate`) -
+     * see [`crate::plugins::android_keystore::AndroidKeystorePlugin`]'s doc
+     * comment. Register it exactly once per process, like every other
+     * plugin.
+     */
+    func registerAndroidKeystorePlugin(callback: FfiAndroidKeystoreCallback) throws 
+    
+    /**
+     * Register the Android Keystore plugin restored from a previously
+     * [`export_android_keystore_state`]-exported blob (kid↔alias mapping,
+     * attestation chains, confirmed security levels - no private key
+     * material, that never leaves the Keystore). The host app must persist
+     * that blob itself and pass it back here on the next launch, or every
+     * key made by this plugin becomes unreachable (mirrors
+     * [`register_fido2_plugin_with_state`]'s doc comment exactly).
+     */
+    func registerAndroidKeystorePluginWithState(callback: FfiAndroidKeystoreCallback, state: Data) throws 
+    
+    /**
+     * Register the Apple Secure Enclave (`apple-se`) plugin.
+     *
+     * The caller supplies a [`FfiSecureEnclaveCallback`] implementation
+     * backed by CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` + a
+     * Keychain tag. **Staged release:** keys this plugin generates carry
+     * no per-key attestation chain - see
+     * [`crate::callbacks::SecureEnclaveCallback`]'s doc comment.
+     */
+    func registerAppleSecureEnclavePlugin(callback: FfiSecureEnclaveCallback) throws 
+    
+    /**
+     * Register the Apple Secure Enclave plugin restored from a previously
+     * [`export_apple_secure_enclave_state`]-exported blob (Keychain tags +
+     * public keys only, no private material - that never leaves the
+     * Secure Enclave). The host app must persist that blob itself and pass
+     * it back here on the next launch, or every enrolled `apple-se` key
+     * becomes unreachable (its `kid` still exists in credential/session
+     * metadata, but the manager has no record of the Keychain tag needed
+     * to sign with it again).
+     */
+    func registerAppleSecureEnclavePluginWithState(callback: FfiSecureEnclaveCallback, state: Data) throws 
     
     /**
      * Register the FIDO2 previewSign (rawSign) plugin for hardware
@@ -873,6 +1005,25 @@ open func deleteKey(kid: String)throws   {try rustCallWithError(FfiConverterType
 }
     
     /**
+     * Read-only description of the FIDO2 authenticator behind the
+     * registered `plugin_id` plugin (must be `"fido2"`; any other plugin
+     * gives `Unsupported`). Sends CTAP2 getInfo and, only when a PIN is set,
+     * getPinRetries (which consumes no retry). Never asks for a PIN, never
+     * sets one, never requests a token. Uses the registered transport as is:
+     * the library opens no connection of its own, so an already-open USB
+     * connection is reused.
+     */
+open func describeAuthenticator(pluginId: String)throws  -> FfiAuthenticatorInfo  {
+    return try  FfiConverterTypeFfiAuthenticatorInfo_lift(try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_describe_authenticator(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(pluginId),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Destroy lifecycle bindings for a context.
      */
 open func destroyLifecycle(request: FfiDestroyLifecycleRequest, auth: FfiAuthCallback, progress: FfiProgressCallback)throws  -> FfiDestructionOutcome  {
@@ -883,6 +1034,33 @@ open func destroyLifecycle(request: FfiDestroyLifecycleRequest, auth: FfiAuthCal
         FfiConverterTypeFfiDestroyLifecycleRequest_lower(request),
         FfiConverterCallbackInterfaceFfiAuthCallback_lower(auth),
         FfiConverterCallbackInterfaceFfiProgressCallback_lower(progress),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Export the Android Keystore plugin's key state for the host app to
+     * persist and later restore via [`register_android_keystore_plugin_with_state`].
+     */
+open func exportAndroidKeystoreState()throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_android_keystore_state(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Export the Apple Secure Enclave plugin's key state (Keychain tags +
+     * public keys) for the host app to persist and later restore via
+     * [`register_apple_secure_enclave_plugin_with_state`].
+     */
+open func exportAppleSecureEnclaveState()throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_apple_secure_enclave_state(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -936,6 +1114,33 @@ open func exportSoftkeyContainer()throws  -> Data  {
 }
     
     /**
+     * Generate a key with the Android Keystore plugin under a
+     * CALLER-SUPPLIED attestation challenge, instead of the random one
+     * `generate_key`/`generate_key_for_level` use.
+     *
+     * **This is what Wallet Instance Attestation's instance-key
+     * provisioning must use.** Per siros-sdk-kotlin #312's
+     * `InstanceKeyEvidence`, the Android Key Attestation challenge for a
+     * WIA instance key is `SHA-256("siros-instance-key-v1" || C)` (`C` the
+     * server-issued challenge, exactly as issued) - compute that hash on
+     * the host side and pass it here as `attestation_challenge`. Never use
+     * `generate_key_with_plugin("android-keystore", ...)` for WIA: it
+     * would attest under a random challenge the backend's fixed formula
+     * cannot reproduce, making the attestation unverifiable.
+     */
+open func generateAndroidKeystoreKeyWithChallenge(attestationChallenge: Data, algorithm: FfiAlgorithm, progress: FfiProgressCallback)throws  -> FfiGeneratedKey  {
+    return try  FfiConverterTypeFfiGeneratedKey_lift(try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_android_keystore_key_with_challenge(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(attestationChallenge),
+        FfiConverterTypeFfiAlgorithm_lower(algorithm),
+        FfiConverterCallbackInterfaceFfiProgressCallback_lower(progress),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Generate a new key pair.
      */
 open func generateKey(algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: FfiProgressCallback)throws  -> FfiGeneratedKey  {
@@ -943,6 +1148,73 @@ open func generateKey(algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: 
         uniffiCallStatus in
     uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key(
             self.uniffiCloneHandle(),
+        FfiConverterTypeFfiAlgorithm_lower(algorithm),
+        FfiConverterCallbackInterfaceFfiAuthCallback_lower(auth),
+        FfiConverterCallbackInterfaceFfiProgressCallback_lower(progress),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Generate a key that actually meets `required_level`, trying each of
+     * `candidate_plugin_ids` in order and confirming the real outcome
+     * rather than trusting any plugin's self-reported capability - see
+     * `WscdManager::generate_key_for_level`'s doc comment for the full
+     * generate → confirm → delete-and-retry-next-candidate contract.
+     *
+     * `candidate_plugin_ids` is the ORDERED list the host SDK's own
+     * selection policy computed (e.g. `WscdSelectionPolicy.resolve()` on
+     * Kotlin/Swift) - this method does no ranking of its own, it only
+     * consumes the order it is given. This is Key Attestation's pluggable
+     * path; never use it for Wallet Instance Attestation's fixed hardware
+     * root (see [`generate_key_with_plugin`]'s doc comment).
+     */
+open func generateKeyForLevel(requiredLevel: FfiCertificationLevel, candidatePluginIds: [String], algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: FfiProgressCallback)throws  -> FfiGeneratedKey  {
+    return try  FfiConverterTypeFfiGeneratedKey_lift(try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key_for_level(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiCertificationLevel_lower(requiredLevel),
+        FfiConverterSequenceString.lower(candidatePluginIds),
+        FfiConverterTypeFfiAlgorithm_lower(algorithm),
+        FfiConverterCallbackInterfaceFfiAuthCallback_lower(auth),
+        FfiConverterCallbackInterfaceFfiProgressCallback_lower(progress),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Generate a key with a SPECIFIC registered plugin, bypassing the
+     * default-plugin resolution chain (`resolve_for_generate`) entirely,
+     * with a RANDOM attestation challenge (the plugin's own, same as the
+     * plain `generate_key`).
+     *
+     * This is the generic forced-plugin path: for a plugin whose generation
+     * has no external challenge-binding contract to satisfy, call this with
+     * that plugin's id directly rather than going through
+     * `resolve_for_generate`/`generate_key_for_level`'s selection-among-
+     * candidates logic.
+     *
+     * **This is NOT what Android Keystore's Wallet Instance Attestation
+     * path needs** - WIA's Android Key Attestation challenge must be
+     * `SHA-256("siros-instance-key-v1" || C)` for a server-issued `C`
+     * (see `AndroidKeystorePlugin`'s doc comment), and this method's
+     * random challenge cannot satisfy that fixed formula. Use
+     * [`generate_android_keystore_key_with_challenge`] for that case
+     * specifically. Never call the plain `generate_key` (which goes
+     * through `resolve_for_generate`) or `generate_key_for_level` (which
+     * tries several candidates) for a WIA-style forced hardware root
+     * either way: both exist for Key Attestation's pluggable path, where
+     * trying a different plugin on a later call is fine; a forced
+     * hardware root must not move around depending on manager
+     * configuration or plugin registration order.
+     */
+open func generateKeyWithPlugin(pluginId: String, algorithm: FfiAlgorithm, auth: FfiAuthCallback, progress: FfiProgressCallback)throws  -> FfiGeneratedKey  {
+    return try  FfiConverterTypeFfiGeneratedKey_lift(try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key_with_plugin(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(pluginId),
         FfiConverterTypeFfiAlgorithm_lower(algorithm),
         FfiConverterCallbackInterfaceFfiAuthCallback_lower(auth),
         FfiConverterCallbackInterfaceFfiProgressCallback_lower(progress),uniffiCallStatus
@@ -1004,6 +1276,83 @@ open func migrateKey(kid: String, targetPluginId: String, auth: FfiAuthCallback)
         FfiConverterCallbackInterfaceFfiAuthCallback_lower(auth),uniffiCallStatus
     )
 })
+}
+    
+    /**
+     * Register the Android Keystore plugin under
+     * [`crate::plugins::android_keystore::PLUGIN_ID`] (`"android-keystore"`).
+     *
+     * One instance serves both WIA's forced path
+     * (`get_plugin_by_id("android-keystore")`/`generate_key_with_plugin`)
+     * and KA's pluggable path (`generate_key_for_level`/`resolve_for_generate`) -
+     * see [`crate::plugins::android_keystore::AndroidKeystorePlugin`]'s doc
+     * comment. Register it exactly once per process, like every other
+     * plugin.
+     */
+open func registerAndroidKeystorePlugin(callback: FfiAndroidKeystoreCallback)throws   {try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin(
+            self.uniffiCloneHandle(),
+        FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback_lower(callback),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Register the Android Keystore plugin restored from a previously
+     * [`export_android_keystore_state`]-exported blob (kid↔alias mapping,
+     * attestation chains, confirmed security levels - no private key
+     * material, that never leaves the Keystore). The host app must persist
+     * that blob itself and pass it back here on the next launch, or every
+     * key made by this plugin becomes unreachable (mirrors
+     * [`register_fido2_plugin_with_state`]'s doc comment exactly).
+     */
+open func registerAndroidKeystorePluginWithState(callback: FfiAndroidKeystoreCallback, state: Data)throws   {try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin_with_state(
+            self.uniffiCloneHandle(),
+        FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback_lower(callback),
+        FfiConverterData.lower(state),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Register the Apple Secure Enclave (`apple-se`) plugin.
+     *
+     * The caller supplies a [`FfiSecureEnclaveCallback`] implementation
+     * backed by CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` + a
+     * Keychain tag. **Staged release:** keys this plugin generates carry
+     * no per-key attestation chain - see
+     * [`crate::callbacks::SecureEnclaveCallback`]'s doc comment.
+     */
+open func registerAppleSecureEnclavePlugin(callback: FfiSecureEnclaveCallback)throws   {try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_apple_secure_enclave_plugin(
+            self.uniffiCloneHandle(),
+        FfiConverterCallbackInterfaceFfiSecureEnclaveCallback_lower(callback),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Register the Apple Secure Enclave plugin restored from a previously
+     * [`export_apple_secure_enclave_state`]-exported blob (Keychain tags +
+     * public keys only, no private material - that never leaves the
+     * Secure Enclave). The host app must persist that blob itself and pass
+     * it back here on the next launch, or every enrolled `apple-se` key
+     * becomes unreachable (its `kid` still exists in credential/session
+     * metadata, but the manager has no record of the Keychain tag needed
+     * to sign with it again).
+     */
+open func registerAppleSecureEnclavePluginWithState(callback: FfiSecureEnclaveCallback, state: Data)throws   {try rustCallWithError(FfiConverterTypeFfiWscdError_lift) {
+        uniffiCallStatus in
+    uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_apple_secure_enclave_plugin_with_state(
+            self.uniffiCloneHandle(),
+        FfiConverterCallbackInterfaceFfiSecureEnclaveCallback_lower(callback),
+        FfiConverterData.lower(state),uniffiCallStatus
+    )
+}
 }
     
     /**
@@ -1314,14 +1663,18 @@ public func FfiConverterTypeFfiActivationOutcome_lower(_ value: FfiActivationOut
 
 
 public struct FfiAttestationChain: Equatable, Hashable {
+    public var format: FfiAttestationFormat
     public var certificates: [Data]
     public var clientDataHash: Data
+    public var opaqueAttestation: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(certificates: [Data], clientDataHash: Data) {
+    public init(format: FfiAttestationFormat, certificates: [Data], clientDataHash: Data, opaqueAttestation: Data) {
+        self.format = format
         self.certificates = certificates
         self.clientDataHash = clientDataHash
+        self.opaqueAttestation = opaqueAttestation
     }
 
     
@@ -1340,14 +1693,18 @@ public struct FfiConverterTypeFfiAttestationChain: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttestationChain {
         return
             try FfiAttestationChain(
+                format: FfiConverterTypeFfiAttestationFormat.read(from: &buf), 
                 certificates: FfiConverterSequenceData.read(from: &buf), 
-                clientDataHash: FfiConverterData.read(from: &buf)
+                clientDataHash: FfiConverterData.read(from: &buf), 
+                opaqueAttestation: FfiConverterData.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiAttestationChain, into buf: inout [UInt8]) {
+        FfiConverterTypeFfiAttestationFormat.write(value.format, into: &buf)
         FfiConverterSequenceData.write(value.certificates, into: &buf)
         FfiConverterData.write(value.clientDataHash, into: &buf)
+        FfiConverterData.write(value.opaqueAttestation, into: &buf)
     }
 }
 
@@ -1484,6 +1841,110 @@ public func FfiConverterTypeFfiAuthFactors_lift(_ buf: RustBuffer) throws -> Ffi
 #endif
 public func FfiConverterTypeFfiAuthFactors_lower(_ value: FfiAuthFactors) -> RustBuffer {
     return FfiConverterTypeFfiAuthFactors.lower(value)
+}
+
+
+public struct FfiAuthenticatorInfo: Equatable, Hashable {
+    public var versions: [String]
+    /**
+     * 16 bytes.
+     */
+    public var aaguid: Data
+    public var clientPin: FfiClientPinState
+    /**
+     * 4 when the authenticator does not advertise it.
+     */
+    public var minPinLength: UInt32
+    public var forcePinChange: Bool
+    /**
+     * Remaining PIN attempts; `None` unless a PIN is set.
+     */
+    public var pinRetries: UInt32?
+    public var pinUvAuthProtocols: [UInt32]
+    public var extensions: [String]
+    public var options: [String: Bool]
+    public var enrolmentSuitability: FfiEnrolmentSuitability
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(versions: [String], 
+        /**
+         * 16 bytes.
+         */aaguid: Data, clientPin: FfiClientPinState, 
+        /**
+         * 4 when the authenticator does not advertise it.
+         */minPinLength: UInt32, forcePinChange: Bool, 
+        /**
+         * Remaining PIN attempts; `None` unless a PIN is set.
+         */pinRetries: UInt32?, pinUvAuthProtocols: [UInt32], extensions: [String], options: [String: Bool], enrolmentSuitability: FfiEnrolmentSuitability) {
+        self.versions = versions
+        self.aaguid = aaguid
+        self.clientPin = clientPin
+        self.minPinLength = minPinLength
+        self.forcePinChange = forcePinChange
+        self.pinRetries = pinRetries
+        self.pinUvAuthProtocols = pinUvAuthProtocols
+        self.extensions = extensions
+        self.options = options
+        self.enrolmentSuitability = enrolmentSuitability
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiAuthenticatorInfo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAuthenticatorInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAuthenticatorInfo {
+        return
+            try FfiAuthenticatorInfo(
+                versions: FfiConverterSequenceString.read(from: &buf), 
+                aaguid: FfiConverterData.read(from: &buf), 
+                clientPin: FfiConverterTypeFfiClientPinState.read(from: &buf), 
+                minPinLength: FfiConverterUInt32.read(from: &buf), 
+                forcePinChange: FfiConverterBool.read(from: &buf), 
+                pinRetries: FfiConverterOptionUInt32.read(from: &buf), 
+                pinUvAuthProtocols: FfiConverterSequenceUInt32.read(from: &buf), 
+                extensions: FfiConverterSequenceString.read(from: &buf), 
+                options: FfiConverterDictionaryStringBool.read(from: &buf), 
+                enrolmentSuitability: FfiConverterTypeFfiEnrolmentSuitability.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiAuthenticatorInfo, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.versions, into: &buf)
+        FfiConverterData.write(value.aaguid, into: &buf)
+        FfiConverterTypeFfiClientPinState.write(value.clientPin, into: &buf)
+        FfiConverterUInt32.write(value.minPinLength, into: &buf)
+        FfiConverterBool.write(value.forcePinChange, into: &buf)
+        FfiConverterOptionUInt32.write(value.pinRetries, into: &buf)
+        FfiConverterSequenceUInt32.write(value.pinUvAuthProtocols, into: &buf)
+        FfiConverterSequenceString.write(value.extensions, into: &buf)
+        FfiConverterDictionaryStringBool.write(value.options, into: &buf)
+        FfiConverterTypeFfiEnrolmentSuitability.write(value.enrolmentSuitability, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAuthenticatorInfo_lift(_ buf: RustBuffer) throws -> FfiAuthenticatorInfo {
+    return try FfiConverterTypeFfiAuthenticatorInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAuthenticatorInfo_lower(_ value: FfiAuthenticatorInfo) -> RustBuffer {
+    return FfiConverterTypeFfiAuthenticatorInfo.lower(value)
 }
 
 
@@ -2262,6 +2723,60 @@ public func FfiConverterTypeFfiRotationOutcome_lower(_ value: FfiRotationOutcome
 }
 
 
+public struct FfiSecureEnclavePublicKey: Equatable, Hashable {
+    public var x: Data
+    public var y: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(x: Data, y: Data) {
+        self.x = x
+        self.y = y
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiSecureEnclavePublicKey: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSecureEnclavePublicKey: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSecureEnclavePublicKey {
+        return
+            try FfiSecureEnclavePublicKey(
+                x: FfiConverterData.read(from: &buf), 
+                y: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSecureEnclavePublicKey, into buf: inout [UInt8]) {
+        FfiConverterData.write(value.x, into: &buf)
+        FfiConverterData.write(value.y, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSecureEnclavePublicKey_lift(_ buf: RustBuffer) throws -> FfiSecureEnclavePublicKey {
+    return try FfiConverterTypeFfiSecureEnclavePublicKey.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSecureEnclavePublicKey_lower(_ value: FfiSecureEnclavePublicKey) -> RustBuffer {
+    return FfiConverterTypeFfiSecureEnclavePublicKey.lower(value)
+}
+
+
 public struct FfiSecurityProperties: Equatable, Hashable {
     public var keyStorage: FfiKeyStorageType
     public var userAuthentication: [String]
@@ -2640,6 +3155,158 @@ public func FfiConverterTypeFfiAlgorithm_lower(_ value: FfiAlgorithm) -> RustBuf
 
 
 
+/**
+ * Mirrors [`InternalAndroidKeystoreSecurityLevel`] — see its doc comment.
+ */
+
+public enum FfiAndroidKeystoreSecurityLevel: Equatable, Hashable {
+    
+    case strongBox
+    case trustedExecution
+    case software
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAndroidKeystoreSecurityLevel: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAndroidKeystoreSecurityLevel: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAndroidKeystoreSecurityLevel
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAndroidKeystoreSecurityLevel {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .strongBox
+        
+        case 2: return .trustedExecution
+        
+        case 3: return .software
+        
+        case 4: return .unknown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAndroidKeystoreSecurityLevel, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .strongBox:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .trustedExecution:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .software:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAndroidKeystoreSecurityLevel_lift(_ buf: RustBuffer) throws -> FfiAndroidKeystoreSecurityLevel {
+    return try FfiConverterTypeFfiAndroidKeystoreSecurityLevel.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAndroidKeystoreSecurityLevel_lower(_ value: FfiAndroidKeystoreSecurityLevel) -> RustBuffer {
+    return FfiConverterTypeFfiAndroidKeystoreSecurityLevel.lower(value)
+}
+
+
+
+/**
+ * Mirrors [`InternalAttestationFormat`] — see its doc comment.
+ */
+
+public enum FfiAttestationFormat: Equatable, Hashable {
+    
+    case x509Chain
+    case opaque
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiAttestationFormat: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAttestationFormat: FfiConverterRustBuffer {
+    typealias SwiftType = FfiAttestationFormat
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttestationFormat {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .x509Chain
+        
+        case 2: return .opaque
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiAttestationFormat, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .x509Chain:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .opaque:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAttestationFormat_lift(_ buf: RustBuffer) throws -> FfiAttestationFormat {
+    return try FfiConverterTypeFfiAttestationFormat.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAttestationFormat_lower(_ value: FfiAttestationFormat) -> RustBuffer {
+    return FfiConverterTypeFfiAttestationFormat.lower(value)
+}
+
+
+
 
 public enum FfiAuthMethod: Equatable, Hashable {
     
@@ -2793,6 +3460,91 @@ public func FfiConverterTypeFfiCertificationLevel_lower(_ value: FfiCertificatio
 
 
 
+/**
+ * See [`crate::authenticator_info::AuthenticatorInfo`].
+ */
+
+public enum FfiClientPinState: Equatable, Hashable {
+    
+    /**
+     * A PIN is set (`clientPin: true`): the user must enter it.
+     */
+    case set
+    /**
+     * PIN supported but not set (`clientPin: false`): one will be chosen.
+     */
+    case notSet
+    /**
+     * `clientPin` option absent: no PIN support.
+     */
+    case unsupported
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiClientPinState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiClientPinState: FfiConverterRustBuffer {
+    typealias SwiftType = FfiClientPinState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiClientPinState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .set
+        
+        case 2: return .notSet
+        
+        case 3: return .unsupported
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiClientPinState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .set:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .notSet:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unsupported:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiClientPinState_lift(_ buf: RustBuffer) throws -> FfiClientPinState {
+    return try FfiConverterTypeFfiClientPinState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiClientPinState_lower(_ value: FfiClientPinState) -> RustBuffer {
+    return FfiConverterTypeFfiClientPinState.lower(value)
+}
+
+
+
 
 public enum FfiDestroyMode: Equatable, Hashable {
     
@@ -2862,6 +3614,75 @@ public func FfiConverterTypeFfiDestroyMode_lift(_ buf: RustBuffer) throws -> Ffi
 #endif
 public func FfiConverterTypeFfiDestroyMode_lower(_ value: FfiDestroyMode) -> RustBuffer {
     return FfiConverterTypeFfiDestroyMode.lower(value)
+}
+
+
+
+
+public enum FfiEnrolmentSuitability: Equatable, Hashable {
+    
+    case suitable
+    case unsuitable(reason: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiEnrolmentSuitability: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiEnrolmentSuitability: FfiConverterRustBuffer {
+    typealias SwiftType = FfiEnrolmentSuitability
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEnrolmentSuitability {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .suitable
+        
+        case 2: return .unsuitable(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiEnrolmentSuitability, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .suitable:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .unsuitable(reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEnrolmentSuitability_lift(_ buf: RustBuffer) throws -> FfiEnrolmentSuitability {
+    return try FfiConverterTypeFfiEnrolmentSuitability.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEnrolmentSuitability_lower(_ value: FfiEnrolmentSuitability) -> RustBuffer {
+    return FfiConverterTypeFfiEnrolmentSuitability.lower(value)
 }
 
 
@@ -3486,6 +4307,16 @@ enum FfiWscdError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
      */
     case Pin(reason: FfiPinFailure, msg: String
     )
+    /**
+     * See [`crate::error::WscdError::StrongBoxUnavailable`].
+     */
+    case StrongBoxUnavailable(msg: String
+    )
+    /**
+     * See [`crate::error::WscdError::UnconfirmedCleanup`].
+     */
+    case UnconfirmedCleanup(msg: String
+    )
 
     
 
@@ -3547,6 +4378,12 @@ public struct FfiConverterTypeFfiWscdError: FfiConverterRustBuffer {
             )
         case 11: return .Pin(
             reason: try FfiConverterTypeFfiPinFailure.read(from: &buf), 
+            msg: try FfiConverterString.read(from: &buf)
+            )
+        case 12: return .StrongBoxUnavailable(
+            msg: try FfiConverterString.read(from: &buf)
+            )
+        case 13: return .UnconfirmedCleanup(
             msg: try FfiConverterString.read(from: &buf)
             )
 
@@ -3616,6 +4453,16 @@ public struct FfiConverterTypeFfiWscdError: FfiConverterRustBuffer {
             FfiConverterTypeFfiPinFailure.write(reason, into: &buf)
             FfiConverterString.write(msg, into: &buf)
             
+        
+        case let .StrongBoxUnavailable(msg):
+            writeInt(&buf, Int32(12))
+            FfiConverterString.write(msg, into: &buf)
+            
+        
+        case let .UnconfirmedCleanup(msg):
+            writeInt(&buf, Int32(13))
+            FfiConverterString.write(msg, into: &buf)
+            
         }
     }
 }
@@ -3633,6 +4480,360 @@ public func FfiConverterTypeFfiWscdError_lift(_ buf: RustBuffer) throws -> FfiWs
 #endif
 public func FfiConverterTypeFfiWscdError_lower(_ value: FfiWscdError) -> RustBuffer {
     return FfiConverterTypeFfiWscdError.lower(value)
+}
+
+
+
+
+/**
+ * Host-provided Android Keystore access — see [`cb::AndroidKeystoreCallback`]'s
+ * doc comment (the internal trait this bridges to) for the full contract,
+ * including why `sign` collapses `newSignature`/authenticate/`finish` into
+ * one call.
+ *
+ * `public_key_jwk` and the `generate`/`certificate_chain` error cases are
+ * the only departures from a literal 1:1 method mirror of
+ * `AndroidKeyStoreBackend`:
+ * - A JWK crosses FFI as a JSON string (`String`), the same convention
+ * `FfiWscdManager::export_public_key` already uses — UniFFI has no
+ * generic "JSON value" record type.
+ * - `generate` returns `Err(FfiWscdError::StrongBoxUnavailable)` rather
+ * than a boolean/sentinel, specifically so `AndroidKeystoreCallbackBridge`
+ * can recover the one error variant it must distinguish (see that type) -
+ * every other error the host throws collapses to
+ * `FfiWscdError::Plugin`/`Callback` same as any other plugin's callback.
+ */
+public protocol FfiAndroidKeystoreCallback: AnyObject, Sendable {
+    
+    func generate(alias: String, attestationChallenge: Data?, strongBox: Bool, userAuthenticationMethods: [String], unlockedDeviceRequired: Bool) throws  -> FfiAndroidKeystoreSecurityLevel
+    
+    func certificateChain(alias: String) throws  -> [Data]
+    
+    /**
+     * `alias`'s public key as a JSON-encoded JWK.
+     */
+    func publicKeyJwk(alias: String) throws  -> String
+    
+    func securityLevel(alias: String) throws  -> FfiAndroidKeystoreSecurityLevel
+    
+    func userAuthenticationMethods(alias: String) throws  -> [String]
+    
+    func sign(alias: String, data: Data) throws  -> Data
+    
+    func aliases() throws  -> [String]
+    
+    func delete(alias: String) throws 
+    
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiAndroidKeystoreCallback {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback = UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiAndroidKeystoreCallback: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiAndroidKeystoreCallback: handle missing in uniffiClone")
+            }
+        },
+        generate: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            attestationChallenge: RustBuffer,
+            strongBox: Int8,
+            userAuthenticationMethods: RustBuffer,
+            unlockedDeviceRequired: Int8,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> FfiAndroidKeystoreSecurityLevel in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.generate(
+                     alias: try FfiConverterString.lift(alias),
+                     attestationChallenge: try FfiConverterOptionData.lift(attestationChallenge),
+                     strongBox: try FfiConverterBool.lift(strongBox),
+                     userAuthenticationMethods: try FfiConverterSequenceString.lift(userAuthenticationMethods),
+                     unlockedDeviceRequired: try FfiConverterBool.lift(unlockedDeviceRequired)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeFfiAndroidKeystoreSecurityLevel_lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        certificateChain: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> [Data] in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.certificateChain(
+                     alias: try FfiConverterString.lift(alias)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        publicKeyJwk: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> String in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.publicKeyJwk(
+                     alias: try FfiConverterString.lift(alias)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterString.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        securityLevel: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> FfiAndroidKeystoreSecurityLevel in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.securityLevel(
+                     alias: try FfiConverterString.lift(alias)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeFfiAndroidKeystoreSecurityLevel_lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        userAuthenticationMethods: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> [String] in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.userAuthenticationMethods(
+                     alias: try FfiConverterString.lift(alias)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceString.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        sign: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            data: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.sign(
+                     alias: try FfiConverterString.lift(alias),
+                     data: try FfiConverterData.lift(data)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        aliases: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> [String] in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.aliases(
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceString.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        delete: { (
+            uniffiHandle: UInt64,
+            alias: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.delete(
+                     alias: try FfiConverterString.lift(alias)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitFfiAndroidKeystoreCallback() {
+    uniffi_siros_wscd_manager_fn_init_callback_vtable_ffiandroidkeystorecallback(UniffiCallbackInterfaceFfiAndroidKeystoreCallback.vtablePtr)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback {
+    fileprivate static let handleMap = UniffiHandleMap<FfiAndroidKeystoreCallback>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback : FfiConverter {
+    typealias SwiftType = FfiAndroidKeystoreCallback
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback_lift(_ handle: UInt64) throws -> FfiAndroidKeystoreCallback {
+    return try FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback_lower(_ v: FfiAndroidKeystoreCallback) -> UInt64 {
+    return FfiConverterCallbackInterfaceFfiAndroidKeystoreCallback.lower(v)
 }
 
 
@@ -4273,6 +5474,233 @@ public func FfiConverterCallbackInterfaceFfiProgressCallback_lower(_ v: FfiProgr
     return FfiConverterCallbackInterfaceFfiProgressCallback.lower(v)
 }
 
+
+
+
+/**
+ * Host-provided access to Apple's Secure Enclave for the `apple-se` plugin.
+ *
+ * The host implements this over CryptoKit's
+ * `SecureEnclave.P256.Signing.PrivateKey` + a Keychain tag - Rust has no
+ * portable way to drive the Secure Enclave directly, the same reason
+ * [`FfiCtap2Transport`] exists for FIDO2 authenticators. See
+ * [`crate::callbacks::SecureEnclaveCallback`]'s doc comment (the trait this
+ * bridges to) for the staged-release no-attestation contract and the raw
+ * `r || s` signature format expected back from `sign`.
+ */
+public protocol FfiSecureEnclaveCallback: AnyObject, Sendable {
+    
+    func generateKey(keyTag: String) throws  -> FfiSecureEnclavePublicKey
+    
+    func sign(keyTag: String, data: Data) throws  -> Data
+    
+    func deleteKey(keyTag: String) throws 
+    
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceFfiSecureEnclaveCallback {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback = UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface FfiSecureEnclaveCallback: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface FfiSecureEnclaveCallback: handle missing in uniffiClone")
+            }
+        },
+        generateKey: { (
+            uniffiHandle: UInt64,
+            keyTag: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> FfiSecureEnclavePublicKey in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.generateKey(
+                     keyTag: try FfiConverterString.lift(keyTag)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeFfiSecureEnclavePublicKey_lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        sign: { (
+            uniffiHandle: UInt64,
+            keyTag: RustBuffer,
+            data: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> Data in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.sign(
+                     keyTag: try FfiConverterString.lift(keyTag),
+                     data: try FfiConverterData.lift(data)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterData.lower($0) }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        },
+        deleteKey: { (
+            uniffiHandle: UInt64,
+            keyTag: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try uniffiObj.deleteKey(
+                     keyTag: try FfiConverterString.lift(keyTag)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCallWithError(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn,
+                lowerError: FfiConverterTypeFfiWscdError_lower
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitFfiSecureEnclaveCallback() {
+    uniffi_siros_wscd_manager_fn_init_callback_vtable_ffisecureenclavecallback(UniffiCallbackInterfaceFfiSecureEnclaveCallback.vtablePtr)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceFfiSecureEnclaveCallback {
+    fileprivate static let handleMap = UniffiHandleMap<FfiSecureEnclaveCallback>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceFfiSecureEnclaveCallback : FfiConverter {
+    typealias SwiftType = FfiSecureEnclaveCallback
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceFfiSecureEnclaveCallback_lift(_ handle: UInt64) throws -> FfiSecureEnclaveCallback {
+    return try FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceFfiSecureEnclaveCallback_lower(_ v: FfiSecureEnclaveCallback) -> UInt64 {
+    return FfiConverterCallbackInterfaceFfiSecureEnclaveCallback.lower(v)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -4292,6 +5720,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -4342,6 +5794,31 @@ fileprivate struct FfiConverterOptionTypeFfiAuthFactor: FfiConverterRustBuffer {
         case 1: return try FfiConverterTypeFfiAuthFactor.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt32]
+
+    public static func write(_ value: [UInt32], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt32.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt32] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt32]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt32.read(from: &buf))
+        }
+        return seq
     }
 }
 
@@ -4444,6 +5921,32 @@ fileprivate struct FfiConverterSequenceTypeFfiKeyInfo: FfiConverterRustBuffer {
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringBool: FfiConverterRustBuffer {
+    public static func write(_ value: [String: Bool], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterBool.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: Bool] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: Bool]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterBool.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
+    }
+}
 /**
  * Decode an EC2 COSE_Key (kty=2) into its (x, y) coordinates. Exposed to
  * native SDKs so a [`FfiCtap2Transport`] implementation can reuse this
@@ -4519,7 +6022,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_delete_key() != 50338) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_describe_authenticator() != 17415) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_destroy_lifecycle() != 3691) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_android_keystore_state() != 11408) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_apple_secure_enclave_state() != 39965) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state() != 64045) {
@@ -4531,7 +6043,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_softkey_container() != 12042) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_android_keystore_key_with_challenge() != 16056) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key() != 35191) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_for_level() != 54910) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_with_plugin() != 23888) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_import_softkey_container() != 44885) {
@@ -4544,6 +6065,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_migrate_key() != 11675) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin() != 51641) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin_with_state() != 2276) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_apple_secure_enclave_plugin() != 13381) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_apple_secure_enclave_plugin_with_state() != 27780) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin() != 39324) {
@@ -4576,6 +6109,30 @@ private let initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_constructor_ffiwscdmanager_new() != 9101) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_generate() != 64646) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_certificate_chain() != 25141) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_public_key_jwk() != 3065) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_security_level() != 32108) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_user_authentication_methods() != 17440) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_sign() != 31288) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_aliases() != 18614) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_delete() != 53873) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() != 7366) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4594,11 +6151,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_siros_wscd_manager_checksum_method_ffiprogresscallback_on_progress() != 5963) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_generate_key() != 16748) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_sign() != 53200) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_delete_key() != 7889) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
+    uniffiCallbackInitFfiAndroidKeystoreCallback()
     uniffiCallbackInitFfiAuthCallback()
     uniffiCallbackInitFfiCtap2Transport()
     uniffiCallbackInitFfiHttpTransport()
     uniffiCallbackInitFfiProgressCallback()
+    uniffiCallbackInitFfiSecureEnclaveCallback()
     return InitializationResult.ok
 }()
 
