@@ -126,16 +126,47 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
 
     public func generateKey(keyTag: String) throws -> (x: Data, y: Data) {
         guard isAvailable else { throw SecureEnclaveKeystoreError.notAvailable }
+        let accessControl = try Self.userPresenceAccessControl()
         let key: SecureEnclave.P256.Signing.PrivateKey
         do {
-            key = try SecureEnclave.P256.Signing.PrivateKey()
+            // `.userPresence` (not `.biometryCurrentSet`, matching
+            // `LocalAuthProvider.register`'s exact precedent/reasoning): a
+            // bare `SecureEnclave.P256.Signing.PrivateKey()` uses CryptoKit's
+            // own default access control, which has NO authentication
+            // requirement at all (confirmed on the real iOS 26.5 SDK
+            // swiftinterface - the default flags are empty) - every sign
+            // would otherwise succeed unconditionally, with zero
+            // device-authentication guarantee, unlike every other hardware
+            // WSCD plugin (FIDO2 requires a PIN/UV by the CTAP2 protocol
+            // itself). `.userPresence` isn't invalidated by biometry
+            // re-enrollment and still allows passcode fallback.
+            key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: accessControl)
         } catch {
             throw SecureEnclaveKeystoreError.keyGenerationFailed(String(describing: error))
         }
-        try writeDataRepresentation(key.dataRepresentation, forTag: keyTag)
+        try writeDataRepresentation(key.dataRepresentation, forTag: keyTag, accessControl: accessControl)
         let raw = key.publicKey.rawRepresentation
         precondition(raw.count == 64, "P-256 rawRepresentation must be x || y, 64 bytes")
         return (x: raw.prefix(32), y: raw.suffix(32))
+    }
+
+    /// `.userPresence`-gated access control, shared by the Secure Enclave
+    /// key itself and the Keychain item wrapping its `dataRepresentation` -
+    /// see `generateKey`'s doc comment for why both need it, not just the
+    /// key.
+    private static func userPresenceAccessControl() throws -> SecAccessControl {
+        var acError: Unmanaged<CFError>?
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            kCFAllocatorDefault,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .userPresence,
+            &acError
+        ) else {
+            throw SecureEnclaveKeystoreError.keyGenerationFailed(
+                "failed to create access control: \(String(describing: acError))"
+            )
+        }
+        return accessControl
     }
 
     public func sign(keyTag: String, data: Data) throws -> Data {
@@ -149,13 +180,16 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
     }
 
     public func deleteKey(keyTag: String) throws {
-        // Checked directly against the Keychain rather than via
-        // `loadKey(forTag:)` - reconstructing a full
-        // `SecureEnclave.P256.Signing.PrivateKey` just to immediately
-        // discard it would be an unnecessary extra Secure Enclave round
-        // trip (and a possible extra biometric prompt) for a presence
-        // check that a plain Keychain read already answers.
-        guard readDataRepresentation(forTag: keyTag) != nil else {
+        // Checked via `keyExists` (an attributes-only query), not
+        // `readDataRepresentation`/`loadKey` - now that the wrapper item is
+        // `.userPresence`-gated (see `writeDataRepresentation`'s doc
+        // comment), requesting the actual VALUE would prompt for
+        // biometry/passcode just to check presence. An attributes-only
+        // query never touches the protected value, so it needs no
+        // authentication - confirmed Apple Keychain behavior: access
+        // control only gates `kSecReturnData`, not existence/attribute
+        // queries.
+        guard keyExists(forTag: keyTag) else {
             throw SecureEnclaveKeystoreError.keyNotFound(keyTag)
         }
         try deleteDataRepresentation(forTag: keyTag)
@@ -180,6 +214,21 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
 
     // MARK: - Keychain storage of `dataRepresentation`
 
+    /// Whether a Keychain item exists under `tag`, without ever requesting
+    /// its (access-control-gated) value - see `deleteKey`'s doc comment.
+    private func keyExists(forTag tag: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: tag,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+
     private func readDataRepresentation(forTag tag: String) -> Data? {
         lock.lock(); defer { lock.unlock() }
         var query: [String: Any] = [
@@ -196,7 +245,15 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
         return data
     }
 
-    private func writeDataRepresentation(_ data: Data, forTag tag: String) throws {
+    /// `accessControl` is required (not defaulted to plain
+    /// `kSecAttrAccessible`, the way `KeychainSessionStore` stores its own
+    /// items): a SonarCloud finding on this PR flagged the earlier
+    /// no-authentication version of this exact line ("This keychain item
+    /// will not require authentication to be used") - this wrapper item
+    /// holds the handle to a Secure Enclave key, not an arbitrary token, so
+    /// it is gated the same way the key itself now is (`generateKey`'s
+    /// `.userPresence` access control), not left open.
+    private func writeDataRepresentation(_ data: Data, forTag tag: String, accessControl: SecAccessControl) throws {
         lock.lock(); defer { lock.unlock() }
         var deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -211,7 +268,7 @@ public final class SystemSecureEnclaveKeyStore: SecureEnclaveKeystoreBackend, @u
             kSecAttrService as String: service,
             kSecAttrAccount as String: tag,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessControl as String: accessControl,
         ]
         if let accessGroup { addQuery[kSecAttrAccessGroup as String] = accessGroup }
         let status = SecItemAdd(addQuery as CFDictionary, nil)
