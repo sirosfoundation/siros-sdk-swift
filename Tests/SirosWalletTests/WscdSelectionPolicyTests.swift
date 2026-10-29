@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import XCTest
+import SirosKeystore
 @testable import SirosWallet
 
 /// Pure logic, no keystore/CryptoKit dependency - unlike
@@ -11,12 +12,16 @@ final class WscdSelectionPolicyTests: XCTestCase {
     private func makePolicy(
         store: SessionStoreProtocol = InMemorySessionStore(),
         defaultMapping: [String: String]? = nil,
-        requestChoice: RequestWscdChoice? = nil
+        requestChoice: RequestWscdChoice? = nil,
+        assuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.default
     ) -> WscdSelectionPolicy {
         if let mem = store as? InMemorySessionStore {
             mem.activeAccountId = "test:account"
         }
-        return WscdSelectionPolicy(sessionStore: store, defaultMapping: defaultMapping, requestChoice: requestChoice)
+        return WscdSelectionPolicy(
+            sessionStore: store, defaultMapping: defaultMapping, requestChoice: requestChoice,
+            assuranceScheme: assuranceScheme
+        )
     }
 
     // 1. No declared requirement.
@@ -780,5 +785,61 @@ final class WscdSelectionPolicyTests: XCTestCase {
         }
 
         XCTAssertEqual(policy.currentTofuMapping().count, count, "every concurrent resolution's TOFU entry must survive - none dropped by a lost read-modify-write race")
+    }
+
+    // MARK: - assuranceScheme is genuinely deployment-configurable, not still
+    // MARK: - hardcoded to WscdPluginCapabilities' own default somewhere else.
+
+    func testResolveUsesDefaultScheme_whenNoAssuranceSchemeGiven() async throws {
+        // Unconfigured: "fido2" meets "iso_18045_high" under
+        // Iso18045AssuranceScheme.default, same as before this change.
+        let policy = makePolicy()
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_high",
+            availablePluginIds: ["fido2"]
+        )
+        XCTAssertEqual(result, "fido2")
+    }
+
+    func testResolveHonorsCustomAssuranceScheme_fido2DemotedBelowRequiredTier() async {
+        // A deployment whose audit treats "fido2" as only iso_18045_moderate
+        // (not Iso18045AssuranceScheme.default's iso_18045_high) - proves the
+        // mapping is genuinely read from the injected scheme, not still a
+        // compiled-in constant anywhere in the resolution path.
+        let strictDeployment = Iso18045AssuranceScheme(nominalPluginLabels: ["fido2": Iso18045AssuranceScheme.moderate])
+        let policy = makePolicy(assuranceScheme: strictDeployment)
+
+        do {
+            _ = try await policy.resolve(
+                issuer: "https://issuer.example.com",
+                credentialType: "urn:eu.europa.ec.eudi:pid:1",
+                requiredTier: "iso_18045_high",
+                availablePluginIds: ["fido2"]
+            )
+            XCTFail("expected WscdSelectionError.noEligiblePlugin: this deployment's scheme caps fido2 at iso_18045_moderate")
+        } catch WscdSelectionError.noEligiblePlugin {
+            // expected
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testResolveHonorsCustomAssuranceScheme_fido2StillEligibleForLowerRequirement() async throws {
+        // Same custom scheme as above, but the credential only requires
+        // iso_18045_moderate - fido2 (capped at moderate by this
+        // deployment's own scheme) is still eligible, proving the override
+        // is a real re-ranking, not merely "always ineligible."
+        let strictDeployment = Iso18045AssuranceScheme(nominalPluginLabels: ["fido2": Iso18045AssuranceScheme.moderate])
+        let policy = makePolicy(assuranceScheme: strictDeployment)
+
+        let result = try await policy.resolve(
+            issuer: "https://issuer.example.com",
+            credentialType: "urn:eu.europa.ec.eudi:pid:1",
+            requiredTier: "iso_18045_moderate",
+            availablePluginIds: ["fido2"]
+        )
+        XCTAssertEqual(result, "fido2")
     }
 }

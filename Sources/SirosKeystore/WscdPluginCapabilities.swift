@@ -2,52 +2,50 @@
 
 import Foundation
 
-/// Static, SDK-side table of each known WSCD plugin's nominal key-storage
-/// assurance tier (ISO 18045 vocabulary), used by `WscdSelectionPolicy` to
-/// pick a plugin capable of meeting a credential type's declared
-/// `attestation_los` requirement BEFORE the wallet generates issuance keys,
-/// instead of finding out only when the issuer later rejects a Key
-/// Attestation for insufficient key storage.
+/// Static, SDK-side read-only facade over `Iso18045AssuranceScheme.default`'s
+/// nominal key-storage assurance tier for each known WSCD plugin, used by
+/// `WscdSelectionPolicy` to pick a plugin capable of meeting a credential
+/// type's declared `attestation_los` requirement BEFORE the wallet
+/// generates issuance keys, instead of finding out only when the issuer
+/// later rejects a Key Attestation for insufficient key storage.
 ///
-/// Phase-1 scope decision: no changes to siros-wscd-manager (Rust/UniFFI) -
-/// no live plugin enumeration, no live per-plugin capability query. This is
-/// a small static table of the 3 known plugin IDs' nominal tier, nothing
-/// more. In particular, `"r2ps"`'s tier here is a best-effort/config-
-/// dependent guess: a real R2PS deployment's actual assurance depends on
-/// the backing HSM, which this table has no way to observe. Treat
-/// `"r2ps" -> iso_18045_high` as a nominal ceiling for Phase 1, not a
-/// guarantee - a future phase that adds live capability query should
-/// replace this entry (and this whole table) with something that actually
-/// asks the plugin.
+/// The actual mapping data lives on `Iso18045AssuranceScheme` (this type's
+/// `scheme`, fixed to `.default`), not a table hardcoded here - see
+/// `WscdAssuranceScheme`'s doc comment for why: a previous version of this
+/// type hardcoded its own `pluginTiers` table, independently from
+/// `WscdKeystoreAdapter`'s own (also now-removed) ISO-18045 guess, and the
+/// two silently disagreed.
+///
+/// This type's static members are kept only as a read-only convenience
+/// facade over `Iso18045AssuranceScheme.default` for callers that predate
+/// `WscdAssuranceScheme` (the sample app's plugin chooser). It is
+/// deliberately NOT configurable itself (no process-wide "set the default"
+/// knob here) - a deployment wanting a different mapping (or a wholly
+/// different `WscdAssuranceScheme` implementation) passes its own instance
+/// to `WscdSelectionPolicy`'s (or `WscdKeystoreAdapter`'s) initializer
+/// instead, which is the ONE place such a choice actually takes effect. A
+/// second, independent "configure the default here too" surface on this
+/// type would recreate exactly the two-places-to-configure-the-same-thing
+/// problem this type exists to fix.
+///
+/// Phase-1 scope decision unchanged: no changes to siros-wscd-manager
+/// (Rust/UniFFI) - no live plugin enumeration, no live per-plugin
+/// capability query.
 public enum WscdPluginCapabilities {
+    /// The `Iso18045AssuranceScheme` instance this facade's static members delegate to.
+    public static var scheme: Iso18045AssuranceScheme { .default }
+
     /// ISO 18045 assurance tier vocabulary, ascending order (each entry
     /// meets every requirement at or below its own index).
-    public static let tierOrder = ["iso_18045_basic", "iso_18045_moderate", "iso_18045_high"]
+    public static var tierOrder: [String] { Iso18045AssuranceScheme.defaultTierOrder }
 
-    /// Known plugin ID -> nominal ISO 18045 tier. Plugin IDs match the
-    /// ones `FfiWscdConfig(defaultPlugin:)` accepts and the sample app's
-    /// plugin chooser offers (`WscaDeveloperView`): `"softkey"`, `"r2ps"`,
+    /// Known plugin ID -> nominal ISO 18045 tier, as `scheme` currently maps
+    /// it - see `Iso18045AssuranceScheme.defaultNominalPluginLabels` for the
+    /// default values and their rationale. Plugin IDs match the ones
+    /// `FfiWscdConfig(defaultPlugin:)` accepts and the sample app's plugin
+    /// chooser offers (`WscaDeveloperView`): `"softkey"`, `"r2ps"`,
     /// `"fido2"`, `"apple-se"`.
-    public static let pluginTiers: [String: String] = [
-        "softkey": "iso_18045_basic",
-        "fido2": "iso_18045_high",
-        // Best-effort/config-dependent - see the type's doc comment above.
-        "r2ps": "iso_18045_high",
-        // `apple-se` (Secure Enclave): a real hardware-isolated key, more
-        // than `softkey`'s "basic" - but, as of this staged release, with
-        // NO per-key attestation chain backing that claim (confirmed on
-        // real Xcode 26.6 / iOS 26.5 SDK headers, 2026-10-29:
-        // `SecKeyCreateAttestation` does not exist on this SDK at all, and
-        // no CryptoKit type exposes any attestation API). `fido2` gets a
-        // real per-key attestation statement from the authenticator today;
-        // `apple-se` does not, so it is deliberately one tier below
-        // `fido2` here, not equal to it. Raise this to `iso_18045_high`
-        // only once a real attestation path exists and is wired through
-        // `security_properties().certification` - see
-        // `SecureEnclaveKeystoreBackend`'s doc comment and
-        // sirosfoundation/siros-wscd-manager#134.
-        "apple-se": "iso_18045_moderate",
-    ]
+    public static var pluginTiers: [String: String] { Iso18045AssuranceScheme.defaultNominalPluginLabels }
 
     /// Plugins with an enrollment ("onboarding") step: the user must register a
     /// token/key before the plugin can sign anything (and before a PIN means
@@ -55,22 +53,17 @@ public enum WscdPluginCapabilities {
     /// state this SDK does not track here, so it is not gated by this set.
     public static let onboardingRequiredPluginIds: Set<String> = ["fido2"]
 
-    /// The nominal tier for a known plugin ID, or `nil` if the ID isn't in
-    /// the static table (an unknown/future plugin ID is never eligible for
-    /// anything - see `meets`).
+    /// The nominal tier for a known plugin ID under `scheme`, or `nil` if
+    /// the ID isn't known (an unknown/future plugin ID is never eligible
+    /// for anything - see `meets`).
     public static func tier(forPluginId pluginId: String) -> String? {
-        pluginTiers[pluginId]
+        scheme.nominalLabel(forPluginId: pluginId)
     }
 
-    /// Whether `actual` meets or exceeds `required` in the ascending
-    /// `tierOrder`. Either value being outside `tierOrder` (an unrecognized
-    /// tier string) is treated as "does not meet" rather than a crash -
-    /// callers should surface that as "not eligible", not fail hard.
+    /// Whether `actual` meets or exceeds `required` under `scheme`. Either
+    /// value being unrecognized is treated as "does not meet" rather than a
+    /// crash - callers should surface that as "not eligible", not fail hard.
     public static func meets(actual: String, required: String) -> Bool {
-        guard let actualIndex = tierOrder.firstIndex(of: actual),
-              let requiredIndex = tierOrder.firstIndex(of: required) else {
-            return false
-        }
-        return actualIndex >= requiredIndex
+        scheme.meets(actual: actual, required: required)
     }
 }

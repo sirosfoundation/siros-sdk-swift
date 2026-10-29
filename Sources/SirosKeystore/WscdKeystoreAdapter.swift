@@ -89,9 +89,22 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     /// signs for it - see `resolveSigningKey`.
     private let profile: InteropProfile
 
-    public init(signer: Signer, profile: InteropProfile = .default) {
+    /// The ISO-18045 mapping this adapter uses to encode the OID4VCI Key
+    /// Attestation JWT's registered `key_storage`/`user_authentication`
+    /// claims (see `toIso18045AttackPotential`) - `.default` unless a
+    /// deployment constructs this adapter with its own
+    /// `Iso18045AssuranceScheme` instance. Always this concrete type, never
+    /// the generic `WscdAssuranceScheme` protocol: those two claims are a
+    /// registered external wire format that IS the ISO-18045 vocabulary by
+    /// spec, not a deployment's free choice of label scheme (see
+    /// `WscdAssuranceScheme`'s doc comment) - only which key-storage type
+    /// maps to which of the three real ISO-18045 tiers is configurable here.
+    private let assuranceScheme: Iso18045AssuranceScheme
+
+    public init(signer: Signer, profile: InteropProfile = .default, assuranceScheme: Iso18045AssuranceScheme = .default) {
         self.signer = signer
         self.profile = profile
+        self.assuranceScheme = assuranceScheme
     }
 
     // MARK: - WscdManager conformance
@@ -1045,24 +1058,28 @@ public final class WscdKeystoreAdapter: @unchecked Sendable, KeystoreManager, Ws
     /// Translate SIROS's internal WSCD key-storage/user-authentication
     /// vocabulary (`software`/`hardware`/`trusted_execution`/`remote_hsm`,
     /// see `SignerSecurityProperties`) into the OID4VCI Key Attestation JWT's
-    /// registered `iso_18045_*` attack-potential-resistance values.
+    /// registered `iso_18045_*` attack-potential-resistance values, via
+    /// `assuranceScheme` - see `WscdAssuranceScheme.label(forKeyStorageType:)`'s
+    /// doc comment for why this goes through the SAME configurable mapping
+    /// `WscdPluginCapabilities` uses, instead of its own separate guess (what
+    /// this method used to be, independently of `WscdPluginCapabilities`'s
+    /// own table - a real, found bug: the two disagreed about what
+    /// `"trusted_execution"` meant).
+    ///
+    /// `"none"`/`omitIfNone` stay local to this method rather than moving
+    /// into `assuranceScheme`: whether to emit the claim AT ALL for "no
+    /// security property reported" is a decision about this JWT's shape, not
+    /// about what an objective fact is worth.
     ///
     /// Confirmed via a real conformance-test issuer that passing the raw
     /// internal string through unmapped (e.g. `"software"`) produces a
     /// `key_storage`/`user_authentication` value the issuer doesn't
-    /// recognize. Mappings are necessarily approximate (SIROS's vocabulary is
-    /// coarser than the ISO 18045 scale) - conservative/lower tiers are
-    /// preferred over overclaiming resistance we can't actually back up.
+    /// recognize.
     private func toIso18045AttackPotential(_ raw: String, omitIfNone: Bool = false) -> String? {
-        if raw.hasPrefix("iso_18045_") { return raw }
-        switch raw.lowercased() {
-        case "none": return omitIfNone ? nil : "iso_18045_basic"
-        case "software": return "iso_18045_basic"
-        case "hardware": return "iso_18045_moderate"
-        case "trusted_execution": return "iso_18045_enhanced-basic"
-        case "remote_hsm": return "iso_18045_high"
-        default: return "iso_18045_basic"
+        if raw.lowercased() == "none" {
+            return omitIfNone ? nil : Iso18045AssuranceScheme.basic
         }
+        return assuranceScheme.label(forKeyStorageType: raw)
     }
 
     private func orderedUnique(_ items: [String]) -> [String] {
