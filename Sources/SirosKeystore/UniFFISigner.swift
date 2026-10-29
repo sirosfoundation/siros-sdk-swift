@@ -253,7 +253,17 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
     public func attestationChain(keyId: String) async throws -> AttestationChain? {
         try await onFFIQueue {
             try self.ffi.attestationChain(kid: keyId).map {
-                AttestationChain(certificates: $0.certificates, clientDataHash: $0.clientDataHash)
+                // `format`/`opaqueAttestation` carried through, not dropped -
+                // this used to assume every attestation was a real X.509
+                // chain, which silently mis-shaped the fido2 plugin's CTAP2
+                // attestation object (CBOR, not DER) into `certificates[0]`.
+                // See `AttestationFormat`'s doc comment.
+                AttestationChain(
+                    format: $0.format == .x509Chain ? .x509Chain : .opaque,
+                    certificates: $0.certificates,
+                    clientDataHash: $0.clientDataHash,
+                    opaqueAttestation: $0.opaqueAttestation
+                )
             }
         }
     }

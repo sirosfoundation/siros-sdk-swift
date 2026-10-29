@@ -56,7 +56,13 @@ public protocol SecureEnclaveKeystoreBackend: Sendable {
 public enum SecureEnclaveKeystoreError: Error, Sendable {
     case notAvailable
     case keyNotFound(String)
-    case keychainError(OSStatus)
+    /// A raw Keychain `OSStatus` code (`Security.framework`'s `OSStatus` IS
+    /// `Int32` - a typealias, not a distinct type - so this stays portable:
+    /// `SecureEnclaveKeystoreBackend`/this error type are referenced from
+    /// cross-platform code like `WscdManager.swift`, which must still
+    /// compile on Linux, where `Security` (and the real `OSStatus` name)
+    /// doesn't exist at all).
+    case keychainError(Int32)
     case keyGenerationFailed(String)
     case signingFailed(String)
 }

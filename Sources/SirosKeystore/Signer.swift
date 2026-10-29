@@ -140,19 +140,51 @@ public struct SignerKeyInfo: Sendable, Equatable {
     }
 }
 
+/// Which shape `AttestationChain`'s attestation statement is in - mirrors
+/// siros-wscd-manager's `AttestationFormat` (Rust) exactly.
+///
+/// Before this existed, every attestation-producing plugin was assumed to
+/// emit a real X.509 certificate chain in `certificates` - the fido2
+/// plugin's CTAP2 attestation object (CBOR, not DER) was stuffed into
+/// `certificates[0]` as a pre-`AttestationFormat` wart, and this type had
+/// no way to say otherwise. `.opaque` exists so a format that genuinely
+/// isn't a certificate chain has somewhere to go honestly instead.
+public enum AttestationFormat: Sendable, Equatable {
+    /// `certificates` holds the attestation statement: a DER-encoded X.509
+    /// chain (leaf first) for a real PKI-rooted attestation.
+    case x509Chain
+    /// `certificates` is empty; `opaqueAttestation` holds a single,
+    /// format-specific attestation blob that isn't chain-shaped at all -
+    /// the fido2 plugin's raw CTAP2 `authenticatorMakeCredential`
+    /// attestation object (CBOR, not DER) today.
+    case opaque
+}
+
 /// A hardware-backed key's attestation evidence, as returned by
-/// `Signer.attestationChain` - the raw CTAP2 makeCredential attestation
-/// object certificate chain (leaf first), plus the client data hash the
-/// attestation signature was computed over. Both are needed to register
+/// `Signer.attestationChain`. `format` says which of `certificates`
+/// (leaf-first X.509 chain) or `opaqueAttestation` (a single
+/// format-specific blob, e.g. fido2's raw CTAP2 attestation object) is
+/// actually populated - see `AttestationFormat`'s doc comment. Both pair
+/// with `clientDataHash`, the client data hash the attestation signature
+/// was computed over, needed to verify either shape. Needed to register
 /// the attestation with the backend (see
 /// `BackendApiClient.registerFido2Attestation` in SirosAuth).
 public struct AttestationChain: Sendable, Equatable {
+    public let format: AttestationFormat
     public let certificates: [Data]
     public let clientDataHash: Data
+    public let opaqueAttestation: Data
 
-    public init(certificates: [Data], clientDataHash: Data) {
+    public init(
+        format: AttestationFormat = .x509Chain,
+        certificates: [Data],
+        clientDataHash: Data,
+        opaqueAttestation: Data = Data()
+    ) {
+        self.format = format
         self.certificates = certificates
         self.clientDataHash = clientDataHash
+        self.opaqueAttestation = opaqueAttestation
     }
 }
 
