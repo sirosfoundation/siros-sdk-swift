@@ -121,10 +121,12 @@ extension WscdSelectionError: LocalizedError {
 /// issuer later rejects a Key Attestation.
 ///
 /// Phase-1 scope decision: no live plugin enumeration, no live per-plugin
-/// capability query - eligibility is decided from `WscdPluginCapabilities`'s
-/// static table alone, over whichever `KeystoreManager` instances the host
-/// app has already constructed and registered. This type never constructs
-/// or mutates a `KeystoreManager` itself, and never touches
+/// capability query - eligibility is decided from `assuranceScheme`'s
+/// static nominal-tier table (`Iso18045AssuranceScheme.default` unless this
+/// policy was constructed with a different `WscdAssuranceScheme` - see that
+/// protocol's doc comment) alone, over whichever `KeystoreManager` instances
+/// the host app has already constructed and registered. This type never
+/// constructs or mutates a `KeystoreManager` itself, and never touches
 /// siros-wscd-manager (Rust/UniFFI).
 ///
 /// Resolution order (mirrors the Kotlin SDK's identical policy so both SDKs
@@ -183,6 +185,18 @@ public final class WscdSelectionPolicy: @unchecked Sendable {
     private let defaultMapping: [String: String]
     private let requestChoice: RequestWscdChoice?
 
+    /// The assurance-label vocabulary `isSufficient` compares a plugin's
+    /// nominal tier against a credential type's declared `requiredTier`
+    /// with - `Iso18045AssuranceScheme.default` unless a deployment
+    /// constructs this policy with its own `WscdAssuranceScheme` (its own
+    /// `Iso18045AssuranceScheme` instance with different mapping tables, or
+    /// a wholly different vocabulary altogether - see `WscdAssuranceScheme`'s
+    /// doc comment). `requiredTier` itself is always a label IN this
+    /// scheme's own vocabulary (it comes from the credential catalog/
+    /// issuer, compared only via `WscdAssuranceScheme.meets` - never parsed
+    /// or assumed to be ISO 18045 by this type).
+    private let assuranceScheme: WscdAssuranceScheme
+
     /// Guards the read-modify-write sequence on every persisted map this
     /// policy owns (TOFU, per-issuer user overrides) against concurrent
     /// `resolve()` calls racing each other (e.g. two credential types being
@@ -196,11 +210,13 @@ public final class WscdSelectionPolicy: @unchecked Sendable {
     public init(
         sessionStore: SessionStoreProtocol,
         defaultMapping: [String: String]? = nil,
-        requestChoice: RequestWscdChoice? = nil
+        requestChoice: RequestWscdChoice? = nil,
+        assuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.default
     ) {
         self.sessionStore = sessionStore
         self.defaultMapping = defaultMapping ?? [:]
         self.requestChoice = requestChoice
+        self.assuranceScheme = assuranceScheme
     }
 
     /// - Parameters:
@@ -334,8 +350,8 @@ public final class WscdSelectionPolicy: @unchecked Sendable {
     }
 
     private func isSufficient(_ pluginId: String, for requiredTier: String) -> Bool {
-        guard let tier = WscdPluginCapabilities.tier(forPluginId: pluginId) else { return false }
-        return WscdPluginCapabilities.meets(actual: tier, required: requiredTier)
+        guard let tier = assuranceScheme.nominalLabel(forPluginId: pluginId) else { return false }
+        return assuranceScheme.meets(actual: tier, required: requiredTier)
     }
 
     static func tofuKey(issuer: String, credentialType: String) -> String {

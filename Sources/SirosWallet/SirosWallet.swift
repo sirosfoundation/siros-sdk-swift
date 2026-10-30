@@ -805,7 +805,8 @@ public final class SirosWallet: @unchecked Sendable {
         self.wscdSelectionPolicy = WscdSelectionPolicy(
             sessionStore: sessionStore,
             defaultMapping: config.defaultWscdMapping,
-            requestChoice: config.requestWscdChoice
+            requestChoice: config.requestWscdChoice,
+            assuranceScheme: config.wscdAssuranceScheme
         )
 
         // Shared HTTP GET for both type-metadata fetchers - see

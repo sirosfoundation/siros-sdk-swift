@@ -167,6 +167,47 @@ final class WscdKeystoreAdapterTest: XCTestCase {
         XCTAssertNil(claims?["user_authentication"])
     }
 
+    /// "iso_18045_enhanced-basic" is a REAL, OID4VCI-registered value
+    /// (Appendix D.2, VAN.3, between basic/VAN.2 and moderate/VAN.4) - see
+    /// `Iso18045AssuranceScheme.defaultKeyStorageTypeLabels`'s doc comment.
+    /// This regression test proves the single shared scheme still produces
+    /// this value (unchanged from the previous, separate
+    /// `toIso18045AttackPotential` table this replaced) rather than
+    /// collapsing it into the coarser "moderate" the SDK's own narrower
+    /// plugin-SELECTION scale uses.
+    func testGenerateKeyAttestationMapsTrustedExecutionToEnhancedBasic() async throws {
+        let signer = MockSigner()
+        signer.securityPropertiesResult = .success(
+            SignerSecurityProperties(keyStorage: ["trusted_execution"], userAuthentication: [])
+        )
+        let adapter = try await unlockedAdapter(signer)
+
+        let jwt = try await adapter.generateKeyAttestation(nonce: "n", count: 1)
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertEqual(claims?["key_storage"] as? [String], ["iso_18045_enhanced-basic"])
+    }
+
+    /// Proves the Key Attestation JWT's `key_storage` claim is genuinely
+    /// read through the injected `Iso18045AssuranceScheme`, not still a
+    /// separate compiled-in table: a deployment configuring `"hardware"` to
+    /// read as `iso_18045_high` (rather than `.default`'s
+    /// `iso_18045_moderate`) sees that custom value in the signed claim.
+    func testGenerateKeyAttestationHonorsCustomAssuranceScheme() async throws {
+        let signer = MockSigner()
+        signer.securityPropertiesResult = .success(
+            SignerSecurityProperties(keyStorage: ["hardware"], userAuthentication: [])
+        )
+        let lenientDeployment = Iso18045AssuranceScheme(
+            keyStorageTypeLabels: ["hardware": Iso18045AssuranceScheme.high]
+        )
+        let adapter = WscdKeystoreAdapter(signer: signer, assuranceScheme: lenientDeployment)
+        try await adapter.unlock(prfOutput: Data(), encryptedContainer: Data(), hkdfSalt: Data(), hkdfInfo: Data())
+
+        let jwt = try await adapter.generateKeyAttestation(nonce: "n", count: 1)
+        let claims = JwtHelpers.parseJwtPayload(jwt)
+        XCTAssertEqual(claims?["key_storage"] as? [String], ["iso_18045_high"])
+    }
+
     // MARK: - generateKeyProof
 
     func testGenerateKeyProofBuildsValidPopJwt() async throws {
