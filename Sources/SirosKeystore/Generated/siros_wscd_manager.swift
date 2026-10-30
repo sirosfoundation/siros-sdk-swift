@@ -3383,10 +3383,9 @@ public func FfiConverterTypeFfiAuthMethod_lower(_ value: FfiAuthMethod) -> RustB
 
 public enum FfiCertificationLevel: Equatable, Hashable {
     
-    case none
-    case baseline
-    case substantial
-    case high
+    case unattested
+    case attestedSharedEnvironment
+    case attestedDedicatedHardware
 
 
 
@@ -3408,13 +3407,11 @@ public struct FfiConverterTypeFfiCertificationLevel: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .none
+        case 1: return .unattested
         
-        case 2: return .baseline
+        case 2: return .attestedSharedEnvironment
         
-        case 3: return .substantial
-        
-        case 4: return .high
+        case 3: return .attestedDedicatedHardware
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -3424,20 +3421,16 @@ public struct FfiConverterTypeFfiCertificationLevel: FfiConverterRustBuffer {
         switch value {
         
         
-        case .none:
+        case .unattested:
             writeInt(&buf, Int32(1))
         
         
-        case .baseline:
+        case .attestedSharedEnvironment:
             writeInt(&buf, Int32(2))
         
         
-        case .substantial:
+        case .attestedDedicatedHardware:
             writeInt(&buf, Int32(3))
-        
-        
-        case .high:
-            writeInt(&buf, Int32(4))
         
         }
     }
