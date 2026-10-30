@@ -558,12 +558,22 @@ public final class UniFFISigner: Signer, @unchecked Sendable {
         }
     }
 
+    // TODO(siros-wscd-manager certification-level redesign, 2026-10-30): this
+    // still names "EUCC" as the certifying scheme for every structurally
+    // attested key, exactly the kind of certification-SCHEME claim
+    // wscd-manager's own `CertificationLevel` was just renamed away from
+    // (neither tier below has ever actually been evaluated under EUCC) -
+    // pre-existing behavior, preserved as-is (collapsed from the old 4-tier
+    // mapping to the new 3-tier one, same label strings) rather than
+    // redesigned here, since fixing `CertificationInfo`'s shape is a
+    // separate, out-of-scope decision. Flagged to the coordinator; do not
+    // copy this pattern elsewhere. Mirrors siros-sdk-kotlin's
+    // UniFFISigner.toSdkCertification() - see that file's identical TODO.
     private static func certificationToSdk(_ cert: FfiCertificationLevel) -> CertificationInfo {
         switch cert {
-        case .none: return .none
-        case .baseline: return .certified(scheme: "EUCC", assuranceLevel: "baseline")
-        case .substantial: return .certified(scheme: "EUCC", assuranceLevel: "substantial")
-        case .high: return .certified(scheme: "EUCC", assuranceLevel: "high")
+        case .unattested: return .none
+        case .attestedSharedEnvironment: return .certified(scheme: "EUCC", assuranceLevel: "baseline")
+        case .attestedDedicatedHardware: return .certified(scheme: "EUCC", assuranceLevel: "substantial")
         }
     }
 }
