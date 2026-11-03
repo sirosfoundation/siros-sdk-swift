@@ -48,6 +48,7 @@ assumes it is the only writer of the container it unlocked.
 | SirosKeystore | `UniFFISigner(config:authProvider:)` + `WscdKeystoreAdapter(signer:)` | a `WscdAuthProvider` for PIN prompts if a plugin needs one | the same `KeystoreManager` surface with keys held by a WSCD plugin (software, FIDO2 security key over CTAP2, R2PS) |
 | SirosKeystore | `MdocProximitySession` | callbacks for credentials, consent, device signature, reader trust | a complete ISO 18013-5 session over BLE (`BleCentralClient` / `BlePeripheralServer`), NFC static handover |
 | SirosKeystore | `LongfellowZkProofSystem(zkCircuitClient:)`, `MdocDeviceResponseBuilder.buildZkDeviceResponse` | a `ZkCircuitClient` | ZK proof generation and the ZK mdoc device response |
+| SirosVerifier | `MdocProximityVerifier` + `HttpAuthZenPdp` | a go-trust evaluation endpoint and tenant ID; no wallet login | standalone mdoc request, proximity response verification, request policy, and fail-closed issuer authorization |
 | SirosAuth | `ASAuthorizationAuthProvider` | a presentation anchor | passkey registration/assertion with PRF (iOS 18+); security keys over the SDK's CTAP2 transports |
 | SirosAuth | `AuthServerClient(baseUrl:tenantId:)` | nothing | the passkey challenge/response conversation with SIROS's auth server, if you use it |
 | SirosCredentials | `CredentialMatcher`, `MdocCbor`, `SdJwtParts`, `VctmFetcher`, `ZkCircuitClient` | nothing | parsing, DCQL matching, display metadata, circuit catalog |

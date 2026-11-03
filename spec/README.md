@@ -1,5 +1,8 @@
 # Bridge capability vocabulary (Swift twin)
 
+[`mdoc-verifier.md`](mdoc-verifier.md) is the cross-platform behavioral contract for the standalone verifier and mirrors `siros-sdk-kotlin/spec/mdoc-verifier.md`; update both copies together.
+
+
 `bridge-capabilities.json` here is a copy of the source of truth in
 [siros-sdk-kotlin/spec](https://github.com/sirosfoundation/siros-sdk-kotlin/tree/main/spec),
 which also documents the descriptor and the rules for evolving it. CI fails

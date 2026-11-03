@@ -28,6 +28,8 @@ excluded:
   # Editing generated code to satisfy a linter would be undone by the next
   # regeneration.
   - Sources/SirosCredentials/Generated
+  # UniFFI verifier-core output is regenerated with the native artifact.
+  - Sources/SirosVerifier/Generated
 
 force_cast: warning
 force_try: warning

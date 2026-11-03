@@ -68,6 +68,11 @@ the parity gaps against the Android SDK.
 - SD-JWT parsing and validation utilities
 - Base error hierarchy (SirosError)
 
+### SirosVerifier
+- Standalone mdoc proximity verification through verifier-core's UniFFI Reader
+- QR/NFC engagement parsing and reader-side BLE transport; no wallet account or `SirosWallet` dependency
+- Exact AuthZEN forwarding to go-trust with fail-closed claim release
+
 ### SirosWallet
 - SirosWallet: top-level API for host applications
 - Session management (login, logout, token refresh)

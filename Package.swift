@@ -3,6 +3,23 @@
 
 import PackageDescription
 
+// Optional, locally built SirosVerifierCore.xcframework from the matching core
+// checkout. There is intentionally no guessed remote artifact URL or checksum.
+// With no path, Linux/macOS tests compile against the internal CoreReader fakes.
+let sirosVerifierCoreXCFrameworkPath = Context.environment["SIROS_VERIFIER_CORE_XCFRAMEWORK_PATH"]
+    .flatMap { $0.isEmpty ? nil : $0 }
+var sirosVerifierDependencies: [Target.Dependency] = [
+    .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+]
+if sirosVerifierCoreXCFrameworkPath != nil {
+    sirosVerifierDependencies.append(
+        .target(name: "siros_verifier_core_ffiFFI", condition: .when(platforms: [.iOS]))
+    )
+}
+let sirosVerifierCoreBinaryTargets: [Target] = sirosVerifierCoreXCFrameworkPath.map {
+    [.binaryTarget(name: "siros_verifier_core_ffiFFI", path: $0)]
+} ?? []
+
 let package = Package(
     name: "SirosSDK",
     platforms: [
@@ -21,6 +38,7 @@ let package = Package(
     products: [
         .library(name: "SirosCredentials", targets: ["SirosCredentials"]),
         .library(name: "SirosTransport", targets: ["SirosTransport"]),
+        .library(name: "SirosVerifier", targets: ["SirosVerifier"]),
         .library(name: "SirosAuth", targets: ["SirosAuth"]),
         .library(name: "SirosKeystore", targets: ["SirosKeystore"]),
         .library(name: "SirosFlow", targets: ["SirosFlow"]),
@@ -175,6 +193,20 @@ let package = Package(
             path: "Tests/SirosTransportTests"
         ),
 
+        // --- Verifier: standalone trust evaluation + mdoc QR engagement ---
+        // Deliberately independent of SirosAuth and SirosWallet: a verifier
+        // needs no account, login, wallet session or wallet authentication.
+        .target(
+            name: "SirosVerifier",
+            dependencies: sirosVerifierDependencies,
+            path: "Sources/SirosVerifier"
+        ),
+        .testTarget(
+            name: "SirosVerifierTests",
+            dependencies: ["SirosVerifier"],
+            path: "Tests/SirosVerifierTests"
+        ),
+
         // --- Auth: WebAuthn / passkey authentication ---
         .target(
             name: "SirosAuth",
@@ -282,7 +314,7 @@ let package = Package(
             ],
             path: "Tests/SirosWalletTests"
         ),
-    ],
+    ] + sirosVerifierCoreBinaryTargets,
     // Tools 6.0 (needed to depend on SwiftDraw, whose manifest is 6.0) would switch every target to
     // the Swift 6 language mode; the package is not migrated, so it stays in Swift 5 mode.
     swiftLanguageModes: [.v5]
