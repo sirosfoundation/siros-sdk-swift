@@ -151,14 +151,26 @@ public enum MdocNfcHandoverParser {
         return records
     }
 
+    private struct BLEAdvertisement {
+        let role: LERole?
+        let uuids: Set<UUID>
+    }
+
     private static func mergeBLEMetadata(
         _ carrierRecords: [NDEFRecord],
         engagementBLE: MdocQrEngagement.BleRetrievalMetadata?
     ) throws -> MdocQrEngagement.BleRetrievalMetadata? {
+        let advertisement = try parseBLEAdvertisement(carrierRecords)
+        if let engagementBLE {
+            return try reconcileBLEMetadata(advertisement, engagementBLE: engagementBLE)
+        }
+        return try metadataWithoutEngagement(advertisement)
+    }
+
+    private static func parseBLEAdvertisement(_ records: [NDEFRecord]) throws -> BLEAdvertisement {
         var role: LERole?
         var advertisedUUIDs = Set<UUID>()
-
-        for carrier in carrierRecords {
+        for carrier in records {
             var offset = 0
             while offset < carrier.payload.count {
                 let length = Int(carrier.payload[offset])
@@ -176,7 +188,6 @@ public enum MdocNfcHandoverParser {
                 let type = carrier.payload[offset + 1]
                 let dataStart = offset + 2
                 let dataLength = length - 1
-
                 switch type {
                 case adTypeLERole:
                     guard dataLength == 1 else {
@@ -208,48 +219,49 @@ public enum MdocNfcHandoverParser {
                 offset = end
             }
         }
+        return BLEAdvertisement(role: role, uuids: advertisedUUIDs)
+    }
 
-        if let engagementBLE {
-            if let role,
-               role.supportsPeripheral != engagementBLE.supportsPeripheralServerMode ||
-                role.supportsCentral != engagementBLE.supportsCentralClientMode {
-                throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
-                    "Bluetooth LE Role conflicts with DeviceEngagement BleOptions"
-                )
-            }
-
-            let engagementUUIDs = Set([
-                engagementBLE.peripheralServerModeUuid,
-                engagementBLE.centralClientModeUuid,
-            ].compactMap { $0 })
-            guard advertisedUUIDs.isSubset(of: engagementUUIDs) else {
-                throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
-                    "Bluetooth OOB Service UUID conflicts with DeviceEngagement BleOptions"
-                )
-            }
-
-            // NfcHandoverSelect advertises only the preferred mode's UUID when
-            // both modes are offered. A different sole UUID is inconsistent.
-            if advertisedUUIDs.count == 1, let role,
-               role.supportsPeripheral, role.supportsCentral {
-                let preferredUUID = role.preferPeripheral
-                    ? engagementBLE.peripheralServerModeUuid
-                    : engagementBLE.centralClientModeUuid
-                guard advertisedUUIDs.first == preferredUUID else {
-                    throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
-                        "Bluetooth OOB Service UUID conflicts with the preferred LE Role"
-                    )
-                }
-            }
-            return engagementBLE
+    private static func reconcileBLEMetadata(
+        _ advertisement: BLEAdvertisement,
+        engagementBLE: MdocQrEngagement.BleRetrievalMetadata
+    ) throws -> MdocQrEngagement.BleRetrievalMetadata {
+        if let role = advertisement.role,
+           role.supportsPeripheral != engagementBLE.supportsPeripheralServerMode ||
+            role.supportsCentral != engagementBLE.supportsCentralClientMode {
+            throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
+                "Bluetooth LE Role conflicts with DeviceEngagement BleOptions"
+            )
         }
+        let engagementUUIDs = Set([
+            engagementBLE.peripheralServerModeUuid,
+            engagementBLE.centralClientModeUuid,
+        ].compactMap { $0 })
+        guard advertisement.uuids.isSubset(of: engagementUUIDs) else {
+            throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
+                "Bluetooth OOB Service UUID conflicts with DeviceEngagement BleOptions"
+            )
+        }
+        if advertisement.uuids.count == 1, let role = advertisement.role,
+           role.supportsPeripheral, role.supportsCentral {
+            let preferredUUID = role.preferPeripheral
+                ? engagementBLE.peripheralServerModeUuid
+                : engagementBLE.centralClientModeUuid
+            guard advertisement.uuids.first == preferredUUID else {
+                throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
+                    "Bluetooth OOB Service UUID conflicts with the preferred LE Role"
+                )
+            }
+        }
+        return engagementBLE
+    }
 
-        // Annex D.3.3 supplies an LE address and role but no UUID. Do not
-        // invent discovery metadata for the later BLE selector.
-        guard let role, !advertisedUUIDs.isEmpty else { return nil }
-
+    private static func metadataWithoutEngagement(
+        _ advertisement: BLEAdvertisement
+    ) throws -> MdocQrEngagement.BleRetrievalMetadata? {
+        guard let role = advertisement.role, !advertisement.uuids.isEmpty else { return nil }
         if role.supportsPeripheral, !role.supportsCentral {
-            guard advertisedUUIDs.count == 1, let uuid = advertisedUUIDs.first else {
+            guard let uuid = advertisement.uuids.first, advertisement.uuids.count == 1 else {
                 throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
                     "Peripheral-only handover must advertise exactly one Service UUID"
                 )
@@ -262,7 +274,7 @@ public enum MdocNfcHandoverParser {
             )
         }
         if role.supportsCentral, !role.supportsPeripheral {
-            guard advertisedUUIDs.count == 1, let uuid = advertisedUUIDs.first else {
+            guard let uuid = advertisement.uuids.first, advertisement.uuids.count == 1 else {
                 throw MdocNfcHandoverError.inconsistentBluetoothMetadata(
                     "Central-only handover must advertise exactly one Service UUID"
                 )
@@ -274,9 +286,6 @@ public enum MdocNfcHandoverParser {
                 centralClientModeUuid: uuid
             )
         }
-
-        // An unlabelled UUID list cannot populate both keyed UUID fields
-        // without DeviceEngagement BleOptions to disambiguate it.
         return nil
     }
 

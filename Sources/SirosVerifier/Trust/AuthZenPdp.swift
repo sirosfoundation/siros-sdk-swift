@@ -60,7 +60,8 @@ public final class HttpAuthZenPdp: AuthZenPdp, @unchecked Sendable {
 
     /// Create a PDP client. Passing no session creates an ephemeral session
     /// with no cookie jar, credential storage, cache, or additional headers.
-    /// A session may be injected for URLProtocol-based tests or custom TLS.
+    /// A session configuration may be injected for URLProtocol-based tests. It
+    /// is copied and scrubbed of cookies, credentials, and auth headers.
     public init(
         evaluationEndpoint: URL,
         tenantId: String,
@@ -68,7 +69,9 @@ public final class HttpAuthZenPdp: AuthZenPdp, @unchecked Sendable {
     ) {
         self.evaluationEndpoint = evaluationEndpoint
         self.tenantId = tenantId
-        self.session = session ?? Self.makeEphemeralSession()
+        let configuration = session?.configuration ?? Self.makeEphemeralConfiguration()
+        Self.sanitize(configuration)
+        self.session = URLSession(configuration: configuration)
     }
 
     /// Spelling convenience for callers that name the complete URL `endpoint`.
@@ -119,15 +122,21 @@ public final class HttpAuthZenPdp: AuthZenPdp, @unchecked Sendable {
         return true
     }
 
-    private static func makeEphemeralSession() -> URLSession {
+    private static func makeEphemeralConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
+    private static func sanitize(_ configuration: URLSessionConfiguration) {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
         configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
-        configuration.httpAdditionalHeaders = nil
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
+        configuration.httpAdditionalHeaders = configuration.httpAdditionalHeaders?.filter { key, _ in
+            guard let name = (key as? String)?.lowercased() else { return true }
+            return name != "authorization" && name != "cookie"
+        }
     }
 }
