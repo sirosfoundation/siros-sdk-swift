@@ -4,6 +4,7 @@ import SwiftUI
 
 struct LoginView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    @EnvironmentObject var verifierViewModel: VerifierViewModel
     @State private var showRegister = false
     @State private var showOtherLogin = false
     @State private var registerName = ""
@@ -69,6 +70,17 @@ struct LoginView: View {
                     }
 
                     loginContent
+
+                    Divider()
+
+                    Button(action: verifierViewModel.open) {
+                        Label("Verify nearby mdoc (no account required)", systemImage: "qrcode.viewfinder")
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(SirosTheme.brand)
+                    .accessibilityIdentifier("login-verify-nearby-mdoc")
                 }
                 .padding(20)
                 .background(

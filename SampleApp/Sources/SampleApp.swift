@@ -6,6 +6,7 @@ import SirosWallet
 @main
 struct SirosSampleApp: App {
     @StateObject private var viewModel = WalletViewModel()
+    @StateObject private var verifierViewModel = VerifierViewModel()
 
     init() {
         #if DEBUG
@@ -23,6 +24,7 @@ struct SirosSampleApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
+                .environmentObject(verifierViewModel)
                 .onOpenURL { url in
                     viewModel.handleDeepLink(url)
                 }

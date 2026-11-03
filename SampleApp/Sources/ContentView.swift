@@ -5,6 +5,7 @@ import SirosWallet
 
 struct ContentView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    @EnvironmentObject var verifierViewModel: VerifierViewModel
 
     /// Current transient toast, derived from `viewModel`'s error/info flags
     /// (see `syncBanner`). Held as its own piece of state, rather than
@@ -20,46 +21,53 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            switch viewModel.walletState {
-            case .disconnected, .connecting:
-                LoginView()
-            case .ready:
-                if let flowType = viewModel.flowStarting {
-                    FlowStartingView(flowType: flowType)
-                } else if viewModel.pendingPresentation != nil {
-                    PresentationConsentView()
-                } else if let credential = viewModel.selectedCredential {
-                    CredentialDetailView(credential: credential)
-                } else if viewModel.showHistory {
-                    PresentationHistoryView()
-                } else if viewModel.showTransactionLog {
-                    TransactionLogView()
-                } else if viewModel.showActivate {
-                    ActivateView()
-                } else if viewModel.showIDVPreparation {
-                    // The real entry point for both the "Scan Physical ID
-                    // card" row (AddCredentialView) and Home's PhotoID
-                    // onboarding CTA (HomeView) - see
-                    // WalletViewModel+PhotoIdOnboarding.swift.
-                    IDVPreparationView(
-                        onStartScan: { viewModel.startIDV() },
-                        onDismiss: { viewModel.closeIDVPreparation() }
-                    )
-                } else if viewModel.showAddCredential {
-                    AddCredentialView()
-                } else if viewModel.showWscaDeveloper {
-                    WscdSettingsView()
-                } else if viewModel.showDevices {
-                    DevicesView()
-                } else {
-                    MainTabView()
+            // Verifier navigation deliberately precedes and is independent of
+            // walletState: the same account-free reader is available logged
+            // out, while connecting, and logged in. It never requires `.ready`.
+            if verifierViewModel.isPresented {
+                MdocVerifierView()
+            } else {
+                switch viewModel.walletState {
+                case .disconnected, .connecting:
+                    LoginView()
+                case .ready:
+                    if let flowType = viewModel.flowStarting {
+                        FlowStartingView(flowType: flowType)
+                    } else if viewModel.pendingPresentation != nil {
+                        PresentationConsentView()
+                    } else if let credential = viewModel.selectedCredential {
+                        CredentialDetailView(credential: credential)
+                    } else if viewModel.showHistory {
+                        PresentationHistoryView()
+                    } else if viewModel.showTransactionLog {
+                        TransactionLogView()
+                    } else if viewModel.showActivate {
+                        ActivateView()
+                    } else if viewModel.showIDVPreparation {
+                        // The real entry point for both the "Scan Physical ID
+                        // card" row (AddCredentialView) and Home's PhotoID
+                        // onboarding CTA (HomeView) - see
+                        // WalletViewModel+PhotoIdOnboarding.swift.
+                        IDVPreparationView(
+                            onStartScan: { viewModel.startIDV() },
+                            onDismiss: { viewModel.closeIDVPreparation() }
+                        )
+                    } else if viewModel.showAddCredential {
+                        AddCredentialView()
+                    } else if viewModel.showWscaDeveloper {
+                        WscdSettingsView()
+                    } else if viewModel.showDevices {
+                        DevicesView()
+                    } else {
+                        MainTabView()
+                    }
+                case .flowActive(let flowType, let status):
+                    FlowActiveView(flowType: flowType, status: status)
+                case .lifecycleBlocked(let reason, let message):
+                    WalletBlockedView(reason: reason, message: message)
+                case .error(let message):
+                    ErrorView(message: message)
                 }
-            case .flowActive(let flowType, let status):
-                FlowActiveView(flowType: flowType, status: status)
-            case .lifecycleBlocked(let reason, let message):
-                WalletBlockedView(reason: reason, message: message)
-            case .error(let message):
-                ErrorView(message: message)
             }
         }
         // Non-blocking dismissable banner, replacing the blocking `.alert()`

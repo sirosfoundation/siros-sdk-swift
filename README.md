@@ -19,6 +19,7 @@ Native Swift SDK for integrating SIROS ID wallet infrastructure into iOS and mac
 | `SirosFlow` | OID4VCI/OID4VP flow orchestration over WMP |
 | `SirosCredentials` | Credential storage, DCQL matching, VCTM, SD-JWT utilities |
 | `SirosWallet` | Top-level wallet API combining all modules |
+| `SirosVerifier` | Standalone ISO 18013-5 mdoc verification and go-trust authorization |
 
 ## Requirements
 
@@ -166,6 +167,10 @@ supported; see [docs/TWO-APIS.md](docs/TWO-APIS.md).
 
 Issuer and credential logos (https, `data:` raster and SVG, what is accepted and refused): see
 [docs/ISSUER-LOGOS.md](docs/ISSUER-LOGOS.md).
+
+## Standalone mdoc verification
+
+`SirosVerifier` verifies ISO 18013-5 presentations without constructing `SirosWallet` or logging in to a wallet account. Applications supply a complete go-trust/AuthZEN evaluation URL and tenant ID; `HttpAuthZenPdp` sends no authorization or cookie header. Claims are exposed only after core verification, request-policy checks, and an explicit permit for every document. There is no local trust fallback. See [docs/VERIFIER.md](docs/VERIFIER.md).
 
 ## Architecture
 

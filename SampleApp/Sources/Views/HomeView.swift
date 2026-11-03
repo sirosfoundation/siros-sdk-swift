@@ -22,6 +22,7 @@ import SwiftUI
 /// doesn't already hold that credential.
 struct HomeView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    @EnvironmentObject var verifierViewModel: VerifierViewModel
 
     var body: some View {
         VStack(spacing: 24) {
@@ -75,6 +76,13 @@ struct HomeView: View {
                 PhotoIdOnboardingCard(onTap: viewModel.openIDVPreparation)
                     .padding(.horizontal, 24)
             }
+
+            Button(action: verifierViewModel.open) {
+                Label("Verify nearby mdoc", systemImage: "person.text.rectangle")
+            }
+            .buttonStyle(.bordered)
+            .tint(SirosTheme.brand)
+            .accessibilityIdentifier("home-verify-nearby-mdoc")
 
             Spacer()
         }
