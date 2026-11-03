@@ -96,7 +96,7 @@ final class HttpAuthZenPdpTests: XCTestCase {
         let request = try XCTUnwrap(AuthZenMockURLProtocol.requests.only)
         XCTAssertEqual(request.url, endpoint)
         XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.httpBody, Data(requestJSON.utf8))
+        XCTAssertEqual(request.authZenBodyData, Data(requestJSON.utf8))
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Tenant-ID"), "verifier-tenant")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
@@ -227,4 +227,25 @@ final class HttpAuthZenPdpTests: XCTestCase {
 
 private extension Array {
     var only: Element? { count == 1 ? self[0] : nil }
+}
+
+private extension URLRequest {
+    /// Apple URLSession may move an in-memory body to a stream; Linux commonly
+    /// leaves it in httpBody. Compare the bytes through either representation.
+    var authZenBodyData: Data? {
+        if let httpBody { return httpBody }
+        guard let stream = httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+        defer { buffer.deallocate() }
+        var data = Data()
+        while stream.hasBytesAvailable {
+            let count = stream.read(buffer, maxLength: 4096)
+            if count < 0 { return nil }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }
