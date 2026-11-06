@@ -170,6 +170,25 @@ public extension WalletEventListener {
     func onNoMatchingCredential(flowId: String, requestedTypes: [String], reason: String?, redirectUri: String?) {}
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}
     func onTxCodeRequired(flowId: String, description: String?) -> String? { nil }
+
+    /// A verifier's presentation requires the user's explicit consent (the Rust
+    /// engine's `consent` ask — the OID4VP consent-check in enforce mode).
+    ///
+    /// Different from ``onCredentialSelectionRequired(request:)``: that one picks
+    /// WHICH credentials to offer (a DCQL match); this one is the YES/NO on what was
+    /// already matched — the scope the verifier asked for and the claims the query
+    /// would disclose.
+    ///
+    /// The default declines (fail closed): a host app that has not built a consent
+    /// UI must not have presentations proceed unconsented. Deployments that do not
+    /// run the consent-check in enforce mode never fire this.
+    ///
+    /// - Parameters:
+    ///   - flowId: The presentation flow asking.
+    ///   - purpose: The scope the verifier asked for.
+    ///   - requestedClaims: The claim names the query would disclose.
+    /// - Returns: Whether the user consents to the presentation.
+    func onConsentRequested(flowId: String, purpose: String?, requestedClaims: [String]) -> Bool { false }
     func onReauthenticationRequired() {
         // No-op by default: implementers only need to override this if they
         // want to route the user to a login screen on forced logout.
