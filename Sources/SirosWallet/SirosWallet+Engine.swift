@@ -115,12 +115,49 @@ extension SirosWallet {
             engineBase = config.backendUrl
         }
 
-        let wsUrl = engineBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            .replacingOccurrences(of: "http://", with: "ws://")
-            .replacingOccurrences(of: "https://", with: "wss://")
-            + "/api/v2/wallet?tenant_id=\(config.tenantId)"
-
-        let transport = WmpWebSocketTransport(url: URL(string: wsUrl)!)
+        // The transport, by the engine mode (WmpEngineMode) - the same
+        // WmpPeer/WmpSession/profile stack over each, which is the point of
+        // the seam: the flows, the asks and the profile dispatch are
+        // transport-independent.
+        //
+        // - legacyWS (default): the Go engine's WebSocket - engineUrl >
+        //   discovery > backendUrl, the historic path, unchanged.
+        // - httpSSE: the Rust engine's WMP HTTP+SSE binding - the
+        //   configured wmpSendUrl/wmpSseUrl (siros-wallet-core
+        //   engine-server; a dev stack with WMP_ENGINE=yes serves them).
+        // - local: the app's own transport factory (WmpUniFFITransport
+        //   over its ports - the XCFramework's engine core).
+        let transport: any TransportProtocol
+        switch config.wmpEngineMode {
+        case .legacyWS:
+            let wsUrl = engineBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .replacingOccurrences(of: "http://", with: "ws://")
+                .replacingOccurrences(of: "https://", with: "wss://")
+                + "/api/v2/wallet?tenant_id=\(config.tenantId)"
+            transport = WmpWebSocketTransport(url: URL(string: wsUrl)!
+            )
+        case .httpSSE:
+            // WmpHttpSseTransport is Apple-only (URLSession async bytes) -
+            // the transport's own platform restriction, carried by the mode:
+            // Linux fails closed with a clear error rather than a missing
+            // symbol.
+            #if canImport(Darwin)
+            guard let sendUrl = URL(string: config.wmpSendUrl), !config.wmpSendUrl.isEmpty else {
+                throw SirosError.wallet(message: "WmpEngineMode.httpSSE needs wmpSendUrl (the engine's POST /wmp endpoint)")
+            }
+            guard let sseUrl = URL(string: config.wmpSseUrl), !config.wmpSseUrl.isEmpty else {
+                throw SirosError.wallet(message: "WmpEngineMode.httpSSE needs wmpSseUrl (the engine's GET /wmp/events endpoint)")
+            }
+            transport = WmpHttpSseTransport(sendUrl: sendUrl, sseUrl: sseUrl)
+            #else
+            throw SirosError.wallet(message: "WmpEngineMode.httpSSE requires Apple platforms (WmpHttpSseTransport is URLSession-async-bytes based)")
+            #endif
+        case .local:
+            guard let factory = config.wmpTransport else {
+                throw SirosError.wallet(message: "WmpEngineMode.local needs wmpTransport (the app's WmpUniFFITransport factory - the XCFramework's engine core)")
+            }
+            transport = try await factory()
+        }
         let session = WmpSession(transport: transport)
         let peer = WmpPeer(session: session)
 
