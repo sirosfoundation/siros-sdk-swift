@@ -1227,11 +1227,23 @@ final class WalletViewModel: ObservableObject {
             // Which engine the WMP protocol connects to, and its endpoints:
             // remote (the Rust engine's HTTP+SSE binding) or local (the
             // XCFramework's engine core in-process, over the app's ports -
-            // not yet wired in the sample app, so the mode refuses with a
-            // clear error until the follow-up lands the transport factory).
+            // the transport factory below wraps the SDK's ask handler, so the
+            // engine's asks reach this wallet's own handlers exactly as they
+            // do on the remote engine).
             wmpEngineMode: wmpEngineMode,
             wmpSendUrl: wmpSendUrl,
             wmpSseUrl: wmpSseUrl,
+            wmpTransport: wmpEngineMode == .local ? { asks in
+                // The local engine over the app's HTTP port (URLSession), the
+                // WALLET's own ask handlers (UniFfiEngineAskHost over the SDK's
+                // handler seam), and no trust stack (fail closed at the trust
+                // step until one is wired).
+                WmpUniFFITransport(
+                    http: URLSessionEngineHttp(),
+                    host: UniFfiEngineAskHost(asks),
+                    pdp: nil
+                )
+            } : nil,
             transactionDataEnabled: transactionDataEnabled,
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,

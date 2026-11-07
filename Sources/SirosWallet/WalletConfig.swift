@@ -90,12 +90,23 @@ public struct WalletConfig: Sendable {
     /// progress, sub-flow asks, completions - with `Last-Event-ID` replay).
     public var wmpSseUrl: String
 
-    /// The transport factory for ``WmpEngineMode/local``: the app
-    /// constructs `WmpUniFFITransport` over its own ports (the engine's
-    /// outgoing fetches, its host asks, its trust stack) - the XCFramework's
-    /// engine core runs in-process. `nil` refuses the local mode with a
-    /// clear error (an app that has not wired the engine's ports).
-    public var wmpTransport: (@Sendable () -> any TransportProtocol)?
+    /// The transport factory for ``WmpEngineMode/local``: the app constructs
+    /// `WmpUniFFITransport` over its own ports - the engine's outgoing fetches
+    /// (`URLSession`-shaped `HttpClient`) and its trust stack (`Pdp`, or nil to
+    /// fail closed) - wrapping the SDK's ask handler in `UniFfiEngineAskHost`
+    /// so the engine's asks (the signs, the consent, the match, the tx code,
+    /// the authorization hand-over) reach the WALLET's handlers, exactly as
+    /// they do on the remote engine:
+    ///
+    /// ```swift
+    /// wmpTransport = { asks in
+    ///     WmpUniFFITransport(http: appHttp(), host: UniFfiEngineAskHost(asks), pdp: nil)
+    /// }
+    /// ```
+    ///
+    /// The XCFramework's engine core runs in-process. `nil` refuses the local
+    /// mode with a clear error (an app that has not wired the engine's ports).
+    public var wmpTransport: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)?
 
     /// Initial value of ``SirosWallet/transactionDataEnabled`` (EC TS12
     /// payment SCA). Default `false`. A runtime setting, not a build flag:
@@ -312,7 +323,7 @@ public struct WalletConfig: Sendable {
         wmpEngineMode: WmpEngineMode = .legacyWS,
         wmpSendUrl: String = "",
         wmpSseUrl: String = "",
-        wmpTransport: (@Sendable () -> any TransportProtocol)? = nil,
+        wmpTransport: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)? = nil,
         transactionDataEnabled: Bool = false,
         availableKeystores: [String: KeystoreManager]? = nil,
         defaultWscdMapping: [String: String]? = nil,

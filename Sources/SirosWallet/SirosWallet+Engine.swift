@@ -116,6 +116,7 @@ extension SirosWallet {
             return try? await tokens.ensureBackendToken().raw
         }
         markSessionEnded(false)
+        lock.lock(); wmpAskGeneration &+= 1; lock.unlock()
         // Resolve engine base URL
         let engineBase: String
         if !config.engineUrl.isEmpty {
@@ -167,7 +168,13 @@ extension SirosWallet {
             guard let factory = config.wmpTransport else {
                 throw SirosError.wallet(message: "WmpEngineMode.local needs wmpTransport (the app's WmpUniFFITransport factory - the XCFramework's engine core)")
             }
-            transport = try await factory()
+            // The asks of the in-process engine ride the Host port (the UniFFI
+            // callbacks), not the wire: hand the app's factory the WALLET's
+            // own ask handler, so the same handlers answer the local engine as
+            // answer the remote one's child flows.
+            lock.lock(); let askGeneration = wmpAskGeneration; lock.unlock()
+            let askHandler = WalletEngineAskHandler(wallet: self, lifetime: askGeneration)
+            transport = try factory(askHandler)
         }
         let session = WmpSession(transport: transport)
         let peer = WmpPeer(session: session)
@@ -243,9 +250,32 @@ extension SirosWallet {
         peer.use(profile)
         // Offered per session: a flag flip applies from the next session.
         let offerTransactionData = snapshotWmpSessionEnablement()
+        // siros-wallet-core gates every OpenID4x flow start on the `flows`
+        // capability being NEGOTIATED (core §10.3) and the credential
+        // notification flow on `credential_notification` - offered on the Rust
+        // engine's transports only: go-wmp (legacyWS) needs neither and its
+        // session create is not told about capabilities it does not know.
+        let capabilities: [String: AnyCodable]?
+        if config.wmpEngineMode == .legacyWS {
+            capabilities = TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: offerTransactionData)
+        } else {
+            var offered: [String: AnyCodable] = [
+                "flows": .object_([
+                    "max_concurrent": .int(16),
+                ]),
+                "credential_notification": .object_([
+                    "events": .array([.string("credential_accepted"), .string("credential_failure")]),
+                    "context_ttl_seconds": .int(300),
+                ]),
+            ]
+            if let transactionData = TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: offerTransactionData) {
+                offered[TransactionDataDeclaration.wmpCapabilityName] = transactionData[TransactionDataDeclaration.wmpCapabilityName]
+            }
+            capabilities = offered
+        }
         try await peer.connect(
             authToken: appToken,
-            capabilitiesOffered: TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: offerTransactionData)
+            capabilitiesOffered: capabilities
         )
         lock.lock(); wmpPeer = peer; credentialNotifier = WmpCredentialNotifier(peer: peer); lock.unlock()
 
@@ -878,7 +908,110 @@ extension SirosWallet {
         return SirosTransport.EngineAttestationResult(wia: material.wia, pop: material.pop)
     }
 
-    // MARK: - Legacy Engine Path
+    // MARK: - The LOCAL engine's asks (the Host port carrier)
+
+    /// The wallet's answers to the LOCAL engine's asks - the same handlers the
+    /// remote engine reaches through the profile's typed-ask callbacks, carried
+    /// over the SDK's ask port (engine-switching.md: "the SDK's Host is the native
+    /// UI"). Built per `connectViaWmp` with THIS connection's own ask generation: an
+    /// ask that arrives from an engine the wallet has since replaced is refused before
+    /// it allocates anything (the same liveness rule every remote WMP callback follows).
+    final class WalletEngineAskHandler: WmpEngineAskHandler, @unchecked Sendable {
+        private weak var wallet: SirosWallet?
+        /// THIS connection's own ask generation, from connectViaWmp - never a
+        /// fresh `wmpAskGeneration` read afterward.
+        private let lifetime: Int
+
+        init(wallet: SirosWallet, lifetime: Int) {
+            self.wallet = wallet
+            self.lifetime = lifetime
+        }
+
+        private func requireLive() throws {
+            guard let wallet, !wallet.isDestroyed else {
+                throw SirosError.wallet(message: "This wallet session has ended")
+            }
+            wallet.lock.lock(); let current = wallet.wmpAskGeneration; wallet.lock.unlock()
+            guard current == lifetime else {
+                throw SirosError.wallet(message: "This wallet session has ended")
+            }
+        }
+
+        public func requestSign(flowId: String, toSign: Data, keyId: String?, algorithm: String) async throws -> Data {
+            try requireLive()
+            return try await wallet!.handleWmpProofSign(
+                parentId: flowId,
+                params: SirosTransport.EngineSignParams(
+                    flowId: flowId,
+                    toSign: [UInt8](toSign),
+                    keyId: keyId,
+                    algorithm: algorithm
+                )
+            )
+        }
+
+        public func requestSigningKey(flowId: String, keyId: String?) async throws -> EngineSigningKeyResult {
+            try requireLive()
+            return try await wallet!.handleWmpSigningKey(parentId: flowId, keyId: keyId)
+        }
+
+        public func requestMatch(flowId: String, params: [String: AnyCodable]?) async throws -> MatchResult {
+            try requireLive()
+            return await wallet!.handleWmpMatchRequest(flowId: flowId, payload: params.map { AnyCodable.object_($0) })
+        }
+
+        public func requestConsent(flowId: String, params: EngineConsentParams) async throws -> Bool {
+            try requireLive()
+            return await wallet!.handleWmpConsent(parentId: flowId, params: params)
+        }
+
+        public func requestTxCode(flowId: String) async throws -> String {
+            try requireLive()
+            return try await wallet!.handleWmpTxCode(parentId: flowId)
+        }
+
+        public func openAuthorization(flowId: String, url: String) async throws {
+            try requireLive()
+            try await wallet!.handleWmpAuthorizationAsk(parentId: flowId, url: url)
+        }
+
+        public func requestVp(flowId: String, params: EngineVpParams) async throws -> EngineVpResult {
+            try requireLive()
+            return try await wallet!.handleWmpVpRequest(parentId: flowId, params: params)
+        }
+
+        public func requestDpopProof(flowId: String, params: EngineDpopProofParams) async throws -> EngineDpopProofResult {
+            try requireLive()
+            return try await wallet!.handleWmpDpopProof(parentId: flowId, params: params)
+        }
+
+        public func requestAttestation(flowId: String, params: EngineAttestationParams) async throws -> EngineAttestationResult {
+            try requireLive()
+            return try await wallet!.handleWmpAttestation(parentId: flowId, params: params)
+        }
+
+        public func requestCredentialSelection(flowId: String, available: [EngineAvailableCredential]) async throws -> String? {
+            // The engine-ports default refusal: a flow that needs a multi-configuration
+            // selection fails closed rather than guessing. Wiring the wallet's selection
+            // UI is the named follow-up (a single-configuration offer never asks).
+            nil
+        }
+
+        public func onProgress(flowId: String, step: String, detail: String?) {
+            guard let wallet, !wallet.isDestroyed else { return }
+            wallet.lock.lock(); let current = wallet.wmpAskGeneration; wallet.lock.unlock()
+            guard current == lifetime else { return }
+            // The local carrier has no SSE stream for the wallet's own UI: the Host's
+            // progress relay feeds the same progress handling.
+            Task { [wallet] in
+                await wallet.handleWmpProgress(
+                    flowId: flowId,
+                    step: step,
+                    payload: detail.map { msg -> AnyCodable in AnyCodable.object_(["message": .string(msg)]) }
+                )
+            }
+        }
+    }
 
     func connectEngine(appToken: String) async throws {
         markSessionEnded(false)

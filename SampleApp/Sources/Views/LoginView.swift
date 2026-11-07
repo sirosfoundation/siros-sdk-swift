@@ -287,10 +287,11 @@ struct PreLoginSettingsView: View {
                         }
                         if viewModel.wmpEngineMode == .local {
                             Text(
-                                "The in-process engine needs the app's transport factory " +
-                                "(the XCFramework's engine core over its ports) - the " +
-                                "follow-up wires it; until then this mode refuses with a " +
-                                "clear error."
+                                "The in-process engine runs over the app's ports: the " +
+                                "outgoing fetches over URLSession, the wallet's asks " +
+                                "answered by the SDK's own handlers (LocalEngine.swift). " +
+                                "The trust stack is absent - the local engine fails " +
+                                "closed at the trust step until one is wired."
                             )
                             .font(.caption)
                             .foregroundColor(.secondary)
