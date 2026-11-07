@@ -142,6 +142,25 @@ public protocol KeystoreManager: AnyObject, Sendable {
     /// Sign a payload with the specified key.
     func sign(keyId: String, payload: Data, algorithm: String) async throws -> Data
 
+    /// The JOSE signature (the raw JWS signature bytes - the base64url of them is
+    /// the third segment of a compact JWS) over an ALREADY-BUILT signing input: the
+    /// bytes an engine's bare `sign` ask carries, `header.payload` ASCII. Unlike
+    /// ``sign(keyId:payload:algorithm:)``, the bytes are signed AS GIVEN - never
+    /// re-encoded into a JWS first. The answer to siros-wallet-core's typed `sign`
+    /// ask, where the engine built the proof's signing input and the key never left
+    /// the wallet. The extension's default nil fails closed: a keystore that cannot
+    /// sign raw input refuses the ask (the engine fails the proof).
+    func signJwsSignature(keyId: String, signingInput: Data, algorithm: String) async throws -> Data?
+
+    /// The public JWK of an existing key - the answer to siros-wallet-core's
+    /// `signing_key` ask: the engine builds a proof header naming the wallet's key,
+    /// and the key never leaves the wallet, so the host answers with the public part
+    /// only. `keyId` nil selects the DEFAULT proof key - the same key an unnamed
+    /// proof would be signed with, so the pair of asks stays consistent: the wallet
+    /// publishes THIS key's JWK and later signs with THIS key. The extension's
+    /// default nil keeps the proof header bare (the legacy shape; fail closed).
+    func publicKeyJwk(keyId: String?) async throws -> (keyId: String, jwk: [String: String])?
+
     /// Generate a proof JWT for credential issuance (c_nonce binding).
     /// When `freshKey` is true, a new key is generated for this proof (batch issuance).
     ///
@@ -688,3 +707,12 @@ extension KeystoreManager {
         )
     }
 }
+
+// The typed asks' fail-closed defaults: a keystore written before siros-wallet-core
+// keeps compiling and linking, and refuses the asks it cannot answer.
+extension KeystoreManager {
+    public func signJwsSignature(keyId: String, signingInput: Data, algorithm: String) async throws -> Data? { nil }
+
+    public func publicKeyJwk(keyId: String?) async throws -> (keyId: String, jwk: [String: String])? { nil }
+}
+

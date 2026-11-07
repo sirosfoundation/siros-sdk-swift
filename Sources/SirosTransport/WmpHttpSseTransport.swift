@@ -18,6 +18,11 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     private let sseUrl: URL
     private let urlSession: URLSession
     private let extraHeaders: [String: String]
+    /// Freshens the `Authorization` bearer per request: the binding is stateless - every POST is its own
+    /// own request and the engine validates each one - so a token baked in at connect dies with its
+    /// (~120 s) expiry. A nil return falls back to no Authorization header; extraHeaders' Authorization
+    /// (if any) then applies.
+    private let tokenProvider: (@Sendable () async -> String?)?
 
     private var _state: TransportState = .disconnected
     public var currentState: TransportState { _state }
@@ -34,17 +39,23 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     private var replayFilter = SseReplayFilter()
     // One reader at a time: two overlapping connects must not feed one parser from two tasks.
     private let readerGate = SseReaderGate()
+    /// The session this stream belongs to, from `onSessionCreated`. The engine's SSE route REQUIRES
+    /// `?session_id=` (it routes the replay and the live events by it), so the stream cannot open
+    /// before the create answers - `connect()` defers to `onSessionCreated` until the id arrives.
+    private var sseSessionId: String?
 
     public init(
         sendUrl: URL,
         sseUrl: URL,
         session: URLSession = .shared,
-        extraHeaders: [String: String] = [:]
+        extraHeaders: [String: String] = [:],
+        tokenProvider: (@Sendable () async -> String?)? = nil
     ) {
         self.sendUrl = sendUrl
         self.sseUrl = sseUrl
         self.urlSession = session
         self.extraHeaders = extraHeaders
+        self.tokenProvider = tokenProvider
 
         var sc: AsyncStream<TransportState>.Continuation!
         self.stateStream = AsyncStream { sc = $0 }
@@ -56,12 +67,16 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     }
 
     public func connect() async throws {
+        // Pre-create there is no session to name: the engine's SSE route answers 400 without
+        // `?session_id=`, and no session exists yet anyway. `onSessionCreated` opens the stream
+        // once the create answered; a resume re-connects through here with the remembered id.
+        guard let sessionId = sseSessionId else { return }
         // The request is built first; the reader is claimed and installed in ONE step under the gate lock, so a
         // concurrent `disconnect()` always finds the reader it has to cancel.
 
-        var request = URLRequest(url: sseUrl)
+        var request = URLRequest(url: sseRequestUrl(sessionId))
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        for (key, value) in extraHeaders {
+        for (key, value) in try await requestHeaders() {
             request.setValue(value, forHTTPHeaderField: key)
         }
         let baseRequest = request   // a `let` for the closure: not changed after this point
@@ -123,11 +138,38 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
             }
     }
 
+    /// The stream, opened with the session the wallet created: `?session_id=` names it (the engine
+    /// routes the replay and the live events by it).
+    public func onSessionCreated(sessionId: String) async {
+        if sseSessionId == nil { sseSessionId = sessionId }
+        if _state != .connected {
+            try? await connect()
+        }
+    }
+
+    /// The SSE GET, named with the session id.
+    private func sseRequestUrl(_ sessionId: String) -> URL {
+        var components = URLComponents(url: sseUrl, resolvingAgainstBaseURL: false)!
+        var items = components.queryItems ?? []
+        items.append(URLQueryItem(name: "session_id", value: sessionId))
+        components.queryItems = items
+        return components.url ?? sseUrl
+    }
+
+    /// [extraHeaders], with the `Authorization` freshened from [tokenProvider] when it answers.
+    private func requestHeaders() async throws -> [String: String] {
+        var headers = extraHeaders
+        if let token = await tokenProvider?() {
+            headers["Authorization"] = "Bearer \(token)"
+        }
+        return headers
+    }
+
     public func send(_ message: Data) async throws {
         var request = URLRequest(url: sendUrl)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        for (key, value) in extraHeaders {
+        for (key, value) in try await requestHeaders() {
             request.setValue(value, forHTTPHeaderField: key)
         }
         request.httpBody = message

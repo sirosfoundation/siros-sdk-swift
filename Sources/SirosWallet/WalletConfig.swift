@@ -6,8 +6,30 @@ import FoundationNetworking
 #endif
 import SirosCredentials
 import SirosKeystore
+import SirosTransport
 
 /// Configuration for ``SirosWallet``.
+/// Which engine the WMP protocol connects to, when
+/// ``WalletConfig/useWmpProtocol`` is enabled.
+///
+/// - ``legacyWS``: the Go engine's WebSocket (`engineUrl`, the historic
+///   default - `go-wallet-backend --mode=engine`).
+/// - ``httpSSE``: the Rust engine's WMP HTTP+SSE binding
+///   (``WalletConfig/wmpSendUrl`` / ``WalletConfig/wmpSseUrl`` -
+///   siros-wallet-core engine-server, the drop-in replacement).
+/// - ``local``: the engine in-process
+///   (``WalletConfig/wmpTransport`` over the `WmpUniFFITransport` - the
+///   XCFramework's engine core; the app supplies the transport wired to
+///   its ports).
+public enum WmpEngineMode: String, Sendable, CaseIterable {
+    /// The Go engine's WebSocket transport.
+    case legacyWS = "legacy_ws"
+    /// The Rust engine's WMP over HTTP+SSE, remote.
+    case httpSSE = "http_sse"
+    /// The Rust engine core in-process, over the XCFramework.
+    case local
+}
+
 public struct WalletConfig: Sendable {
     /// The wallet backend URL (e.g. "https://wallet.sirosid.dev").
     public var backendUrl: String
@@ -51,6 +73,40 @@ public struct WalletConfig: Sendable {
     /// Use the WMP (Wallet Messaging Protocol) JSON-RPC 2.0 transport instead
     /// of the legacy engine protocol. Requires go-wallet-backend with WMP support.
     public var useWmpProtocol: Bool
+
+    /// Which engine ``useWmpProtocol`` connects to. `.legacyWS` keeps the
+    /// historic WebSocket path (the Go engine) so existing deployments are
+    /// unchanged; the others speak the Rust engine
+    /// (siros-wallet-core, the drop-in replacement).
+    public var wmpEngineMode: WmpEngineMode
+
+    /// The WMP send endpoint (``WmpEngineMode/httpSSE``):
+    /// `http://<engine>:8780/wmp` (POST /wmp - the request/response
+    /// binding; the reply rides the SSE stream).
+    public var wmpSendUrl: String
+
+    /// The WMP SSE endpoint (``WmpEngineMode/httpSSE``):
+    /// `http://<engine>:8780/wmp/events` (the engine's messages: flow
+    /// progress, sub-flow asks, completions - with `Last-Event-ID` replay).
+    public var wmpSseUrl: String
+
+    /// The transport factory for ``WmpEngineMode/local``: the app constructs
+    /// `WmpUniFFITransport` over its own ports - the engine's outgoing fetches
+    /// (`URLSession`-shaped `HttpClient`) and its trust stack (`Pdp`, or nil to
+    /// fail closed) - wrapping the SDK's ask handler in `UniFfiEngineAskHost`
+    /// so the engine's asks (the signs, the consent, the match, the tx code,
+    /// the authorization hand-over) reach the WALLET's handlers, exactly as
+    /// they do on the remote engine:
+    ///
+    /// ```swift
+    /// wmpTransport = { asks in
+    ///     WmpUniFFITransport(http: appHttp(), host: UniFfiEngineAskHost(asks), pdp: nil)
+    /// }
+    /// ```
+    ///
+    /// The XCFramework's engine core runs in-process. `nil` refuses the local
+    /// mode with a clear error (an app that has not wired the engine's ports).
+    public var wmpTransport: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)?
 
     /// Initial value of ``SirosWallet/transactionDataEnabled`` (EC TS12
     /// payment SCA). Default `false`. A runtime setting, not a build flag:
@@ -264,6 +320,10 @@ public struct WalletConfig: Sendable {
         urlRewriter: (@Sendable (String) -> String)? = nil,
         requireUserAuth: Bool = true,
         useWmpProtocol: Bool = false,
+        wmpEngineMode: WmpEngineMode = .legacyWS,
+        wmpSendUrl: String = "",
+        wmpSseUrl: String = "",
+        wmpTransport: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)? = nil,
         transactionDataEnabled: Bool = false,
         availableKeystores: [String: KeystoreManager]? = nil,
         defaultWscdMapping: [String: String]? = nil,
@@ -291,6 +351,10 @@ public struct WalletConfig: Sendable {
         self.urlRewriter = urlRewriter
         self.requireUserAuth = requireUserAuth
         self.useWmpProtocol = useWmpProtocol
+        self.wmpEngineMode = wmpEngineMode
+        self.wmpSendUrl = wmpSendUrl
+        self.wmpSseUrl = wmpSseUrl
+        self.wmpTransport = wmpTransport
         self.transactionDataEnabled = transactionDataEnabled
         self.availableKeystores = availableKeystores
         self.defaultWscdMapping = defaultWscdMapping

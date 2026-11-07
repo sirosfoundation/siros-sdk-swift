@@ -137,6 +137,11 @@ extension SirosWallet {
             // The flow is over for this wallet: marked ended, so a request for it still buffered on the legacy
             // WebSocket is refused instead of recreating its key.
             cancelTransactionTasks(flowId: cancelFlowId)
+            // The live transport cancels the flow SERVER-side too (the engine
+            // ends the flow and tells the issuer/verifier side), whichever is up.
+            Task { [peer, cancelFlowId] in
+                _ = try? await peer?.cancelFlowNow(flowId: cancelFlowId, reason: "user_cancelled")
+            }
         }
         // On WMP the parents and their sign/match children live in the peer, and the wallet state need not say a flow
         // is active (nothing sets it there): everything the peer is running for flows stops here, before this
@@ -194,7 +199,40 @@ extension SirosWallet {
         let pending = pendingAuthorizations[flowId]
         let tokens = authTokens
         let listener = eventListener
+        let peer = wmpPeer
         lock.unlock()
+
+        if let peer {
+            // The WMP resume (siros-wallet-core): the engine stashed the PKCE
+            // verifier and the offer context server-side at its
+            // authorization_required progress, so the resume is ONE action on the
+            // ORIGINAL flow id - no reconnect, no re-sent start, no new flow id.
+            // The completion (or error) arrives on the SSE stream.
+            if let pending {
+                guard pending.state == state else {
+                    listener?.onFlowError(flowId: flowId, errorMessage: "Authorization state mismatch", redirectUri: nil)
+                    return
+                }
+                lock.lock(); pendingAuthorizations.removeValue(forKey: flowId); lock.unlock()
+            }
+            Task {
+                do {
+                    _ = try await peer.sendFlowAction(
+                        flowId: flowId,
+                        action: OID4Action.authorize,
+                        params: AnyCodable.object_(["code": .string(code), "state": .string(state)])
+                    )
+                } catch {
+                    lock.lock(); let listener = eventListener; lock.unlock()
+                    listener?.onFlowError(
+                        flowId: flowId,
+                        errorMessage: "Failed to resume authorization: \(error.localizedDescription)",
+                        redirectUri: nil
+                    )
+                }
+            }
+            return
+        }
 
         guard let engine else { return }
 

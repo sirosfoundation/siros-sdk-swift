@@ -62,6 +62,19 @@ final class WalletViewModel: ObservableObject {
     @Published var useWmpProtocol: Bool {
         didSet { UserDefaults.standard.set(useWmpProtocol, forKey: "siros_use_wmp_protocol") }
     }
+    /// Which engine the WMP protocol connects to, and the remote endpoints -
+    /// persisted like useWmpProtocol (the pre-login settings' own rule: the
+    /// choice is made before any login/registration, at the next wallet
+    /// construction).
+    @Published var wmpEngineMode: SirosWallet.WmpEngineMode {
+        didSet { UserDefaults.standard.set(wmpEngineMode.rawValue, forKey: "siros_wmp_engine_mode") }
+    }
+    @Published var wmpSendUrl: String {
+        didSet { UserDefaults.standard.set(wmpSendUrl, forKey: "siros_wmp_send_url") }
+    }
+    @Published var wmpSseUrl: String {
+        didSet { UserDefaults.standard.set(wmpSseUrl, forKey: "siros_wmp_sse_url") }
+    }
     /// EC TS12 switch: persisted, applied to the live wallet. Default off.
     @Published var transactionDataEnabled: Bool {
         didSet {
@@ -381,6 +394,11 @@ final class WalletViewModel: ObservableObject {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
         self.useWmpProtocol = defaults.bool(forKey: "siros_use_wmp_protocol")
+        self.wmpEngineMode = SirosWallet.WmpEngineMode(
+            rawValue: defaults.string(forKey: "siros_wmp_engine_mode") ?? ""
+        ) ?? .legacyWS
+        self.wmpSendUrl = defaults.string(forKey: "siros_wmp_send_url") ?? ""
+        self.wmpSseUrl = defaults.string(forKey: "siros_wmp_sse_url") ?? ""
         self.transactionDataEnabled = defaults.bool(forKey: Self.transactionDataEnabledKey)
         if let storedShowDetails = defaults.object(forKey: "siros_show_credential_details") as? Bool {
             self.showCredentialDetails = storedShowDetails
@@ -1206,6 +1224,26 @@ final class WalletViewModel: ObservableObject {
             tenantId: tenantId,
             redirectUri: "\(redirectScheme)://callback",
             useWmpProtocol: useWmpProtocol,
+            // Which engine the WMP protocol connects to, and its endpoints:
+            // remote (the Rust engine's HTTP+SSE binding) or local (the
+            // XCFramework's engine core in-process, over the app's ports -
+            // the transport factory below wraps the SDK's ask handler, so the
+            // engine's asks reach this wallet's own handlers exactly as they
+            // do on the remote engine).
+            wmpEngineMode: wmpEngineMode,
+            wmpSendUrl: wmpSendUrl,
+            wmpSseUrl: wmpSseUrl,
+            wmpTransport: wmpEngineMode == .local ? { asks in
+                // The local engine over the app's HTTP port (URLSession), the
+                // WALLET's own ask handlers (UniFfiEngineAskHost over the SDK's
+                // handler seam), and no trust stack (fail closed at the trust
+                // step until one is wired).
+                WmpUniFFITransport(
+                    http: URLSessionEngineHttp(),
+                    host: UniFfiEngineAskHost(asks),
+                    pdp: nil
+                )
+            } : nil,
             transactionDataEnabled: transactionDataEnabled,
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,
