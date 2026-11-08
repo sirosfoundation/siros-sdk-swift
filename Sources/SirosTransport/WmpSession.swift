@@ -112,6 +112,14 @@ public final class WmpSession: @unchecked Sendable {
         sessionId = parsed.wmp.sessionId
         resumptionToken = parsed.resumptionToken
 
+        // The HTTP+SSE binding names its event stream with the session id (the engine's SSE route
+        // requires `?session_id=`): it opens HERE, after the create answered. The create's own
+        // reply rode the POST's body. The WS and in-process bindings answer nothing (their carrier
+        // is bound another way).
+        if let sid = sessionId {
+            await transport.onSessionCreated(sessionId: sid)
+        }
+
         setState(.active)
     }
 
@@ -175,7 +183,7 @@ public final class WmpSession: @unchecked Sendable {
         let effectiveTimeout = timeoutMs > 0 ? timeoutMs : Int(config.requestTimeoutMs)
         let id = UUID().uuidString
 
-        let message = try codec.encodeRequest(method: method, params: params, id: id)
+        let message = try codec.encodeRequest(method: method, params: stampSessionId(params), id: id)
 
         return try await withCheckedThrowingContinuation { continuation in
             pendingLock.lock()
@@ -205,8 +213,25 @@ public final class WmpSession: @unchecked Sendable {
 
     /// Send a JSON-RPC notification (no response expected).
     public func sendNotification(method: String, params: [String: AnyCodable]?) async throws {
-        let message = try codec.encodeNotification(method: method, params: params)
+        let message = try codec.encodeNotification(method: method, params: stampSessionId(params))
         try await sendSerializer.send(message, via: transport)
+    }
+
+    /// [params] with this session's id stamped into its `wmp.session_id`.
+    ///
+    /// The engine resolves EVERY request's session context from that member (the SSE
+    /// stream aside, the HTTP+SSE binding is stateless - nothing else names the session a
+    /// POST belongs to), and its capability gate fails closed without one: a flow start
+    /// whose envelope carried no session id was answered "Capability not supported" (found
+    /// driving the issuance against a live engine). Nil before the create answered
+    /// ([sessionId] unset): the params ride as built. The resume/close envelopes already
+    /// name the session; the stamp is idempotent over them.
+    private func stampSessionId(_ params: [String: AnyCodable]?) -> [String: AnyCodable]? {
+        guard let sid = sessionId, var params = params,
+              case var .object_(wmp) = params["wmp"] ?? AnyCodable.object_([:]) else { return params }
+        wmp["session_id"] = .string(sid)
+        params["wmp"] = .object_(wmp)
+        return params
     }
 
     /// Send a JSON-RPC response for an incoming request.

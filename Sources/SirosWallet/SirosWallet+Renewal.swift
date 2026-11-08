@@ -119,10 +119,11 @@ extension SirosWallet {
     /// raw wire values (e.g. the bare "mso_mdoc" format string instead of
     /// "mDL").
     public func renewCredential(batchId: Int64) async throws {
-        guard let engine = engineSession else {
+        lock.lock(); let peer = wmpPeer; let engine = engineSession; lock.unlock()
+        if peer == nil && engine == nil {
             throw SirosError.wallet(message: "Not connected")
         }
-        try await ensureEngineConnected(engine)
+        if let engine { try await ensureEngineConnected(engine) }
         // A renewal is issuance-shaped (it ends up at the same
         // `flow_complete` path and mutates the same `activeOffer`/
         // `pendingRenewalSourceBatchId` shared state) so it must
@@ -165,14 +166,37 @@ extension SirosWallet {
             // (like `dispatchIssuanceStart`): a cancel plus a newer renewal cannot land
             // between them, so this one can neither overwrite the newer renewal's source
             // batch nor send its cancelled start.
-            commitRenewalStart(epoch: startEpoch, batchId: batchId, offer: stagedOffer) {
+            if let peer {
+                // The WMP renewal start (siros-wallet-core): the refresh_token
+                // grant bundle as the by-value params form.
+                var params: [String: AnyCodable] = [
+                    "refresh_token": .string(candidate.refreshToken),
+                    "credential_issuer": .string(candidate.credentialIssuerIdentifier),
+                    "selected_credential_configuration_id": .string(candidate.credentialConfigurationId),
+                ]
+                if let dpopJwk = candidate.dpopJwk { params["dpop_jwk"] = .string(dpopJwk) }
+                if let dpopKeyId = candidate.dpopKeyId { params["dpop_key_id"] = .string(dpopKeyId) }
+                commitRenewalStart(epoch: startEpoch, batchId: batchId, offer: stagedOffer) { _ in
+                    wmpIssuanceStartTask?.cancel()
+                    wmpIssuanceStartTask = Task { [weak self] in
+                        _ = try? await peer.startFlow(
+                            flowType: OID4FlowTypes.oid4vci,
+                            flowId: self?.wmpNewFlowId() ?? "flow-\(UUID().uuidString.lowercased())",
+                            params: AnyCodable.object_(params)
+                        )
+                    }
+                }
+                return
+            }
+            guard let engine else { throw SirosError.wallet(message: "Not connected") }
+            commitRenewalStart(epoch: startEpoch, batchId: batchId, offer: stagedOffer) { tag in
                 engine.startRenewal(
                     refreshToken: candidate.refreshToken,
                     credentialIssuer: candidate.credentialIssuerIdentifier,
                     selectedCredentialConfigurationId: candidate.credentialConfigurationId,
                     dpopJwk: candidate.dpopJwk,
                     dpopKeyId: candidate.dpopKeyId,
-                    startTag: $0
+                    startTag: tag
                 )
             }
         } catch {

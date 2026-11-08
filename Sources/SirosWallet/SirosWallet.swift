@@ -682,6 +682,16 @@ public final class SirosWallet: @unchecked Sendable {
     // too - same cross-file-extension-access reason as `keystore` above.
     var wmpPeer: WmpPeer?
 
+    /// The detached WMP issuance start (see `wmpStartIssuance`): cancelled by
+    /// the next start so a cancelled attempt's late send cannot race it.
+    var wmpIssuanceStartTask: Task<Void, Never>?
+
+    /// The WMP ask epoch: bumped at every `connectViaWmp`, so a LOCAL-mode ask
+    /// handler built for a REPLACED connection refuses (asks of the old engine
+    /// cannot act on the new connection's state) - the same liveness rule every
+    /// remote callback follows (`WalletEngineAskHandler.lifetime`).
+    var wmpAskGeneration: Int = 0
+
     /// Caller holds `lock`.
     func resetPresentationHistoryLocked() { _presentationHistory = [] }
 

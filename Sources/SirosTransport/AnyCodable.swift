@@ -28,6 +28,33 @@ public enum AnyCodable: Sendable, Equatable {
         return nil
     }
 
+    /// The plain-`Any` view (JSONSerialization-shaped): one conversion for the
+    /// seams that hand JSON to Foundation (the UniFFI bindings, metadata caches).
+    public var any: Any? {
+        switch self {
+        case .string(let v): return v
+        case .int(let v): return v
+        case .double(let v): return v
+        case .bool(let v): return v
+        case .null_: return nil
+        case .object_(let v): return v.mapValues { $0.any }
+        case .array(let v): return v.map { $0.any }
+        }
+    }
+
+    /// One `Any` as an [AnyCodable] (JSONSerialization-shaped sources).
+    public init(_ any: Any) {
+        switch any {
+        case let value as String: self = .string(value)
+        case let value as Int: self = .int(value)
+        case let value as Bool: self = .bool(value)
+        case let value as Double: self = .double(value)
+        case let value as [String: Any]: self = .object_(value.mapValues { AnyCodable($0) })
+        case let value as [Any]: self = .array(value.map { AnyCodable($0) })
+        default: self = .null_
+        }
+    }
+
     public var objectValue: [String: AnyCodable]? {
         if case .object_(let d) = self { return d }
         return nil

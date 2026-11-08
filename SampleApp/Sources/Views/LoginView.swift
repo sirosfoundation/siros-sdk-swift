@@ -260,6 +260,43 @@ struct PreLoginSettingsView: View {
                     Text(viewModel.useWmpProtocol ? L10n.string("settings.wmpProtocolOn") : L10n.string("settings.wmpProtocolOff"))
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    // Which engine the WMP protocol connects to, and its
+                    // endpoints - selected BEFORE login/registration (the
+                    // sheet's own rule), taking effect at the next wallet
+                    // construction.
+                    if viewModel.useWmpProtocol {
+                        Picker("WMP Engine", selection: $viewModel.wmpEngineMode) {
+                            Text("Go engine (WebSocket)").tag(SirosWallet.WmpEngineMode.legacyWS)
+                            Text("Rust engine (remote, HTTP+SSE)").tag(SirosWallet.WmpEngineMode.httpSSE)
+                            Text("Rust engine (in-process, XCFramework)").tag(SirosWallet.WmpEngineMode.local)
+                        }
+                        if viewModel.wmpEngineMode == .httpSSE {
+                            TextField("WMP send URL (POST /wmp)", text: $viewModel.wmpSendUrl)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                            TextField("WMP SSE URL (GET /wmp/events)", text: $viewModel.wmpSseUrl)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                            Text(
+                                "A dev stack with WMP_ENGINE=yes serves these at " +
+                                "http://<host>:8780/wmp and /wmp/events."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        }
+                        if viewModel.wmpEngineMode == .local {
+                            Text(
+                                "The in-process engine runs over the app's ports: the " +
+                                "outgoing fetches over URLSession, the wallet's asks " +
+                                "answered by the SDK's own handlers (LocalEngine.swift). " +
+                                "The trust stack is absent - the local engine fails " +
+                                "closed at the trust step until one is wired."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        }
+                    }
                 }
 
                 // RICAL reader-trust local fallback (Geneva 2026 interop

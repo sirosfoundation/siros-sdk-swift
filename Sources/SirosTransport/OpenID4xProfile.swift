@@ -9,6 +9,24 @@ import Foundation
 public enum WmpSubFlowTypes {
     public static let sign = "sign"
     public static let match = "match"
+
+    /// siros-wallet-core's typed asks (engine-ports' `Host` vocabulary, one child
+    /// flow per ask — see `EngineAsks.swift` for the dialect distinction): the
+    /// same sub-flow answer mechanics, answered with each ask's own result
+    /// struct on `wmp.flow.complete`.
+    public static let signingKey = "signing_key"
+    public static let consent = "consent"
+    public static let txCode = "tx_code"
+    public static let authorization = "authorization"
+    public static let presentation = "presentation"
+    public static let dpopProof = "dpop_proof"
+    public static let attestation = "attestation"
+
+    /// Every child flow the profile answers: the go-wmp dialect (`sign`/`match`)
+    /// and siros-wallet-core's typed asks.
+    public static let all: [String] = [
+        sign, match, signingKey, consent, txCode, authorization, presentation, dpopProof, attestation,
+    ]
 }
 
 public enum OID4FlowTypes {
@@ -568,6 +586,28 @@ public struct OpenID4xConfig: @unchecked Sendable {
     /// failed POST on a healthy stream). After the last one the answer waits for the next resume.
     public var sendRetryDelaysMs: [Int]
 
+    // ── siros-wallet-core's typed asks (httpSSE/local engines), appended after
+    // every go-wmp-era member (a struct's property order is its ABI). A nil
+    // callback answers its ask with capability-not-supported (the engine fails
+    // the flow closed), except where an "empty" answer is a legal negative (no
+    // key, no DPoP proof, no attestation).
+    /// The bare `sign` ask: sign `EngineSignParams.toSignBytes` with the key its `keyId` names.
+    public var onProofSign: ((String, EngineSignParams) async throws -> Data)?
+    /// The `signing_key` ask: the named key's public JWK, or nil for "no such key".
+    public var onSigningKey: ((String, String?) async throws -> EngineSigningKeyResult)?
+    /// The `consent` ask: the user's YES/NO on the claims/purpose. `false` is the decline path, never an error.
+    public var onConsent: ((String, EngineConsentParams) async throws -> Bool)?
+    /// The `tx_code` ask: the transaction code the user entered.
+    public var onTxCode: ((String) async throws -> String)?
+    /// The `authorization` ask: hand the user to the URL (open the browser); the ask's result is ignored.
+    public var onAuthorization: ((String, String) async throws -> Void)?
+    /// The `presentation` ask: build and sign the VP token for the selections. Answer a token or a structured refusal.
+    public var onVpRequest: ((String, EngineVpParams) async throws -> EngineVpResult)?
+    /// The `dpop_proof` ask: the client-held DPoP proof, or nil for "unavailable" (the engine falls back).
+    public var onDpopProof: ((String, EngineDpopProofParams) async throws -> EngineDpopProofResult)?
+    /// The `attestation` ask: the WIA + PoP pair, or nils for "no attestation".
+    public var onAttestation: ((String, EngineAttestationParams) async throws -> EngineAttestationResult)?
+
     public init(
         onProgress: ((String, String, AnyCodable?) async -> Void)? = nil,
         onSignRequest: ((String, SignSubFlowParams) async throws -> SignSubFlowResult)? = nil,
@@ -578,7 +618,15 @@ public struct OpenID4xConfig: @unchecked Sendable {
         onError: ((String, String?, String?) async -> Void)? = nil,
         attestationProvider: ClientAttestationProvider? = nil,
         onShutdown: (() -> Void)? = nil,
-        sendRetryDelaysMs: [Int] = [1_000, 2_000, 4_000, 8_000]
+        sendRetryDelaysMs: [Int] = [1_000, 2_000, 4_000, 8_000],
+        onProofSign: ((String, EngineSignParams) async throws -> Data)? = nil,
+        onSigningKey: ((String, String?) async throws -> EngineSigningKeyResult)? = nil,
+        onConsent: ((String, EngineConsentParams) async throws -> Bool)? = nil,
+        onTxCode: ((String) async throws -> String)? = nil,
+        onAuthorization: ((String, String) async throws -> Void)? = nil,
+        onVpRequest: ((String, EngineVpParams) async throws -> EngineVpResult)? = nil,
+        onDpopProof: ((String, EngineDpopProofParams) async throws -> EngineDpopProofResult)? = nil,
+        onAttestation: ((String, EngineAttestationParams) async throws -> EngineAttestationResult)? = nil
     ) {
         self.onCancel = onCancel
         self.onShutdown = onShutdown
@@ -590,6 +638,14 @@ public struct OpenID4xConfig: @unchecked Sendable {
         self.onComplete = onComplete
         self.onError = onError
         self.attestationProvider = attestationProvider
+        self.onProofSign = onProofSign
+        self.onSigningKey = onSigningKey
+        self.onConsent = onConsent
+        self.onTxCode = onTxCode
+        self.onAuthorization = onAuthorization
+        self.onVpRequest = onVpRequest
+        self.onDpopProof = onDpopProof
+        self.onAttestation = onAttestation
     }
 }
 
@@ -606,7 +662,7 @@ private let trustEvaluationRequired = "trust_evaluation_required"
 public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfile, WmpResumeProfile, WmpLocalCancelProfile, @unchecked Sendable {
     public let name: String = "openid4x"
     public let capabilities: [String] = ["oid4vci", "oid4vp"]
-    public let flowTypes: [String] = [OID4FlowTypes.oid4vci, OID4FlowTypes.oid4vp, WmpSubFlowTypes.sign, WmpSubFlowTypes.match]
+    public let flowTypes: [String] = [OID4FlowTypes.oid4vci, OID4FlowTypes.oid4vp] + WmpSubFlowTypes.all
 
     private let config: OpenID4xConfig
     private weak var peer: WmpPeerContext?
@@ -662,7 +718,7 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
     public func startFlow(params: FlowStartParams) async throws -> FlowStartResult {
         // A sign or match sub-flow is answered when the wallet has an answer (it may wait for the user),
         // not in the reply to the start request.
-        if params.flowType == WmpSubFlowTypes.sign || params.flowType == WmpSubFlowTypes.match {
+        if WmpSubFlowTypes.all.contains(params.flowType) {
             let parent = params.params?.objectValue?["parent_flow_id"]?.stringValue ?? params.flowId
             // Registered under the lock the task's own `finishChild` takes, so a fast child cannot finish first.
             childLock.lock()
@@ -693,7 +749,14 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
     func runChildFlow(params: FlowStartParams, token: UUID = UUID()) async {
         let childId = params.flowId
         let payload = params.params
-        let parentId = payload?.objectValue?["parent_flow_id"]?.stringValue ?? childId
+        // The PARENT flow's id, both dialects: go-wmp names it in `parent_flow_id`;
+        // siros-wallet-core's typed asks carry it as `flow_id`, and the child id itself
+        // is `<parent>::<type>::<seq>`, so the prefix before the first `::` is the
+        // final fallback.
+        let parentId = payload?.objectValue?["parent_flow_id"]?.stringValue
+            ?? payload?.objectValue?["flow_id"]?.stringValue
+            ?? childId.split(separator: "::").first.map(String.init)
+            ?? childId
         // Cancelled or shut down before it got going: no handler runs (Swift cancellation does not stop a task
         // that has not started, and a handler must not begin signing for a flow that has ended).
         guard !endedBeforeStart(childId, token) else { peer?.releaseFlow(flowId: childId); return }
@@ -701,7 +764,17 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
         let answer: [String: AnyCodable]
         do {
             let members: [String: AnyCodable]
-            if params.flowType == WmpSubFlowTypes.sign {
+            // The dialect fork, inside `sign`: go-wmp's ask always carries
+            // `action`; siros-wallet-core's bare `sign` ask never does (its
+            // SignParams is flow_id/to_sign/key_id/algorithm). A params-less
+            // sign child (nil payload) is neither dialect's shape - the
+            // pre-existing INVALID_PARAMS answer (a nil payload is invalid in
+            // BOTH dialects: the bare ask's members are required).
+            if params.flowType == WmpSubFlowTypes.sign && payload?.objectValue == nil {
+                throw ChildFlowFailure(code: "INVALID_PARAMS")
+            } else if params.flowType == WmpSubFlowTypes.sign && payload?.objectValue?["action"] == nil {
+                members = try await bareSignAnswerMembers(parentId, params)
+            } else if params.flowType == WmpSubFlowTypes.sign {
                 guard let handler = config.onSignRequest, let payload else { throw ChildFlowFailure(code: "INVALID_PARAMS") }
                 let signParams: SignSubFlowParams
                 do {
@@ -710,9 +783,20 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
                     throw ChildFlowFailure(code: "INVALID_PARAMS")
                 }
                 members = signResponseMembers(try await handler(parentId, signParams))
-            } else {
+            } else if params.flowType == WmpSubFlowTypes.match {
                 guard let handler = config.onMatchRequest else { throw ChildFlowFailure(code: "INVALID_PARAMS") }
-                members = matchResponseMembers(try await handler(parentId, payload))
+                let result = try await handler(parentId, payload)
+                // go-wmp's dialect names the parent in `parent_flow_id` and is answered
+                // with `matches` (query ids only); siros-wallet-core's MatchParams carry
+                // the parent as `flow_id` and are answered with `selections` (the wallet's
+                // own credential ids, relayed nowhere but the wallet's own presentation ask).
+                if payload?.objectValue?["parent_flow_id"] != nil {
+                    members = matchResponseMembers(result)
+                } else {
+                    members = matchSelectionsMembers(result)
+                }
+            } else {
+                members = try await typedAskMembers(params.flowType ?? "", parentId, params)
             }
             method = WmpMethods.flowComplete
             answer = ["flow_id": .string(childId), "result": .object_(members)]
@@ -1035,6 +1119,129 @@ public final class OpenID4xProfile: WmpProfile, WmpFlowHandler, WmpShutdownProfi
         // credential they are missing - is lost on this transport.
         if let reason = NoMatchReason.wire(result.noMatchReason) { params["no_match_reason"] = .string(reason) }
         return params
+    }
+
+    /// The match answer in siros-wallet-core's dialect (its `MatchResult`): `selections` —
+    /// the wallet's OWN credential ids with the query each answers and the claims each would
+    /// disclose, and the engine relays them nowhere but the wallet's own presentation ask. An
+    /// empty array is "nothing matched" and the engine ends the flow itself: no reason code
+    /// exists in that dialect.
+    private func matchSelectionsMembers(_ result: MatchResult) -> [String: AnyCodable] {
+        let selections = result.matches.map { match -> AnyCodable in
+            var dict: [String: AnyCodable] = [
+                "credential_query_id": .string(match.credentialQueryId ?? ""),
+                "credential_id": .string(match.credentialId),
+            ]
+            // The claims to disclose: this SDK's match result carries the
+            // credential's available claims (nil = the whole credential).
+            if let claims = match.availableClaims, !claims.isEmpty {
+                dict["disclosed_claims"] = .array(claims.map { AnyCodable.string($0) })
+            }
+            return .object_(dict)
+        }
+        return ["selections": .array(selections)]
+    }
+
+    /// The bare `sign` answer: `{"signature": [byte values]}` — `Vec<u8>` on the wire,
+    /// not base64. A thrown error is the flow ERROR (never an empty answer): an empty
+    /// signature array is a valid value the engine would relay as a proof.
+    private func bareSignAnswerMembers(_ parentId: String, _ params: FlowStartParams) async throws -> [String: AnyCodable] {
+        guard let handler = config.onProofSign, let payload = params.params else {
+            throw ChildFlowFailure(code: "CAPABILITY_NOT_SUPPORTED")
+        }
+        let signParams: EngineSignParams
+        do {
+            signParams = try JSONDecoder().decode(EngineSignParams.self, from: try JSONEncoder().encode(payload))
+        } catch {
+            throw ChildFlowFailure(code: "INVALID_PARAMS")
+        }
+        let signature = try await handler(parentId, signParams)
+        return ["signature": .array(signature.map { AnyCodable.int(Int($0)) })]
+    }
+
+    /// One typed ask's answer members, by flow type. Each ask's NEGATIVE rides the
+    /// result, never a flow error — the engine reads any `wmp.flow.error` on an ask
+    /// as a generic refusal, and the verifier must learn WHICH it was.
+    private func typedAskMembers(_ flowType: String, _ parentId: String, _ start: FlowStartParams) async throws -> [String: AnyCodable] {
+        let payload = start.params
+        let decode = { (type: Decodable.Type) -> Any in
+            try JSONDecoder().decode(type, from: try JSONEncoder().encode(payload))
+        }
+        func requirePayload() throws -> [String: AnyCodable] {
+            guard payload != nil else { throw ChildFlowFailure(code: "INVALID_PARAMS") }
+            return payload!.objectValue ?? [:]
+        }
+        switch flowType {
+        case WmpSubFlowTypes.signingKey:
+            guard let handler = config.onSigningKey else {
+                throw ChildFlowFailure(code: "CAPABILITY_NOT_SUPPORTED")
+            }
+            _ = try requirePayload()
+            let params = try decode(EngineSigningKeyParams.self) as! EngineSigningKeyParams
+            let result = try await handler(parentId, params.keyId)
+            var members: [String: AnyCodable] = [:]
+            if let jwk = result.jwk { members["jwk"] = .object_(jwk) }
+            return members
+        case WmpSubFlowTypes.consent:
+            _ = try requirePayload()
+            let params = try decode(EngineConsentParams.self) as! EngineConsentParams
+            // No consent UI behind this wallet: refuse rather than present unconsented
+            // claims. A machinery failure declines too, never an error.
+            let consented: Bool
+            if let handler = config.onConsent {
+                consented = try await handler(parentId, params)
+            } else {
+                consented = false
+            }
+            return ["consented": .bool(consented)]
+        case WmpSubFlowTypes.txCode:
+            guard let handler = config.onTxCode else {
+                throw ChildFlowFailure(code: "CAPABILITY_NOT_SUPPORTED")
+            }
+            let code = try await handler(parentId)
+            return ["tx_code": .string(code)]
+        case WmpSubFlowTypes.authorization:
+            guard let handler = config.onAuthorization else {
+                throw ChildFlowFailure(code: "CAPABILITY_NOT_SUPPORTED")
+            }
+            _ = try requirePayload()
+            let params = try decode(EngineAuthorizationParams.self) as! EngineAuthorizationParams
+            guard let url = params.url, !url.isEmpty else { throw ChildFlowFailure(code: "INVALID_PARAMS") }
+            try await handler(parentId, url)
+            // Any result: the engine only waits for the hand-over.
+            return [:]
+        case WmpSubFlowTypes.presentation:
+            guard let handler = config.onVpRequest else {
+                throw ChildFlowFailure(code: "CAPABILITY_NOT_SUPPORTED")
+            }
+            _ = try requirePayload()
+            let params = try decode(EngineVpParams.self) as! EngineVpParams
+            let result = try await handler(parentId, params)
+            var members: [String: AnyCodable] = [:]
+            if let token = result.vpToken { members["vp_token"] = .string(token) }
+            if let refusal = result.refusalCode {
+                members["refusal"] = .object_(["code": .string(refusal)])
+            }
+            return members
+        case WmpSubFlowTypes.dpopProof:
+            _ = try requirePayload()
+            let params = try decode(EngineDpopProofParams.self) as! EngineDpopProofParams
+            // No client-held DPoP behind this wallet: the empty proof is the legal
+            // "unavailable", the engine falls back to its own key.
+            let result = try await config.onDpopProof?(parentId, params) ?? EngineDpopProofResult(proof: nil)
+            return ["proof": .string(result.proof ?? "")]
+        case WmpSubFlowTypes.attestation:
+            _ = try requirePayload()
+            let params = try decode(EngineAttestationParams.self) as! EngineAttestationParams
+            // No attestation provider: the empty answer is the legal "none".
+            let result = try await config.onAttestation?(parentId, params) ?? EngineAttestationResult()
+            var members: [String: AnyCodable] = [:]
+            if let wia = result.wia { members["wia"] = .string(wia) }
+            if let pop = result.pop { members["pop"] = .string(pop) }
+            return members
+        default:
+            throw ChildFlowFailure(code: "CAPABILITY_NOT_SUPPORTED")
+        }
     }
 
     private func sendTrustResult(flowId: String, result: TrustResult) async {

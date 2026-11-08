@@ -141,11 +141,24 @@ extension SirosWallet {
         let metadata: IssuerMetadata
         let entitlement: IssuerEntitlement?
         let trusted: Bool?
+        /// The issuer's REGISTERED OAuth client id (the backend issuer
+        /// registry's `registered_issuer.client_id`), when the backend resolved it.
+        /// The OID4VCI authorization-code flow's `client_id`: a registered issuer's AS
+        /// rejects the unregistered fallback (the wallet's redirect_uri) - the WMP
+        /// flow start relays this into the engine's params (the engine's own
+        /// `client_id` member, the same source the legacy backend read from its registry).
+        var registeredClientId: String?
 
-        init(metadata: IssuerMetadata, entitlement: IssuerEntitlement? = nil, trusted: Bool? = nil) {
+        init(
+            metadata: IssuerMetadata,
+            entitlement: IssuerEntitlement? = nil,
+            trusted: Bool? = nil,
+            registeredClientId: String? = nil
+        ) {
             self.metadata = metadata
             self.entitlement = entitlement
             self.trusted = trusted
+            self.registeredClientId = registeredClientId
         }
     }
 
@@ -210,7 +223,8 @@ extension SirosWallet {
                     return ResolvedIssuerMetadata(
                         metadata: metadata,
                         entitlement: entitlement,
-                        trusted: resolved["decision"] as? Bool
+                        trusted: resolved["decision"] as? Bool,
+                        registeredClientId: (resolved["registered_issuer"] as? [String: Any])?["client_id"] as? String
                     )
                 }
             } catch {
@@ -717,7 +731,8 @@ extension SirosWallet {
 
     /// Start issuance with a credential offer object.
     public func startIssuanceByOffer(_ offer: CredentialOffer) async throws {
-        guard let engine = engineSession else {
+        lock.lock(); let peer = wmpPeer; let engine = engineSession; lock.unlock()
+        if peer == nil && engine == nil {
             throw SirosError.wallet(message: "Not connected")
         }
         // Admission takes the in-flight guard, allocates the attempt's epoch
@@ -727,7 +742,7 @@ extension SirosWallet {
         // `failIssuanceStart`.
         let epoch = try admitIssuanceStart()
         do {
-            try await connectEngineForIssuance(engine, epoch: epoch)
+            if let engine { try await connectEngineForIssuance(engine, epoch: epoch) }
             try advanceIssuanceStart(epoch, WalletState.FlowActive.stepCheckingEntitlement)
             // ARF section 6.6.2.3: check the provider is registered to issue what
             // it offers before requesting it.
@@ -738,6 +753,13 @@ extension SirosWallet {
                     configurationId: offer.credentialConfigurationId
                 )
             )
+            // The issuer's REGISTERED client id (the WMP flow start's `client_id`
+            // member): the same backend resolve the entitlement check rides,
+            // best-effort - nil keeps the unregistered-client convention.
+            let registeredClientId: String? = (try? await resolveIssuerMetadata(
+                issuerUrl: offer.credentialIssuerIdentifier,
+                credentialTypes: [offer.credentialConfigurationId]
+            ))?.registeredClientId
             try advanceIssuanceStart(epoch, WalletState.FlowActive.stepPreparingIssuance)
             try await prepareOfferMetadata(offer, epoch: epoch)
             // Wallet attestation is engine-requested (`request_attestation`
@@ -749,7 +771,27 @@ extension SirosWallet {
             // The send is the epoch-checked commit: a cancel after the last
             // check can no longer be followed by `flow_start`.
             try dispatchIssuanceStart(epoch: epoch) {
-                engine.startIssuance(offer: offerJson, redirectUri: redirectUri, authorizationDetails: details, startTag: issuanceEpoch)
+                if let engine {
+                    engine.startIssuance(offer: offerJson, redirectUri: redirectUri, authorizationDetails: details, startTag: issuanceEpoch)
+                } else if let peer {
+                    // The WMP start (siros-wallet-core): the offer OBJECT is the
+                    // lenient BY-VALUE params form - it carries the wallet's own
+                    // members beside the offer's, which a redirect-based grant
+                    // needs (the engine reads redirect_uri/client_id/
+                    // authorization_details from it). The registered client id
+                    // comes from the same resolve above - the engine's
+                    // redirect_uri fallback is refused by a registered issuer's AS.
+                    let offerObject = ((try? JSONSerialization.jsonObject(
+                        with: Data(offerJson.utf8)
+                    )) as? [String: Any]) ?? [:]
+                    wmpStartIssuance(
+                        peer: peer,
+                        offerObject: offerObject,
+                        redirectUri: redirectUri,
+                        authorizationDetails: details,
+                        registeredClientId: registeredClientId
+                    )
+                }
             }
         } catch {
             // A start failure here means the flow was never registered
@@ -761,6 +803,66 @@ extension SirosWallet {
             throw failIssuanceStart(epoch, error)
         }
     }
+
+    /// The OID4VCI flow start on the WMP peer: the lenient BY-VALUE offer form
+    /// (the offer object beside the wallet's members - `redirect_uri` for a
+    /// redirect-based grant, `authorization_details` where the offer asks for
+    /// them, `client_id` when the backend registered the issuer). The flow id
+    /// is the wallet's own choice on this transport.
+    ///
+    /// The send runs on a detached task because `peer.startFlow` is async while
+    /// the commit point (`dispatchIssuanceStart`) is sync - the epoch check
+    /// still guards it: a cancelled attempt unwinds before the task runs, and
+    /// the task is cancelled by the next start.
+    func wmpStartIssuance(
+        peer: WmpPeer,
+        offerObject: [String: Any],
+        credentialOfferUri: String? = nil,
+        redirectUri: String?,
+        authorizationDetails: [AuthorizationDetail]?,
+        registeredClientId: String?
+    ) {
+        var params: [String: AnyCodable] = offerObject.mapValues { wmpAnyCodable($0) }
+        if let credentialOfferUri {
+            params["credential_offer_uri"] = .string(credentialOfferUri)
+        }
+        if let redirectUri {
+            params["redirect_uri"] = .string(redirectUri)
+        }
+        if let registeredClientId {
+            params["client_id"] = .string(registeredClientId)
+        }
+        if let details = authorizationDetails, !details.isEmpty,
+           let data = try? JSONEncoder().encode(details),
+           let decoded = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            params["authorization_details"] = wmpAnyCodable(decoded)
+        }
+        let paramsCodable = AnyCodable.object_(params)
+        wmpIssuanceStartTask?.cancel()
+        wmpIssuanceStartTask = Task { [weak self] in
+            _ = try? await peer.startFlow(
+                flowType: OID4FlowTypes.oid4vci,
+                flowId: self?.wmpNewFlowId() ?? "flow-\(UUID().uuidString.lowercased())",
+                params: paramsCodable
+            )
+        }
+    }
+
+    /// One `Any` as an [AnyCodable] (the engine's params are JSON at the seam).
+    func wmpAnyCodable(_ any: Any) -> AnyCodable {
+        switch any {
+        case let value as String: return .string(value)
+        case let value as Int: return .int(value)
+        case let value as Bool: return .bool(value)
+        case let value as Double: return .double(value)
+        case let value as [String: Any]: return .object_(value.mapValues { wmpAnyCodable($0) })
+        case let value as [Any]: return .array(value.map { wmpAnyCodable($0) })
+        default: return .null_
+        }
+    }
+
+    /// A fresh client-chosen flow id - the WMP protocol's flow ids are the wallet's own.
+    func wmpNewFlowId() -> String { "flow-\(UUID().uuidString.lowercased())" }
 
     /// Fetch the VCTM (SD-JWT) and MDDL schema (mdoc) for `offer` - format-blind,
     /// like `activeVctm`'s existing fetch: whichever one doesn't match this
@@ -836,12 +938,13 @@ extension SirosWallet {
     }
 
     public func startIssuance(offerUri: String) async throws {
-        guard let engine = engineSession else {
+        lock.lock(); let peer = wmpPeer; let engine = engineSession; lock.unlock()
+        if peer == nil && engine == nil {
             throw SirosError.wallet(message: "Not connected")
         }
         let epoch = try admitIssuanceStart()
         do {
-            try await connectEngineForIssuance(engine, epoch: epoch)
+            if let engine { try await connectEngineForIssuance(engine, epoch: epoch) }
             try advanceIssuanceStart(epoch, WalletState.FlowActive.stepPreparingIssuance)
             if let offer = await resolveOfferForDisplay(offerUri) {
                 try await prepareOfferMetadata(offer, epoch: epoch)
@@ -856,12 +959,45 @@ extension SirosWallet {
             let details = authorizationDetailsForActiveOffer()
             switch IssuanceStart.resolve(offerUri: offerUri) {
             case .offer(let offer):
-                try dispatchIssuanceStart(epoch: epoch) {
-                    engine.startIssuance(offer: offer, authorizationDetails: details, startTag: issuanceEpoch)
+                if let engine {
+                    try dispatchIssuanceStart(epoch: epoch) {
+                        engine.startIssuance(offer: offer, authorizationDetails: details, startTag: issuanceEpoch)
+                    }
+                } else if let peer {
+                    // The by-value form: the offer OBJECT plus the wallet's
+                    // members, exactly as startIssuanceByOffer's WMP branch.
+                    let offerObject = ((try? JSONSerialization.jsonObject(
+                        with: Data(offer.utf8)
+                    )) as? [String: Any]) ?? [:]
+                    try dispatchIssuanceStart(epoch: epoch) {
+                        wmpStartIssuance(
+                            peer: peer,
+                            offerObject: offerObject,
+                            redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
+                            authorizationDetails: details,
+                            registeredClientId: nil
+                        )
+                    }
                 }
             case .credentialOfferUri(let uri):
-                try dispatchIssuanceStart(epoch: epoch) {
-                    engine.startIssuance(credentialOfferUri: uri, authorizationDetails: details, startTag: issuanceEpoch)
+                if let engine {
+                    try dispatchIssuanceStart(epoch: epoch) {
+                        engine.startIssuance(credentialOfferUri: uri, authorizationDetails: details, startTag: issuanceEpoch)
+                    }
+                } else if let peer {
+                    // The reference form: the engine fetches the offer; the
+                    // wallet's members ride beside the reference (the
+                    // lenient by-value params form).
+                    try dispatchIssuanceStart(epoch: epoch) {
+                        wmpStartIssuance(
+                            peer: peer,
+                            offerObject: [:],
+                            credentialOfferUri: uri,
+                            redirectUri: config.redirectUri.isEmpty ? nil : config.redirectUri,
+                            authorizationDetails: details,
+                            registeredClientId: nil
+                        )
+                    }
                 }
             }
         } catch {
@@ -953,7 +1089,20 @@ extension SirosWallet {
         guard presentationLinkLedger.admit(requestUri) else { return false }
         lock.lock(); pendingPresentationLink = requestUri; lock.unlock()
         do {
-            guard let engine = engineSession else {
+            lock.lock(); let peer = wmpPeer; let engine = engineSession; lock.unlock()
+            if let peer {
+                // The WMP start (siros-wallet-core): the request URI as the
+                // by-reference params form - the engine fetches the request
+                // object; the transaction-data declaration rode the session's
+                // capabilities, not the start. The flow id is the wallet's own.
+                _ = try await peer.startFlow(
+                    flowType: OID4FlowTypes.oid4vp,
+                    flowId: wmpNewFlowId(),
+                    params: AnyCodable.object_(["request_uri": .string(requestUri)])
+                )
+                return true
+            }
+            guard let engine else {
                 throw SirosError.wallet(message: "Not connected")
             }
             if let connect = startPresentationConnectHook {
