@@ -212,6 +212,62 @@ final class AuthTokensTests: XCTestCase {
             "the superseded token was cached by neither layer, so the next caller mints a fresh one"
         )
     }
+
+    // MARK: - The tenant-bound engine kind (W10, engine-parity.md §8)
+
+    /// The manifest's engine kind: the audience and the TAC the WMP engine's
+    /// flow-start gate enforces (read for OID4VP, insert for OID4VCI), and
+    /// the pseudonymous flag - the token carries a rotating pseudonym, not
+    /// the user, so it is not the anonymous kind either (which carries no
+    /// subject at all).
+    func testTenantTokenIsThePseudonymousEngineKind() throws {
+        let kind = try XCTUnwrap(AuthTokens.manifest[AuthTokens.tokenWmpEngine])
+        XCTAssertEqual(kind.aud, "wallet-engine")
+        XCTAssertTrue(kind.tac.contains("r"), "OID4VP's flow gate needs 'r' in \(kind.tac)")
+        XCTAssertTrue(kind.tac.contains("i"), "OID4VCI's flow gate needs 'i' in \(kind.tac)")
+        XCTAssertTrue(kind.pseudonymous, "the kind is pseudonymous: a rotating pseudonym, not the user")
+        XCTAssertFalse(kind.anonymous, "the kind is not the anonymous one: the token carries a subject (the pseudonym)")
+    }
+
+    /// The tenant kind mints through the AS's `pseudonymous` request - the
+    /// wire shape the go-wallet-backend kind answers (a real session behind
+    /// the mint, a fresh pseudonym per mint) - and never through the
+    /// anonymous or plain access-token forms.
+    func testEnsureTenantTokenMintsThePseudonymousRequest() async throws {
+        let server = StubTokenServer()
+        let recorder = RequestRecorder()
+        server.onBody = { recorder.append($0) }
+        let tokens = AuthTokens(authServerClient: server.asClient, tenantId: "default")
+
+        _ = try await tokens.ensureTenantToken()
+        _ = try await tokens.ensureTenantToken()
+
+        let bodies = recorder.bodies
+        XCTAssertEqual(bodies.count, 1, "the second ensure is served from the cache, not the AS")
+        let body = try XCTUnwrap(bodies.first)
+        XCTAssertEqual(body["pseudonymous"] as? Bool, true, "the wire kind is the AS's pseudonymous one")
+        XCTAssertNil(body["anonymous"], "never the anonymous kind: the token carries a subject")
+        XCTAssertEqual(body["aud"] as? String, "wallet-engine")
+    }
+
+    /// A force-refresh of the tenant kind re-mints - the pseudonym rotates
+    /// per mint, which is the point of the kind. The re-mint needs BOTH
+    /// caches cleared (the `AuthTokens` cache by `forceRefreshToken`, the
+    /// client's own by `clearTokenCache`) - exactly the pair
+    /// `SirosWallet.reloginAfterCutOff` clears on a lifecycle cut-off.
+    func testForceRefreshTenantTokenMintsAfresh() async throws {
+        let server = StubTokenServer()
+        let recorder = RequestRecorder()
+        server.onBody = { recorder.append($0) }
+        let client = server.asClient
+        let tokens = AuthTokens(authServerClient: client, tenantId: "default")
+
+        _ = try await tokens.ensureTenantToken()
+        await client.clearTokenCache()
+        _ = try await tokens.forceRefreshToken(AuthTokens.tokenWmpEngine)
+
+        XCTAssertEqual(recorder.bodies.count, 2, "both caches cleared: the refresh mints a fresh pseudonym")
+    }
 }
 
 /// A minimal `AuthServerClient` that answers `/auth/token` with a freshly
@@ -221,13 +277,19 @@ private final class StubTokenServer: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     var onRequest: (@Sendable () async -> Void)?
+    /// Observed with each request's parsed body (the `pseudonymous`/
+    /// `anonymous` kind flags are what the wire-contract tests read).
+    var onBody: (@Sendable ([String: Any]) -> Void)?
     var requestCount: Int { lock.lock(); defer { lock.unlock() }; return count }
 
     lazy var asClient: AuthServerClient = AuthServerClient(
         baseUrl: "https://as.example.invalid",
         tenantId: "default"
-    ) { [self] _, _, _, _ in
+    ) { [self] _, _, _, body in
         self.lock.lock(); self.count += 1; self.lock.unlock()
+        if let body, let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            self.onBody?(parsed)
+        }
         await self.onRequest?()
         let exp = Int(Date().timeIntervalSince1970) + 3600
         let payload = try JSONSerialization.data(withJSONObject: [
@@ -241,5 +303,19 @@ private final class StubTokenServer: @unchecked Sendable {
         return try JSONSerialization.data(withJSONObject: [
             "access_token": jwt, "token_type": "Bearer", "expires_in": 3600,
         ])
+    }
+}
+
+/// A thread-safe observer for the request bodies `StubTokenServer` sees.
+private final class RequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [[String: Any]] = []
+    var bodies: [[String: Any]] {
+        lock.lock(); defer { lock.unlock() }
+        return recorded
+    }
+    func append(_ body: [String: Any]) {
+        lock.lock(); defer { lock.unlock() }
+        recorded.append(body)
     }
 }

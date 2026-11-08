@@ -111,9 +111,14 @@ extension SirosWallet {
         // than baking the connect-time token in (found driving an issuance ~40 min after login:
         // the start reached the engine with a long-expired token). No authTokens (an anonymous/
         // fixed-token deployment) answers nil: the transport then sends no Authorization header.
+        //
+        // The kind follows the DEPLOYMENT's engine (engine-parity.md §8): a tenant-mode engine
+        // (config.wmpTenantTokens) takes the AS's pseudonymous kind - the wallet's traffic
+        // attributes to the tenant, never to a person; the default keeps the backend token (the
+        // user's own subject), matching a user-mode engine.
         let freshToken: @Sendable () async -> String? = { [weak self] in
-            guard let tokens = self?.authTokens else { return nil }
-            return try? await tokens.ensureBackendToken().raw
+            guard let tokens = self?.authTokens, let config = self?.config else { return nil }
+            return try? await (config.wmpTenantTokens ? tokens.ensureTenantToken() : tokens.ensureBackendToken()).raw
         }
         markSessionEnded(false)
         lock.lock(); wmpAskGeneration &+= 1; lock.unlock()

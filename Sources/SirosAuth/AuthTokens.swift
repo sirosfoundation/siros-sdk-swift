@@ -11,12 +11,18 @@ public struct TokenKind: Sendable {
     public let aud: String
     public let tac: String
     public let anonymous: Bool
+    /// The AS's pseudonymous engine kind (engine-parity.md §8 G3): a real,
+    /// authenticated session behind the mint, a fresh random pseudonym in
+    /// the token — rotating per mint, so the traffic it carries attributes
+    /// to the tenant, never to a person.
+    public let pseudonymous: Bool
 
-    public init(name: String, aud: String, tac: String, anonymous: Bool = false) {
+    public init(name: String, aud: String, tac: String, anonymous: Bool = false, pseudonymous: Bool = false) {
         self.name = name
         self.aud = aud
         self.tac = tac
         self.anonymous = anonymous
+        self.pseudonymous = pseudonymous
     }
 }
 
@@ -64,6 +70,7 @@ public final class AuthTokens: @unchecked Sendable {
 
     public static let tokenBackend = "backend"
     public static let tokenAnonymous = "anonymous"
+    public static let tokenWmpEngine = "wmp-engine"
 
     private static let rejectionThreshold = 3
     private static let rejectionWindowSeconds: TimeInterval = 60
@@ -81,6 +88,15 @@ public final class AuthTokens: @unchecked Sendable {
             aud: "wallet-registry",
             tac: "rl",
             anonymous: true
+        ),
+        // The tenant-bound engine kind (engine-parity.md §8 G3): the
+        // pseudonymous bearer the remote engine's privacy mode
+        // consumes - `tac = "ri"`, the engine's two flow gates.
+        tokenWmpEngine: TokenKind(
+            name: tokenWmpEngine,
+            aud: "wallet-engine",
+            tac: "ri",
+            pseudonymous: true
         ),
     ]
 
@@ -131,6 +147,22 @@ public final class AuthTokens: @unchecked Sendable {
         try await ensureToken(Self.tokenAnonymous)
     }
 
+    /// Convenience: ensure the tenant-bound engine token (engine-parity.md
+    /// §8) - the AS's pseudonymous engine kind: the session's real
+    /// authentication behind the mint, a fresh random pseudonym per mint in
+    /// the token, `tac = "ri"` (the engine's two flow gates: read for
+    /// OID4VP, insert for OID4VCI), the tenant claimed as today.
+    ///
+    /// The remote engine's privacy mode (`ENGINE_PRINCIPAL_MODE=tenant`)
+    /// consumes this kind: its session store, its flow registry and its
+    /// logs attribute the traffic to the tenant, never to a person. Use
+    /// this ONLY against a tenant-mode engine (the wallet's config gates
+    /// its own choice): a user-mode engine keys sessions by the subject,
+    /// which this kind rotates per mint.
+    public func ensureTenantToken() async throws -> AccessToken {
+        try await ensureToken(Self.tokenWmpEngine)
+    }
+
     /// Force-refresh a token by clearing the cache and re-requesting.
     public func forceRefreshToken(_ name: String) async throws -> AccessToken {
         lock.lock()
@@ -158,7 +190,9 @@ public final class AuthTokens: @unchecked Sendable {
     /// from the AS's own token endpoint (see `handleAsTokenFailure` below).
     private func requestToken(for kind: TokenKind) async throws -> AccessToken {
         do {
-            if kind.anonymous {
+            if kind.pseudonymous {
+                return try await authServerClient.requestPseudonymousToken(aud: kind.aud, tac: kind.tac)
+            } else if kind.anonymous {
                 return try await authServerClient.requestAnonymousToken(aud: kind.aud, tac: kind.tac)
             } else {
                 return try await authServerClient.requestAccessToken(aud: kind.aud, tac: kind.tac)

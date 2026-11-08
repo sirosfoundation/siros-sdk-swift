@@ -231,6 +231,47 @@ public final class AuthServerClient: @unchecked Sendable {
         return token
     }
 
+    /// Request the pseudonymous engine token (engine-parity.md §8 G3): a real,
+    /// authenticated session behind the mint, a fresh random pseudonym in the
+    /// token - rotating per mint, so the traffic it carries attributes to the
+    /// tenant, never to a person. The server caps the kind to `tac ⊆ "ri"`
+    /// (the engine's two flow gates).
+    ///
+    /// - Parameters:
+    ///   - aud: Target audience (`wallet-engine`).
+    ///   - tac: Token Access Control string (defaults server-side to "ri").
+    /// - Returns: Parsed `AccessToken` with claims.
+    public func requestPseudonymousToken(aud: String, tac: String? = nil) async throws -> AccessToken {
+        let key = "\(tenantId)::\(aud)::\(tac ?? "")::pseudonymous"
+
+        if let cached = await cache.getIfValid(key) {
+            return cached
+        }
+        // The session this request belongs to; see `TokenCache.generation`.
+        let generation = await cache.generation
+
+        var body: [String: Any] = [
+            "aud": aud,
+            "tenant_id": tenantId,
+            "pseudonymous": true,
+        ]
+        if let tac = tac {
+            body["tac"] = tac
+        }
+        let response = try await post(
+            path: Self.pathToken,
+            body: body,
+            headers: defaultHeaders()
+        )
+        let data = try JSONSerialization.data(withJSONObject: response)
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        let token = try AccessToken(jwt: tokenResponse.accessToken)
+
+        await cache.set(key, token, generation: generation)
+
+        return token
+    }
+
     /// Request an anonymous access token (no session cookie required).
     ///
     /// - Parameters:
