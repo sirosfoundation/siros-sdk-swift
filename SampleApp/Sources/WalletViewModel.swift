@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import SwiftUI
 import SirosWallet
+import SirosTransport
 import SirosCredentials
 import SirosAuth
 import SirosKeystore
@@ -66,7 +67,7 @@ final class WalletViewModel: ObservableObject {
     /// persisted like useWmpProtocol (the pre-login settings' own rule: the
     /// choice is made before any login/registration, at the next wallet
     /// construction).
-    @Published var wmpEngineMode: SirosWallet.WmpEngineMode {
+    @Published var wmpEngineMode: WmpEngineMode {
         didSet { UserDefaults.standard.set(wmpEngineMode.rawValue, forKey: "siros_wmp_engine_mode") }
     }
     @Published var wmpSendUrl: String {
@@ -394,7 +395,7 @@ final class WalletViewModel: ObservableObject {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
         self.useWmpProtocol = defaults.bool(forKey: "siros_use_wmp_protocol")
-        self.wmpEngineMode = SirosWallet.WmpEngineMode(
+        self.wmpEngineMode = WmpEngineMode(
             rawValue: defaults.string(forKey: "siros_wmp_engine_mode") ?? ""
         ) ?? .legacyWS
         self.wmpSendUrl = defaults.string(forKey: "siros_wmp_send_url") ?? ""
@@ -1444,11 +1445,11 @@ extension WalletViewModel {
     /// app's ports, `nil` where the framework does not link (the local mode
     /// then fails closed at its config check, exactly as the remote engine does
     /// unconfigured).
-    private func makeLocalEngineTransport(asks: WmpEngineAskHandler) -> (any SirosTransport.TransportProtocol)? {
+    private func makeLocalEngineTransport(asks: WmpEngineAskHandler) -> (any TransportProtocol)? {
         #if canImport(engine_adapter_sdkFFI)
-        return SirosTransport.WmpUniFFITransport(
+        return WmpUniFFITransport(
             http: URLSessionEngineHttp(),
-            host: SirosTransport.UniFfiEngineAskHost(asks),
+            host: UniFfiEngineAskHost(asks),
             pdp: nil
         )
         #else
