@@ -1234,14 +1234,11 @@ final class WalletViewModel: ObservableObject {
             wmpEngineMode: wmpEngineMode,
             wmpSendUrl: wmpSendUrl,
             wmpSseUrl: wmpSseUrl,
-            // The local engine's transport factory: the app's HTTP port
-            // (URLSession), the WALLET's own ask handlers
-            // (UniFiiEngineAskHost over the SDK's handler seam), and no trust
-            // stack (fail closed at the trust step until one is wired). The
-            // XCFramework gates it: a build without the engine core ships no
-            // factory, and the local mode fails closed at its config check.
+            // The local engine's transport factory - see
+            // makeLocalEngineTransport below the class (a free function, so
+            // the @Sendable closure captures nothing).
             wmpTransport: wmpEngineMode == .local ? { asks in
-                makeLocalEngineTransport(asks: asks)
+                try makeLocalEngineTransport(asks: asks)
             } : nil,
             transactionDataEnabled: transactionDataEnabled,
             availableKeystores: resolvedAvailableKeystores,
@@ -1439,21 +1436,28 @@ enum WalletViewState: Equatable {
     case error(message: String)
 }
 
-
-extension WalletViewModel {
-    /// The local engine's transport - the XCFramework's engine core over the
-    /// app's ports, `nil` where the framework does not link (the local mode
-    /// then fails closed at its config check, exactly as the remote engine does
-    /// unconfigured).
-    private func makeLocalEngineTransport(asks: WmpEngineAskHandler) -> (any TransportProtocol)? {
-        #if canImport(engine_adapter_sdkFFI)
-        return WmpUniFFITransport(
-            http: URLSessionEngineHttp(),
-            host: UniFfiEngineAskHost(asks),
-            pdp: nil
-        )
-        #else
-        return nil
-        #endif
-    }
+/// The local engine's transport - the XCFramework's engine core over the
+/// app's ports (URLSession for the engine's outgoing fetches, the WALLET's
+/// own ask handlers over the SDK's handler seam, no trust stack: fail
+/// closed at the trust step until one is wired). A free function, so the
+/// `@Sendable` closure `WalletConfig.wmpTransport` captures nothing.
+///
+/// The XCFramework gates it: a build without the engine core
+/// (`engine_adapter_sdkFFI` - Vendor/'s framework) refuses the local mode
+/// with a clear error at the factory, exactly as the SDK's own
+/// `WmpEngineMode.local` check does when no factory was configured.
+private func makeLocalEngineTransport(asks: WmpEngineAskHandler) throws -> any TransportProtocol {
+    #if canImport(engine_adapter_sdkFFI)
+    return WmpUniFFITransport(
+        http: URLSessionEngineHttp(),
+        host: UniFfiEngineAskHost(asks),
+        pdp: nil
+    )
+    #else
+    throw NSError(
+        domain: "org.siros.sdk.sample",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "The local engine mode needs the engine XCFramework (engine_adapter_sdkFFI), which this build does not link"]
+    )
+    #endif
 }
