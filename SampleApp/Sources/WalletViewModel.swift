@@ -1237,7 +1237,7 @@ final class WalletViewModel: ObservableObject {
             // The local engine's transport factory - see
             // makeLocalEngineTransport below the class (a free function, so
             // the @Sendable closure captures nothing).
-            wmpTransport: wmpEngineMode == .local ? { asks in
+            wmpTransport: wmpEngineMode == .local ? { (asks: WmpEngineAskHandler) in
                 try makeLocalEngineTransport(asks: asks)
             } : nil,
             transactionDataEnabled: transactionDataEnabled,
