@@ -4,6 +4,14 @@ import Foundation
 import SirosCredentials
 import SirosKeystore
 import SirosTransport
+#if canImport(os)
+import os
+// The file-level logger this file's completions log through (the same
+// declaration every SirosWallet+* file carries - not shared, so a
+// private top-level decl never crosses files; found by the iOS build
+// #265's merged stack never ran).
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
+#endif
 
 extension SirosWallet {
     /// `wmp.flow.complete` for an issuance or presentation. A wallet-encrypted issuance is paired and stored exactly
