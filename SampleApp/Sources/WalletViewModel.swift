@@ -1233,16 +1233,14 @@ final class WalletViewModel: ObservableObject {
             wmpEngineMode: wmpEngineMode,
             wmpSendUrl: wmpSendUrl,
             wmpSseUrl: wmpSseUrl,
+            // The local engine's transport factory: the app's HTTP port
+            // (URLSession), the WALLET's own ask handlers
+            // (UniFiiEngineAskHost over the SDK's handler seam), and no trust
+            // stack (fail closed at the trust step until one is wired). The
+            // XCFramework gates it: a build without the engine core ships no
+            // factory, and the local mode fails closed at its config check.
             wmpTransport: wmpEngineMode == .local ? { asks in
-                // The local engine over the app's HTTP port (URLSession), the
-                // WALLET's own ask handlers (UniFfiEngineAskHost over the SDK's
-                // handler seam), and no trust stack (fail closed at the trust
-                // step until one is wired).
-                WmpUniFFITransport(
-                    http: URLSessionEngineHttp(),
-                    host: UniFfiEngineAskHost(asks),
-                    pdp: nil
-                )
+                makeLocalEngineTransport(asks: asks)
             } : nil,
             transactionDataEnabled: transactionDataEnabled,
             availableKeystores: resolvedAvailableKeystores,
@@ -1438,4 +1436,23 @@ enum WalletViewState: Equatable {
     case lifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
     case flowActive(flowType: String, status: String)
     case error(message: String)
+}
+
+
+extension WalletViewModel {
+    /// The local engine's transport - the XCFramework's engine core over the
+    /// app's ports, `nil` where the framework does not link (the local mode
+    /// then fails closed at its config check, exactly as the remote engine does
+    /// unconfigured).
+    private func makeLocalEngineTransport(asks: WmpEngineAskHandler) -> (any SirosTransport.TransportProtocol)? {
+        #if canImport(engine_adapter_sdkFFI)
+        return SirosTransport.WmpUniFFITransport(
+            http: URLSessionEngineHttp(),
+            host: SirosTransport.UniFfiEngineAskHost(asks),
+            pdp: nil
+        )
+        #else
+        return nil
+        #endif
+    }
 }

@@ -1,8 +1,13 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+import SirosTransport
 #if canImport(engine_adapter_sdkFFI)
 import engine_adapter_sdkFFI
+
+// The local engine's HTTP port - the XCFramework links where the engine
+// core ships (Vendor/), and the gate keeps this file compiling where it
+// does not, exactly as the SDK's own WmpUniFFITransport gates itself.
 #endif
 
 /// The LOCAL engine mode's HTTP port: the engine's outgoing fetches over
@@ -17,6 +22,7 @@ import engine_adapter_sdkFFI
 /// The trust (`Pdp`) is deliberately absent (nil): the local engine fails closed
 /// at the trust step until the app wires a trust stack, exactly as the remote
 /// engine does unconfigured - the local mode is not a permissive mode.
+#if canImport(engine_adapter_sdkFFI)
 final class URLSessionEngineHttp: HttpClient, @unchecked Sendable {
     func send(request: HttpRequest) async throws -> HttpResponse {
         guard let url = URL(string: request.url) else {
@@ -67,3 +73,5 @@ private final class NoneRedirectDelegate: NSObject, URLSessionTaskDelegate, @unc
         completionHandler(nil)
     }
 }
+
+#endif
