@@ -25,6 +25,11 @@ import SirosAuth
 import SirosKeystore
 import SirosFlow
 @preconcurrency import SwiftCBOR
+#if canImport(os)
+// The os module the moved ask handlers' `os.Logger` calls need (the same
+// import SirosWallet+Engine.swift carries).
+import os
+#endif
 
 // The engine's asks, by surface: siros-wallet-core's typed asks over the
 // remote transports (httpSSE - the child flows the profile answers) and
