@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import SwiftUI
+import SirosWallet
 
 struct LoginView: View {
     @EnvironmentObject var viewModel: WalletViewModel
