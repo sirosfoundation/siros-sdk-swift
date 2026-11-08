@@ -1,7 +1,14 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+// swift-crypto's `Crypto` module mirrors CryptoKit's API 1:1, including
+// P256 ECDSA and Curve25519 - see Package.swift's SirosWallet dependencies
+// and SirosWallet+MdocTrust.swift's identical fallback.
 import Crypto
+#endif
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
