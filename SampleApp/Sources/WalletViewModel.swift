@@ -1220,16 +1220,19 @@ final class WalletViewModel: ObservableObject {
             resolvedRequestWscdChoice = nil
         }
 
-        // The local engine's transport factory - hoisted out of the
-        // initializer's argument list: the giant WalletConfig call's type
-        // check blows up on a closure inside it ("failed to produce a
-        // diagnostic", the type checker's own crash report). A free function
-        // (see makeLocalEngineTransport below the class), so the @Sendable
+        // The local engine's transport factory - bound by a plain if/else
+        // (an optional-closure ternary is a type-checker crash report:
+        // "failed to produce a diagnostic"). A free function (see
+        // makeLocalEngineTransport below the class), so the @Sendable
         // closure captures nothing.
-        let localTransportFactory: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)? =
-            wmpEngineMode == .local ? { (asks: WmpEngineAskHandler) in
+        let localTransportFactory: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)?
+        if wmpEngineMode == .local {
+            localTransportFactory = { (asks: WmpEngineAskHandler) in
                 try makeLocalEngineTransport(asks: asks)
-            } : nil
+            }
+        } else {
+            localTransportFactory = nil
+        }
         let config = WalletConfig(
             backendUrl: backendUrl,
             tenantId: tenantId,
