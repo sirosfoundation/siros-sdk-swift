@@ -54,12 +54,13 @@ let package = Package(
         // `Crypto` module is only actually compiled/linked in on Linux,
         // where CryptoKit doesn't exist at all.
         //
-        // Pinned below 5.1.1: that release's HPKE AEAD uses the Swift 6.3
+        // Pinned below 5.1.0: that release's HPKE enums use the Swift 6.3
         // `@nonexhaustive` attribute, above this package's 6.2 toolchain
         // floor (swift-crypto 5 declares tools 6.2 - the floor's origin).
         // Breaks every fresh resolve under 6.2 with "unknown attribute
-        // 'nonexhaustive'". Lift the pin with the floor, together.
-        .package(url: "https://github.com/apple/swift-crypto.git", "5.0.0"..<"5.1.1"),
+        // 'nonexhaustive'" (5.1.0 and 5.1.1 both carry it). Lift the pin
+        // with the floor, together.
+        .package(url: "https://github.com/apple/swift-crypto.git", "5.0.0"..<"5.1.0"),
         // Circuits fetched from go-zk-circuits (see ZkCircuitClient,
         // SirosCredentials) are zstd-compressed; zk-cred-longfellow's
         // initializeProver expects already-decompressed bytes (confirmed
