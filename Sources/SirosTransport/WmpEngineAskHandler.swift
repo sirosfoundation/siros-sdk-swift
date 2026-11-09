@@ -68,6 +68,8 @@ public protocol WmpEngineAskHandler: AnyObject, Sendable {
 /// Gate: `#if canImport(EngineAdapterSdk)` - the XCFramework links where the
 /// local mode activates; the package builds everywhere else.
 #if canImport(EngineAdapterSdk)
+import EngineAdapterSdk
+
 public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendable {
     private let handler: WmpEngineAskHandler
 
