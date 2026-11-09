@@ -35,7 +35,7 @@ final class URLSessionEngineHttp: HttpClient, @unchecked Sendable {
         }
         // Redirects: the engine declares its policy; URLSession follows them or not.
         let (data, response): (Data, URLResponse)
-        if request.redirects != RedirectPolicy.None {
+        if request.redirects != RedirectPolicy.none {
             (data, response) = try await URLSession.shared.data(for: urlRequest)
         } else {
             // The engine's fetches are none-following by policy: a redirect is
