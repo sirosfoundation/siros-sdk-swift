@@ -127,6 +127,22 @@ let package = Package(
             checksum: "f95cf6d304862e1b3ba7274bda654ed19d99ff3dd30d03cb97109863606779a0"
         ),
 
+        // --- siros-wallet-core engine (UniFFI bindings, XCFramework) ---
+        // The WMP engine core the SDK's LOCAL mode runs in-process
+        // (WalletEngineAskHandler over the Host port): built by siros-wallet-core's
+        // release workflow (`Release — XCFramework + AAR + bindings`), released
+        // as v0.2.1. iOS slices only (device + simulator) - the same gate as the
+        // zk-cred frameworks above: the FFI-dependent code is wrapped in
+        // `#if canImport(engine_adapter_sdkFFI)` (WmpUniFFITransport,
+        // WmpEngineAskHandler, the Generated bindings' FFI half, the sample
+        // app's LocalEngine), so macOS/Linux build with the whole local mode
+        // compiled out until slices exist for them.
+        .binaryTarget(
+            name: "engine_adapter_sdkFFI",
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.1/engine_adapter_sdk.xcframework.zip",
+            checksum: "896c9804e47f530ba8fdfeba843c7db592b8367c12599c453ec81cacf8fb3829"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -185,6 +201,15 @@ let package = Package(
         // --- Transport: WebSocket + WMP protocol ---
         .target(
             name: "SirosTransport",
+            dependencies: [
+                // The WMP engine core (the LOCAL mode's in-process engine):
+                // iOS slices only - the FFI-dependent code in this target
+                // (WmpUniFFITransport, WmpEngineAskHandler, the Generated
+                // bindings' FFI half) is `#if canImport`-gated, so macOS
+                // and Linux resolve the dependency but compile the local
+                // mode out, same as the zk-cred gates in SirosCredentials.
+                .target(name: "engine_adapter_sdkFFI", condition: .when(platforms: [.iOS])),
+            ],
             path: "Sources/SirosTransport"
         ),
         .testTarget(

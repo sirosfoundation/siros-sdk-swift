@@ -5,12 +5,12 @@
 import Foundation
 
 // The engine core's XCFramework rides Package.swift's
-// engine_adapter_sdkFFI binaryTarget, which lands with the first
-// siros-wallet-core release tag (the release workflow builds
-// engine_adapter_sdk.xcframework). Until then - and anywhere the
-// slices are absent - this whole file is compiled out, and the
-// package builds without it; the transport class and its tests carry
-// the same gate.
+// engine_adapter_sdkFFI binaryTarget (siros-wallet-core's release
+// workflow builds engine_adapter_sdk.xcframework, released as
+// v0.2.1). The XCFramework ships iOS slices only, so this whole
+// file is compiled out everywhere the framework cannot be imported,
+// and the package builds without it; WmpUniFFITransport,
+// WmpEngineAskHandler and the transport tests carry the same gate.
 #if canImport(engine_adapter_sdkFFI)
 
 // Depending on the consumer's build setup, the low-level FFI code
@@ -3308,6 +3308,12 @@ public struct SigningKeyParams {
      * The key the engine will sign with, named when the flow knows it.
      */
     public var keyId: String?
+    /**
+     * Whether the host must answer with a FRESH key (the OID4VCI batch
+     * rule: each credential in a batch binds to its own key —
+     * SDJWT-10.1). Default false.
+     */
+    public var fresh: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3317,9 +3323,15 @@ public struct SigningKeyParams {
          */flowId: String, 
         /**
          * The key the engine will sign with, named when the flow knows it.
-         */keyId: String?) {
+         */keyId: String?, 
+        /**
+         * Whether the host must answer with a FRESH key (the OID4VCI batch
+         * rule: each credential in a batch binds to its own key —
+         * SDJWT-10.1). Default false.
+         */fresh: Bool) {
         self.flowId = flowId
         self.keyId = keyId
+        self.fresh = fresh
     }
 }
 
@@ -3333,12 +3345,16 @@ extension SigningKeyParams: Equatable, Hashable {
         if lhs.keyId != rhs.keyId {
             return false
         }
+        if lhs.fresh != rhs.fresh {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(flowId)
         hasher.combine(keyId)
+        hasher.combine(fresh)
     }
 }
 
@@ -3351,13 +3367,15 @@ public struct FfiConverterTypeSigningKeyParams: FfiConverterRustBuffer {
         return
             try SigningKeyParams(
                 flowId: FfiConverterString.read(from: &buf), 
-                keyId: FfiConverterOptionString.read(from: &buf)
+                keyId: FfiConverterOptionString.read(from: &buf), 
+                fresh: FfiConverterBool.read(from: &buf)
         )
     }
 
     public static func write(_ value: SigningKeyParams, into buf: inout [UInt8]) {
         FfiConverterString.write(value.flowId, into: &buf)
         FfiConverterOptionString.write(value.keyId, into: &buf)
+        FfiConverterBool.write(value.fresh, into: &buf)
     }
 }
 
