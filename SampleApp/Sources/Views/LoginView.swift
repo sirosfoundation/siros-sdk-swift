@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 
 import SwiftUI
+import SirosWallet
 
 struct LoginView: View {
     @EnvironmentObject var viewModel: WalletViewModel
@@ -267,9 +268,9 @@ struct PreLoginSettingsView: View {
                     // construction.
                     if viewModel.useWmpProtocol {
                         Picker("WMP Engine", selection: $viewModel.wmpEngineMode) {
-                            Text("Go engine (WebSocket)").tag(SirosWallet.WmpEngineMode.legacyWS)
-                            Text("Rust engine (remote, HTTP+SSE)").tag(SirosWallet.WmpEngineMode.httpSSE)
-                            Text("Rust engine (in-process, XCFramework)").tag(SirosWallet.WmpEngineMode.local)
+                            Text("Go engine (WebSocket)").tag(WmpEngineMode.legacyWS)
+                            Text("Rust engine (remote, HTTP+SSE)").tag(WmpEngineMode.httpSSE)
+                            Text("Rust engine (in-process, XCFramework)").tag(WmpEngineMode.local)
                         }
                         if viewModel.wmpEngineMode == .httpSSE {
                             TextField("WMP send URL (POST /wmp)", text: $viewModel.wmpSendUrl)

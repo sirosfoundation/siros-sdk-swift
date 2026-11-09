@@ -4,6 +4,14 @@ import Foundation
 import SirosCredentials
 import SirosKeystore
 import SirosTransport
+#if canImport(os)
+import os
+// The file-level logger this file's completions log through (the same
+// declaration every SirosWallet+* file carries - not shared, so a
+// private top-level decl never crosses files; found by the iOS build
+// #265's merged stack never ran).
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
+#endif
 
 extension SirosWallet {
     /// `wmp.flow.complete` for an issuance or presentation. A wallet-encrypted issuance is paired and stored exactly
@@ -130,83 +138,16 @@ extension SirosWallet {
             format = (credential.contains(".") || credential.contains("~")) ? "vc+sd-jwt" : "mso_mdoc"
         }
 
-        var storeFailureReason: String?
-        var stored: StoredCredential?
-        var parsedMdoc: DocumentMdoc?
-        if format == "mso_mdoc" {
-            do {
-                guard let bytes = CredentialUtils.base64UrlDecode(credential) else {
-                    throw NSError(domain: "org.siros.sdk", code: 1, userInfo: [NSLocalizedDescriptionKey: "base64url"])
-                }
-                parsedMdoc = try MdocCbor.parseStoredCredential([UInt8](bytes))
-            } catch {
-                #if canImport(os)
-                logger.warning("The issued mdoc credential could not be read: \(error.localizedDescription)")
-                #endif
-                storeFailureReason = "Received credential could not be read"
-            }
-        } else {
-            let payload = CredentialUtils.parseJwtPayload(credential)
-            if payload == nil {
-                storeFailureReason = "Received credential could not be read"
-            } else if let reason = verifyIssuedType(format: format, raw: credential) {
-                storeFailureReason = reason
-            } else {
-                let integrity = await verifyVctIntegrity(
-                    format: format, payload: payload ?? [:],
-                    offer: flowOffer, document: activeVctmDocument
-                )
-                if let reason = integrity.reason {
-                    storeFailureReason = reason
-                } else {
-                    // The stored credential, format-validated.
-                    stored = StoredCredential(
-                        id: randomUint32Id(),
-                        format: format,
-                        raw: credential,
-                        metadata: flowOffer.map { offer in
-                            CredentialUtils.buildMetadata(
-                                offer: offer,
-                                vctm: integrity.refreshed?.vctm ?? flowVctm,
-                                rawCredential: credential
-                            )
-                        },
-                        issuedAt: (payload?["iat"] as? NSNumber)?.int64Value,
-                        expiresAt: (payload?["exp"] as? NSNumber)?.int64Value,
-                        notificationId: notificationId,
-                        credentialIssuerIdentifier: flowOffer?.credentialIssuerIdentifier,
-                        credentialConfigurationId: flowOffer?.credentialConfigurationId,
-                        batchId: batchId,
-                        instanceId: 0
-                    )
-                }
-            }
-        }
-        if format == "mso_mdoc", parsedMdoc != nil, stored == nil {
-            // The mdoc branch builds the StoredCredential after the parse (the
-            // doctype names the MDDL schema to fetch).
-            var mdocMetadata: CredentialMetadata?
-            if let offer = flowOffer {
-                let schema = await mddlSchemaFetcher.fetch(
-                    issuerUrl: offer.credentialIssuerIdentifier,
-                    scope: offer.credentialConfigurationId,
-                    doctype: parsedMdoc?.docType,
-                    registryUrl: resolvedRegistryUrl
-                )
-                mdocMetadata = CredentialUtils.buildMdocMetadata(offer: offer, mddlSchema: schema)
-            }
-            stored = StoredCredential(
-                id: randomUint32Id(),
-                format: format,
-                raw: credential,
-                metadata: mdocMetadata,
-                notificationId: notificationId,
-                credentialIssuerIdentifier: flowOffer?.credentialIssuerIdentifier,
-                credentialConfigurationId: flowOffer?.credentialConfigurationId,
-                batchId: batchId,
-                instanceId: 0
-            )
-        }
+        let built = await wmpBuildStoredCredential(
+            format: format,
+            raw: credential,
+            offer: flowOffer,
+            vctm: flowVctm,
+            notificationId: notificationId,
+            batchId: batchId
+        )
+        let stored = built.stored
+        let storeFailureReason = built.failureReason
 
         if let stored {
             _ = try? await credentialStore.save(stored)
@@ -274,6 +215,104 @@ extension SirosWallet {
             eventListener?.onFlowComplete(flowId: flowId, redirectUri: nil)
         }
         await returnToReadyState()
+    }
+
+    /// The issued credential as a `StoredCredential` - the per-format
+    /// validation and build, extracted from `handleWmpIssuanceComplete`
+    /// (its body ran past swiftlint's 120-line bound the day the §10
+    /// notification joined; the two branches are one question - "is this
+    /// credential storable" - and belong together, away from the
+    /// completion orchestration that calls them).
+    ///
+    /// - The `mso_mdoc` form parses the CBOR (a readable credential is a
+    ///   storable one), then builds the `StoredCredential` after the parse
+    ///   (the doctype names the MDDL schema to fetch).
+    /// - The SD-JWT form parses the payload, verifies the issued type and
+    ///   the VCT integrity, and builds the stored credential over the
+    ///   (possibly refreshed) VCTM.
+    ///
+    /// - Returns: the built credential (`nil` on any validation failure)
+    ///   and the user-facing failure reason (set only when `stored` is
+    ///   `nil` - a build that succeeded has no failure to report).
+    private func wmpBuildStoredCredential(
+        format: String,
+        raw: String,
+        offer: CredentialOffer?,
+        vctm: Vctm?,
+        notificationId: String?,
+        batchId: Int64
+    ) async -> (stored: StoredCredential?, failureReason: String?) {
+        if format == "mso_mdoc" {
+            var parsedMdoc: DocumentMdoc?
+            do {
+                guard let bytes = CredentialUtils.base64UrlDecode(raw) else {
+                    throw NSError(domain: "org.siros.sdk", code: 1, userInfo: [NSLocalizedDescriptionKey: "base64url"])
+                }
+                parsedMdoc = try MdocCbor.parseStoredCredential([UInt8](bytes))
+            } catch {
+                #if canImport(os)
+                logger.warning("The issued mdoc credential could not be read: \(error.localizedDescription)")
+                #endif
+                return (nil, "Received credential could not be read")
+            }
+            // The mdoc branch builds the StoredCredential after the parse (the
+            // doctype names the MDDL schema to fetch).
+            var mdocMetadata: CredentialMetadata?
+            if let offer {
+                let schema = await mddlSchemaFetcher.fetch(
+                    issuerUrl: offer.credentialIssuerIdentifier,
+                    scope: offer.credentialConfigurationId,
+                    doctype: parsedMdoc?.docType,
+                    registryUrl: resolvedRegistryUrl
+                )
+                mdocMetadata = CredentialUtils.buildMdocMetadata(offer: offer, mddlSchema: schema)
+            }
+            return (StoredCredential(
+                id: randomUint32Id(),
+                format: format,
+                raw: raw,
+                metadata: mdocMetadata,
+                notificationId: notificationId,
+                credentialIssuerIdentifier: offer?.credentialIssuerIdentifier,
+                credentialConfigurationId: offer?.credentialConfigurationId,
+                batchId: batchId,
+                instanceId: 0
+            ), nil)
+        }
+        let payload = CredentialUtils.parseJwtPayload(raw)
+        if payload == nil {
+            return (nil, "Received credential could not be read")
+        }
+        if let reason = verifyIssuedType(format: format, raw: raw) {
+            return (nil, reason)
+        }
+        let integrity = await verifyVctIntegrity(
+            format: format, payload: payload ?? [:],
+            offer: offer, document: activeVctmDocument
+        )
+        if let reason = integrity.reason {
+            return (nil, reason)
+        }
+        // The stored credential, format-validated.
+        return (StoredCredential(
+            id: randomUint32Id(),
+            format: format,
+            raw: raw,
+            metadata: offer.map { current in
+                CredentialUtils.buildMetadata(
+                    offer: current,
+                    vctm: integrity.refreshed?.vctm ?? vctm,
+                    rawCredential: raw
+                )
+            },
+            issuedAt: (payload?["iat"] as? NSNumber)?.int64Value,
+            expiresAt: (payload?["exp"] as? NSNumber)?.int64Value,
+            notificationId: notificationId,
+            credentialIssuerIdentifier: offer?.credentialIssuerIdentifier,
+            credentialConfigurationId: offer?.credentialConfigurationId,
+            batchId: batchId,
+            instanceId: 0
+        ), nil)
     }
 
     /// A credential lifecycle notification as a FLOW - siros-wallet-core's

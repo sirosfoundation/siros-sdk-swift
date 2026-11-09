@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import SwiftUI
 import SirosWallet
+import SirosTransport
 import SirosCredentials
 import SirosAuth
 import SirosKeystore
@@ -66,7 +67,7 @@ final class WalletViewModel: ObservableObject {
     /// persisted like useWmpProtocol (the pre-login settings' own rule: the
     /// choice is made before any login/registration, at the next wallet
     /// construction).
-    @Published var wmpEngineMode: SirosWallet.WmpEngineMode {
+    @Published var wmpEngineMode: WmpEngineMode {
         didSet { UserDefaults.standard.set(wmpEngineMode.rawValue, forKey: "siros_wmp_engine_mode") }
     }
     @Published var wmpSendUrl: String {
@@ -394,7 +395,7 @@ final class WalletViewModel: ObservableObject {
         self.backendUrl = backendUrl
         self.tenantId = tenantId
         self.useWmpProtocol = defaults.bool(forKey: "siros_use_wmp_protocol")
-        self.wmpEngineMode = SirosWallet.WmpEngineMode(
+        self.wmpEngineMode = WmpEngineMode(
             rawValue: defaults.string(forKey: "siros_wmp_engine_mode") ?? ""
         ) ?? .legacyWS
         self.wmpSendUrl = defaults.string(forKey: "siros_wmp_send_url") ?? ""
@@ -1219,6 +1220,19 @@ final class WalletViewModel: ObservableObject {
             resolvedRequestWscdChoice = nil
         }
 
+        // The local engine's transport factory - bound by a plain if/else
+        // (an optional-closure ternary is a type-checker crash report:
+        // "failed to produce a diagnostic"). A free function (see
+        // makeLocalEngineTransport below the class), so the @Sendable
+        // closure captures nothing.
+        let localTransportFactory: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)?
+        if wmpEngineMode == .local {
+            localTransportFactory = { (asks: WmpEngineAskHandler) in
+                try makeLocalEngineTransport(asks: asks)
+            }
+        } else {
+            localTransportFactory = nil
+        }
         let config = WalletConfig(
             backendUrl: backendUrl,
             tenantId: tenantId,
@@ -1233,17 +1247,7 @@ final class WalletViewModel: ObservableObject {
             wmpEngineMode: wmpEngineMode,
             wmpSendUrl: wmpSendUrl,
             wmpSseUrl: wmpSseUrl,
-            wmpTransport: wmpEngineMode == .local ? { asks in
-                // The local engine over the app's HTTP port (URLSession), the
-                // WALLET's own ask handlers (UniFfiEngineAskHost over the SDK's
-                // handler seam), and no trust stack (fail closed at the trust
-                // step until one is wired).
-                WmpUniFFITransport(
-                    http: URLSessionEngineHttp(),
-                    host: UniFfiEngineAskHost(asks),
-                    pdp: nil
-                )
-            } : nil,
+            wmpTransport: localTransportFactory,
             transactionDataEnabled: transactionDataEnabled,
             availableKeystores: resolvedAvailableKeystores,
             defaultWscdMapping: resolvedDefaultWscdMapping,
@@ -1438,4 +1442,30 @@ enum WalletViewState: Equatable {
     case lifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?)
     case flowActive(flowType: String, status: String)
     case error(message: String)
+}
+
+/// The local engine's transport - the XCFramework's engine core over the
+/// app's ports (URLSession for the engine's outgoing fetches, the WALLET's
+/// own ask handlers over the SDK's handler seam, no trust stack: fail
+/// closed at the trust step until one is wired). A free function, so the
+/// `@Sendable` closure `WalletConfig.wmpTransport` captures nothing.
+///
+/// The XCFramework gates it: a build without the engine core
+/// (`engine_adapter_sdkFFI` - Vendor/'s framework) refuses the local mode
+/// with a clear error at the factory, exactly as the SDK's own
+/// `WmpEngineMode.local` check does when no factory was configured.
+private func makeLocalEngineTransport(asks: WmpEngineAskHandler) throws -> any TransportProtocol {
+    #if canImport(engine_adapter_sdkFFI)
+    return WmpUniFFITransport(
+        http: URLSessionEngineHttp(),
+        host: UniFfiEngineAskHost(asks),
+        pdp: nil
+    )
+    #else
+    throw NSError(
+        domain: "org.siros.sdk.sample",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "The local engine mode needs the engine XCFramework (engine_adapter_sdkFFI), which this build does not link"]
+    )
+    #endif
 }

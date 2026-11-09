@@ -108,6 +108,23 @@ public struct WalletConfig: Sendable {
     /// mode with a clear error (an app that has not wired the engine's ports).
     public var wmpTransport: (@Sendable (WmpEngineAskHandler) throws -> any TransportProtocol)?
 
+    /// Whether the remote engine runs tenant-bound
+    /// (`ENGINE_PRINCIPAL_MODE=tenant`, engine-parity.md §8): the bearer
+    /// the ``WmpEngineMode/httpSSE`` transport mints is then the AS's
+    /// pseudonymous engine kind - the wallet's traffic attributes to the
+    /// tenant, never to a person. Default `false`: the backend token (the
+    /// user's own subject), the historic shape - matching a user-mode engine.
+    ///
+    /// The flag must match the deployment: a tenant-mode engine with user
+    /// tokens keeps its sessions but loses the privacy point; a user-mode
+    /// engine with pseudonym tokens strands every session at the token's
+    /// mint (the subject rotates per mint, and the user-mode owner key names
+    /// it). A stored property with its own default, not an `init`
+    /// parameter, so a caller sets just this one
+    /// (`config.wmpTenantTokens = true`) without touching `init` at all -
+    /// the `wscdAssuranceScheme` precedent.
+    public var wmpTenantTokens: Bool = false
+
     /// Initial value of ``SirosWallet/transactionDataEnabled`` (EC TS12
     /// payment SCA). Default `false`. A runtime setting, not a build flag:
     /// the wallet exposes the live value and a change applies to flows
