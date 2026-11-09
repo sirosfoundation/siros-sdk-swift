@@ -140,24 +140,22 @@ jobs:
 
   test-linux:
     name: Test (Linux)
-    # ubuntu-latest resolved to 26.04 and swift-actions/setup-swift does
-    # not serve toolchains for it yet - pin the OS the action supports.
-    runs-on: ubuntu-24.04
     # Deliberately older than the toolchain this is developed on, so that a
     # construct only the newer type-checker can handle is caught here rather
     # than by whoever next builds on an older Swift. 6.2 is the floor set by
     # swift-crypto 5, which declares tools version 6.2.0.
-    # The swift:6.2 container is gone: FoundationNetworking's libcurl
-    # crashes downloading the package's binary targets on this runner
-    # (Error 43, `try!` fatal - containerized or not; the same crash the
-    # Swift Package Index's Linux builds hit on Sentry's zips). The
-    # artifact-seed step below bypasses SwiftPM's downloader entirely;
-    # the toolchain stays 6.2, the floor swift-crypto 5 sets.
+    #
+    # NOTE setup-swift is NOT a substitute for this container: its 6.2.1
+    # toolchain rejects swift-crypto's `@nonexhaustive` attributes
+    # ("unknown attribute") that this container's 6.2 compiles fine - and
+    # every swift-crypto 5.x release carries them, so no pin dodges it.
+    #
+    # The container's own SwiftPM downloader crashes fetching the binary
+    # targets on this runner (FoundationNetworking/libcurl Error 43,
+    # `try!` fatal); the artifact-seed step below bypasses it with curl.
+    container: swift:6.2
     steps:
       - uses: actions/checkout@v7
-      - uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
-        with:
-          swift-version: "6.2"
       - name: Seed SwiftPM's binary-target cache with curl
         # FoundationNetworking's libcurl crashes downloading the binary
         # targets on this runner (Error 43, `try!` fatal) - in the container
