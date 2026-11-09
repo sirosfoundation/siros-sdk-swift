@@ -1460,7 +1460,7 @@ private func makeLocalEngineTransport(asks: WmpEngineAskHandler) throws -> any T
     // the engine bindings ride inside them - nothing to import here.
     return WmpUniFFITransport(
         http: URLSessionEngineHttp(),
-        host: UniFfiEngineAskHost(asks),
+        host: UniFfiEngineAskHost(handler: asks),
         pdp: nil
     )
     #else
