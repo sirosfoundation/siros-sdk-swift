@@ -88,21 +88,25 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
     public func requestMatch(params: EngineAdapterSdk.MatchParams) async throws -> EngineAdapterSdk.MatchResult {
         // The profile-shaped payload: the wallet's one matcher reads `dcql_query`
         // (and the verifier members, informational) whatever the carrier.
+        var verifierObject: [String: AnyCodable] = [
+            "name": .string(params.verifier.name),
+            "client_id": .string(params.verifier.clientId),
+            "trusted": .bool(params.verifier.trusted),
+        ]
+        // engine-ports' VerifierInfo carries framework/reason as non-optional
+        // strings (empty when the PDP published none) - the members ride
+        // only when they carry something.
+        if !params.verifier.framework.isEmpty {
+            verifierObject["framework"] = .string(params.verifier.framework)
+        }
+        if !params.verifier.reason.isEmpty {
+            verifierObject["reason"] = .string(params.verifier.reason)
+        }
         var payload: [String: AnyCodable] = [
             "scope": .string(params.scope),
             "transaction_data": .array(params.transactionData.map { .string($0) }),
-            "verifier": .object_([
-                "name": .string(params.verifier.name),
-                "client_id": .string(params.verifier.clientId),
-                "trusted": .bool(params.verifier.trusted),
-            ]),
+            "verifier": .object_(verifierObject),
         ]
-        if let framework = params.verifier.framework, !framework.isEmpty {
-            payload["verifier"]?.objectValue?["framework"] = .string(framework)
-        }
-        if let reason = params.verifier.reason, !reason.isEmpty {
-            payload["verifier"]?.objectValue?["reason"] = .string(reason)
-        }
         if let raw = params.dcqlQuery {
             // A query the wallet cannot read is one it cannot match: an explicit null
             // (the "offer every credential" branch), never a crash on the engine's
@@ -125,8 +129,8 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
 
     public func requestVp(params: EngineAdapterSdk.VpParams) async throws -> EngineAdapterSdk.VpResult {
         let result = try await handler.requestVp(
-            params.flowId,
-            EngineVpParams(
+            flowId: params.flowId,
+            params: EngineVpParams(
                 flowId: params.flowId,
                 audience: params.audience,
                 nonce: params.nonce,
@@ -153,8 +157,8 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
     public func requestDpopProof(params: EngineAdapterSdk.DpopProofParams) async throws -> EngineAdapterSdk.DpopProofResult {
         EngineAdapterSdk.DpopProofResult(
             proof: try await handler.requestDpopProof(
-                params.flowId,
-                EngineDpopProofParams(
+                flowId: params.flowId,
+                params: EngineDpopProofParams(
                     flowId: params.flowId, keyId: params.keyId, htm: params.htm,
                     htu: params.htu, accessToken: params.accessToken, nonce: params.nonce
                 )
@@ -165,8 +169,8 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
     public func requestConsent(params: EngineAdapterSdk.ConsentParams) async throws -> EngineAdapterSdk.ConsentResult {
         EngineAdapterSdk.ConsentResult(
             consented: try await handler.requestConsent(
-                params.flowId,
-                EngineConsentParams(
+                flowId: params.flowId,
+                params: EngineConsentParams(
                     flowId: params.flowId, purpose: params.purpose,
                     requestedClaims: params.requestedClaims, transactionData: params.transactionData
                 )
@@ -197,8 +201,8 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
 
     public func requestAttestation(params: EngineAdapterSdk.AttestationParams) async throws -> EngineAdapterSdk.AttestationResult {
         let result = try await handler.requestAttestation(
-            params.flowId,
-            EngineAttestationParams(
+            flowId: params.flowId,
+            params: EngineAttestationParams(
                 flowId: params.flowId, audience: params.audience,
                 clientId: params.clientId, challenge: params.challenge
             )
@@ -208,8 +212,8 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
 
     public func requestCredentialSelection(params: EngineAdapterSdk.CredentialSelectionParams) async throws -> EngineAdapterSdk.CredentialSelectionResult {
         let chosen = try await handler.requestCredentialSelection(
-            params.flowId,
-            params.available.map {
+            flowId: params.flowId,
+            available: params.available.map {
                 EngineAvailableCredential(id: $0.id, display: $0.display, format: $0.format, vct: $0.vct)
             }
         )
