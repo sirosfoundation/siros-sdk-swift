@@ -2,13 +2,6 @@
 
 import Foundation
 import SirosTransport
-#if canImport(engine_adapter_sdkFFI)
-import engine_adapter_sdkFFI
-
-// The local engine's HTTP port - the XCFramework links where the engine
-// core ships (Vendor/), and the gate keeps this file compiling where it
-// does not, exactly as the SDK's own WmpUniFFITransport gates itself.
-#endif
 
 /// The LOCAL engine mode's HTTP port: the engine's outgoing fetches over
 /// URLSession - the same stack the app already uses for everything else
@@ -22,11 +15,17 @@ import engine_adapter_sdkFFI
 /// The trust (`Pdp`) is deliberately absent (nil): the local engine fails closed
 /// at the trust step until the app wires a trust stack, exactly as the remote
 /// engine does unconfigured - the local mode is not a permissive mode.
-#if canImport(engine_adapter_sdkFFI)
+#if canImport(EngineAdapterSdk)
+import EngineAdapterSdk
+
+// The local engine's HTTP port - the bindings module links where the
+// XCFramework ships its slices (Vendor/'s framework), and the gate keeps
+// this file compiling where it does not, exactly as the SDK's own
+// WmpUniFFITransport gates itself.
 final class URLSessionEngineHttp: HttpClient, @unchecked Sendable {
     func send(request: HttpRequest) async throws -> HttpResponse {
         guard let url = URL(string: request.url) else {
-            throw engine_adapter_sdk.SdkException.Transport("the engine's fetch URL is invalid")
+            throw EngineAdapterSdk.SdkException.Transport("the engine's fetch URL is invalid")
         }
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = request.method
@@ -45,13 +44,13 @@ final class URLSessionEngineHttp: HttpClient, @unchecked Sendable {
             (data, response) = try await session.data(for: urlRequest)
         }
         guard let http = response as? HTTPURLResponse else {
-            throw engine_adapter_sdk.SdkException.Transport("the engine's fetch was not an HTTP response")
+            throw EngineAdapterSdk.SdkException.Transport("the engine's fetch was not an HTTP response")
         }
         // Bound the body exactly as the engine declared: refuse the response if
         // it exceeded the limit (the engine's own port rule, applied on the
         // app's side of the adapter).
         if UInt64(data.count) > request.maxResponseBytes {
-            throw engine_adapter_sdk.SdkException.Transport("response exceeded the engine's declared limit")
+            throw EngineAdapterSdk.SdkException.Transport("response exceeded the engine's declared limit")
         }
         return HttpResponse(
             status: UInt16(http.statusCode),

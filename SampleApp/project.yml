@@ -23,6 +23,8 @@ targets:
       - path: Resources/PrivacyInfo.xcprivacy
     dependencies:
       - package: SirosSDK
+        product: EngineAdapterSdk
+      - package: SirosSDK
         product: SirosWallet
       - package: SirosSDK
         product: SirosVerifier

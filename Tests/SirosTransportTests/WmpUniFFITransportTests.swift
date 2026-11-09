@@ -5,7 +5,8 @@ import XCTest
 
 @testable import SirosTransport
 
-#if canImport(engine_adapter_sdkFFI)
+#if canImport(EngineAdapterSdk)
+import EngineAdapterSdk
 /// The in-process transport's tests. The engine's XCFramework rides
 /// Package.swift's `engine_adapter_sdkFFI` binaryTarget (which lands with
 /// the first siros-wallet-core release tag), so these run where the

@@ -36,6 +36,7 @@ let package = Package(
         .macOS("15.0"),
     ],
     products: [
+        .library(name: "EngineAdapterSdk", targets: ["EngineAdapterSdk"]),
         .library(name: "SirosCredentials", targets: ["SirosCredentials"]),
         .library(name: "SirosTransport", targets: ["SirosTransport"]),
         .library(name: "SirosVerifier", targets: ["SirosVerifier"]),
@@ -199,16 +200,31 @@ let package = Package(
         ),
 
         // --- Transport: WebSocket + WMP protocol ---
+        // The engine core's Swift bindings: the generated UniFFI file, its
+        // own module so the engine's types (MatchResult, VpSelection...)
+        // never collide with the SDK's own of the same name - the gated
+        // code qualifies them as `EngineAdapterSdk.`. The FFI dependency
+        // is iOS-conditioned (the XCFramework ships iOS slices only) and
+        // the file self-gates on canImport, so the module compiles empty
+        // everywhere the framework is absent.
+        .target(
+            name: "EngineAdapterSdk",
+            dependencies: [
+                .target(name: "engine_adapter_sdkFFI", condition: .when(platforms: [.iOS])),
+            ],
+            path: "Sources/EngineAdapterSdk"
+        ),
+
         .target(
             name: "SirosTransport",
             dependencies: [
-                // The WMP engine core (the LOCAL mode's in-process engine):
+                // The engine bindings (the LOCAL mode's in-process engine):
                 // iOS slices only - the FFI-dependent code in this target
-                // (WmpUniFFITransport, WmpEngineAskHandler, the Generated
-                // bindings' FFI half) is `#if canImport`-gated, so macOS
-                // and Linux resolve the dependency but compile the local
-                // mode out, same as the zk-cred gates in SirosCredentials.
-                .target(name: "engine_adapter_sdkFFI", condition: .when(platforms: [.iOS])),
+                // (WmpUniFFITransport, WmpEngineAskHandler) is
+                // `#if canImport(EngineAdapterSdk)`-gated, so macOS and
+                // Linux compile the local mode out, same as the zk-cred
+                // gates in SirosCredentials.
+                .target(name: "EngineAdapterSdk", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/SirosTransport"
         ),

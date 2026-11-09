@@ -1455,7 +1455,9 @@ enum WalletViewState: Equatable {
 /// with a clear error at the factory, exactly as the SDK's own
 /// `WmpEngineMode.local` check does when no factory was configured.
 private func makeLocalEngineTransport(asks: WmpEngineAskHandler) throws -> any TransportProtocol {
-    #if canImport(engine_adapter_sdkFFI)
+    #if canImport(EngineAdapterSdk)
+    // The types are the SDK's own (SirosTransport's) and the app target's;
+    // the engine bindings ride inside them - nothing to import here.
     return WmpUniFFITransport(
         http: URLSessionEngineHttp(),
         host: UniFfiEngineAskHost(asks),
