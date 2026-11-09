@@ -145,15 +145,18 @@ jobs:
     # construct only the newer type-checker can handle is caught here rather
     # than by whoever next builds on an older Swift. 6.2 is the floor set by
     # swift-crypto 5, which declares tools version 6.2.0.
-    container: swift:6.2
+    # NOT the swift:6.2 container: FoundationNetworking's libcurl crashes
+    # downloading the package's fifth binary-target zip on the runner's
+    # containerized network path (Error 43, `try!` fatal - the same crash
+    # the Swift Package Index's Linux builds hit on Sentry's zips; found
+    # adding engine_adapter_sdkFFI). The host toolchain - same Swift 6.2,
+    # the floor swift-crypto 5 sets, same runner curl - downloads all six
+    # zips fine. The floor is the Swift version, not the container.
     steps:
       - uses: actions/checkout@v7
-      - name: Force HTTP/1.1 for SwiftPM's binary-target fetches
-        # FoundationNetworking's libcurl crashes downloading the package's
-        # fifth binary-target zip (libcurl Error 43, `try!` fatal) on this
-        # image - found adding engine_adapter_sdkFFI. libcurl honors
-        # ~/.curlrc, and HTTP/1.1 is the known-good path.
-        run: echo "http1.1" >> "$HOME/.curlrc"
+      - uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
+        with:
+          swift-version: "6.2"
       - name: Build & Test
         run: |
           # SirosKeystore, SirosFlow, SirosWallet depend on Apple-only frameworks

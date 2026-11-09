@@ -25,7 +25,7 @@ import EngineAdapterSdk
 final class URLSessionEngineHttp: HttpClient, @unchecked Sendable {
     func send(request: HttpRequest) async throws -> HttpResponse {
         guard let url = URL(string: request.url) else {
-            throw EngineAdapterSdk.SdkException.Transport("the engine's fetch URL is invalid")
+            throw EngineAdapterSdk.SdkError.Transport("the engine's fetch URL is invalid")
         }
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = request.method
@@ -44,13 +44,13 @@ final class URLSessionEngineHttp: HttpClient, @unchecked Sendable {
             (data, response) = try await session.data(for: urlRequest)
         }
         guard let http = response as? HTTPURLResponse else {
-            throw EngineAdapterSdk.SdkException.Transport("the engine's fetch was not an HTTP response")
+            throw EngineAdapterSdk.SdkError.Transport("the engine's fetch was not an HTTP response")
         }
         // Bound the body exactly as the engine declared: refuse the response if
         // it exceeded the limit (the engine's own port rule, applied on the
         // app's side of the adapter).
         if UInt64(data.count) > request.maxResponseBytes {
-            throw EngineAdapterSdk.SdkException.Transport("response exceeded the engine's declared limit")
+            throw EngineAdapterSdk.SdkError.Transport("response exceeded the engine's declared limit")
         }
         return HttpResponse(
             status: UInt16(http.statusCode),

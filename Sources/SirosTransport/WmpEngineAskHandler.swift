@@ -218,7 +218,7 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
             }
         )
         guard let chosen else {
-            throw EngineAdapterSdk.SdkException.Cannot("credential selection is not supported by this wallet")
+            throw EngineAdapterSdk.SdkError.Cannot("credential selection is not supported by this wallet")
         }
         return EngineAdapterSdk.CredentialSelectionResult(credentialConfigurationId: chosen)
     }
