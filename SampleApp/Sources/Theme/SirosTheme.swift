@@ -43,8 +43,10 @@ enum SirosTheme {
     static let screenBackground = adaptive(light: 0xFFFFFF, dark: 0x131B29)
     /// Primary text (#0C0E11).
     static let ink = adaptive(light: 0x0C0E11, dark: 0xEEF0F3)
-    /// Secondary text and unselected bar items (#6E7582).
-    static let secondaryText = adaptive(light: 0x6E7582, dark: 0xB3BBC6)
+    /// Secondary text and unselected bar items: #69707D, a step darker than
+    /// the design's #6E7582 so it reads at 4.7:1 on the alternate surface
+    /// (the design's value reaches 4.4:1 there).
+    static let secondaryText = adaptive(light: 0x69707D, dark: 0xB3BBC6)
     /// The alternate, faintly grey surface (#F8F9F9).
     static let altSurface = adaptive(light: 0xF8F9F9, dark: 0x1C2433)
     /// Card borders and rules (#E0E1E4).
