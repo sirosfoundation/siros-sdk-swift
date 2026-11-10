@@ -33,38 +33,92 @@ struct CredentialsView: View {
     @State private var actionMenuFor: StoredCredential?
     @State private var pendingDeleteFor: StoredCredential?
 
+    @State private var query = ""
+
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle(L10n.string("nav.credentials"))
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(action: { viewModel.openAddCredential() }) {
-                            Image(systemName: "plus")
-                        }
-                    }
+        content
+            .background(SirosTheme.screenBackground)
+            .overlay(alignment: .bottomTrailing) {
+                Button(action: { viewModel.openAddCredential() }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 64, height: 64)
+                        .background(Circle().fill(SirosTheme.brand))
+                        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.string("credentials.addTitle"))
+                .accessibilityIdentifier("manage-add")
+                .padding(.trailing, SirosTheme.screenMargin)
+                .padding(.bottom, 16)
+            }
+    }
+
+    /// What the search field and the filter leave of `all`.
+    private func shown(_ all: [CredentialWithInstances]) -> [CredentialWithInstances] {
+        all.filter {
+            (!viewModel.needsAttentionOnly || $0.needsAttention(statuses: viewModel.credentialStatuses))
+                && $0.credential.matchesSearch(query)
         }
     }
 
+    private func filterPill(_ label: String, selected: Bool, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.body.weight(.medium))
+                .foregroundColor(selected ? .white : SirosTheme.ink)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(selected ? SirosTheme.chipSelected : Color.clear))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
     private var content: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(L10n.string("credentials.welcome", viewModel.displayName ?? L10n.string("credentials.unknownUser")))
-                .font(.title2)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 16)
+        VStack(alignment: .leading, spacing: 0) {
+            let all = grouped
+            VStack(alignment: .leading, spacing: 16) {
+                ScreenTitle(text: L10n.string("manage.title"))
+                TextField(L10n.string("manage.search"), text: $query)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(SirosTheme.altSurface))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(SirosTheme.hairline, lineWidth: 1))
+                    .accessibilityIdentifier("manage-search")
+                HStack(spacing: 8) {
+                    filterPill(
+                        L10n.string("manage.filterAll", all.count),
+                        selected: !viewModel.needsAttentionOnly,
+                        identifier: "manage-filter-all"
+                    ) { viewModel.needsAttentionOnly = false }
+                    filterPill(
+                        L10n.string("manage.filterAttention"),
+                        selected: viewModel.needsAttentionOnly,
+                        identifier: "manage-filter-attention"
+                    ) { viewModel.needsAttentionOnly = true }
+                }
+            }
+            .padding(.horizontal, SirosTheme.screenMargin)
+            .padding(.bottom, 16)
 
-            Text(credentialCountText)
-                .font(.subheadline)
-                .foregroundColor(SirosTheme.onSurfaceVariant)
-                .padding(.horizontal, 16)
-
-            Spacer().frame(height: 16)
-
-            let entries = grouped
-            if entries.isEmpty {
+            let entries = shown(all)
+            if all.isEmpty {
                 emptyState
+                Spacer()
+            } else if entries.isEmpty {
+                Text(viewModel.needsAttentionOnly && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? L10n.string("manage.noneNeedAttention")
+                    : L10n.string("manage.noMatch"))
+                    .font(.body)
+                    .foregroundColor(SirosTheme.secondaryText)
+                    .padding(.horizontal, SirosTheme.screenMargin)
+                    .padding(.vertical, 24)
                 Spacer()
             } else {
                 // A partially-overlapping, interactive deck instead of a
@@ -80,7 +134,7 @@ struct CredentialsView: View {
                     onCredentialLongClick: { actionMenuFor = $0 },
                     onRenewCredential: { viewModel.renewCredential($0) }
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, SirosTheme.screenMargin)
             }
         }
         .padding(.top, 12)
@@ -123,15 +177,6 @@ struct CredentialsView: View {
             }
         } message: { credential in
             Text(L10n.string("credentials.deleteConfirmMessage", credential.metadata?.name ?? credential.format))
-        }
-    }
-
-    private var credentialCountText: String {
-        let count = grouped.count
-        switch count {
-        case 0: return L10n.string("credentials.countZero")
-        case 1: return L10n.string("credentials.countOne")
-        default: return L10n.string("credentials.countOther", count)
         }
     }
 

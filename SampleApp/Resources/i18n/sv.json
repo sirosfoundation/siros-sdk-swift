@@ -31,14 +31,14 @@
     "countOther": "%1$d intyg",
     "emptyTitle": "Inga intyg ännu",
     "emptySubtitle": "Tryck för att lägga till ditt första intyg",
-    "addTitle": "Lägg till Intyg",
+    "addTitle": "Lägg till intyg",
     "addLoading": "Laddar tillgängliga intyg...",
     "addEmpty": "Inga intyg tillgängliga",
     "addConfirmTitle": "Lägg till intyg?",
     "addConfirmAccept": "Acceptera",
     "addConfirmMessage": "Du är på väg att begära \"%1$@\" från %2$@.",
-    "scanPhysicalIdTitle": "Digitalt ID (skannat pass)",
-    "scanPhysicalIdSubtitle": "Skanna ditt ansikte och pass",
+    "scanPhysicalIdTitle": "Skanna foto-ID",
+    "scanPhysicalIdSubtitle": "Använd ditt pass för att skapa ett digitalt foto-ID.",
     "renew": "Förnya",
     "deleteConfirmTitle": "Ta bort intyg",
     "deleteConfirmMessage": "Är du säker på att du vill ta bort \"%1$@\"? Detta kan inte ångras.",
@@ -67,7 +67,10 @@
     "statusSuspendedDetail": "Det här intyget har spärrats tillfälligt av utfärdaren",
     "statusUnknown": "Okänt",
     "statusUnknownDetail": "Det gick inte att fastställa detta intygs status",
-    "fieldHolderBinding": "Innehavarbindning"
+    "fieldHolderBinding": "Innehavarbindning",
+    "scanQrTitle": "Skanna QR-kod",
+    "scanQrSubtitle": "Skanna en QR-kod för att lägga till ett intyg i din plånbok.",
+    "addAvailable": "Tillgängliga intyg"
   },
   "presentation": {
     "title": "Intygsbegäran",
@@ -220,18 +223,18 @@
     "stepFaceScanTitle": "Ansiktsskanning",
     "stepFaceScanDescription": "Skanna ditt ansikte för att visa att du är en verklig, levande människa",
     "stepDocumentScanTitle": "Dokumentskanning",
-    "stepDocumentScanDescription": "Skanna fotosidan på ditt pass eller ID-kort",
+    "stepDocumentScanDescription": "Skanna din handling",
     "stepNfcTitle": "NFC-chipavläsning",
-    "stepNfcDescription": "Placera din telefon på ditt dokument för att läsa NFC-chippet",
+    "stepNfcDescription": "Lägg telefonen på handlingen för att läsa NFC-chippet",
     "beforeYouStart": "Innan du börjar",
-    "prereqDocument": "Ha ditt pass eller ID-kort redo",
-    "prereqLighting": "Säkerställ goda ljusförhållanden",
-    "prereqConnection": "Säkerställ en stabil internetanslutning",
-    "whyFaceScanTitle": "Varför en ansiktsskanning?",
-    "whyFaceScanDescription": "En 3D-ansiktsskanning verifierar att du är en verklig, levande person. Din biometriska data krypteras vid insamling och behandlas endast för identitetsverifiering. Den lagras inte efter sessionen.",
+    "prereqDocument": "Ha passet redo",
+    "prereqLighting": "Ha bra belysning",
+    "prereqConnection": "Ha bra internetanslutning",
+    "whyFaceScanTitle": "Varför ansiktsskanning?",
+    "whyFaceScanDescription": "Vi använder en snabb 3D-ansiktsverifiering för att förhindra att din handling används bedrägligt. Dina biometriska uppgifter krypteras och raderas när verifieringen är klar.",
     "consentText": "Jag samtycker till biometrisk behandling för identitetsverifiering.",
     "startScanButton": "Starta skanning",
-    "navTitle": "Skanna fysiskt ID",
+    "navTitle": "Skanna foto-ID",
     "errors": {
       "cancelled": "Identitetsverifieringen avbröts.",
       "unavailable": "Identitetsverifiering är inte tillgänglig på den här enheten.",
@@ -255,7 +258,8 @@
       "initialization_failed": "Identitetsverifieringen kunde inte startas. Försök igen senare.",
       "unknown_internal_error": "Något gick fel under skanningen. Försök igen.",
       "no_session_result": "Skanningen avslutades utan resultat. Försök igen."
-    }
+    },
+    "stepNumber": "Steg %1$d"
   },
   "error": {
     "title": "Något gick fel",
@@ -313,7 +317,9 @@
     "credentials": "Intyg",
     "home": "Hem",
     "settings": "Inställningar",
-    "back": "Tillbaka"
+    "back": "Tillbaka",
+    "scanQr": "Skanna QR",
+    "menu": "Meny"
   },
   "qr": {
     "title": "Skanna QR-kod",
@@ -321,7 +327,8 @@
     "pasteButton": "Skicka",
     "unrecognised": "Okänd QR-kod",
     "simulatorUnavailable": "Kameran är inte tillgänglig i simulatorn",
-    "simulatorFallbackHint": "Använd inmatningsfältet nedan för att ange en URI."
+    "simulatorFallbackHint": "Använd inmatningsfältet nedan för att ange en URI.",
+    "caption": "Skanna enhetens QR-kod med din telefon."
   },
   "activate": {
     "useProximityInstead": "Tryck för att dela i stället"
@@ -330,7 +337,16 @@
     "activateButton": "Aktivera",
     "addCredentialButton": "Lägg till ett intyg",
     "photoIdOnboardingTitle": "Skaffa ditt PhotoID",
-    "photoIdOnboardingDescription": "Verifiera din identitet för att lägga till ett PhotoID-intyg av statlig kvalitet"
+    "photoIdOnboardingDescription": "Verifiera din identitet för att lägga till ett PhotoID-intyg av statlig kvalitet",
+    "welcomeBack": "Välkommen tillbaka.",
+    "welcomeBackName": "Välkommen tillbaka, %1$@.",
+    "attentionOne": "1 intyg behöver åtgärdas",
+    "attentionOther": "%1$d intyg behöver åtgärdas",
+    "manageCredentials": "Hantera intyg",
+    "shareInPerson": "Dela på plats",
+    "promptBegin": "Börja",
+    "promptGetStarted": "Kom igång",
+    "addCredentialsText": "Se de intyg som din plånbok erbjuder."
   },
   "history": {
     "title": "Presentationshistorik",
@@ -342,7 +358,10 @@
     "statusLabel": "Status: %1$@",
     "statusSuccessful": "Lyckad",
     "statusFailed": "Misslyckad",
-    "zkProof": "Nollkunskapsbevis"
+    "zkProof": "Nollkunskapsbevis",
+    "today": "I dag",
+    "yesterday": "I går",
+    "search": "Sök"
   },
   "devices": {
     "title": "Enheter",
@@ -452,5 +471,40 @@
       "declined": "Du avböjde transaktionen.",
       "signingFailed": "Bekräftelsen ledde inte till någon presentation."
     }
+  },
+  "chrome": {
+    "title": "SIROS ID Wallet",
+    "myWallet": "Min plånbok",
+    "walletOf": "%1$@ – plånbok"
+  },
+  "menu": {
+    "history": "Historik",
+    "about": "Om",
+    "verify": "Verifiera ett intyg",
+    "logout": "Logga ut",
+    "poweredBy": "Powered by SIROS Foundation"
+  },
+  "share": {
+    "title": "Dela på plats",
+    "intro": "Dela ett intyg med en enhet i närheten på ett av två sätt:",
+    "showQrTitle": "Visa QR-kod",
+    "showQrSubtitle": "Visa din QR-kod så att enheten kan skanna den.",
+    "scanQrTitle": "Skanna QR-kod",
+    "scanQrSubtitle": "Skanna enhetens QR-kod med din telefon.",
+    "showQrCaption": "Visa din QR-kod så att enheten kan skanna den.",
+    "showQrDescription": "QR-kod som den andra enheten skannar"
+  },
+  "manage": {
+    "title": "Hantera intyg",
+    "search": "Sök intyg...",
+    "filterAll": "Alla (%1$d)",
+    "filterAttention": "Behöver åtgärdas",
+    "noneNeedAttention": "Inga intyg behöver åtgärdas.",
+    "noMatch": "Inga intyg matchar din sökning."
+  },
+  "about": {
+    "text": "SIROS ID Wallet förvarar dina digitala intyg på din enhet och låter dig dela dem online och på plats.",
+    "version": "Version",
+    "license": "Licens"
   }
 }

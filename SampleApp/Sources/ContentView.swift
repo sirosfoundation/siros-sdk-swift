@@ -38,22 +38,26 @@ struct ContentView: View {
                     } else if let credential = viewModel.selectedCredential {
                         CredentialDetailView(credential: credential)
                     } else if viewModel.showHistory {
-                        PresentationHistoryView()
+                        WalletChrome { PresentationHistoryView() }
                     } else if viewModel.showTransactionLog {
                         TransactionLogView()
                     } else if viewModel.showActivate {
-                        ActivateView()
+                        // A full-attention screen: Back replaces the
+                        // three-way bar.
+                        WalletChrome(onBack: { viewModel.closeActivate() }) { ActivateView() }
                     } else if viewModel.showIDVPreparation {
                         // The real entry point for both the "Scan Physical ID
                         // card" row (AddCredentialView) and Home's PhotoID
                         // onboarding CTA (HomeView) - see
                         // WalletViewModel+PhotoIdOnboarding.swift.
-                        IDVPreparationView(
-                            onStartScan: { viewModel.startIDV() },
-                            onDismiss: { viewModel.closeIDVPreparation() }
-                        )
+                        WalletChrome {
+                            IDVPreparationView(
+                                onStartScan: { viewModel.startIDV() },
+                                onDismiss: { viewModel.closeIDVPreparation() }
+                            )
+                        }
                     } else if viewModel.showAddCredential {
-                        AddCredentialView()
+                        WalletChrome { AddCredentialView() }
                     } else if viewModel.showWscaDeveloper {
                         WscdSettingsView()
                     } else if viewModel.showDevices {
@@ -280,91 +284,35 @@ struct ErrorView: View {
 
 // MARK: - Main Tab View
 
+/// The destinations of the bottom bar and the menu (see
+/// `WalletDestination`), in the wallet's frame.
 struct MainTabView: View {
     @EnvironmentObject var viewModel: WalletViewModel
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // Content area
-            Group {
-                switch viewModel.selectedTab {
-                case 1:
-                    HomeView()
-                case 2:
-                    SettingsView()
-                default:
-                    CredentialsView()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-
-            // Bottom tab bar matching Android
-            HStack {
-                tabButton(
-                    icon: "wallet.pass",
-                    label: L10n.string("nav.credentials"),
-                    tag: 0,
-                    identifier: "nav-tab-credentials"
-                )
-                Spacer()
-                tabButton(
-                    mark: true,
-                    label: L10n.string("nav.home"),
-                    tag: 1,
-                    identifier: "nav-tab-home"
-                )
-                Spacer()
-                tabButton(
-                    icon: "gear",
-                    label: L10n.string("nav.settings"),
-                    tag: 2,
-                    identifier: "nav-tab-settings"
-                )
-            }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 8)
-            .background(SirosTheme.surfaceVariant)
-            // Reports this bar's real height (see `BottomBarHeightKey`) so
-            // ContentView's message banner can float above it instead of
-            // covering it - only present while MainTabView (i.e. this bar)
-            // is actually on screen.
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(key: BottomBarHeightKey.self, value: proxy.size.height)
-                }
-            )
+    private var selected: WalletNavItem? {
+        switch viewModel.destination {
+        case .home: return .home
+        case .menu: return .menu
+        default: return nil
         }
-        .background(SirosTheme.background)
     }
 
-    @ViewBuilder
-    private func tabButton(icon: String? = nil, mark: Bool = false, label: String, tag: Int, identifier: String) -> some View {
-        let isSelected = viewModel.selectedTab == tag
-        Button(action: { viewModel.selectedTab = tag }) {
-            VStack(spacing: 2) {
-                if mark {
-                    // The SIROS mark is two-tone (navy star on white), so it's
-                    // shown as-is rather than tinted like the other tabs'
-                    // single-color SF Symbols - and noticeably larger, since
-                    // this is the app's primary "home" anchor.
-                    SirosMarkView(size: 32)
-                        .frame(width: 32, height: 32)
-                } else if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 20))
-                        .foregroundColor(isSelected ? SirosTheme.brand : SirosTheme.onSurfaceVariant)
-                }
-                Text(label)
-                    .font(.caption2)
-                    .foregroundColor(isSelected ? SirosTheme.brand : SirosTheme.onSurfaceVariant)
+    var body: some View {
+        WalletChrome(selected: selected, brandHeader: viewModel.destination == .home) {
+            switch viewModel.destination {
+            case .home:
+                HomeView()
+            case .menu:
+                MenuView()
+            case .credentials:
+                CredentialsView()
+            case .share:
+                ShareInPersonView()
+            case .settings:
+                SettingsView()
+            case .about:
+                AboutView()
             }
         }
-        .buttonStyle(.plain)
-        // Stable, locale-independent hook for UI tests (see
-        // CredentialStackInteractionUITests, which must switch off Home to
-        // reach the Credentials tab before it can exercise the stack).
-        .accessibilityIdentifier(identifier)
     }
 }
