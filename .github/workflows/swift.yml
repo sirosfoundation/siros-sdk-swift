@@ -158,6 +158,9 @@ jobs:
     container: swift:6.2
     steps:
       - uses: actions/checkout@v7
+      - name: Install the seed script's tools
+        # The swift:6.2 image ships neither curl nor python3.
+        run: apt-get update && apt-get install -y --no-install-recommends curl python3 ca-certificates unzip
       - name: Seed SwiftPM's binary-target cache with curl
         # FoundationNetworking's libcurl crashes downloading the binary
         # targets on this runner (Error 43, `try!` fatal) - in the container
