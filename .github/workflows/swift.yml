@@ -140,6 +140,8 @@ jobs:
 
   test-linux:
     name: Test (Linux)
+    # A container job still needs a runner to host the container.
+    runs-on: ubuntu-24.04
     # Deliberately older than the toolchain this is developed on, so that a
     # construct only the newer type-checker can handle is caught here rather
     # than by whoever next builds on an older Swift. 6.2 is the floor set by
@@ -156,6 +158,9 @@ jobs:
     container: swift:6.2
     steps:
       - uses: actions/checkout@v7
+      - name: Install the seed script's tools
+        # The swift:6.2 image ships neither curl nor python3.
+        run: apt-get update && apt-get install -y --no-install-recommends curl python3 ca-certificates unzip
       - name: Seed SwiftPM's binary-target cache with curl
         # FoundationNetworking's libcurl crashes downloading the binary
         # targets on this runner (Error 43, `try!` fatal) - in the container

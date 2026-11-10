@@ -31,14 +31,14 @@
     "countOther": "%1$d credentials",
     "emptyTitle": "No credentials yet",
     "emptySubtitle": "Tap to add your first credential",
-    "addTitle": "Add Credential",
+    "addTitle": "Add Credentials",
     "addLoading": "Loading available credentials...",
     "addEmpty": "No credentials available",
     "addConfirmTitle": "Add Credential?",
     "addConfirmAccept": "Accept",
     "addConfirmMessage": "You are about to request \"%1$@\" from %2$@.",
-    "scanPhysicalIdTitle": "Digital ID (scanned passport)",
-    "scanPhysicalIdSubtitle": "Scan your face and passport",
+    "scanPhysicalIdTitle": "Scan Photo ID",
+    "scanPhysicalIdSubtitle": "Use your passport to create a digital Photo ID.",
     "renew": "Renew",
     "deleteConfirmTitle": "Delete Credential",
     "deleteConfirmMessage": "Are you sure you want to delete \"%1$@\"? This cannot be undone.",
@@ -67,7 +67,10 @@
     "statusSuspendedDetail": "This credential has been suspended by its issuer",
     "statusUnknown": "Unknown",
     "statusUnknownDetail": "This credential’s status could not be determined",
-    "fieldHolderBinding": "Holder binding"
+    "fieldHolderBinding": "Holder binding",
+    "scanQrTitle": "Scan QR code",
+    "scanQrSubtitle": "Scan a QR code to add a credential to your wallet.",
+    "addAvailable": "Available credentials"
   },
   "presentation": {
     "title": "Credential Request",
@@ -127,7 +130,11 @@
     "transactionDataToggle": "Payment confirmation (EC TS12)",
     "transactionDataDescription": "Allow payment and login confirmations that show you the transaction before you approve it. Applies to requests started after you change it; with the WMP transport, to the next connection (sign out and in again). Needs a key other than a software key, and biometric verification.",
     "transactionLogButton": "Transaction Log",
-    "interopProfiles": "Interop profiles"
+    "interopProfiles": "Interop profiles",
+    "appearanceSection": "Appearance",
+    "appearanceSystem": "System",
+    "appearanceLight": "Light",
+    "appearanceDark": "Dark"
   },
   "wscd": {
     "title": "WSCA Developer",
@@ -220,18 +227,18 @@
     "stepFaceScanTitle": "Face scan",
     "stepFaceScanDescription": "Scan your face to show you are a real, live human",
     "stepDocumentScanTitle": "Document scan",
-    "stepDocumentScanDescription": "Scan the photo page of your passport or ID card",
+    "stepDocumentScanDescription": "Scan your document",
     "stepNfcTitle": "NFC chip read",
-    "stepNfcDescription": "Place your phone on your document to read the NFC chip",
-    "beforeYouStart": "Before you start",
-    "prereqDocument": "Have your passport or ID card ready",
-    "prereqLighting": "Ensure good lighting conditions",
-    "prereqConnection": "Ensure a stable internet connection",
-    "whyFaceScanTitle": "Why a face scan?",
-    "whyFaceScanDescription": "A 3D face scan verifies you are a real, live person. Your biometric data is encrypted during capture and processed only for identity verification. It is not stored after the session.",
+    "stepNfcDescription": "Place your phone on your document to read the NFC-chip",
+    "beforeYouStart": "Before you begin",
+    "prereqDocument": "Have passport ready",
+    "prereqLighting": "Have good lighting",
+    "prereqConnection": "Have good internet connection",
+    "whyFaceScanTitle": "Why face scan?",
+    "whyFaceScanDescription": "We use a quick 3D face verification to prevent fraudulent use of your document. Your biometric data is encrypted and discarded after the verification is complete.",
     "consentText": "I consent to biometric processing for identity verification.",
     "startScanButton": "Start Scan",
-    "navTitle": "Scan Physical ID",
+    "navTitle": "Scan Photo ID",
     "errors": {
       "cancelled": "Identity verification was cancelled.",
       "unavailable": "Identity verification is not available on this device.",
@@ -255,7 +262,8 @@
       "initialization_failed": "Identity verification could not be started. Please try again later.",
       "unknown_internal_error": "Something went wrong during the scan. Please try again.",
       "no_session_result": "The scan ended without a result. Please try again."
-    }
+    },
+    "stepNumber": "Step %1$d"
   },
   "error": {
     "title": "Something went wrong",
@@ -313,7 +321,9 @@
     "credentials": "Credentials",
     "home": "Home",
     "settings": "Settings",
-    "back": "Back"
+    "back": "Back",
+    "scanQr": "Scan QR",
+    "menu": "Menu"
   },
   "qr": {
     "title": "Scan QR Code",
@@ -321,7 +331,8 @@
     "pasteButton": "Submit",
     "unrecognised": "Unrecognised QR code",
     "simulatorUnavailable": "Camera not available in Simulator",
-    "simulatorFallbackHint": "Use the paste field below to enter a URI."
+    "simulatorFallbackHint": "Use the paste field below to enter a URI.",
+    "caption": "Scan the device's QR code with your phone."
   },
   "activate": {
     "useProximityInstead": "Tap to share instead"
@@ -330,7 +341,16 @@
     "activateButton": "Activate",
     "addCredentialButton": "Add a credential",
     "photoIdOnboardingTitle": "Get your PhotoID",
-    "photoIdOnboardingDescription": "Verify your identity to add a government-grade PhotoID credential"
+    "photoIdOnboardingDescription": "Verify your identity to add a government-grade PhotoID credential",
+    "welcomeBack": "Welcome back.",
+    "welcomeBackName": "Welcome back, %1$@.",
+    "attentionOne": "1 credential needs attention",
+    "attentionOther": "%1$d credentials need attention",
+    "manageCredentials": "Manage Credentials",
+    "shareInPerson": "Share in-person",
+    "promptBegin": "Begin",
+    "promptGetStarted": "Get started",
+    "addCredentialsText": "Access pre-configured credential offers from your wallet."
   },
   "history": {
     "title": "Presentation History",
@@ -342,7 +362,10 @@
     "statusLabel": "Status: %1$@",
     "statusSuccessful": "Successful",
     "statusFailed": "Failed",
-    "zkProof": "Zero-knowledge proof"
+    "zkProof": "Zero-knowledge proof",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "search": "Search"
   },
   "devices": {
     "title": "Devices",
@@ -452,5 +475,40 @@
       "declined": "You declined the transaction.",
       "signingFailed": "Your confirmation did not lead to a presentation."
     }
+  },
+  "chrome": {
+    "title": "SIROS ID Wallet",
+    "myWallet": "My Wallet",
+    "walletOf": "%1$@'s Wallet"
+  },
+  "menu": {
+    "history": "History",
+    "about": "About",
+    "verify": "Verify a credential",
+    "logout": "Logout",
+    "poweredBy": "Powered by SIROS Foundation"
+  },
+  "share": {
+    "title": "Share In-Person",
+    "intro": "Share a credential with a nearby device in one of two ways:",
+    "showQrTitle": "Show QR code",
+    "showQrSubtitle": "Show your QR code for the device to scan.",
+    "scanQrTitle": "Scan QR code",
+    "scanQrSubtitle": "Scan the device's QR code with your phone.",
+    "showQrCaption": "Show your QR code for the device to scan.",
+    "showQrDescription": "QR code for the other device to scan"
+  },
+  "manage": {
+    "title": "Manage credentials",
+    "search": "Search credential...",
+    "filterAll": "All (%1$d)",
+    "filterAttention": "Needs attention",
+    "noneNeedAttention": "No credentials need attention.",
+    "noMatch": "No credentials match your search."
+  },
+  "about": {
+    "text": "SIROS ID Wallet keeps your digital credentials on your device and lets you share them online and in person.",
+    "version": "Version",
+    "license": "License"
   }
 }

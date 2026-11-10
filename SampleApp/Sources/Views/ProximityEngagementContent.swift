@@ -94,29 +94,23 @@ struct ProximityEngagementContent: View {
         }
     }
 
+    /// The waiting state as the design draws it: the engagement QR code on
+    /// the brand panel with one line of instruction.
     @ViewBuilder
     private func engagementView(_ qrImage: UIImage) -> some View {
         ScrollView {
-            VStack(spacing: 16) {
-                Text(L10n.string("proximity.scanPrompt"))
-                    .font(.title3.weight(.medium))
-                    .multilineTextAlignment(.center)
-
+            BrandPanel(caption: L10n.string("share.showQrCaption")) {
                 Image(uiImage: qrImage)
                     .resizable()
                     .interpolation(.none)
                     .scaledToFit()
-                    .frame(maxWidth: 280, maxHeight: 280)
-                    .padding(.vertical, 8)
-
-                Divider()
-
-                Text(L10n.string("proximity.activeDescription"))
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                    .padding(20)
+                    .frame(maxWidth: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 20).fill(Color.white))
+                    .accessibilityLabel(L10n.string("share.showQrDescription"))
             }
-            .padding(24)
+            .padding(.horizontal, SirosTheme.screenMargin)
+            .padding(.vertical, 24)
         }
     }
 

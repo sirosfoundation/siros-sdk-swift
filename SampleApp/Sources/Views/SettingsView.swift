@@ -6,10 +6,23 @@ import SirosCredentials
 struct SettingsView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     @State private var showDeleteConfirm = false
+    @AppStorage(ThemeMode.storageKey) private var themeMode = ThemeMode.system.rawValue
 
     var body: some View {
         NavigationStack {
             List {
+                // Appearance: follow the device, or always light, or always dark.
+                Section(L10n.string("settings.appearanceSection")) {
+                    Picker(L10n.string("settings.appearanceSection"), selection: $themeMode) {
+                        ForEach(ThemeMode.allCases) { mode in
+                            Text(mode.label).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings-appearance")
+                }
+
                 // Account section
                 Section("Account") {
                     LabeledContent("Signed in as", value: viewModel.displayName ?? viewModel.userId ?? "—")

@@ -3,39 +3,81 @@
 import SwiftUI
 import SirosCredentials
 
-/// Displays presentation history — a log of credential presentations
-/// made to verifiers. Supports optional credential filtering.
+/// History: the wallet's log of presentations, newest first under day
+/// headings, with a search over who it was shown to and what was shown.
+/// Supports optional credential filtering. Chrome-free - `ContentView`
+/// frames it.
 struct PresentationHistoryView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     var filterCredentialId: Int64? = nil
 
-    var body: some View {
-        let history = filterCredentialId.map { credId in
-            viewModel.presentationHistory.filter { $0.credentialIds.contains(credId) }
-        } ?? viewModel.presentationHistory
+    @State private var query = ""
 
-        NavigationStack {
-            Group {
-                if history.isEmpty {
-                    Text(L10n.string("history.empty"))
-                        .font(.body)
-                        .foregroundColor(SirosTheme.onSurfaceVariant)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List(history, id: \.id) { record in
-                        PresentationRecordRow(record: record)
-                    }
-                    .listStyle(.plain)
-                }
+    /// The records to show, newest first, under their day headings.
+    private var groups: [(day: String, records: [PresentationRecord])] {
+        let today = L10n.string("history.today")
+        let yesterday = L10n.string("history.yesterday")
+        let now = Date()
+        let records = viewModel.presentationHistory
+            .filter { record in filterCredentialId.map { record.credentialIds.contains($0) } ?? true }
+            .filter { matchesHistoryQuery(verifierName: $0.verifierName, credentialNames: $0.credentialNames, query: query) }
+            .sorted { $0.timestamp > $1.timestamp }
+        var result: [(day: String, records: [PresentationRecord])] = []
+        for record in records {
+            let day = historyDayLabel(timestamp: record.timestamp, now: now, today: today, yesterday: yesterday)
+            if let last = result.indices.last, result[last].day == day {
+                result[last].records.append(record)
+            } else {
+                result.append((day: day, records: [record]))
             }
-            .navigationTitle(L10n.string("history.title"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(L10n.string("nav.back")) { viewModel.closeHistory() }
+        }
+        return result
+    }
+
+    var body: some View {
+        let groups = self.groups
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.string("menu.history"))
+                .font(.title2.weight(.medium))
+                .foregroundColor(SirosTheme.ink)
+            HStack {
+                TextField(L10n.string("history.search"), text: $query)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(SirosTheme.hairline)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .overlay(RoundedRectangle(cornerRadius: SirosTheme.cardCorner).stroke(SirosTheme.hairline, lineWidth: 1))
+            .accessibilityIdentifier("history-search")
+
+            if groups.isEmpty {
+                Text(L10n.string("history.empty"))
+                    .font(.body)
+                    .foregroundColor(SirosTheme.secondaryText)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(groups, id: \.day) { group in
+                            Text(group.day)
+                                .font(.title3.weight(.semibold))
+                                .foregroundColor(SirosTheme.ink)
+                            ForEach(group.records, id: \.id) { record in
+                                PresentationRecordRow(record: record)
+                                    .walletCard(padding: 14)
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                    .padding(.bottom, 24)
                 }
             }
         }
+        .padding(.horizontal, SirosTheme.screenMargin)
+        .padding(.top, 24)
+        .background(SirosTheme.screenBackground)
     }
 }
 
@@ -57,7 +99,7 @@ struct PresentationRecordRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text(record.verifierName ?? L10n.string("history.unknownVerifier"))
-                                .font(.body.weight(.medium))
+                                .font(.body.weight(.semibold))
                                 .foregroundColor(SirosTheme.onSurface)
                                 .lineLimit(1)
                             // A ZK proof disclosed nothing the verifier could
@@ -73,14 +115,14 @@ struct PresentationRecordRow: View {
 
                         if !record.credentialNames.isEmpty {
                             Text(record.credentialNames.joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundColor(SirosTheme.onSurfaceVariant)
+                                .font(.body)
+                                .foregroundColor(SirosTheme.ink)
                                 .lineLimit(1)
                         }
 
                         Text(formatTimestamp(record.timestamp))
-                            .font(.caption2)
-                            .foregroundColor(SirosTheme.onSurfaceVariant)
+                            .font(.body)
+                            .foregroundColor(SirosTheme.ink)
                     }
 
                     Spacer()
@@ -133,7 +175,7 @@ struct PresentationRecordRow: View {
 
     private func formatTimestamp(_ timestamp: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(timestamp) / 1000.0)
-        return date.formatted(date: .abbreviated, time: .shortened)
+        return date.formatted(date: .numeric, time: .standard)
     }
 
     private func formatClaimName(_ claim: String) -> String {

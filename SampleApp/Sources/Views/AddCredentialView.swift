@@ -3,107 +3,93 @@
 import SwiftUI
 import SirosCredentials
 
-/// Credential picker list — shows available credentials from all issuers.
+/// Add Credentials: two ways to bring a credential in from outside - scan an
+/// issuer's QR code (the wallet's one QR scanner) or scan a passport into a
+/// Photo ID (`IDVPreparationView`) - followed by the catalog of credentials
+/// the wallet's issuers offer, listed in place.
+///
+/// The Scan Photo ID card is shown whatever `availableCredentials` holds: a
+/// tenant whose one catalog offer is the Photo ID itself (filtered out of the
+/// list - see `openAddCredential`) still reaches it here while the list below
+/// is empty. Chrome-free - `ContentView` frames it.
 struct AddCredentialView: View {
     @EnvironmentObject var viewModel: WalletViewModel
     @State private var detailOffer: CredentialOffer?
 
     var body: some View {
-        NavigationStack {
-            Group {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                ScreenTitle(text: L10n.string("credentials.addTitle"))
+                ActionCard(
+                    title: L10n.string("credentials.scanQrTitle"),
+                    subtitle: L10n.string("credentials.scanQrSubtitle"),
+                    systemImage: "qrcode",
+                    identifier: "add-scan-qr"
+                ) {
+                    viewModel.openActivate()
+                }
+                ActionCard(
+                    title: L10n.string("credentials.scanPhysicalIdTitle"),
+                    subtitle: L10n.string("credentials.scanPhysicalIdSubtitle"),
+                    systemImage: "camera",
+                    identifier: "add-scan-photo-id"
+                ) {
+                    viewModel.openIDVPreparation()
+                }
+
+                Text(L10n.string("credentials.addAvailable"))
+                    .font(.body.weight(.semibold))
+                    .foregroundColor(SirosTheme.ink)
+                    .padding(.top, 14)
+
                 if viewModel.isLoadingOffers {
                     VStack(spacing: 12) {
                         ProgressView()
                         Text(L10n.string("credentials.addLoading"))
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(SirosTheme.secondaryText)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                } else if viewModel.availableCredentials.isEmpty {
+                    Text(L10n.string("credentials.addEmpty"))
+                        .font(.body)
+                        .foregroundColor(SirosTheme.secondaryText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
                 } else {
-                    // The "Scan Physical ID card" row is always shown here,
-                    // regardless of whether `availableCredentials` (the
-                    // generic issuer-offer list, with the plain SIROS ID
-                    // offer filtered out - see `openAddCredential`) is
-                    // empty. A real bug this replaced: showing the plain
-                    // "No credentials available" empty state instead of
-                    // this List whenever SIROS ID was a tenant's only
-                    // offer completely hid the one path meant to actually
-                    // issue it, since this row previously lived only in
-                    // the "offers non-empty" branch.
-                    List {
-                        Section {
-                            Button(action: { viewModel.openIDVPreparation() }) {
-                                HStack(spacing: 12) {
-                                    ZStack {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(Color.accentColor.opacity(0.15))
-                                            .frame(width: 40, height: 40)
-                                        Image(systemName: "camera")
-                                            .foregroundColor(.accentColor)
-                                    }
-                                    VStack(alignment: .leading) {
-                                        Text(L10n.string("credentials.scanPhysicalIdTitle"))
-                                            .font(.body)
-                                            .fontWeight(.medium)
-                                        Text(L10n.string("credentials.scanPhysicalIdSubtitle"))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        if viewModel.availableCredentials.isEmpty {
-                            Section {
-                                Text(L10n.string("credentials.addEmpty"))
-                                    .font(.body)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else {
-                            Section {
-                                ForEach(viewModel.availableCredentials, id: \.offerIdentity) { offer in
-                                    CredentialOfferRow(offer: offer)
-                                        .contentShape(Rectangle())
-                                        // `.onTapGesture` + `.onLongPressGesture` on the
-                                        // same view both fire on a long-press release in
-                                        // SwiftUI (a real bug this replaced: tapping to add
-                                        // a credential could immediately follow opening its
-                                        // detail sheet) - `exclusively(before:)` recognizes
-                                        // whichever gesture succeeds first and suppresses
-                                        // the other.
-                                        .gesture(
-                                            LongPressGesture(minimumDuration: 0.5)
-                                                .onEnded { _ in detailOffer = offer }
-                                                .exclusively(
-                                                    before: TapGesture()
-                                                        .onEnded { viewModel.selectCredentialOffer(offer) }
-                                                )
-                                        )
-                                }
-                            }
-                        }
+                    ForEach(viewModel.availableCredentials, id: \.offerIdentity) { offer in
+                        CredentialOfferRow(offer: offer)
+                            // `.onTapGesture` + `.onLongPressGesture` on the
+                            // same view both fire on a long-press release in
+                            // SwiftUI (a real bug this replaced: tapping to add
+                            // a credential could immediately follow opening its
+                            // detail sheet) - `exclusively(before:)` recognizes
+                            // whichever gesture succeeds first and suppresses
+                            // the other.
+                            .gesture(
+                                LongPressGesture(minimumDuration: 0.5)
+                                    .onEnded { _ in detailOffer = offer }
+                                    .exclusively(
+                                        before: TapGesture()
+                                            .onEnded { viewModel.selectCredentialOffer(offer) }
+                                    )
+                            )
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAction { viewModel.selectCredentialOffer(offer) }
                     }
-                    .listStyle(.plain)
                 }
             }
-            .navigationTitle(L10n.string("credentials.addTitle"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(L10n.string("nav.back")) { viewModel.closeAddCredential() }
-                }
-            }
-            .alert(L10n.string("credentials.addConfirmTitle"), isPresented: showIssuanceConsent) {
-                Button(L10n.string("credentials.addConfirmAccept")) { viewModel.confirmIssuance() }
-                Button(L10n.string("common.cancel"), role: .cancel) { viewModel.cancelIssuance() }
-            } message: {
-                if let offer = viewModel.pendingIssuanceOffer {
-                    Text(L10n.string("credentials.addConfirmMessage", offer.credentialName, offer.issuerName))
-                }
+            .padding(.horizontal, SirosTheme.screenMargin)
+            .padding(.vertical, 12)
+        }
+        .background(SirosTheme.screenBackground)
+        .alert(L10n.string("credentials.addConfirmTitle"), isPresented: showIssuanceConsent) {
+            Button(L10n.string("credentials.addConfirmAccept")) { viewModel.confirmIssuance() }
+            Button(L10n.string("common.cancel"), role: .cancel) { viewModel.cancelIssuance() }
+        } message: {
+            if let offer = viewModel.pendingIssuanceOffer {
+                Text(L10n.string("credentials.addConfirmMessage", offer.credentialName, offer.issuerName))
             }
         }
         .sheet(isPresented: showDetailOffer) {
@@ -137,40 +123,49 @@ struct AddCredentialView: View {
 
 // MARK: - Credential Offer Row
 
+/// One offer of the catalog, as a card: the credential's initial on the
+/// issuer's colour, its name, its description, and the issuer on a grey chip.
 struct CredentialOfferRow: View {
     let offer: CredentialOffer
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Initial badge
-            let bgColor = offer.backgroundColor.flatMap { Color(hex: $0) } ?? .accentColor
-            Circle()
+        HStack(alignment: .top, spacing: 14) {
+            let bgColor = offer.backgroundColor.flatMap { Color(hex: $0) } ?? SirosTheme.iconTile
+            let fgColor: Color = offer.backgroundColor.flatMap { Color(hex: $0) } == nil ? SirosTheme.iconTileContent : .white
+            RoundedRectangle(cornerRadius: 4)
                 .fill(bgColor)
-                .frame(width: 40, height: 40)
+                .frame(width: 44, height: 44)
                 .overlay(
                     Text(offer.credentialName.prefix(1).uppercased())
                         .font(.headline.bold())
-                        .foregroundStyle(.white)
+                        .foregroundColor(fgColor)
                 )
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(offer.credentialName)
                     .font(.body.weight(.medium))
-                    .lineLimit(1)
+                    .foregroundColor(SirosTheme.ink)
+                    .lineLimit(2)
+                if let description = offer.credentialDescription, !description.isEmpty {
+                    Text(description)
+                        .font(.body)
+                        .foregroundColor(SirosTheme.secondaryText)
+                        .lineLimit(2)
+                }
                 Text(offer.issuerName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.body)
+                    .foregroundColor(SirosTheme.secondaryText)
                     .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 2).fill(SirosTheme.altSurface))
+                    .padding(.top, 4)
             }
 
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .walletCard()
     }
 }
 

@@ -205,6 +205,13 @@ final class WalletViewModel: ObservableObject {
     /// not just reasoned about - the same class of screen round-trip that
     /// test exercises.
     @Published var selectedTab = 1
+    /// The "Needs attention" filter of Manage credentials - here rather than
+    /// in that view so Home's banner can open the screen on it.
+    @Published var needsAttentionOnly = false
+    /// The row the menu highlights: the screen it was opened from.
+    @Published var menuOrigin: MenuItem?
+    /// Whether the user closed Home's Add Credentials prompt this session.
+    @Published var addCredentialsPromptDismissed = false
     @Published var showAddCredential = false
     @Published var showHistory = false
     @Published var showWscaDeveloper = false

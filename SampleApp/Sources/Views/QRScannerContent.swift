@@ -25,50 +25,66 @@ struct QRScannerContent: View {
     @State private var pendingHandoff: DispatchWorkItem?
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                #if targetEnvironment(simulator)
-                simulatorFallback
-                #else
-                CameraQRScanner { code in
-                    handleDetectedCode(code)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                BrandPanel(caption: L10n.string("qr.caption")) {
+                    ZStack {
+                        #if targetEnvironment(simulator)
+                        simulatorFallback
+                        #else
+                        CameraQRScanner { code in
+                            handleDetectedCode(code)
+                        }
+                        #endif
+
+                        if detectedCode != nil {
+                            detectionOverlay
+                        }
+                    }
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: SirosTheme.cardCorner))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: SirosTheme.cardCorner)
+                            .stroke(detectedCode == nil ? Color.white : SirosTheme.success, lineWidth: detectedCode == nil ? 1 : 3)
+                    )
                 }
-                #endif
 
-                // Viewfinder overlay
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(detectedCode == nil ? Color.white : SirosTheme.brand, lineWidth: 3)
-                    .frame(width: 250, height: 250)
-                    .shadow(radius: 8)
-
-                if detectedCode != nil {
-                    detectionOverlay
-                }
-            }
-
-            // Paste URI fallback (always visible, like Kotlin)
-            VStack(spacing: 8) {
-                Text(L10n.string("qr.manualInput"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack {
+                // Paste URI fallback (always visible, like Kotlin)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.string("qr.manualInput"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(SirosTheme.ink)
                     TextField("openid-credential-offer://...", text: $pasteUri)
-                        .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                    Button(L10n.string("qr.pasteButton")) {
-                        let trimmed = pasteUri.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .overlay(RoundedRectangle(cornerRadius: SirosTheme.cardCorner).stroke(SirosTheme.hairline, lineWidth: 1))
+                        .accessibilityIdentifier("qr-paste-field")
+                    let trimmed = pasteUri.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Button(action: {
                         guard !trimmed.isEmpty else { return }
                         viewModel.handleQrResult(trimmed)
+                    }) {
+                        Text(L10n.string("qr.pasteButton"))
+                            .font(.body.weight(.semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                            .background(
+                                RoundedRectangle(cornerRadius: SirosTheme.cardCorner)
+                                    .fill(SirosTheme.brand.opacity(trimmed.isEmpty ? 0.4 : 1))
+                            )
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(pasteUri.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(.plain)
+                    .disabled(trimmed.isEmpty)
+                    .accessibilityIdentifier("qr-paste-submit")
                 }
             }
-            .padding()
-            .background(.regularMaterial)
+            .padding(.horizontal, SirosTheme.screenMargin)
+            .padding(.vertical, 24)
         }
-        .ignoresSafeArea(edges: .top)
+        .background(SirosTheme.screenBackground)
         .onDisappear {
             pendingHandoff?.cancel()
             pendingHandoff = nil
@@ -87,8 +103,6 @@ struct QRScannerContent: View {
                 .foregroundStyle(.white, SirosTheme.brand)
                 .shadow(radius: 8)
         }
-        .frame(width: 250, height: 250)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
         .transition(.opacity.combined(with: .scale(scale: 0.9)))
         .allowsHitTesting(false)
     }
@@ -157,6 +171,7 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
     var onCodeScanned: ((String) -> Void)?
     private let captureSession = AVCaptureSession()
     private var hasScanned = false
+    private var previewLayer: AVCaptureVideoPreviewLayer?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -179,10 +194,18 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
         previewLayer.frame = view.layer.bounds
         previewLayer.videoGravity = .resizeAspectFill
         view.layer.addSublayer(previewLayer)
+        self.previewLayer = previewLayer
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.captureSession.startRunning()
         }
+    }
+
+    /// The scanner is laid out in a square window whose size is only known
+    /// after layout, so the preview follows the view's bounds.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.layer.bounds
     }
 
     override func viewWillDisappear(_ animated: Bool) {
