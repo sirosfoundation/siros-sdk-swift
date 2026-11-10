@@ -94,6 +94,19 @@ final class WalletNavigationTests: XCTestCase {
         XCTAssertFalse(vm.needsAttentionOnly)
     }
 
+    /// The appearance setting: a stored choice is read back, anything else
+    /// follows the device, and only an explicit choice overrides it.
+    func testTheAppearanceChoice() {
+        for mode in ThemeMode.allCases {
+            XCTAssertEqual(ThemeMode.fromStored(mode.rawValue), mode)
+        }
+        XCTAssertEqual(ThemeMode.fromStored(nil), .system)
+        XCTAssertEqual(ThemeMode.fromStored("sepia"), .system)
+        XCTAssertNil(ThemeMode.system.colorScheme)
+        XCTAssertEqual(ThemeMode.light.colorScheme, .light)
+        XCTAssertEqual(ThemeMode.dark.colorScheme, .dark)
+    }
+
     /// Every string the designed screens look up is in both language tables
     /// (read from the source tree, as `FlowStepLabelTests` does).
     func testTheDesignedScreensStringsAreInBothLanguageTables() throws {
@@ -108,6 +121,8 @@ final class WalletNavigationTests: XCTestCase {
             "manage.noneNeedAttention", "manage.noMatch", "about.text", "about.version", "about.license",
             "history.today", "history.yesterday", "history.search", "qr.caption",
             "credentials.scanQrTitle", "credentials.scanQrSubtitle", "credentials.addAvailable", "idv.stepNumber",
+            "settings.appearanceSection", "settings.appearanceSystem", "settings.appearanceLight",
+            "settings.appearanceDark",
         ]
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         for name in ["en", "sv"] {

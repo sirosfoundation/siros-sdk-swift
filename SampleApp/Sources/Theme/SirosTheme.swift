@@ -62,8 +62,10 @@ enum SirosTheme {
     static let attention = Color(red: 0.976, green: 0.663, blue: 0.090)
     /// Fill of the selected filter pill on Manage credentials (#7C96BF).
     static let chipSelected = Color(red: 0.486, green: 0.588, blue: 0.749)
-    /// Fill of the Scan QR button at the centre of the bottom bar.
-    static let scanButton = Color.black
+    /// The Scan QR button at the centre of the bottom bar: black with a white
+    /// mark, inverted in the dark theme.
+    static let scanButton = adaptive(light: 0x000000, dark: 0xEEF0F3)
+    static let onScanButton = adaptive(light: 0xFFFFFF, dark: 0x0C0E11)
 
     /// Horizontal page margin and corner radius shared by the designed screens.
     static let screenMargin: CGFloat = 24

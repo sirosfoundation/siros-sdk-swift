@@ -7,6 +7,8 @@ import SirosWallet
 struct SirosSampleApp: App {
     @StateObject private var viewModel = WalletViewModel()
     @StateObject private var verifierViewModel = VerifierViewModel()
+    /// The user's appearance choice (Settings); `system` follows the device.
+    @AppStorage(ThemeMode.storageKey) private var themeMode = ThemeMode.system.rawValue
 
     init() {
         #if DEBUG
@@ -29,6 +31,7 @@ struct SirosSampleApp: App {
                     viewModel.handleDeepLink(url)
                 }
                 .tint(SirosTheme.brand)
+                .preferredColorScheme(ThemeMode.fromStored(themeMode).colorScheme)
         }
     }
 }

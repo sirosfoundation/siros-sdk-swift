@@ -126,7 +126,7 @@ struct WalletBottomBar: View {
                     Circle().fill(SirosTheme.scanButton)
                     Image(systemName: "qrcode")
                         .font(.system(size: 22))
-                        .foregroundColor(.white)
+                        .foregroundColor(SirosTheme.onScanButton)
                 }
                 .frame(width: 48, height: 48)
             }

@@ -130,7 +130,11 @@
     "transactionDataToggle": "Payment confirmation (EC TS12)",
     "transactionDataDescription": "Allow payment and login confirmations that show you the transaction before you approve it. Applies to requests started after you change it; with the WMP transport, to the next connection (sign out and in again). Needs a key other than a software key, and biometric verification.",
     "transactionLogButton": "Transaction Log",
-    "interopProfiles": "Interop profiles"
+    "interopProfiles": "Interop profiles",
+    "appearanceSection": "Appearance",
+    "appearanceSystem": "System",
+    "appearanceLight": "Light",
+    "appearanceDark": "Dark"
   },
   "wscd": {
     "title": "WSCA Developer",

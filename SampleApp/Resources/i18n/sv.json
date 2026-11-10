@@ -130,7 +130,11 @@
     "interopProfiles": "Interop-profiler",
     "transactionDataToggle": "Betalningsbekräftelse (EC TS12)",
     "transactionDataDescription": "Tillåt betalnings- och inloggningsbekräftelser som visar transaktionen innan du godkänner den. Gäller förfrågningar som startas efter att du ändrat inställningen; med WMP gäller den nästa anslutning (logga ut och in igen). Kräver en annan nyckel än en mjukvarunyckel och biometrisk verifiering.",
-    "transactionLogButton": "Transaktionslogg"
+    "transactionLogButton": "Transaktionslogg",
+    "appearanceSection": "Utseende",
+    "appearanceSystem": "System",
+    "appearanceLight": "Ljust",
+    "appearanceDark": "Mörkt"
   },
   "wscd": {
     "title": "WSCA Utvecklare",
