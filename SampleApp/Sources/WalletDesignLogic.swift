@@ -5,25 +5,39 @@ import SirosCredentials
 
 extension CredentialWithInstances {
 
-    /// Whether this credential belongs under "Needs attention": the SDK
-    /// reports a status that stops it being used (`statuses`, see
-    /// `WalletViewModel.credentialStatuses`), or no copy of it is left to
-    /// present - the state its card shows as renew-only
-    /// (`credentialBatchExhausted`).
-    func needsAttention(statuses: [Int64: CredentialStatus]) -> Bool {
-        if let status = statuses[credential.id], status != .valid { return true }
+    /// Whether this credential belongs under "Needs attention": its status
+    /// stops it being used, or no copy of it is left to present - the state
+    /// its card shows as renew-only (`credentialBatchExhausted`).
+    ///
+    /// The status is the SDK's (`statuses`, see
+    /// `WalletViewModel.credentialStatuses`). Where the SDK has not evaluated
+    /// the credential yet, its own `exp` decides, exactly as on its card
+    /// (`CredentialCardView.unusableStatus`) - so the banner and the filter
+    /// never disagree with what the card says.
+    func needsAttention(statuses: [Int64: CredentialStatus], now: Date = Date()) -> Bool {
+        if let status = statuses[credential.id] {
+            if !status.isUsable { return true }
+        } else if let expiresAt = credential.expiresAt, expiresAt > 0,
+                  Date(timeIntervalSince1970: Double(expiresAt)) < now {
+            // expiresAt is a JWT `exp` claim - always epoch seconds, not millis.
+            return true
+        }
         return !instances.contains { $0.sigCount == 0 }
     }
 }
 
 extension StoredCredential {
 
-    /// Whether `query` occurs in the name the credential is listed under. A
-    /// blank query matches every credential.
+    /// Whether `query` occurs in what the credential's card calls it: the
+    /// title and the type label under it, resolved the way the card resolves
+    /// them (`cardLabels`). A blank query matches every credential.
     func matchesSearch(_ query: String) -> Bool {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return true }
-        return (metadata?.name ?? format).localizedCaseInsensitiveContains(trimmed)
+        let meta = metadata ?? CredentialUtils.buildFallbackMetadata(self)
+        let labels = cardLabels(name: meta.name, format: format, typeId: cardTypeId(metadata: meta, credential: self))
+        if labels.title.localizedCaseInsensitiveContains(trimmed) { return true }
+        return labels.typeBadge?.localizedCaseInsensitiveContains(trimmed) ?? false
     }
 }
 

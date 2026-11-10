@@ -70,7 +70,9 @@ struct CredentialsView: View {
                 .foregroundColor(selected ? .white : SirosTheme.ink)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 8)
-                .background(Capsule().fill(selected ? SirosTheme.chipSelected : Color.clear))
+                // Brand blue, not the design's paler #7C96BF: white text on
+                // that fill has a 3:1 contrast, below the 4.5:1 body text needs.
+                .background(Capsule().fill(selected ? SirosTheme.brand : Color.clear))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)

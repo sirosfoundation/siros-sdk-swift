@@ -42,6 +42,35 @@ final class WalletDesignLogicTests: XCTestCase {
         XCTAssertFalse(entry(1, used, unused).needsAttention(statuses: [:]))
     }
 
+    func testACredentialPastItsOwnExpiryNeedsAttentionBeforeTheSdkHasEvaluatedIt() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        func expiring(_ expSeconds: Int64?) -> CredentialWithInstances {
+            CredentialWithInstances(
+                credential: StoredCredential(
+                    id: 1, format: "dc+sd-jwt", raw: "", expiresAt: expSeconds, batchId: 1, instanceId: 0
+                ),
+                instances: [unused]
+            )
+        }
+        XCTAssertTrue(expiring(1_999_999_999).needsAttention(statuses: [:], now: now))
+        XCTAssertFalse(expiring(2_000_000_060).needsAttention(statuses: [:], now: now))
+        XCTAssertFalse(expiring(nil).needsAttention(statuses: [:], now: now))
+        // Once the SDK has an answer, that answer stands.
+        XCTAssertFalse(expiring(1_999_999_999).needsAttention(statuses: [1: .valid], now: now))
+    }
+
+    func testCredentialSearchMatchesWhatTheCardShows() {
+        // No display metadata: the card resolves a title of its own, and that title is what a user types.
+        let bare = StoredCredential(
+            id: 3, format: "dc+sd-jwt", raw: "", credentialConfigurationId: "diploma", batchId: 3, instanceId: 0
+        )
+        let meta = CredentialUtils.buildFallbackMetadata(bare)
+        let labels = cardLabels(name: meta.name, format: bare.format, typeId: cardTypeId(metadata: meta, credential: bare))
+        XCTAssertTrue(bare.matchesSearch(labels.title))
+        if let badge = labels.typeBadge { XCTAssertTrue(bare.matchesSearch(badge)) }
+        XCTAssertFalse(bare.matchesSearch("passport"))
+    }
+
     func testCredentialSearchMatchesTheListedName() {
         let pid = entry(1, name: "Person Identification Data", unused).credential
         XCTAssertTrue(pid.matchesSearch(""))

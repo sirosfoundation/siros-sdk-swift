@@ -60,8 +60,6 @@ enum SirosTheme {
     static let brandOnPage = adaptive(light: 0x1B4587, dark: 0x7D92B4)
     /// The attention amber of Home's banner (#F9A917).
     static let attention = Color(red: 0.976, green: 0.663, blue: 0.090)
-    /// Fill of the selected filter pill on Manage credentials (#7C96BF).
-    static let chipSelected = Color(red: 0.486, green: 0.588, blue: 0.749)
     /// The Scan QR button at the centre of the bottom bar: black with a white
     /// mark, inverted in the dark theme.
     static let scanButton = adaptive(light: 0x000000, dark: 0xEEF0F3)
