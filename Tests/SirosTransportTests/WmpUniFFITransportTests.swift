@@ -5,7 +5,8 @@ import XCTest
 
 @testable import SirosTransport
 
-#if canImport(engine_adapter_sdkFFI)
+#if canImport(EngineAdapterSdk)
+import EngineAdapterSdk
 /// The in-process transport's tests. The engine's XCFramework rides
 /// Package.swift's `engine_adapter_sdkFFI` binaryTarget (which lands with
 /// the first siros-wallet-core release tag), so these run where the
@@ -16,49 +17,49 @@ final class WmpUniFFITransportTests: XCTestCase {
     // The scripted ports: these tests make no fetch and ask for nothing.
     private final class RefusingHttp: HttpClient {
         func send(request: HttpRequest) async throws -> HttpResponse {
-            throw SdkError.NetworkRefused()
+            throw SdkError.NetworkRefused
         }
     }
 
     private final class RefusingHost: Host {
         func requestSign(params: SignParams) async throws -> SignResult {
-            throw SdkError.Declined()
+            throw SdkError.Declined
         }
 
-        func requestMatch(params: MatchParams) async throws -> MatchResult {
-            throw SdkError.Declined()
+        func requestMatch(params: MatchParams) async throws -> EngineAdapterSdk.MatchResult {
+            throw SdkError.Declined
         }
 
         func requestVp(params: VpParams) async throws -> VpResult {
-            throw SdkError.Declined()
+            throw SdkError.Declined
         }
 
         func requestDpopProof(params: DpopProofParams) async throws -> DpopProofResult {
-            throw SdkError.Declined()
+            throw SdkError.Declined
         }
 
         func requestConsent(params: ConsentParams) async throws -> ConsentResult {
-            throw SdkError.Declined()
+            throw SdkError.Declined
         }
 
         func requestTxCode(flowId: String) async throws -> String {
-            throw SdkError.Declined()
+            throw SdkError.Declined
         }
 
         func openAuthorization(flowId: String, url: String) async throws {}
 
         func requestSigningKey(params: SigningKeyParams) async throws -> SigningKeyResult {
-            throw SdkError.Cannot(reason: "no key")
+            throw SdkError.Cannot("no key")
         }
 
         func requestAttestation(params: AttestationParams) async throws -> AttestationResult {
-            throw SdkError.Cannot(reason: "no attestation")
+            throw SdkError.Cannot("no attestation")
         }
 
         func requestCredentialSelection(
             params: CredentialSelectionParams
         ) async throws -> CredentialSelectionResult {
-            throw SdkError.Cannot(reason: "no selection")
+            throw SdkError.Cannot("no selection")
         }
 
         func progress(flowId: String, step: String, detail: String?) {}

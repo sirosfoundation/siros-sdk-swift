@@ -61,46 +61,52 @@ public protocol WmpEngineAskHandler: AnyObject, Sendable {
     func onProgress(flowId: String, step: String, detail: String?)
 }
 
-/// `engine_adapter_sdk.Host` over a ``WmpEngineAskHandler``: the class the app hands
+/// `EngineAdapterSdk.Host` over a ``WmpEngineAskHandler``: the class the app hands
 /// `WmpUniFFITransport` in local mode, so the wallet's ask handlers answer the in-process
 /// engine exactly as they answer the remote one.
 ///
-/// Gate: `#if canImport(engine_adapter_sdkFFI)` - the XCFramework links where the
+/// Gate: `#if canImport(EngineAdapterSdk)` - the XCFramework links where the
 /// local mode activates; the package builds everywhere else.
-#if canImport(engine_adapter_sdkFFI)
-public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Sendable {
+#if canImport(EngineAdapterSdk)
+import EngineAdapterSdk
+
+public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendable {
     private let handler: WmpEngineAskHandler
 
     public init(handler: WmpEngineAskHandler) {
         self.handler = handler
     }
 
-    public func requestSign(params: engine_adapter_sdk.SignParams) async throws -> engine_adapter_sdk.SignResult {
-        engine_adapter_sdk.SignResult(
+    public func requestSign(params: EngineAdapterSdk.SignParams) async throws -> EngineAdapterSdk.SignResult {
+        EngineAdapterSdk.SignResult(
             signature: try await handler.requestSign(
                 flowId: params.flowId, toSign: params.toSign, keyId: params.keyId, algorithm: params.algorithm
             )
         )
     }
 
-    public func requestMatch(params: engine_adapter_sdk.MatchParams) async throws -> engine_adapter_sdk.MatchResult {
+    public func requestMatch(params: EngineAdapterSdk.MatchParams) async throws -> EngineAdapterSdk.MatchResult {
         // The profile-shaped payload: the wallet's one matcher reads `dcql_query`
         // (and the verifier members, informational) whatever the carrier.
+        var verifierObject: [String: AnyCodable] = [
+            "name": .string(params.verifier.name),
+            "client_id": .string(params.verifier.clientId),
+            "trusted": .bool(params.verifier.trusted),
+        ]
+        // engine-ports' VerifierInfo carries framework/reason as non-optional
+        // strings (empty when the PDP published none) - the members ride
+        // only when they carry something.
+        if !params.verifier.framework.isEmpty {
+            verifierObject["framework"] = .string(params.verifier.framework)
+        }
+        if !params.verifier.reason.isEmpty {
+            verifierObject["reason"] = .string(params.verifier.reason)
+        }
         var payload: [String: AnyCodable] = [
             "scope": .string(params.scope),
             "transaction_data": .array(params.transactionData.map { .string($0) }),
-            "verifier": .object_([
-                "name": .string(params.verifier.name),
-                "client_id": .string(params.verifier.clientId),
-                "trusted": .bool(params.verifier.trusted),
-            ]),
+            "verifier": .object_(verifierObject),
         ]
-        if let framework = params.verifier.framework, !framework.isEmpty {
-            payload["verifier"]?.objectValue?["framework"] = .string(framework)
-        }
-        if let reason = params.verifier.reason, !reason.isEmpty {
-            payload["verifier"]?.objectValue?["reason"] = .string(reason)
-        }
         if let raw = params.dcqlQuery {
             // A query the wallet cannot read is one it cannot match: an explicit null
             // (the "offer every credential" branch), never a crash on the engine's
@@ -109,9 +115,9 @@ public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Send
                 .flatMap { AnyCodable($0) } ?? AnyCodable.null_
         }
         let result = try await handler.requestMatch(flowId: params.flowId, params: payload)
-        return engine_adapter_sdk.MatchResult(
+        return EngineAdapterSdk.MatchResult(
             selections: result.matches.map { match in
-                engine_adapter_sdk.VpSelection(
+                EngineAdapterSdk.VpSelection(
                     credentialQueryId: match.credentialQueryId ?? "",
                     credentialId: match.credentialId,
                     disclosedClaims: match.availableClaims ?? []
@@ -121,10 +127,10 @@ public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Send
         )
     }
 
-    public func requestVp(params: engine_adapter_sdk.VpParams) async throws -> engine_adapter_sdk.VpResult {
+    public func requestVp(params: EngineAdapterSdk.VpParams) async throws -> EngineAdapterSdk.VpResult {
         let result = try await handler.requestVp(
-            params.flowId,
-            EngineVpParams(
+            flowId: params.flowId,
+            params: EngineVpParams(
                 flowId: params.flowId,
                 audience: params.audience,
                 nonce: params.nonce,
@@ -142,17 +148,17 @@ public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Send
                 selectionHandle: params.selectionHandle
             )
         )
-        return engine_adapter_sdk.VpResult(
+        return EngineAdapterSdk.VpResult(
             vpToken: result.vpToken ?? "",
-            refusal: result.refusalCode.map { engine_adapter_sdk.SignRefusal(code: $0) }
+            refusal: result.refusalCode.map { EngineAdapterSdk.SignRefusal(code: $0) }
         )
     }
 
-    public func requestDpopProof(params: engine_adapter_sdk.DpopProofParams) async throws -> engine_adapter_sdk.DpopProofResult {
-        engine_adapter_sdk.DpopProofResult(
+    public func requestDpopProof(params: EngineAdapterSdk.DpopProofParams) async throws -> EngineAdapterSdk.DpopProofResult {
+        EngineAdapterSdk.DpopProofResult(
             proof: try await handler.requestDpopProof(
-                params.flowId,
-                EngineDpopProofParams(
+                flowId: params.flowId,
+                params: EngineDpopProofParams(
                     flowId: params.flowId, keyId: params.keyId, htm: params.htm,
                     htu: params.htu, accessToken: params.accessToken, nonce: params.nonce
                 )
@@ -160,11 +166,11 @@ public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Send
         )
     }
 
-    public func requestConsent(params: engine_adapter_sdk.ConsentParams) async throws -> engine_adapter_sdk.ConsentResult {
-        engine_adapter_sdk.ConsentResult(
+    public func requestConsent(params: EngineAdapterSdk.ConsentParams) async throws -> EngineAdapterSdk.ConsentResult {
+        EngineAdapterSdk.ConsentResult(
             consented: try await handler.requestConsent(
-                params.flowId,
-                EngineConsentParams(
+                flowId: params.flowId,
+                params: EngineConsentParams(
                     flowId: params.flowId, purpose: params.purpose,
                     requestedClaims: params.requestedClaims, transactionData: params.transactionData
                 )
@@ -180,7 +186,7 @@ public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Send
         try await handler.openAuthorization(flowId: flowId, url: url)
     }
 
-    public func requestSigningKey(params: engine_adapter_sdk.SigningKeyParams) async throws -> engine_adapter_sdk.SigningKeyResult {
+    public func requestSigningKey(params: EngineAdapterSdk.SigningKeyParams) async throws -> EngineAdapterSdk.SigningKeyResult {
         let result = try await handler.requestSigningKey(flowId: params.flowId, keyId: params.keyId)
         // The JWK travels as a JSON string over UniFFI; "no key" is the empty string.
         if let jwk = result.jwk,
@@ -188,33 +194,33 @@ public final class UniFfiEngineAskHost: engine_adapter_sdk.Host, @unchecked Send
            JSONSerialization.isValidJSONObject(codable),
            let data = try? JSONSerialization.data(withJSONObject: codable),
            let json = String(data: data, encoding: .utf8) {
-            return engine_adapter_sdk.SigningKeyResult(jwk: json)
+            return EngineAdapterSdk.SigningKeyResult(jwk: json)
         }
-        return engine_adapter_sdk.SigningKeyResult(jwk: "")
+        return EngineAdapterSdk.SigningKeyResult(jwk: "")
     }
 
-    public func requestAttestation(params: engine_adapter_sdk.AttestationParams) async throws -> engine_adapter_sdk.AttestationResult {
+    public func requestAttestation(params: EngineAdapterSdk.AttestationParams) async throws -> EngineAdapterSdk.AttestationResult {
         let result = try await handler.requestAttestation(
-            params.flowId,
-            EngineAttestationParams(
+            flowId: params.flowId,
+            params: EngineAttestationParams(
                 flowId: params.flowId, audience: params.audience,
                 clientId: params.clientId, challenge: params.challenge
             )
         )
-        return engine_adapter_sdk.AttestationResult(wia: result.wia ?? "", pop: result.pop ?? "")
+        return EngineAdapterSdk.AttestationResult(wia: result.wia ?? "", pop: result.pop ?? "")
     }
 
-    public func requestCredentialSelection(params: engine_adapter_sdk.CredentialSelectionParams) async throws -> engine_adapter_sdk.CredentialSelectionResult {
+    public func requestCredentialSelection(params: EngineAdapterSdk.CredentialSelectionParams) async throws -> EngineAdapterSdk.CredentialSelectionResult {
         let chosen = try await handler.requestCredentialSelection(
-            params.flowId,
-            params.available.map {
+            flowId: params.flowId,
+            available: params.available.map {
                 EngineAvailableCredential(id: $0.id, display: $0.display, format: $0.format, vct: $0.vct)
             }
         )
         guard let chosen else {
-            throw engine_adapter_sdk.SdkException.Cannot("credential selection is not supported by this wallet")
+            throw EngineAdapterSdk.SdkError.Cannot("credential selection is not supported by this wallet")
         }
-        return engine_adapter_sdk.CredentialSelectionResult(credentialConfigurationId: chosen)
+        return EngineAdapterSdk.CredentialSelectionResult(credentialConfigurationId: chosen)
     }
 
     public func progress(flowId: String, step: String, detail: String?) {

@@ -140,14 +140,30 @@ jobs:
 
   test-linux:
     name: Test (Linux)
-    runs-on: ubuntu-latest
     # Deliberately older than the toolchain this is developed on, so that a
     # construct only the newer type-checker can handle is caught here rather
     # than by whoever next builds on an older Swift. 6.2 is the floor set by
     # swift-crypto 5, which declares tools version 6.2.0.
+    #
+    # NOTE setup-swift is NOT a substitute for this container: its 6.2.1
+    # toolchain rejects swift-crypto's `@nonexhaustive` attributes
+    # ("unknown attribute") that this container's 6.2 compiles fine - and
+    # every swift-crypto 5.x release carries them, so no pin dodges it.
+    #
+    # The container's own SwiftPM downloader crashes fetching the binary
+    # targets on this runner (FoundationNetworking/libcurl Error 43,
+    # `try!` fatal); the artifact-seed step below bypasses it with curl.
     container: swift:6.2
     steps:
       - uses: actions/checkout@v7
+      - name: Seed SwiftPM's binary-target cache with curl
+        # FoundationNetworking's libcurl crashes downloading the binary
+        # targets on this runner (Error 43, `try!` fatal) - in the container
+        # AND on the host toolchain; curl on the same machine downloads the
+        # same zips fine. The seed lays the artifacts out exactly as
+        # `swift package resolve` would (schema v7) so SwiftPM never
+        # fetches; the git dependencies stay SwiftPM's to resolve.
+        run: ./scripts/seed-swiftpm-artifacts.sh
       - name: Build & Test
         run: |
           # SirosKeystore, SirosFlow, SirosWallet depend on Apple-only frameworks

@@ -2,8 +2,8 @@
 
 import Foundation
 
-#if canImport(engine_adapter_sdkFFI)
-import engine_adapter_sdkFFI
+#if canImport(EngineAdapterSdk)
+import EngineAdapterSdk
 #endif
 
 /// The in-process WMP engine as a `TransportProtocol` — the local mode of
@@ -23,12 +23,12 @@ import engine_adapter_sdkFFI
 /// not a permissive mode.
 ///
 /// The UniFFI Swift bindings are vendored source
-/// (`Generated/engine_adapter_sdk.swift`, regenerated per engine release
+/// (`Generated/EngineAdapterSdk.swift`, regenerated per engine release
 /// from siros-wallet-core's `make bindings`), gated on the same
-/// `canImport(engine_adapter_sdkFFI)` as this file: the package builds
+/// `canImport(EngineAdapterSdk)` as this file: the package builds
 /// everywhere without the XCFramework, and the local mode activates
 /// where it links.
-#if canImport(engine_adapter_sdkFFI)
+#if canImport(EngineAdapterSdk)
 public final class WmpUniFFITransport: TransportProtocol, @unchecked Sendable {
     private let http: HttpClient
     private let host: Host

@@ -36,6 +36,7 @@ let package = Package(
         .macOS("15.0"),
     ],
     products: [
+        .library(name: "EngineAdapterSdk", targets: ["EngineAdapterSdk"]),
         .library(name: "SirosCredentials", targets: ["SirosCredentials"]),
         .library(name: "SirosTransport", targets: ["SirosTransport"]),
         .library(name: "SirosVerifier", targets: ["SirosVerifier"]),
@@ -52,7 +53,14 @@ let package = Package(
         // ZkCircuitClient.swift's `#if canImport(CryptoKit)`); swift-crypto's
         // `Crypto` module is only actually compiled/linked in on Linux,
         // where CryptoKit doesn't exist at all.
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "5.0.0"),
+        //
+        // Pinned below 5.1.0: that release's HPKE enums use the Swift 6.3
+        // `@nonexhaustive` attribute, above this package's 6.2 toolchain
+        // floor (swift-crypto 5 declares tools 6.2 - the floor's origin).
+        // Breaks every fresh resolve under 6.2 with "unknown attribute
+        // 'nonexhaustive'" (5.1.0 and 5.1.1 both carry it). Lift the pin
+        // with the floor, together.
+        .package(url: "https://github.com/apple/swift-crypto.git", "5.0.0"..<"5.1.0"),
         // Circuits fetched from go-zk-circuits (see ZkCircuitClient,
         // SirosCredentials) are zstd-compressed; zk-cred-longfellow's
         // initializeProver expects already-decompressed bytes (confirmed
@@ -127,6 +135,22 @@ let package = Package(
             checksum: "f95cf6d304862e1b3ba7274bda654ed19d99ff3dd30d03cb97109863606779a0"
         ),
 
+        // --- siros-wallet-core engine (UniFFI bindings, XCFramework) ---
+        // The WMP engine core the SDK's LOCAL mode runs in-process
+        // (WalletEngineAskHandler over the Host port): built by siros-wallet-core's
+        // release workflow (`Release — XCFramework + AAR + bindings`), released
+        // as v0.2.1. iOS slices only (device + simulator) - the same gate as the
+        // zk-cred frameworks above: the FFI-dependent code is wrapped in
+        // `#if canImport(engine_adapter_sdkFFI)` (WmpUniFFITransport,
+        // WmpEngineAskHandler, the Generated bindings' FFI half, the sample
+        // app's LocalEngine), so macOS/Linux build with the whole local mode
+        // compiled out until slices exist for them.
+        .binaryTarget(
+            name: "engine_adapter_sdkFFI",
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.1/engine_adapter_sdk.xcframework.zip",
+            checksum: "896c9804e47f530ba8fdfeba843c7db592b8367c12599c453ec81cacf8fb3829"
+        ),
+
         // --- Credentials: data models, DCQL matcher, VCTM types ---
         .target(
             name: "SirosCredentials",
@@ -183,8 +207,32 @@ let package = Package(
         ),
 
         // --- Transport: WebSocket + WMP protocol ---
+        // The engine core's Swift bindings: the generated UniFFI file, its
+        // own module so the engine's types (MatchResult, VpSelection...)
+        // never collide with the SDK's own of the same name - the gated
+        // code qualifies them as `EngineAdapterSdk.`. The FFI dependency
+        // is iOS-conditioned (the XCFramework ships iOS slices only) and
+        // the file self-gates on canImport, so the module compiles empty
+        // everywhere the framework is absent.
+        .target(
+            name: "EngineAdapterSdk",
+            dependencies: [
+                .target(name: "engine_adapter_sdkFFI", condition: .when(platforms: [.iOS])),
+            ],
+            path: "Sources/EngineAdapterSdk"
+        ),
+
         .target(
             name: "SirosTransport",
+            dependencies: [
+                // The engine bindings (the LOCAL mode's in-process engine):
+                // iOS slices only - the FFI-dependent code in this target
+                // (WmpUniFFITransport, WmpEngineAskHandler) is
+                // `#if canImport(EngineAdapterSdk)`-gated, so macOS and
+                // Linux compile the local mode out, same as the zk-cred
+                // gates in SirosCredentials.
+                .target(name: "EngineAdapterSdk", condition: .when(platforms: [.iOS])),
+            ],
             path: "Sources/SirosTransport"
         ),
         .testTarget(
