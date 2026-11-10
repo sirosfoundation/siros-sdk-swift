@@ -12,6 +12,7 @@ import SirosCredentials
 import SirosTransport
 #if canImport(os)
 import os
+private let logger = Logger(subsystem: "org.siros.sdk", category: "SirosWallet")
 #endif
 
 extension SirosWallet {
