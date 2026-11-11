@@ -1073,6 +1073,42 @@ extension SirosWallet {
         }
     }
 
+    /// The engine's OID4VP start params for a deep link: the link's own query
+    /// members, verbatim and percent-decoded — the by-reference
+    /// `request_uri` (an https URL the engine fetches), the `client_id`, the
+    /// inline `request` of a by-value link. The engine's params contract is
+    /// "the link string, or the query members" — never the whole link AS a
+    /// `request_uri`: the engine treats that member as a URL to fetch, and
+    /// handing it the `openid4vp://` URI made it try to fetch its own deep
+    /// link (found on-device, the Kotlin twin: siros-sdk-kotlin#394).
+    ///
+    /// A link with no query is the bare-reference form (a request-object URL
+    /// or a URN): the request_uri itself.
+    func openid4vpStartParams(_ link: String) -> AnyCodable {
+        guard let queryRange = link.range(of: "?") else {
+            return .object_(["request_uri": .string(link)])
+        }
+        let query = String(link[queryRange.upperBound...])
+        guard !query.isEmpty else {
+            return .object_(["request_uri": .string(link)])
+        }
+        var members: [String: AnyCodable] = [:]
+        for pair in query.split(separator: "&", omittingEmptySubsequences: true) {
+            guard let eq = pair.firstIndex(of: "="), eq > pair.startIndex else { continue }
+            let name = percentDecode(String(pair[pair.startIndex..<eq]))
+            let value = percentDecode(String(pair[pair.index(after: eq)...]))
+            members[name] = .string(value)
+        }
+        return .object_(members)
+    }
+
+    /// Percent-decodes a query member (RFC 3986 §2.1); a malformed escape
+    /// passes through verbatim rather than throwing — a malformed name is
+    /// dropped by the caller, a malformed value is the verifier's problem.
+    func percentDecode(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? raw
+    }
+
     /// Start a presentation flow.
     ///
     /// - Returns: `false` when `requestUri` is identical to one started within the last minute
@@ -1091,14 +1127,16 @@ extension SirosWallet {
         do {
             lock.lock(); let peer = wmpPeer; let engine = engineSession; lock.unlock()
             if let peer {
-                // The WMP start (siros-wallet-core): the request URI as the
-                // by-reference params form - the engine fetches the request
-                // object; the transaction-data declaration rode the session's
-                // capabilities, not the start. The flow id is the wallet's own.
+                // The WMP start (siros-wallet-core): the link's own query
+                // members — the engine's params contract is "the link string,
+                // or the query members", NEVER the whole link wrapped as
+                // request_uri (found on-device, the Kotlin twin: the engine
+                // treats that member as a URL to fetch and tried to fetch
+                // its own openid4vp:// deep link — siros-sdk-kotlin#394).
                 _ = try await peer.startFlow(
                     flowType: OID4FlowTypes.oid4vp,
                     flowId: wmpNewFlowId(),
-                    params: AnyCodable.object_(["request_uri": .string(requestUri)])
+                    params: openid4vpStartParams(requestUri)
                 )
                 return true
             }
