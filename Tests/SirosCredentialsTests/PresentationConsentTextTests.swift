@@ -109,7 +109,7 @@ final class PresentationConsentTextTests: XCTestCase {
     func testALegacyDisclosureIsADisclosureScreen() throws {
         let screen = try text("en").render(request([.claim(name: "family_name"), .legacyPseudonym(verifierContext: "ctx")]))
         XCTAssertEqual(screen.header, "Example RP is asking you to share:")
-        XCTAssertEqual(screen.entries[0].lines, ["The value of “family_name” from your credential is shared.", "A pseudonym is shared with Example RP."])
+        XCTAssertEqual(screen.entries[0].lines, ["the value of “family_name” from your credential", "A pseudonym is shared with Example RP."])
     }
 
     func testAPseudonymScopeTheWordingDoesNotCoverFailsInsteadOfBeingOmitted() {
