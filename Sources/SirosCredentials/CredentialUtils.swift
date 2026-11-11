@@ -791,15 +791,33 @@ public enum CredentialUtils {
             let cleaned = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "_-."))
             return formatClaimKey(cleaned.isEmpty ? lastSegment : cleaned)
         }
-        let typeLabel = typeHint.flatMap { $0.isEmpty ? nil : typeLabelOf($0) }
-            ?? credential.metadata?.doctype.flatMap { $0.isEmpty ? nil : typeLabelOf($0) }
-            ?? credential.metadata?.vct.flatMap { $0.isEmpty ? nil : typeLabelOf($0) }
-            ?? ["dc+sd-jwt": "SD-JWT VC", "mso_mdoc": "mDoc", "vc+sd-jwt": "SD-JWT VC"][credential.format]
+        // Step by step rather than a `??` chain of ternary closures: that
+        // form blew the compiler's type-checking time budget on every
+        // platform (CI's Linux build was the first to say so), and it read
+        // as a puzzle anyway.
+        func typeLabelFrom(_ hint: String?) -> String? {
+            guard let hint, !hint.isEmpty else { return nil }
+            return typeLabelOf(hint)
+        }
+        let formatLabels = ["dc+sd-jwt": "SD-JWT VC", "mso_mdoc": "mDoc", "vc+sd-jwt": "SD-JWT VC"]
+        let typeLabel = typeLabelFrom(typeHint)
+            ?? typeLabelFrom(credential.metadata?.doctype)
+            ?? typeLabelFrom(credential.metadata?.vct)
+            ?? formatLabels[credential.format]
             ?? formatClaimKey(credential.format)
-        let metadataName = credential.metadata?.name.flatMap { $0.isEmpty ? nil : $0 }
-        let nameIsTheType = typeHint != nil && metadataName != nil
-            && typeHint!.replacingOccurrences(of: " ", with: "")
-                .caseInsensitiveCompare(metadataName!.replacingOccurrences(of: " ", with: "")) == .orderedSame
+        let metadataName: String?
+        if let name = credential.metadata?.name, !name.isEmpty {
+            metadataName = name
+        } else {
+            metadataName = nil
+        }
+        let nameIsTheType: Bool
+        if let hint = typeHint, let name = metadataName {
+            nameIsTheType = hint.replacingOccurrences(of: " ", with: "")
+                .caseInsensitiveCompare(name.replacingOccurrences(of: " ", with: "")) == .orderedSame
+        } else {
+            nameIsTheType = false
+        }
         if let metadataName, !nameIsTheType {
             return "\(typeLabel) — \(metadataName)"
         }
