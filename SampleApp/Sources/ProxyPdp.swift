@@ -43,7 +43,10 @@ final class ProxyPdp: Pdp {
     }
 
     func evaluate(request: EvaluationRequest) async throws -> EvaluationResponse {
-        guard let bearer = try? await bearerProvider(), let bearer else {
+        // One binding: `try?` on the optional-returning provider already
+        // flattens to a single optional (nil covers both a thrown error and
+        // a nil bearer) - fail closed either way.
+        guard let bearer = try? await bearerProvider() else {
             return EvaluationResponse(trusted: false, decision: "no bearer for the PDP routes")
         }
         var body: [String: Any] = [
@@ -71,7 +74,7 @@ final class ProxyPdp: Pdp {
     }
 
     func resolve(request: ResolveRequest) async throws -> ResolveResponse {
-        guard let bearer = try? await bearerProvider(), let bearer else {
+        guard let bearer = try? await bearerProvider() else {
             return ResolveResponse(metadata: Data(), trustInfo: nil)
         }
         let body: [String: Any] = [
