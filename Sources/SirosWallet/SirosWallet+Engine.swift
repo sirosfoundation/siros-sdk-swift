@@ -109,46 +109,10 @@ extension SirosWallet {
         }
     }
 
-    // MARK: - WMP Protocol Path
-
-    func connectViaWmp(appToken: String) async throws {
-        // The freshened bearer source (same as the legacy engine session's reconnect mint): the
-        // HTTP+SSE binding is stateless - every POST is its own request, the engine validates each
-        // one, and the AS's tokens live ~2 minutes - so the transport re-mints per request rather
-        // than baking the connect-time token in (found driving an issuance ~40 min after login:
-        // the start reached the engine with a long-expired token). No authTokens (an anonymous/
-        // fixed-token deployment) answers nil: the transport then sends no Authorization header.
-        //
-        // The kind follows the DEPLOYMENT's engine (engine-parity.md §8): a tenant-mode engine
-        // (config.wmpTenantTokens) takes the AS's pseudonymous kind - the wallet's traffic
-        // attributes to the tenant, never to a person; the default keeps the backend token (the
-        // user's own subject), matching a user-mode engine.
-        let freshToken: @Sendable () async -> String? = { [weak self] in
-            guard let tokens = self?.authTokens, let config = self?.config else { return nil }
-            return try? await (config.wmpTenantTokens ? tokens.ensureTenantToken() : tokens.ensureBackendToken()).raw
-        }
-        markSessionEnded(false)
-        lock.lock(); wmpAskGeneration &+= 1; lock.unlock()
-        let engineBase = await resolveWmpEngineBase()
-        let transport = try makeWmpTransport(engineBase: engineBase, freshToken: freshToken)
-        let session = WmpSession(transport: transport)
-        let peer = WmpPeer(session: session)
-        peer.use(makeWmpProfile())
-        // Offered per session: a flag flip applies from the next session.
-        try await peer.connect(
-            authToken: appToken,
-            capabilitiesOffered: makeWmpCapabilitiesOffered()
-        )
-        lock.lock(); wmpPeer = peer; credentialNotifier = WmpCredentialNotifier(peer: peer); lock.unlock()
-
-        #if canImport(os)
-        logger.info("Connected via WMP protocol to \(engineBase)")
-        #endif
-    }
 
     /// The engine base URL the legacy transport dials: explicit `engineUrl`
     /// > discovery > `backendUrl` - the historic resolution order.
-    private func resolveWmpEngineBase() async -> String {
+    func resolveWmpEngineBase() async -> String {
         if !config.engineUrl.isEmpty {
             return config.engineUrl
         }
@@ -170,7 +134,7 @@ extension SirosWallet {
     ///   engine-server; a dev stack with WMP_ENGINE=yes serves them).
     /// - local: the app's own transport factory (WmpUniFFITransport
     ///   over its ports - the XCFramework's engine core).
-    private func makeWmpTransport(
+    func makeWmpTransport(
         engineBase: String,
         freshToken: @escaping @Sendable () async -> String?
     ) throws -> any TransportProtocol {
@@ -214,7 +178,7 @@ extension SirosWallet {
     /// The WMP profile: every callback the wallet's flows answer - the
     /// go-wmp-era ones and siros-wallet-core's typed asks (httpSSE/local),
     /// each reaching the same handler by ask type.
-    private func makeWmpProfile() -> OpenID4xProfile {
+    func makeWmpProfile() -> OpenID4xProfile {
         OpenID4xProfile(config: OpenID4xConfig(
             onProgress: { [weak self] flowId, step, payload in
                 await self?.handleWmpProgress(flowId: flowId, step: step, payload: payload)
@@ -291,10 +255,10 @@ extension SirosWallet {
     /// `credential_notification` - offered on the Rust engine's transports
     /// only: go-wmp (legacyWS) needs neither and its session create is not
     /// told about capabilities it does not know.
-    private func makeWmpCapabilitiesOffered() -> [String: AnyCodable]? {
+    func makeWmpCapabilitiesOffered(legacy: Bool = false) -> [String: AnyCodable]? {
         // Offered per session: a flag flip applies from the next session.
         let offerTransactionData = snapshotWmpSessionEnablement()
-        guard config.wmpEngineMode != .legacyWS else {
+        guard !legacy else {
             return TransactionDataDeclaration.wmpCapabilitiesOffered(enabled: offerTransactionData)
         }
         var offered: [String: AnyCodable] = [

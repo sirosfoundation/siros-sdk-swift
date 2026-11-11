@@ -125,6 +125,25 @@ public struct WalletConfig: Sendable {
     /// the `wscdAssuranceScheme` precedent.
     public var wmpTenantTokens: Bool = false
 
+    /// The PRIORITIZED engine providers (first to try first):
+    /// ``WmpEngineProvider``. Each is connected in order with
+    /// ``engineConnectRetries`` attempts before failing over to the next;
+    /// the first that connects carries the session. Empty (the default)
+    /// keeps the single-mode shape - ``wmpEngineMode`` (and its endpoint
+    /// fields) selects the one engine, failover none.
+    ///
+    /// A stored property with its own default (the `wscdAssuranceScheme`
+    /// precedent), so a caller sets just this one without touching `init`.
+    /// Failover is a CONNECT-time behavior only: a connected session is
+    /// pinned to its provider for its life - never mid-flow.
+    public var engineProviders: [WmpEngineProvider] = []
+
+    /// Connect attempts per engine provider before failing over to the
+    /// next (``engineProviders`` in priority order). Default 2: one retry
+    /// rides out a blip; a dead provider costs one extra attempt, not a
+    /// hang. The same stored-property precedent.
+    public var engineConnectRetries: Int = 2
+
     /// Initial value of ``SirosWallet/transactionDataEnabled`` (EC TS12
     /// payment SCA). Default `false`. A runtime setting, not a build flag:
     /// the wallet exposes the live value and a change applies to flows
