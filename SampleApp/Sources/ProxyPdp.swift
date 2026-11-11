@@ -54,7 +54,12 @@ final class ProxyPdp: Pdp {
             "resource": [
                 "type": Self.keyMaterialType(request.keyMaterial),
                 "id": request.subject,
-                "key": Self.keyMaterialValue(request.keyMaterial),
+                // NSNull for empty material: go-trust treats a null/empty key
+                // as a RESOLUTION-ONLY request (the registry question), the
+                // reference adapter's own shape (ports.rs); a fabricated
+                // empty string would turn it into a key-binding evaluation
+                // and the PDP would correctly deny it.
+                "key": Self.keyMaterialValue(request.keyMaterial) ?? NSNull,
             ],
             "action": ["name": request.resourceType ?? "credential-issuer"],
         ]
@@ -166,10 +171,22 @@ final class ProxyPdp: Pdp {
         return "x5c"
     }
 
-    /// The resource key: the parsed JSON as-is (a JWK), or the raw material.
-    private static func keyMaterialValue(_ keyMaterial: Data) -> Any {
-        if let object = jsonObject(keyMaterial) { return object }
-        return String(decoding: keyMaterial, as: UTF8.self)
+    /// The resource key: the AuthZEN profile's shape is an ARRAY (go-trust's
+    /// golden testdata: `[ {...the JWK...} ]`, `["<x5c cert>", ...]`) - the
+    /// proxy's bind is `[]interface{}` and a bare object fails it with a 400.
+    /// - EMPTY material returns nil (the caller sends NSNull): a
+    ///   resolution-only request, the registry question.
+    /// - a parsed ARRAY (the x5c chain) rides as-is;
+    /// - a parsed OBJECT (a JWK) rides one-element-wrapped;
+    /// - anything else (raw material, a did: kid) rides as a one-element
+    ///   string array.
+    private static func keyMaterialValue(_ keyMaterial: Data) -> Any? {
+        if keyMaterial.isEmpty { return nil }
+        if let array = (try? JSONSerialization.jsonObject(with: keyMaterial)) as? [Any] {
+            return array
+        }
+        if let object = jsonObject(keyMaterial) { return [object] }
+        return [String(decoding: keyMaterial, as: UTF8.self)]
     }
 }
 
