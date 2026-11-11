@@ -76,6 +76,25 @@ final class WalletViewModel: ObservableObject {
     @Published var wmpSseUrl: String {
         didSet { UserDefaults.standard.set(wmpSseUrl, forKey: "siros_wmp_sse_url") }
     }
+    /// The prioritized provider list's local entry: the XCFramework's
+    /// engine core in-process, connected FIRST. On by default.
+    @Published var engineLocalEnabled: Bool {
+        didSet { UserDefaults.standard.set(engineLocalEnabled, forKey: "siros_engine_local_enabled") }
+    }
+    /// The prioritized provider list's remote entry: the HTTP+SSE binding,
+    /// the FAILOVER target. On by default (needs the URLs above).
+    @Published var engineRemoteEnabled: Bool {
+        didSet { UserDefaults.standard.set(engineRemoteEnabled, forKey: "siros_engine_remote_enabled") }
+    }
+    /// The remote engine's bearer KIND: tenant-bound (the AS's pseudonymous
+    /// engine token) or the user's own backend token. Must match the
+    /// deployment's `ENGINE_PRINCIPAL_MODE`: on by default - every deployed
+    /// engine this sample targets (sirosid-dev, GDC) runs tenant mode,
+    /// where a user token keeps the flows working but attributes the
+    /// traffic to the person instead of the tenant.
+    @Published var engineTenantTokens: Bool {
+        didSet { UserDefaults.standard.set(engineTenantTokens, forKey: "siros_engine_tenant_tokens") }
+    }
     /// EC TS12 switch: persisted, applied to the live wallet. Default off.
     @Published var transactionDataEnabled: Bool {
         didSet {
@@ -407,6 +426,12 @@ final class WalletViewModel: ObservableObject {
         ) ?? .legacyWS
         self.wmpSendUrl = defaults.string(forKey: "siros_wmp_send_url") ?? ""
         self.wmpSseUrl = defaults.string(forKey: "siros_wmp_sse_url") ?? ""
+        // Default ON for all three (the deployed engines run tenant mode
+        // with both providers enabled): bool(forKey:) answers false for an
+        // unset key, so the object-as-Bool shape carries the default.
+        self.engineLocalEnabled = defaults.object(forKey: "siros_engine_local_enabled") as? Bool ?? true
+        self.engineRemoteEnabled = defaults.object(forKey: "siros_engine_remote_enabled") as? Bool ?? true
+        self.engineTenantTokens = defaults.object(forKey: "siros_engine_tenant_tokens") as? Bool ?? true
         self.transactionDataEnabled = defaults.bool(forKey: Self.transactionDataEnabledKey)
         if let storedShowDetails = defaults.object(forKey: "siros_show_credential_details") as? Bool {
             self.showCredentialDetails = storedShowDetails
@@ -1240,7 +1265,7 @@ final class WalletViewModel: ObservableObject {
         } else {
             localTransportFactory = nil
         }
-        let config = WalletConfig(
+        var config = WalletConfig(
             backendUrl: backendUrl,
             tenantId: tenantId,
             redirectUri: "\(redirectScheme)://callback",
@@ -1263,6 +1288,16 @@ final class WalletViewModel: ObservableObject {
             readerTrustRootCertificatesPem: readerTrustRootCertificatePem.isEmpty ? [] : [readerTrustRootCertificatePem],
             preferLocalReaderTrustEvaluation: preferLocalReaderTrustEvaluation
         )
+
+        // The prioritized engine providers (the SDK's engineProviders), the
+        // single-mode path's bearer kind - both follow the settings toggles
+        // (EngineProviderWiring.swift's engineProviderList).
+        config.engineProviders = engineProviderList(backendUrl: backendUrl)
+        config.engineConnectRetries = 2
+        // The single-mode path's bearer kind (the empty-list shape) - the
+        // same toggle the remote provider carries, so both shapes agree on
+        // the deployment either way.
+        config.wmpTenantTokens = engineTenantTokens
 
         // ASAuthorizationAuthProvider is the real, OS-backed passkey provider
         // (Face ID/Touch ID/roaming security keys) and is used on every
@@ -1452,29 +1487,3 @@ enum WalletViewState: Equatable {
 }
 
 /// The local engine's transport - the XCFramework's engine core over the
-/// app's ports (URLSession for the engine's outgoing fetches, the WALLET's
-/// own ask handlers over the SDK's handler seam, no trust stack: fail
-/// closed at the trust step until one is wired). A free function, so the
-/// `@Sendable` closure `WalletConfig.wmpTransport` captures nothing.
-///
-/// The XCFramework gates it: a build without the engine core
-/// (`engine_adapter_sdkFFI` - Vendor/'s framework) refuses the local mode
-/// with a clear error at the factory, exactly as the SDK's own
-/// `WmpEngineMode.local` check does when no factory was configured.
-private func makeLocalEngineTransport(asks: WmpEngineAskHandler) throws -> any TransportProtocol {
-    #if canImport(EngineAdapterSdk)
-    // The types are the SDK's own (SirosTransport's) and the app target's;
-    // the engine bindings ride inside them - nothing to import here.
-    return WmpUniFFITransport(
-        http: URLSessionEngineHttp(),
-        host: UniFfiEngineAskHost(handler: asks),
-        pdp: nil
-    )
-    #else
-    throw NSError(
-        domain: "org.siros.sdk.sample",
-        code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "The local engine mode needs the engine XCFramework (engine_adapter_sdkFFI), which this build does not link"]
-    )
-    #endif
-}

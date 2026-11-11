@@ -291,12 +291,38 @@ struct PreLoginSettingsView: View {
                                 "The in-process engine runs over the app's ports: the " +
                                 "outgoing fetches over URLSession, the wallet's asks " +
                                 "answered by the SDK's own handlers (LocalEngine.swift). " +
-                                "The trust stack is absent - the local engine fails " +
-                                "closed at the trust step until one is wired."
+                                "In this single-mode shape the trust stack is absent - " +
+                                "the local engine fails closed at the trust step (the " +
+                                "provider list below wires it through the backend PDP)."
                             )
                             .font(.caption)
                             .foregroundColor(.secondary)
                         }
+
+                        // The prioritized engine providers: each connected in
+                        // order (retries each) until one answers - the connected
+                        // session is pinned to it. An empty enabled set keeps
+                        // the single-mode shape above (the picker).
+                        Toggle("Local engine first", isOn: $viewModel.engineLocalEnabled)
+                        Text(
+                            "The XCFramework's engine core on this device; its trust " +
+                            "routes through the backend proxy's PDP with your own " +
+                            "backend token."
+                        )
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        Toggle("Remote engine (failover)", isOn: $viewModel.engineRemoteEnabled)
+                        Text("The HTTP+SSE binding; needs the URLs above.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Toggle("Tenant engine tokens", isOn: $viewModel.engineTenantTokens)
+                        Text(
+                            "The remote bearer kind: the AS's pseudonymous tenant token " +
+                            "(ENGINE_PRINCIPAL_MODE=tenant, the deployed shape) or your " +
+                            "own backend token (a user-mode engine)."
+                        )
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     }
                 }
 
