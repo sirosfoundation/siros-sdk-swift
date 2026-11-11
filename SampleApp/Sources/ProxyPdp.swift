@@ -59,7 +59,7 @@ final class ProxyPdp: Pdp {
                 // reference adapter's own shape (ports.rs); a fabricated
                 // empty string would turn it into a key-binding evaluation
                 // and the PDP would correctly deny it.
-                "key": Self.keyMaterialValue(request.keyMaterial) ?? NSNull,
+                "key": Self.keyMaterialValue(request.keyMaterial) ?? NSNull(),
             ],
             "action": ["name": request.resourceType ?? "credential-issuer"],
         ]
