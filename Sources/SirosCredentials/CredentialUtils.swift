@@ -772,6 +772,49 @@ public enum CredentialUtils {
             .joined(separator: " ")
     }
 
+    /// The credential's TITLE for pickers and consent UIs: "Type — holder",
+    /// the type label always present and the closest thing to a personal
+    /// title supplementing it - the metadata's name, else the holder's own
+    /// name (given + family, the personal-credential convention). Never the
+    /// bare raw id, and never the raw FORMAT string title-cased ("Dc Sd
+    /// Jwt"): `typeHint` is the verifier's own query id for the type
+    /// ("diploma", "mDL"), which outranks everything; the doctype/vct tail
+    /// follows; a known format label is the last resort. A metadata name
+    /// that merely restates the type collapses to the type alone (found
+    /// on-device: "diploma - Diploma Credential" twice over).
+    public static func credentialTitle(credential: StoredCredential, typeHint: String? = nil) -> String {
+        func typeLabelOf(_ identifier: String) -> String {
+            let tail = identifier.split(separator: ":").last.map(String.init) ?? identifier
+            let lastSegment = tail.split(separator: ".").last.map(String.init) ?? tail
+            var trimmed = Substring(lastSegment)
+            while let last = trimmed.last, last.isNumber { trimmed = trimmed.dropLast() }
+            let cleaned = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "_-."))
+            return formatClaimKey(cleaned.isEmpty ? lastSegment : cleaned)
+        }
+        let typeLabel = typeHint.flatMap { $0.isEmpty ? nil : typeLabelOf($0) }
+            ?? credential.metadata?.doctype.flatMap { $0.isEmpty ? nil : typeLabelOf($0) }
+            ?? credential.metadata?.vct.flatMap { $0.isEmpty ? nil : typeLabelOf($0) }
+            ?? ["dc+sd-jwt": "SD-JWT VC", "mso_mdoc": "mDoc", "vc+sd-jwt": "SD-JWT VC"][credential.format]
+            ?? formatClaimKey(credential.format)
+        let metadataName = credential.metadata?.name.flatMap { $0.isEmpty ? nil : $0 }
+        let nameIsTheType = typeHint != nil && metadataName != nil
+            && typeHint!.replacingOccurrences(of: " ", with: "")
+                .caseInsensitiveCompare(metadataName!.replacingOccurrences(of: " ", with: "")) == .orderedSame
+        if let metadataName, !nameIsTheType {
+            return "\(typeLabel) — \(metadataName)"
+        }
+        let claims = extractClaims(credential)
+        func valueOf(_ key: String) -> String? {
+            guard let claim = claims.first(where: {
+                $0.key == key || $0.label.lowercased() == key.replacingOccurrences(of: "_", with: " ").lowercased()
+            }), !claim.value.isEmpty else { return nil }
+            return claim.value
+        }
+        let holder = [valueOf("given_name") ?? valueOf("givenName"), valueOf("family_name") ?? valueOf("familyName")]
+            .compactMap { $0 }.joined(separator: " ")
+        return holder.isEmpty ? typeLabel : "\(typeLabel) — \(holder)"
+    }
+
     // MARK: - Private
 
     private static func decodeJsonSegmentText(_ base64url: String) -> String? {

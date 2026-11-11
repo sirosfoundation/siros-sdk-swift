@@ -66,7 +66,8 @@ final class IssuanceTrustGateTests: XCTestCase {
         private(set) var received = 0
         func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] { [] }
         func onCredentialReceived(credential: StoredCredential) { lock.lock(); received += 1; lock.unlock() }
-        func onFlowComplete(flowId: String, redirectUri: String?) { lock.lock(); completed.append(flowId); lock.unlock() }
+        func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) { lock.lock(); completed.append(flowId); lock.unlock() }
+        func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
         func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { lock.lock(); errors.append(errorMessage); lock.unlock() }
         func onNoMatchingCredential(flowId: String, requestedTypes: [String], reason: String?, redirectUri: String?) {}
         func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}

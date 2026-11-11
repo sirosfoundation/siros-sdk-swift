@@ -75,10 +75,18 @@ extension SirosWallet {
             await failIssuanceLocally(flowId: flowId, message: "The issuer's credential did not arrive")
             return
         }
+        // The presentation-final branch: the engine's completion payload
+        // carries `refused: true` when the request matched nothing (the UI's
+        // no-match key) and `redirect_uri` when the error answer built a
+        // back-to-verifier link (wallet-core#27 - found on-device: the user
+        // landed in the wallet with no link while the verifier showed
+        // "wallet declined the request").
+        let matchedNothing = result?.objectValue?["refused"]?.boolValue == true
+        let redirect = result?.objectValue?["redirect_uri"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
         // Terminal path for this issuance over the WMP transport too - see `resetIssuanceGuards()`.
         resetIssuanceGuards()
         cancelTransactionTasks(flowId: flowId)
-        eventListener?.onFlowComplete(flowId: flowId, redirectUri: nil)
+        eventListener?.onFlowComplete(flowId: flowId, redirectUri: redirect, matchedNothing: matchedNothing)
     }
 
     /// An OID4VCI completion on the WMP path (siros-wallet-core): what remains is

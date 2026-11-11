@@ -113,6 +113,8 @@ private final class RecordingListener: WalletEventListener, @unchecked Sendable 
     var reauthenticationRequired = false
     var blocked: (reason: SirosError.WalletLifecycleRefusal, message: String?)?
     func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] { [] }
+    func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
+    func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) {}
     func onReauthenticationRequired() { reauthenticationRequired = true }
     func onWalletLifecycleBlocked(reason: SirosError.WalletLifecycleRefusal, message: String?) {
         blocked = (reason, message)

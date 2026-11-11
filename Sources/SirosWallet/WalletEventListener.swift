@@ -19,6 +19,31 @@ public struct PresentationRequest: Sendable {
     }
 }
 
+/// One matched credential a WMP consent ask covers (issue #277's groupings).
+public struct WmpConsentSelection: Sendable {
+    /// The wallet's own credential id (the store's).
+    public let credentialId: Int64
+    /// The credential's title (type — holder), the picker/consent label.
+    public let credentialName: String?
+    /// THIS credential's claim names; nil = the whole credential.
+    public let claims: [String]?
+    public init(credentialId: Int64, credentialName: String?, claims: [String]?) {
+        self.credentialId = credentialId
+        self.credentialName = credentialName
+        self.claims = claims
+    }
+}
+
+/// The `onCredentialAmbiguity` answer: who picks among several matches.
+public enum WmpCredentialAmbiguity: Sendable {
+    /// The wallet proceeds with its own first match. The default.
+    case walletChoice
+    /// The user chose these matches; the wallet proceeds with exactly them.
+    case userChoice([WmpConsentSelection])
+    /// The user refused the presentation outright.
+    case declined
+}
+
 /// Callback protocol for wallet events that require user interaction.
 ///
 /// Implement this and pass it to `SirosWallet.setEventListener()`.
@@ -39,7 +64,7 @@ public protocol WalletEventListener: AnyObject, Sendable {
     ///   (e.g. via `UIApplication.shared.open`), matching
     ///   `onAuthorizationRequired`'s pattern. Nil when the verifier didn't
     ///   return one (also true for every OID4VCI issuance completion).
-    func onFlowComplete(flowId: String, redirectUri: String?)
+    func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool)
 
     /// Called when a flow fails.
     ///
@@ -165,7 +190,10 @@ public protocol WalletEventListener: AnyObject, Sendable {
 /// Default implementations for optional callbacks.
 public extension WalletEventListener {
     func onCredentialReceived(credential: StoredCredential) {}
-    func onFlowComplete(flowId: String, redirectUri: String?) {}
+    /// The pre-#277 two-argument conformance shape: matchedNothing false.
+    func onFlowComplete(flowId: String, redirectUri: String?) {
+        onFlowComplete(flowId: flowId, redirectUri: redirectUri, matchedNothing: false)
+    }
     func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {}
     func onNoMatchingCredential(flowId: String, requestedTypes: [String], reason: String?, redirectUri: String?) {}
     func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}
@@ -188,7 +216,21 @@ public extension WalletEventListener {
     ///   - purpose: The scope the verifier asked for.
     ///   - requestedClaims: The claim names the query would disclose.
     /// - Returns: Whether the user consents to the presentation.
-    func onConsentRequested(flowId: String, purpose: String?, requestedClaims: [String]) -> Bool { false }
+    func onConsentRequested(
+        flowId: String,
+        purpose: String?,
+        requestedClaims: [String],
+        verifierName: String?,
+        verifierId: String?,
+        selections: [WmpConsentSelection]
+    ) -> Bool { false }
+
+    /// A WMP credential match produced more than one candidate: the wallet may
+    /// keep its own first pick (`.walletChoice`, the default - the
+    /// pre-#277 behaviour) or hand the choice to the user (`.userChoice`,
+    /// the picks becoming the match answer's entirety) — or the user refused
+    /// outright (`.declined`).
+    func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
     func onReauthenticationRequired() {
         // No-op by default: implementers only need to override this if they
         // want to route the user to a login screen on forced logout.
