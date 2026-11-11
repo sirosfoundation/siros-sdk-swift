@@ -303,7 +303,8 @@
     },
     "diagnosticLabel": "Diagnostic: %1$@",
     "credentialsReceived": "Received %1$d credential(s)",
-    "presentationSent": "Presentation sent successfully"
+    "presentationSent": "Presentation sent successfully",
+    "noMatchingCredential": "No credential in this wallet matches what the verifier asked for"
   },
   "proximity": {
     "title": "Tap to share",

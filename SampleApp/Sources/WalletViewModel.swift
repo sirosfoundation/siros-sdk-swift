@@ -245,6 +245,15 @@ final class WalletViewModel: ObservableObject {
     @Published var activateMode: ActivateMode = .qr
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
+    /// Non-nil while a WMP consent ask (the YES/NO on a matched presentation)
+    /// awaits the user - the WMP twin of `pendingPresentation`'s selection
+    /// sheet. The verifier's label + the per-credential selections render
+    /// in `WmpConsentSheet`.
+    @Published var pendingConsentAsk: PendingConsentAsk?
+    /// Non-nil while a WMP credential-match ambiguity awaits the user's
+    /// ruling (issue #277): Choose the picked match, or Cancel - which
+    /// REFUSES the presentation outright.
+    @Published var pendingAmbiguity: PendingAmbiguityAsk?
     /// Non-nil while a `RequestWscdChoice` prompt (see `requestWscdChoice`)
     /// is awaiting the user's answer - drives `WscdChoiceSheet` via
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingPresentation`'s
@@ -252,6 +261,31 @@ final class WalletViewModel: ObservableObject {
     @Published var pendingWscdChoice: PendingWscdChoice?
     /// Non-nil while a transaction prompt awaits the user (TS12).
     @Published var pendingTransactionConsent: PendingTransactionConsent?
+
+    /// A WMP consent ask awaiting the user's YES/NO. Identity-carrying for
+    /// `.sheet(item:)`.
+    struct PendingConsentAsk: Identifiable {
+        let id = UUID()
+        /// The trust evaluation's label (client_name → domain → client_id).
+        let verifierName: String?
+        /// The raw client_id (the details view's subject).
+        let verifierId: String?
+        /// The per-credential selections this ask covers.
+        let selections: [WmpConsentSelection]
+        /// The claim names, flat (the fallback rendering).
+        let requestedClaims: [String]
+        /// The answer channel.
+        let answer: CheckedContinuation<Bool, Never>
+    }
+
+    /// A credential-match ambiguity awaiting the user's ruling.
+    struct PendingAmbiguityAsk: Identifiable {
+        let id = UUID()
+        /// The matched credentials to pick among.
+        let matches: [WmpConsentSelection]
+        /// The answer channel.
+        let answer: CheckedContinuation<WmpCredentialAmbiguity, Never>
+    }
     @Published var showTransactionLog = false
     @Published var transactionLog: [TransactionLogEntry] = []
     var transactionLogGeneration = 0
@@ -835,6 +869,22 @@ final class WalletViewModel: ObservableObject {
         presentationContinuation = nil
     }
 
+    // MARK: - WMP consent & ambiguity
+
+    /// The user's YES on a WMP consent ask.
+    func answerConsentAsk(_ ask: PendingConsentAsk, agreed: Bool) {
+        guard pendingConsentAsk?.id == ask.id else { return }
+        pendingConsentAsk = nil
+        ask.answer.resume(returning: agreed)
+    }
+
+    /// The user's ruling on a credential-match ambiguity: these picks.
+    func chooseAmbiguityMatch(_ ask: PendingAmbiguityAsk, pick: WmpConsentSelection?) {
+        guard pendingAmbiguity?.id == ask.id else { return }
+        pendingAmbiguity = nil
+        ask.answer.resume(returning: pick.map { .userChoice([$0]) } ?? .declined)
+    }
+
     // MARK: - History
 
     func openHistory() {
@@ -1405,9 +1455,66 @@ extension WalletViewModel: WalletEventListener {
         }
     }
 
-    nonisolated func onFlowComplete(flowId: String, redirectUri: String?) {
+    /// The WMP consent ask: the YES/NO on a matched presentation. Routed
+    /// through `pendingConsentAsk` (`WmpConsentSheet`), the verifier's
+    /// resolved label as the subject and the per-credential selections
+    /// grouped. The SDK's default DECLINES (fail closed) - without this
+    /// override every WMP presentation in enforce mode is auto-declined
+    /// (the Kotlin #395 twin, found in the 2026-11-11 audit round).
+    nonisolated func onConsentRequested(
+        flowId: String,
+        purpose: String?,
+        requestedClaims: [String],
+        verifierName: String?,
+        verifierId: String?,
+        selections: [WmpConsentSelection]
+    ) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            Task { @MainActor in
+                if self.pendingConsentAsk != nil {
+                    // A second ask while one is up: the first is cancelled
+                    // (its flow ended) - answer it declined, take this one.
+                    self.pendingConsentAsk?.answer.resume(returning: false)
+                }
+                self.pendingConsentAsk = PendingConsentAsk(
+                    verifierName: verifierName ?? purpose,
+                    verifierId: verifierId,
+                    selections: selections,
+                    requestedClaims: requestedClaims,
+                    answer: continuation
+                )
+            }
+        }
+    }
+
+    /// The multi-match ruling (issue #277): Choose the picked match, or
+    /// Cancel - which REFUSES the presentation outright, never a silent
+    /// fallback to the wallet's first pick.
+    nonisolated func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity {
+        await withCheckedContinuation { (continuation: CheckedContinuation<WmpCredentialAmbiguity, Never>) in
+            Task { @MainActor in
+                if self.pendingAmbiguity != nil {
+                    self.pendingAmbiguity?.answer.resume(returning: .declined)
+                }
+                self.pendingAmbiguity = PendingAmbiguityAsk(matches: matches, answer: continuation)
+            }
+        }
+    }
+
+    nonisolated func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) {
         Task { @MainActor in
-            if self.receivedCredentialCount > 0 {
+            // Any pending ask belonged to a flow that just ended: decline it.
+            self.pendingConsentAsk?.answer.resume(returning: false)
+            self.pendingConsentAsk = nil
+            self.pendingAmbiguity?.answer.resume(returning: .declined)
+            self.pendingAmbiguity = nil
+            if matchedNothing {
+                // The engine's no-match refusal: the verifier sees "wallet
+                // declined the request"; the wallet says what happened (and
+                // the redirect link below, when the error answer built one).
+                self.infoMessage = L10n.string("flow.noMatchingCredential")
+                self.showInfo = true
+            } else if self.receivedCredentialCount > 0 {
                 self.infoMessage = L10n.string("flow.credentialsReceived", self.receivedCredentialCount)
                 self.showInfo = true
                 self.receivedCredentialCount = 0

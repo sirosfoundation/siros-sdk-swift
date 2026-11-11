@@ -101,6 +101,18 @@ struct ContentView: View {
         .sheet(item: $viewModel.pendingWscdChoice) { choice in
             WscdChoiceSheet(choice: choice)
         }
+        // The WMP consent ask (the YES/NO on a matched presentation) and
+        // the credential-match ambiguity (issue #277) - both can fire during
+        // any WMP presentation regardless of the screen underneath. Both
+        // sheets answer their ask exactly once; swipe-dismiss is disabled
+        // (interactiveDismissDisabled) so a dismissal can never strand the
+        // SDK's await.
+        .sheet(item: $viewModel.pendingConsentAsk) { ask in
+            WmpConsentSheet(ask: ask)
+        }
+        .sheet(item: $viewModel.pendingAmbiguity) { ask in
+            AmbiguitySheet(ask: ask)
+        }
         // Same top-level rationale: a transaction (EC TS12) can be put to the
         // user while any screen is showing. Dismissing the sheet declines.
         // Each sheet declines only its own prompt when it goes away (see TransactionConsentSheet).
