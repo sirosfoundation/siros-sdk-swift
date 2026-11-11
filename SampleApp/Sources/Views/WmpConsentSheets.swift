@@ -11,7 +11,9 @@ import SirosWallet
 struct WmpConsentSheet: View {
     @EnvironmentObject var viewModel: WalletViewModel
     let ask: WalletViewModel.PendingConsentAsk
-    @State private var showDetails = false
+    /// Opens the full in-wallet consent view (PresentationConsentView) at
+    /// its claim-selection step - the Kotlin twin's "Show me details".
+    let onDetails: () -> Void
 
     var body: some View {
         VStack(spacing: 16) {
@@ -20,16 +22,10 @@ struct WmpConsentSheet: View {
                 .multilineTextAlignment(.center)
 
             if let verifierId = ask.verifierId, !verifierId.isEmpty {
-                Button(showDetails ? "Hide details" : "Verifier details") {
-                    showDetails.toggle()
-                }
-                .font(.caption)
-                if showDetails {
-                    Text(verifierId)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
+                Text(verifierId)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
 
             if ask.selections.isEmpty {
@@ -60,6 +56,10 @@ struct WmpConsentSheet: View {
                     viewModel.answerConsentAsk(ask, agreed: false)
                 }
                 .buttonStyle(.bordered)
+                Button("Show me details") {
+                    onDetails()
+                }
+                .buttonStyle(.bordered)
                 Button("Share") {
                     viewModel.answerConsentAsk(ask, agreed: true)
                 }
@@ -77,6 +77,9 @@ struct WmpConsentSheet: View {
 struct AmbiguitySheet: View {
     @EnvironmentObject var viewModel: WalletViewModel
     let ask: WalletViewModel.PendingAmbiguityAsk
+    /// Opens the full in-wallet consent view at the selection step (the
+    /// Kotlin twin's bridge).
+    let onDetails: () -> Void
     @State private var picked: WmpConsentSelection?
 
     var body: some View {
@@ -109,6 +112,10 @@ struct AmbiguitySheet: View {
             HStack(spacing: 12) {
                 Button("Cancel") {
                     viewModel.chooseAmbiguityMatch(ask, pick: nil)
+                }
+                .buttonStyle(.bordered)
+                Button("Show me details") {
+                    onDetails()
                 }
                 .buttonStyle(.bordered)
                 Button("Choose") {

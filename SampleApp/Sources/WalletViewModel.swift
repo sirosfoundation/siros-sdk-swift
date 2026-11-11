@@ -254,6 +254,78 @@ final class WalletViewModel: ObservableObject {
     /// ruling (issue #277): Choose the picked match, or Cancel - which
     /// REFUSES the presentation outright.
     @Published var pendingAmbiguity: PendingAmbiguityAsk?
+
+    /// Which WMP ask the full consent view answers, when "Show me details"
+    /// bridged it: the consent ask (Share/Cancel answer it) or the
+    /// ambiguity ask (Share answers UserChoice(picked), Cancel refuses).
+    private var consentAskBridge: ConsentAskBridge?
+
+    /// The WMP consent ask's detail context: what the full view renders.
+    @Published private(set) var consentAskDetail: ConsentAskDetail?
+
+    private enum ConsentAskBridge {
+        case consent(PendingConsentAsk)
+        case ambiguity(PendingAmbiguityAsk)
+    }
+
+    struct ConsentAskDetail {
+        let verifierName: String?
+        let verifierId: String?
+        let selections: [WmpConsentSelection]
+    }
+
+    /// "Show me details" on the minimal WMP consent sheet: swap it for the
+    /// pre-rework full in-wallet consent view (PresentationConsentView),
+    /// landing on the claim-selection step; its Share/Cancel answer the
+    /// same gate ask the sheet would have.
+    func showConsentDetails(_ ask: PendingConsentAsk) {
+        consentAskBridge = .consent(ask)
+        pendingConsentAsk = nil
+        pendingPresentation = presentationRequest(from: consentAskDetail, or: nil)
+    }
+
+    /// "Show me details" on the ambiguity sheet: the same full view at the
+    /// selection step - the choice of credential IS the point. Share answers
+    /// the AMBIGUITY ask with the picked credential; Cancel refuses.
+    func showAmbiguityDetails(_ ask: PendingAmbiguityAsk) {
+        consentAskBridge = .ambiguity(ask)
+        pendingAmbiguity = nil
+        pendingPresentation = presentationRequest(from: consentAskDetail, or: ask.matches)
+    }
+
+    /// Back from the full consent view to the sheet it bridged from.
+    func hideConsentDetails() {
+        guard let bridge = consentAskBridge else { return }
+        consentAskBridge = nil
+        pendingPresentation = nil
+        switch bridge {
+        case .consent(let ask): pendingConsentAsk = ask
+        case .ambiguity(let ask): pendingAmbiguity = ask
+        }
+    }
+
+    /// Where the full consent view lands when bridged (the selection step).
+    var consentViewStartStep: Int { consentAskBridge == nil ? 0 : 1 }
+
+    /// The wallet-level PresentationRequest for the bridged ask's selections.
+    private func presentationRequest(from detail: ConsentAskDetail?, or matches: [WmpConsentSelection]) -> PresentationRequest {
+        let selections = detail?.selections.isEmpty == false ? detail!.selections : matches
+        let creds = (wallet?.state.value as? WalletState.Ready)?.credentials ?? []
+        let matchResults = selections.compactMap { sel -> CredentialMatcher.MatchResult? in
+            guard let cred = creds.first(where: { $0.id == sel.credentialId }) else { return nil }
+            return CredentialMatcher.MatchResult(
+                queryId: "",
+                format: cred.format,
+                candidates: [cred],
+                requestedClaims: (sel.claims ?? []).map { [$0] }
+            )
+        }
+        return PresentationRequest(
+            verifierName: detail?.verifierName ?? detail?.verifierId,
+            matchResults: matchResults,
+            candidates: matchResults.flatMap { $0.candidates }
+        )
+    }
     /// Non-nil while a `RequestWscdChoice` prompt (see `requestWscdChoice`)
     /// is awaiting the user's answer - drives `WscdChoiceSheet` via
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingPresentation`'s
@@ -858,12 +930,36 @@ final class WalletViewModel: ObservableObject {
     // MARK: - Presentation
 
     func acceptPresentation(_ selectedIds: [Int64]) {
+        // The full consent view bridged from a WMP ask: its Share answers
+        // THAT ask (consent: agree; ambiguity: the picked credential as
+        // UserChoice).
+        if let bridge = consentAskBridge {
+            consentAskBridge = nil
+            pendingPresentation = nil
+            switch bridge {
+            case .consent(let ask): ask.answer.resume(returning: true)
+            case .ambiguity(let ask):
+                ask.answer.resume(returning: .userChoice(ask.matches.filter { selectedIds.contains($0.credentialId) }))
+            }
+            return
+        }
         pendingPresentation = nil
         presentationContinuation?.resume(returning: selectedIds)
         presentationContinuation = nil
     }
 
     func declinePresentation() {
+        // The bridge counterpart: decline the consent ask, or refuse the
+        // presentation outright (ambiguity).
+        if let bridge = consentAskBridge {
+            consentAskBridge = nil
+            pendingPresentation = nil
+            switch bridge {
+            case .consent(let ask): ask.answer.resume(returning: false)
+            case .ambiguity(let ask): ask.answer.resume(returning: .declined)
+            }
+            return
+        }
         pendingPresentation = nil
         presentationContinuation?.resume(returning: [])
         presentationContinuation = nil
@@ -1482,6 +1578,11 @@ extension WalletViewModel: WalletEventListener {
                     selections: selections,
                     requestedClaims: requestedClaims,
                     answer: continuation
+                )
+                self.consentAskDetail = ConsentAskDetail(
+                    verifierName: verifierName ?? purpose,
+                    verifierId: verifierId,
+                    selections: selections
                 )
             }
         }
