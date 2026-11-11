@@ -89,16 +89,28 @@ public final class WmpUniFFITransport: TransportProtocol, @unchecked Sendable {
 
     public func send(_ message: Data) async throws {
         // One WMP message in, the reply out; a notification answers nil.
-        // The call blocks until the engine answers: call it from a task
-        // the engine's sub-flow asks (`host`) are free to run on.
-        if let response = try engine.send(message: message) {
+        // The call blocks until the engine answers — and the engine runs the
+        // WHOLE flow (fetches, PDP trust calls, the match/consent asks) inside
+        // that call — so it must run OFF the caller's actor: the SDK's flow
+        // starts are called from UI contexts (the sample app's MainActor
+        // Tasks), and a blocking send there deadlocks against the very
+        // thread that must render the consent sheet (found on-device, the
+        // Kotlin twin: siros-sdk-kotlin#393). The remote transports need no
+        // such detour — URLSession's async APIs never block the thread.
+        let engine = self.engine
+        let (response, notifications) = try await Task.detached(priority: .userInitiated) {
+            let reply = try engine.send(message: message)
+            let queued = engine.takeNotifications()
+            return (reply, queued)
+        }.value
+        if let response {
             incomingContinuation.yield(response)
         }
         // Deliver any queued notifications (flow progress, sub-flow
         // starts, completions) that arrived while the request was in
         // flight — the transport's polling counterpart of the SSE stream
         // the remote mode reads.
-        for notification in engine.takeNotifications() {
+        for notification in notifications {
             incomingContinuation.yield(notification)
         }
     }
