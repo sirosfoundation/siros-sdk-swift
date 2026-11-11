@@ -47,7 +47,7 @@ final class ProxyPdp: Pdp {
         // flattens to a single optional (nil covers both a thrown error and
         // a nil bearer) - fail closed either way.
         guard let bearer = try? await bearerProvider() else {
-            return EvaluationResponse(trusted: false, decision: "no bearer for the PDP routes")
+            return EvaluationResponse(trusted: false, decision: "no bearer for the PDP routes", context: nil)
         }
         var body: [String: Any] = [
             "subject": ["type": "key", "id": request.subject],
@@ -72,10 +72,20 @@ final class ProxyPdp: Pdp {
             let answer = await post("/v1/evaluate", bearer: bearer, body: body),
             let parsed = Self.jsonObject(answer.data(using: .utf8))
         else {
-            return EvaluationResponse(trusted: false, decision: "the PDP route did not answer")
+            return EvaluationResponse(trusted: false, decision: "the PDP route did not answer", context: nil)
         }
         let trusted = (parsed["decision"] as? Bool) ?? false
-        return EvaluationResponse(trusted: trusted, decision: Self.reasonMessage(parsed["context"]))
+        // The PDP's context, verbatim JSON text - go-trust's registry
+        // display_name (a registry's own human-facing name for the subject)
+        // rides it to the verifier info and overrides the consent UI's label
+        // (go-trust#249: most registries do not carry one - absent then, no
+        // change).
+        let contextText = parsed["context"].flatMap { value -> String? in
+            guard JSONSerialization.isValidJSONObject(value),
+                  let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+        return EvaluationResponse(trusted: trusted, decision: Self.reasonMessage(parsed["context"]), context: contextText)
     }
 
     func resolve(request: ResolveRequest) async throws -> ResolveResponse {

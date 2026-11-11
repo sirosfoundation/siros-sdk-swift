@@ -2274,9 +2274,17 @@ public struct EvaluationResponse {
          */trusted: Bool, 
         /**
          * The decision text, when there is one.
-         */decision: String?) {
+         */decision: String?, 
+        /**
+         * The PDP's response context, verbatim JSON text when it carried one
+         * (go-trust's `EvaluationResponseContext` - `display_name`, …). The
+         * recognised member today is `display_name` (a registry's own
+         * human-facing name for the subject), consumed by the wallet's consent
+         * surfaces; uninterpreted elsewhere.
+         */context: String?) {
         self.trusted = trusted
         self.decision = decision
+        self.context = context
     }
 }
 
@@ -2296,6 +2304,7 @@ extension EvaluationResponse: Equatable, Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(trusted)
         hasher.combine(decision)
+        hasher.combine(context)
     }
 }
 
