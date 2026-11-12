@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-12
+
+The SDK's local WMP engine pins to the **released wallet-core v0.2.2** (the XCFramework from the v0.2.2 release, the first
+release-track pin rather than a dev build): the PDP response context and the no-match redirect_uri - the wire inputs the consent
+surfaces consume - plus the OID4VP link-parsing fixes and the AuthZEN proxy shape. The consent round and its presentation-flow
+split ship with it.
+
+### Changed
+- **wallet-core 0.2.2.** Package.swift's `engine_adapter_sdkFFI` binaryTarget moves from v0.2.1 to the released v0.2.2
+  (checksum 6f0f6ba7…); the vendored UniFFI binding is regenerated from the release.
+- **The WMP consent contract.** The listener carries the consent ask, the credential-match ambiguity and the flow completion with
+  the no-match flag; the details bridge ("Show me details") opens the full in-wallet consent view at the claim-selection step, and
+  the claim lines are noun phrases completing the header's sentence.
+- **The presentation flow splits out of WalletViewModel** (WalletViewModel+PresentationFlow.swift) - the consent surface had grown
+  the file past SwiftLint's file_length limit.
+
+### Fixed
+- `credentialTitle`'s type-label chain is written step by step - the `??` chain over ternary closures blew the compiler's
+  type-check budget on every platform.
+
 ## [0.16.0] - 2026-11-10
 
 ### Changed

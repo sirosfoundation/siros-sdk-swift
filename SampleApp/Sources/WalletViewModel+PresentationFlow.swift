@@ -62,7 +62,7 @@ extension WalletViewModel {
     private func presentationRequest(from detail: ConsentAskDetail?, or matches: [WmpConsentSelection]?) -> PresentationRequest {
         let selections = (detail?.selections.isEmpty == false ? detail!.selections : matches) ?? []
         var creds: [StoredCredential] = []
-        if case .ready(_, _, let ready, _) = walletState { creds = ready }
+        if case .ready = walletState { creds = credentials }
         return PresentationRequest(
             verifierName: detail?.verifierName ?? detail?.verifierId,
             candidates: selections.compactMap { sel in creds.first { $0.id == sel.credentialId } },
@@ -202,7 +202,7 @@ extension WalletViewModel {
     /// The multi-match ruling (issue #277): Choose the picked match, or
     /// Cancel - which REFUSES the presentation outright, never a silent
     /// fallback to the wallet's first pick.
-    nonisolated func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity {
+    nonisolated func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) async -> WmpCredentialAmbiguity {
         await withCheckedContinuation { (continuation: CheckedContinuation<WmpCredentialAmbiguity, Never>) in
             Task { @MainActor in
                 if self.pendingAmbiguity != nil {

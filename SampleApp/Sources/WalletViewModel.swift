@@ -407,7 +407,9 @@ final class WalletViewModel: ObservableObject {
     /// in a deferred `Task { @MainActor in ... }` - by the time that runs,
     /// the wallet's state may have already transitioned to `.ready`, so it
     /// can't just read `wallet?.state` at completion time.
-    private var lastFlowType: String?
+    // Internal, not private: the flow-complete callback in
+    // WalletViewModel+PresentationFlow.swift reads it.
+    var lastFlowType: String?
     /// Credentials received so far in the current flow. Flows in this app
     /// run one at a time, so a plain counter reset on consumption (in
     /// onFlowComplete) is enough - no need to key it by flowId, which

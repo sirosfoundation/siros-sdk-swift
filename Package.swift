@@ -147,8 +147,8 @@ let package = Package(
         // compiled out until slices exist for them.
         .binaryTarget(
             name: "engine_adapter_sdkFFI",
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.1/engine_adapter_sdk.xcframework.zip",
-            checksum: "896c9804e47f530ba8fdfeba843c7db592b8367c12599c453ec81cacf8fb3829"
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.2/engine_adapter_sdk.xcframework.zip",
+            checksum: "6f0f6ba7ac8e315072f4d4be6526d15d198d6256abb2f24b4d655254341a38f1"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---

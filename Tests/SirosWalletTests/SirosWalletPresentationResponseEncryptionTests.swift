@@ -53,7 +53,6 @@ private final class Listener: WalletEventListener, @unchecked Sendable {
     var errors: [String] = []
     func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] { [] }
     func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errors.append(errorMessage) }
-    func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
     func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) {}
 }
 

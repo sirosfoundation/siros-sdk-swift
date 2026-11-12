@@ -414,7 +414,6 @@ final class SirosWalletAccountDeletionTests: XCTestCase {
         }
         func onCredentialReceived(credential: StoredCredential) {}
         func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) {}
-        func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
         func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {}
         func onNoMatchingCredential(flowId: String, requestedTypes: [String], reason: String?, redirectUri: String?) {}
         func onAuthorizationRequired(flowId: String, authorizationUrl: String, redirectUri: String, state: String) {}

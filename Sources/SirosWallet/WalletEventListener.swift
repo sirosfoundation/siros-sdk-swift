@@ -190,6 +190,13 @@ public protocol WalletEventListener: AnyObject, Sendable {
 /// Default implementations for optional callbacks.
 public extension WalletEventListener {
     func onCredentialReceived(credential: StoredCredential) {}
+    /// The flow-completion requirement's own default - a no-op, like
+    /// `onFlowError`'s. It was missing from the consent-plumbing round
+    /// (only the two-argument convenience below shipped), which left every
+    /// conformer that predates the three-argument shape unable to compile -
+    /// invisible until the iOS test target next built (the v0.10.0 release
+    /// bump, the first build of the merged tree).
+    func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) {}
     /// The pre-#277 two-argument conformance shape: matchedNothing false.
     func onFlowComplete(flowId: String, redirectUri: String?) {
         onFlowComplete(flowId: flowId, redirectUri: redirectUri, matchedNothing: false)
@@ -216,6 +223,9 @@ public extension WalletEventListener {
     ///   - purpose: The scope the verifier asked for.
     ///   - requestedClaims: The claim names the query would disclose.
     /// - Returns: Whether the user consents to the presentation.
+    ///
+    ///   `async`, the Kotlin `suspend` twin's shape: the answer comes from
+    ///   the user, and the engine's call site already awaited it.
     func onConsentRequested(
         flowId: String,
         purpose: String?,
@@ -223,14 +233,14 @@ public extension WalletEventListener {
         verifierName: String?,
         verifierId: String?,
         selections: [WmpConsentSelection]
-    ) -> Bool { false }
+    ) async -> Bool { false }
 
     /// A WMP credential match produced more than one candidate: the wallet may
     /// keep its own first pick (`.walletChoice`, the default - the
     /// pre-#277 behaviour) or hand the choice to the user (`.userChoice`,
     /// the picks becoming the match answer's entirety) — or the user refused
     /// outright (`.declined`).
-    func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
+    func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) async -> WmpCredentialAmbiguity { .walletChoice }
     func onReauthenticationRequired() {
         // No-op by default: implementers only need to override this if they
         // want to route the user to a login screen on forced logout.
