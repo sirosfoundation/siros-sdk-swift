@@ -12,7 +12,12 @@ import SirosCredentials
 /// 3. Summary: confirm final selection before sharing
 struct PresentationConsentView: View {
     @EnvironmentObject var viewModel: WalletViewModel
+    /// Where a bridged entry ("Show me details" from a WMP ask) lands: the
+    /// claim-selection step (`1`) - where the actual information lives - not
+    /// the preview (the Kotlin twin's ConsentEntryPoint.SELECT).
+    var startStep: Int = 0
     @State private var currentStep = 0
+    @State private var appeared = false
     @State private var claimSelections: [String: Bool] = [:]
 
     var body: some View {
@@ -38,6 +43,12 @@ struct PresentationConsentView: View {
         let displayCandidates = uniqueRepresentativeCandidates(request.candidates)
 
         let totalSteps = displayCandidates.count + 2 // preview + per-cred + summary
+
+        // The bridge entry point, applied once (not on every re-render).
+        if !appeared {
+            appeared = true
+            currentStep = startStep
+        }
 
         // NavigationStack + inline title matches every other sub-screen's
         // chrome (CredentialDetailView, etc.) instead of a bare, unchromed

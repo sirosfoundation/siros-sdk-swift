@@ -164,7 +164,8 @@ private final class Listener: WalletEventListener, @unchecked Sendable {
     var completed: [String] = []
     func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] { [] }
     func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errors.append(errorMessage) }
-    func onFlowComplete(flowId: String, redirectUri: String?) { completed.append(flowId) }
+    func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) { completed.append(flowId) }
+    func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
 }
 
 /// Engine-blind issuance on the wallet: the response-encryption key, `decrypt_credential_response` on

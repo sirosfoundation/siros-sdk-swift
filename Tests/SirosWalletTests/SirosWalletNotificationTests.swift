@@ -125,7 +125,8 @@ final class SirosWalletNotificationTests: XCTestCase {
         var errors: [String] = [], completed: [String] = []
         func onCredentialSelectionRequired(request: PresentationRequest) async -> [Int64] { [] }
         func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errors.append(errorMessage) }
-        func onFlowComplete(flowId: String, redirectUri: String?) { completed.append(flowId) }
+        func onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Bool) { completed.append(flowId) }
+        func onCredentialAmbiguity(flowId: String, matches: [WmpConsentSelection]) -> WmpCredentialAmbiguity { .walletChoice }
     }
 
     /// A wallet holding batch 77 (one credential and its refresh token), mid-renewal of it.

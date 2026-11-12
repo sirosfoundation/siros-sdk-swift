@@ -245,6 +245,31 @@ final class WalletViewModel: ObservableObject {
     @Published var activateMode: ActivateMode = .qr
     @Published var selectedCredential: StoredCredential?
     @Published var pendingPresentation: PresentationRequest?
+    /// Non-nil while a WMP consent ask (the YES/NO on a matched presentation)
+    /// awaits the user - the WMP twin of `pendingPresentation`'s selection
+    /// sheet. The verifier's label + the per-credential selections render
+    /// in `WmpConsentSheet`.
+    @Published var pendingConsentAsk: PendingConsentAsk?
+    /// Non-nil while a WMP credential-match ambiguity awaits the user's
+    /// ruling (issue #277): Choose the picked match, or Cancel - which
+    /// REFUSES the presentation outright.
+    @Published var pendingAmbiguity: PendingAmbiguityAsk?
+
+    /// Which WMP ask the full consent view answers, when "Show me details"
+    /// bridged it: the consent ask (Share/Cancel answer it) or the
+    /// ambiguity ask (Share answers UserChoice(picked), Cancel refuses).
+    // Internal, not private: WalletViewModel+PresentationFlow.swift (the
+    // bridging methods) reads it.
+    var consentAskBridge: ConsentAskBridge?
+
+    /// The WMP consent ask's detail context: what the full view renders.
+    @Published var consentAskDetail: ConsentAskDetail?
+
+    enum ConsentAskBridge {
+        case consent(PendingConsentAsk)
+        case ambiguity(PendingAmbiguityAsk)
+    }
+
     /// Non-nil while a `RequestWscdChoice` prompt (see `requestWscdChoice`)
     /// is awaiting the user's answer - drives `WscdChoiceSheet` via
     /// `.sheet(item:)` in `ContentView`, mirroring `pendingPresentation`'s
@@ -252,6 +277,7 @@ final class WalletViewModel: ObservableObject {
     @Published var pendingWscdChoice: PendingWscdChoice?
     /// Non-nil while a transaction prompt awaits the user (TS12).
     @Published var pendingTransactionConsent: PendingTransactionConsent?
+
     @Published var showTransactionLog = false
     @Published var transactionLog: [TransactionLogEntry] = []
     var transactionLogGeneration = 0
@@ -386,7 +412,9 @@ final class WalletViewModel: ObservableObject {
     /// run one at a time, so a plain counter reset on consumption (in
     /// onFlowComplete) is enough - no need to key it by flowId, which
     /// onCredentialReceived doesn't carry anyway.
-    private var receivedCredentialCount = 0
+    // Internal, not private: the flow-complete callback in
+    // WalletViewModel+PresentationFlow.swift resets it.
+    var receivedCredentialCount = 0
     #if canImport(siros_wscd_managerFFI)
     /// Stored reference to the UniFFISigner for `listKeys()`/
     /// `securityProperties(keyId:)` calls only - these aren't part of
@@ -821,30 +849,7 @@ final class WalletViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Presentation
 
-    func acceptPresentation(_ selectedIds: [Int64]) {
-        pendingPresentation = nil
-        presentationContinuation?.resume(returning: selectedIds)
-        presentationContinuation = nil
-    }
-
-    func declinePresentation() {
-        pendingPresentation = nil
-        presentationContinuation?.resume(returning: [])
-        presentationContinuation = nil
-    }
-
-    // MARK: - History
-
-    func openHistory() {
-        showHistory = true
-        presentationHistory = wallet?.presentationHistory ?? []
-    }
-
-    func closeHistory() {
-        showHistory = false
-    }
 
     // MARK: - Proximity (ISO 18013-5 BLE) presentation dependencies
 
@@ -1067,7 +1072,9 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Private
 
-    private var presentationContinuation: CheckedContinuation<[Int64], Never>?
+    // Internal, not private: WalletViewModel+PresentationFlow.swift (the
+    // accept/decline paths) resumes it.
+    var presentationContinuation: CheckedContinuation<[Int64], Never>?
 
     /// Not `private` - other WalletViewModel+*.swift extension files (e.g.
     /// PhotoIdOnboarding, Wscd) need this from another file in the same target.
@@ -1405,30 +1412,6 @@ extension WalletViewModel: WalletEventListener {
         }
     }
 
-    nonisolated func onFlowComplete(flowId: String, redirectUri: String?) {
-        Task { @MainActor in
-            if self.receivedCredentialCount > 0 {
-                self.infoMessage = L10n.string("flow.credentialsReceived", self.receivedCredentialCount)
-                self.showInfo = true
-                self.receivedCredentialCount = 0
-            } else if self.lastFlowType == "presentation" {
-                // Presentation has no analogous per-item count, so a plain
-                // confirmation is the equivalent "something happened" signal
-                // for a flow whose whole point is watching this screen after
-                // a QR scan.
-                self.infoMessage = L10n.string("flow.presentationSent")
-                self.showInfo = true
-            }
-
-            // Some verifiers (e.g. verifier.multipaz.org) return a
-            // redirect_uri with their direct_post.jwt response so the
-            // user's browser can be sent back to the verifier's own result
-            // page. Without this, the flow just silently ends on the
-            // wallet side with no way back to the verifier.
-            self.openVerifierRedirect(redirectUri)
-        }
-    }
-
     nonisolated func onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
         Task { @MainActor in
             self.receivedCredentialCount = 0
@@ -1444,7 +1427,9 @@ extension WalletViewModel: WalletEventListener {
 
     /// Opens a verifier-provided redirect_uri (from flow completion or decline) in the browser.
     @MainActor
-    private func openVerifierRedirect(_ redirectUri: String?) {
+    // Internal, not private: the flow callbacks in
+    // WalletViewModel+PresentationFlow.swift redirect on completion too.
+    func openVerifierRedirect(_ redirectUri: String?) {
         guard let redirectUri, let url = URL(string: redirectUri) else { return }
         #if canImport(UIKit)
         UIApplication.shared.open(url)

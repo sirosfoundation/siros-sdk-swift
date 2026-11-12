@@ -303,7 +303,8 @@
     },
     "diagnosticLabel": "Diagnostik: %1$@",
     "credentialsReceived": "Mottog %1$d intyg",
-    "presentationSent": "Presentationen skickades"
+    "presentationSent": "Presentationen skickades",
+    "noMatchingCredential": "Ingen legitimation i denna plånbok matchar vad verifieraren bad om"
   },
   "proximity": {
     "title": "Tryck för att dela",

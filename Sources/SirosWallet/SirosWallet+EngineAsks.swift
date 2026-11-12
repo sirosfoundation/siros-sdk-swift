@@ -104,7 +104,40 @@ extension SirosWallet {
 
     /// The `consent` ask: the user's YES/NO. The listener's default declines (fail closed).
     func handleWmpConsent(parentId: String, params: SirosTransport.EngineConsentParams) async -> Bool {
-        await eventListener?.onConsentRequested(flowId: parentId, purpose: params.purpose, requestedClaims: params.requestedClaims) ?? false
+        // The verifier's display name (the trust evaluation's entityName -
+        // client_name, else the domain the engine extracted, else the
+        // client_id) and its raw identifier, so the consent sentence has a
+        // subject and the details view has its material (found on-device:
+        // the dialog read "is asking you to share…" with no subject).
+        let trust = lastTrustResults[parentId]
+        // The per-credential selections this ask covers (the match step's
+        // record), so a consent UI can group claims under their credentials
+        // (two matched credentials both carrying a claim otherwise read as
+        // a duplicated bare list - found on-device).
+        // Per-credential selection records, under the wallet's own lock (the
+        // same `lock` every other consent-record mutation takes).
+        let selections: [WmpConsentSelection] = lock.withLock {
+            (pendingMatchResultsByFlow[parentId] ?? []).flatMap { result in
+                result.candidates.map { candidate in (candidate, result) }
+            }.compactMap { candidate, result in
+                let id = candidate.id
+                var seen = Set<String>()
+                let claims = result.requestedClaims.flatMap { $0 }.filter { seen.insert($0).inserted }
+                return WmpConsentSelection(
+                    credentialId: id,
+                    credentialName: CredentialUtils.credentialTitle(credential: candidate, typeHint: result.queryId),
+                    claims: claims.isEmpty ? nil : claims
+                )
+            }
+        }
+        return await eventListener?.onConsentRequested(
+            flowId: parentId,
+            purpose: params.purpose,
+            requestedClaims: params.requestedClaims,
+            verifierName: trust?.entityName,
+            verifierId: trust?.identifier,
+            selections: selections
+        ) ?? false
     }
 
     /// The `tx_code` ask: the transaction code from the user. The listener's nil (its
