@@ -11,6 +11,12 @@ public final class WmpSession: @unchecked Sendable {
     internal let codec: WmpCodec
     private let config: WmpSessionConfig
 
+    // Saved from create() so the fresh-create fallback after a resume
+    // exhaustion replays the same auth, sender and capabilities.
+    private var savedAuthToken: String?
+    private var savedSender: String?
+    private var savedCapabilities: [String: AnyCodable]?
+
     private var sessionId: String?
     private var resumptionToken: String?
     private var lastReceivedId: String?
@@ -81,6 +87,11 @@ public final class WmpSession: @unchecked Sendable {
         sender: String? = nil,
         capabilitiesOffered: [String: AnyCodable]? = nil
     ) async throws {
+        // Saved for the fresh-create fallback after a resume exhaustion
+        // (see handleDisconnect): the same auth, sender and capabilities.
+        savedAuthToken = authToken
+        savedSender = sender
+        savedCapabilities = capabilitiesOffered
         terminalLock.lock(); terminalFired = false; terminalLock.unlock()
         setState(.connecting)
         try await transport.connect()
@@ -310,6 +321,7 @@ public final class WmpSession: @unchecked Sendable {
         let attempts = resumptionToken == nil ? 0 : config.maxReconnectAttempts
         if attempts > 0 { setState(.resuming) }
 
+        var lastError: (any Error)?
         for attempt in 0..<attempts {
             let backoffMs = min(
                 config.reconnectBaseMs * Int64(1 << (attempt + 1)),
@@ -321,7 +333,38 @@ public final class WmpSession: @unchecked Sendable {
                 try await resume()
                 return
             } catch {
+                lastError = error
                 // Try again
+            }
+        }
+
+        // The resume exhausted. A "Session not found" means the session
+        // expired or the server restarted - it is GONE, and trying to
+        // resume again is trying to bring back the dead. The wallet's
+        // engine session is stateless from its own perspective (the
+        // credentials live in the wallet's store, not the engine's), so
+        // a transparent fresh create is safe and the wallet never gets
+        // stranded on a dead session. Found on-device against the GDC
+        // released engine: the session's TTL lapsed while the wallet sat
+        // in the background, the resume loop exhausted, and every later
+        // QR scan's flow start landed on the dead session - the engine
+        // answered "Capability not supported" (the capability gate fires
+        // on an unresolvable session before the flow's own matching, so
+        // every request failed identically regardless of which credential
+        // it named). The Kotlin twin is the same fix
+        // (siros-sdk-kotlin's `fix/wmp-session-recovery`).
+        if let message = (lastError as? WmpSessionError)?.errorDescription,
+           message.contains("Session not found"),
+           let token = savedAuthToken {
+            do {
+                try await create(
+                    authToken: token,
+                    sender: savedSender,
+                    capabilitiesOffered: savedCapabilities
+                )
+                return
+            } catch {
+                // Fall through to the failed state
             }
         }
 
