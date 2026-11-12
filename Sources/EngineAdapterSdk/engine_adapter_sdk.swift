@@ -4,15 +4,6 @@
 // swiftlint:disable all
 import Foundation
 
-// The engine core's XCFramework rides Package.swift's
-// engine_adapter_sdkFFI binaryTarget (siros-wallet-core's release
-// workflow builds engine_adapter_sdk.xcframework, released as
-// v0.2.1). The XCFramework ships iOS slices only, so this whole
-// file is compiled out everywhere the framework cannot be imported,
-// and the package builds without it; WmpUniFFITransport,
-// WmpEngineAskHandler and the transport tests carry the same gate.
-#if canImport(engine_adapter_sdkFFI)
-
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
@@ -2265,6 +2256,14 @@ public struct EvaluationResponse {
      * The decision text, when there is one.
      */
     public var decision: String?
+    /**
+     * The PDP's response context, verbatim JSON text when it carried one
+     * (go-trust's `EvaluationResponseContext` - `display_name`, …). The
+     * recognised member today is `display_name` (a registry's own
+     * human-facing name for the subject), consumed by the wallet's consent
+     * surfaces; uninterpreted elsewhere.
+     */
+    public var context: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2274,9 +2273,17 @@ public struct EvaluationResponse {
          */trusted: Bool, 
         /**
          * The decision text, when there is one.
-         */decision: String?) {
+         */decision: String?, 
+        /**
+         * The PDP's response context, verbatim JSON text when it carried one
+         * (go-trust's `EvaluationResponseContext` - `display_name`, …). The
+         * recognised member today is `display_name` (a registry's own
+         * human-facing name for the subject), consumed by the wallet's consent
+         * surfaces; uninterpreted elsewhere.
+         */context: String?) {
         self.trusted = trusted
         self.decision = decision
+        self.context = context
     }
 }
 
@@ -2290,12 +2297,16 @@ extension EvaluationResponse: Equatable, Hashable {
         if lhs.decision != rhs.decision {
             return false
         }
+        if lhs.context != rhs.context {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(trusted)
         hasher.combine(decision)
+        hasher.combine(context)
     }
 }
 
@@ -2308,13 +2319,15 @@ public struct FfiConverterTypeEvaluationResponse: FfiConverterRustBuffer {
         return
             try EvaluationResponse(
                 trusted: FfiConverterBool.read(from: &buf), 
-                decision: FfiConverterOptionString.read(from: &buf)
+                decision: FfiConverterOptionString.read(from: &buf), 
+                context: FfiConverterOptionString.read(from: &buf)
         )
     }
 
     public static func write(_ value: EvaluationResponse, into buf: inout [UInt8]) {
         FfiConverterBool.write(value.trusted, into: &buf)
         FfiConverterOptionString.write(value.decision, into: &buf)
+        FfiConverterOptionString.write(value.context, into: &buf)
     }
 }
 
@@ -6267,4 +6280,3 @@ private func uniffiEnsureInitialized() {
 }
 
 // swiftlint:enable all
-#endif
