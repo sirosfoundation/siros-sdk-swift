@@ -231,7 +231,12 @@ final class SirosWalletNotificationTests: XCTestCase {
         XCTAssertEqual(tokens.keys.sorted(), [77])
     }
 
-    /// WMP: a plain completion that names a credential entry without its value is an error, never a success.
+    /// WMP: a plain completion that names a credential entry without its value is an error, never a success —
+    /// and a later, genuinely readable batch still completes (the refusal does not poison the wallet).
+    /// The second fixture was "a.b.c" — valued but unparseable — whose "completion" was #276's discard
+    /// bug in miniature: the flow reported success and stored nothing. With the batch branch, an
+    /// unparseable credential is the single-member path's own "succeeded with nothing to show" error,
+    /// so the fixture became a readable one and the assertion keeps its real point.
     func testAWmpCompletionWithAnUnreadableEntryIsRefused() async {
         let store = InMemoryCredentialStore()
         let wallet = makeWallet(store: store)
@@ -240,8 +245,11 @@ final class SirosWalletNotificationTests: XCTestCase {
         await wallet.handleWmpFlowComplete(flowId: "w1", result: .object_(["credentials": .array([.object_(["format": .string("vc+sd-jwt")])])]))
         XCTAssertEqual(listener.errors.count, 1)
         XCTAssertTrue(listener.completed.isEmpty)
-        await wallet.handleWmpFlowComplete(flowId: "w2", result: .object_(["credentials": .array([.object_(["format": .string("vc+sd-jwt"), "credential": .string("a.b.c")])])]))
+        let now = Int64(Date().timeIntervalSince1970)
+        await wallet.handleWmpFlowComplete(flowId: "w2", result: .object_(["credentials": .array([.object_(["format": .string("vc+sd-jwt"), "credential": .string(makeJwt(exp: now + 3600, iat: now))])])]))
         XCTAssertEqual(listener.completed, ["w2"], "a readable completion still completes")
+        let stored = await store.getAll()
+        XCTAssertEqual(stored.count, 1, "and the readable batch actually stores")
     }
 }
 

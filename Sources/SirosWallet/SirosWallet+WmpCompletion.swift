@@ -70,9 +70,39 @@ extension SirosWallet {
             await handleWmpIssuanceComplete(flowId: flowId, result: result)
             return
         }
-        if let entries = result?.objectValue?["credentials"]?.arrayValue,
-           entries.contains(where: { ($0.objectValue?["credential"]?.stringValue ?? "").isEmpty }) {
-            await failIssuanceLocally(flowId: flowId, message: "The issuer's credential did not arrive")
+        // The `credentials` array is the BATCH shape (issue #276): the engine
+        // issued more than one credential for one flow, and each entry is a
+        // completion of its own - stored, validated per format, renewal-relayed
+        // and acceptance-notified entry by entry, never "success with nothing
+        // stored" (the pre-fix handler checked the entries for emptiness and
+        // then fell through to the presentation branch, discarding a clean
+        // batch while the UI reported success). The Kotlin twin's shape
+        // (siros-sdk-kotlin, its own #398): a prohibited credential_metadata on
+        // ANY entry refuses the whole batch before anything is stored, and an
+        // empty batch is the engine's error path, not a plain completion.
+        if let entries = result?.objectValue?["credentials"]?.arrayValue {
+            guard !entries.isEmpty else {
+                await failIssuanceLocally(flowId: flowId, message: "The issuance delivered no credential")
+                return
+            }
+            let prohibited = entries.contains { entry in
+                if case .object_(let members)? = entry.objectValue?["credential_metadata"],
+                   members.keys.contains(where: { CredentialDisplayMetadata.prohibitedMembers.contains($0) }) {
+                    return true
+                }
+                return false
+            }
+            if prohibited {
+                let ids = entries.compactMap { $0.objectValue?["notification_id"]?.stringValue }
+                await refusePlainCompletion(
+                    flowId: flowId, notificationIds: ids,
+                    message: "The issuer's response carries a superseded secret member (LEGACY_SECRET_MEMBER)"
+                )
+                return
+            }
+            for entry in entries {
+                await handleWmpIssuanceComplete(flowId: flowId, result: entry)
+            }
             return
         }
         // The presentation-final branch: the engine's completion payload

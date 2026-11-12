@@ -172,6 +172,21 @@ private final class Listener: WalletEventListener, @unchecked Sendable {
 /// A256GCM response (the pair gdc advertises) to a fixed test key.
 final class SirosWalletCredentialResponseEncryptionTests: XCTestCase {
 
+    /// A JWT-shaped string whose payload encodes the given claims - the same
+    /// minimal fixture shape SirosWalletNotificationTests' `makeJwt` builds
+    /// (parseJwtPayload only decodes the second segment; header and signature
+    /// are arbitrary).
+    private static func batchJwt(exp: Int64, iat: Int64) -> String {
+        let payload = ["exp": exp, "iat": iat]
+        let json = try! JSONSerialization.data(withJSONObject: payload)
+        let b64 = json.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "eyJ.\(b64).sig"
+    }
+
+
     private static let recipientD = "xu-cXXiuASoBEWSss5fOJIil0NepofeuDXqNXB9aHTc"
     private static let jwe = "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImN0eSI6IkpXVCIsImVuYyI6IkEyNTZHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiJPeS1XS0doWnFVTFhLQ1dNTmpnak1MQkRVeUVvTVVrV1RXTXZEcERPemQ4IiwieSI6ImlBcjhqUWlOX2ZPWXlNTDRPSFowRDhXNUpIWHBDRHVqTTZZVkplNHE4akEifX0.AVHzAebYl0dJwUIDRXgqhicLksq5U2jbQ8oQF0FHLXGcL9DBygMhlA.k7wZ1dAXylMAU7ro.U0dX-8eeDhyx6ENvowNRTPjyQM4nXwNCBixgCycXbyPRVG3Pzy7ZToqeAyKYllagDo7xUR_Mi_IRwwy5Wo2YnSaYkzFdV6solmOdxgakj_oKQrVJ0Eagh3ht5cOftilYnj4hmlH5f1mRbzBHctzUCZ_ywG9Z_k9ihrHtZOgk5Pn7ez4zDecb-bd6ByLspXjwc07saB0vpd9t2KApnQr5NwVDJfU02BHkzcrt0mYTqSrJlj6sVZZ_cLNyq8L5v74i8E1EsZwBRlegUYMvs9SmJuXTzkdn1RYJtnJIDq7qEGiVW7EmIfB1tLotQ6JFDGqT.Z7XYDoZNqv6-8cqUFJrbFw"
     private static let jweDeferred = "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00iLCJlcGsiOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIyb2hzemZSSUJ4ekg0dENOREpWbHExUU9yYk96a0ZGdGlIOWs2dTNVWjVjIiwieSI6Ik1YU3JVLWJGVzBNdGVyRWpLQmY3MFQwcUt1UG1WVTB1YnZxN0lMSm4wbncifX0.kCtw0ue8R0VZtgRXiPoiSkX1uWyzl4F1Us_O0SR45ZWo3mIK3xKBvg.5vICxNjnqA5hjI-f.oSbTeZez3MjbSUXEYKlDRuEjsbp7gH-oZ9cVJ7g2eRpl_GZPVcw.22SeVPINtknkA6ybIkYH3A"
@@ -1492,6 +1507,51 @@ final class SirosWalletCredentialResponseEncryptionTests: XCTestCase {
         XCTAssertEqual(stored.count, 1, "the paired credential reaches the store")
         XCTAssertEqual(listener.completed, ["wmp-ok"])
         XCTAssertTrue(listener.errors.isEmpty)
+    }
+
+    /// A batch completion (`credentials[]`, the multi-credential issuance shape) stores every entry -
+    /// found as issue #276: the pre-fix handler checked the entries for emptiness and then fell through
+    /// to the presentation branch, discarding a clean batch while the UI reported success. The Kotlin
+    /// twin's shape (siros-sdk-kotlin #398): entry by entry, each one the per-format validation,
+    /// the store, the relay capture and the acceptance notification of a completion of its own.
+    func testAWmpBatchCompletionStoresEveryEntry() async throws {
+        let store = InMemoryCredentialStore()
+        let w = wallet(store: store)
+        let listener = Listener()
+        w.eventListener = listener
+        w.setState(.flowActive(userId: "u", displayName: nil, flowId: "batch", flowType: "oid4vci", status: "active", credentials: []))
+        let now = Int64(Date().timeIntervalSince1970)
+
+        await w.handleWmpFlowComplete(flowId: "batch", result: .object_([
+            "credentials": .array([
+                .object_(["format": .string("vc+sd-jwt"), "credential": .string(Self.batchJwt(exp: now + 3600, iat: now)), "notification_id": .string("n-1")]),
+                .object_(["format": .string("vc+sd-jwt"), "credential": .string(Self.batchJwt(exp: now + 7200, iat: now)), "notification_id": .string("n-2")]),
+            ]),
+        ]))
+
+        let stored = await store.getAll()
+        XCTAssertEqual(stored.count, 2, "every entry reaches the store, never success-with-nothing-stored")
+        XCTAssertTrue(listener.errors.isEmpty)
+        XCTAssertEqual(listener.completed.count, 2, "each entry completes its own issuance")
+    }
+
+    /// An empty batch is the engine's error path (the issuer delivered nothing), not a plain
+    /// completion that reports success over an empty store.
+    func testAnEmptyWmpBatchIsTheEngineErrorPath() async throws {
+        let store = InMemoryCredentialStore()
+        let w = wallet(store: store)
+        let listener = Listener()
+        w.eventListener = listener
+        w.setState(.flowActive(userId: "u", displayName: nil, flowId: "empty", flowType: "oid4vci", status: "active", credentials: []))
+
+        await w.handleWmpFlowComplete(flowId: "empty", result: .object_([
+            "credentials": .array([]),
+        ]))
+
+        let stored = await store.getAll()
+        XCTAssertTrue(stored.isEmpty)
+        XCTAssertEqual(listener.errors.count, 1, "the empty batch is reported, not celebrated")
+        XCTAssertTrue(listener.completed.isEmpty)
     }
 
     /// No recorded epoch means the issuance cannot be established: refused with an error, not dropped silently.
