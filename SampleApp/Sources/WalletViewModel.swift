@@ -412,7 +412,9 @@ final class WalletViewModel: ObservableObject {
     /// run one at a time, so a plain counter reset on consumption (in
     /// onFlowComplete) is enough - no need to key it by flowId, which
     /// onCredentialReceived doesn't carry anyway.
-    private var receivedCredentialCount = 0
+    // Internal, not private: the flow-complete callback in
+    // WalletViewModel+PresentationFlow.swift resets it.
+    var receivedCredentialCount = 0
     #if canImport(siros_wscd_managerFFI)
     /// Stored reference to the UniFFISigner for `listKeys()`/
     /// `securityProperties(keyId:)` calls only - these aren't part of
@@ -1070,7 +1072,9 @@ final class WalletViewModel: ObservableObject {
 
     // MARK: - Private
 
-    private var presentationContinuation: CheckedContinuation<[Int64], Never>?
+    // Internal, not private: WalletViewModel+PresentationFlow.swift (the
+    // accept/decline paths) resumes it.
+    var presentationContinuation: CheckedContinuation<[Int64], Never>?
 
     /// Not `private` - other WalletViewModel+*.swift extension files (e.g.
     /// PhotoIdOnboarding, Wscd) need this from another file in the same target.
@@ -1423,7 +1427,9 @@ extension WalletViewModel: WalletEventListener {
 
     /// Opens a verifier-provided redirect_uri (from flow completion or decline) in the browser.
     @MainActor
-    private func openVerifierRedirect(_ redirectUri: String?) {
+    // Internal, not private: the flow callbacks in
+    // WalletViewModel+PresentationFlow.swift redirect on completion too.
+    func openVerifierRedirect(_ redirectUri: String?) {
         guard let redirectUri, let url = URL(string: redirectUri) else { return }
         #if canImport(UIKit)
         UIApplication.shared.open(url)

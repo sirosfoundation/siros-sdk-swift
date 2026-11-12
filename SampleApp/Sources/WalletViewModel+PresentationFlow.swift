@@ -59,22 +59,14 @@ extension WalletViewModel {
     var consentViewStartStep: Int { consentAskBridge == nil ? 0 : 1 }
 
     /// The wallet-level PresentationRequest for the bridged ask's selections.
-    private func presentationRequest(from detail: ConsentAskDetail?, or matches: [WmpConsentSelection]) -> PresentationRequest {
-        let selections = detail?.selections.isEmpty == false ? detail!.selections : matches
-        let creds = (wallet?.state.value as? WalletState.Ready)?.credentials ?? []
-        let matchResults = selections.compactMap { sel -> CredentialMatcher.MatchResult? in
-            guard let cred = creds.first(where: { $0.id == sel.credentialId }) else { return nil }
-            return CredentialMatcher.MatchResult(
-                queryId: "",
-                format: cred.format,
-                candidates: [cred],
-                requestedClaims: (sel.claims ?? []).map { [$0] }
-            )
-        }
+    private func presentationRequest(from detail: ConsentAskDetail?, or matches: [WmpConsentSelection]?) -> PresentationRequest {
+        let selections = (detail?.selections.isEmpty == false ? detail!.selections : matches) ?? []
+        var creds: [StoredCredential] = []
+        if case .ready(_, _, let ready, _) = walletState { creds = ready }
         return PresentationRequest(
             verifierName: detail?.verifierName ?? detail?.verifierId,
-            matchResults: matchResults,
-            candidates: matchResults.flatMap { $0.candidates }
+            candidates: selections.compactMap { sel in creds.first { $0.id == sel.credentialId } },
+            requestedClaims: selections.map { $0.claims ?? [] }
         )
     }
 
