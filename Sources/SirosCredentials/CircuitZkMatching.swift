@@ -239,8 +239,11 @@ public struct CircuitZkSupport {
 }
 
 #if canImport(siros_dc_matcher_ffiFFI)
-import siros_dc_matcher_ffiFFI
-import Generated
+// The generated matcher module is `#if canImport(siros_dc_matcher_ffiFFI)`-
+// gated inside this same target (see `Generated/siros_dc_matcher_ffi.swift`),
+// so the types and functions below are target-local — no module import (an
+// `import Generated` fails on iOS where this block compiles IN; found by
+// the iOS CI, 2026-11-14).
 
 /// `CircuitZkServing` by the shared matcher, the engine the OS picker runs:
 /// the circuit and a claimless credential of the doctype are registered in a
