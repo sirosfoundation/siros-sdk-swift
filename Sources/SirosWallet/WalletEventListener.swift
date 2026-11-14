@@ -173,6 +173,15 @@ public protocol WalletEventListener: AnyObject, Sendable {
     /// durable. The record is still held for the running session.
     func onTransactionLogFailure()
 
+    /// A transaction-data request was refused before anything was matched
+    /// or signed (EC TS12): TS12 handling not in effect, an entry that
+    /// does not decode, a schema violation, the user's own decline — the
+    /// Kotlin twin's exact shape (`onTransactionDataRefused`). The reason
+    /// class carries the local wording; a `.declined` is a user choice,
+    /// never an error in the UI. Fires alongside (not instead of)
+    /// `onFlowError` when the refusal ends the flow.
+    func onTransactionDataRefused(flowId: String, reason: TransactionDataError.Reason)
+
     /// An issuance was refused because the issuer's trust could not be
     /// established: the wallet backend's evaluation was negative, or an mdoc's
     /// `issuerAuth` was missing, unverifiable, or not trusted (negative, or the
@@ -251,7 +260,11 @@ public extension WalletEventListener {
     func onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
     func onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}
     func onTransactionLogFailure() {
-        // No-op by default: implementers override to tell the user a record was not stored.
+        // No-op by default; the record is still held for the session.
+    }
+    func onTransactionDataRefused(flowId: String, reason: TransactionDataError.Reason) {
+        // No-op by default: a `.declined` reason is a user choice, not an
+        // error in the UI; implementers override to word the refusal class.
     }
     func onIssuerNotTrusted(flowId: String, issuer: String?, reason: String) {
         // No-op by default: onFlowError follows with user-facing text.

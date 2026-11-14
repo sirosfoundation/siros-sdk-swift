@@ -1019,6 +1019,12 @@ extension SirosWallet {
                 // / `access_denied`, so only the code reaches the app, and the
                 // user's own decline is not presented to it as an error.
                 engine.sendSignResponse(flowId: msg.flowId, messageId: msg.messageId)
+                // The refusal class reaches the listener beside the flow error
+                // (the Kotlin `onTransactionDataRefused` twin): a decline is
+                // worded locally, never as an error. The listener snapshot
+                // under `lock`, the same discipline every dispatch site takes.
+                lock.lock(); let refusalListener = eventListener; lock.unlock()
+                refusalListener?.onTransactionDataRefused(flowId: msg.flowId, reason: refusal.reason)
                 reportSignFailure(flowId: msg.flowId, message: refusal.verifierErrorCode, notifyError: refusal.reason != .declined)
             } else {
                 // The engine waits for an answer to this request: say that it failed (with the original
