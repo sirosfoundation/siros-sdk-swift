@@ -139,16 +139,20 @@ let package = Package(
         // The WMP engine core the SDK's LOCAL mode runs in-process
         // (WalletEngineAskHandler over the Host port): built by siros-wallet-core's
         // release workflow (`Release — XCFramework + AAR + bindings`), released
-        // as v0.2.1. iOS slices only (device + simulator) - the same gate as the
+        // as v0.2.9. iOS slices only (device + simulator) - the same gate as the
         // zk-cred frameworks above: the FFI-dependent code is wrapped in
         // `#if canImport(engine_adapter_sdkFFI)` (WmpUniFFITransport,
         // WmpEngineAskHandler, the Generated bindings' FFI half, the sample
         // app's LocalEngine), so macOS/Linux build with the whole local mode
         // compiled out until slices exist for them.
+        // v0.2.9: the zkp_req policy inputs on the presentation ask, the PDP
+        // context relay on the match ask (VerifierInfo.trust_context), and the
+        // RFC 9207 iss gate — all JSON through the Host port, the FFI surface
+        // unchanged from v0.2.2.
         .binaryTarget(
             name: "engine_adapter_sdkFFI",
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.2/engine_adapter_sdk.xcframework.zip",
-            checksum: "6f0f6ba7ac8e315072f4d4be6526d15d198d6256abb2f24b4d655254341a38f1"
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.9/engine_adapter_sdk.xcframework.zip",
+            checksum: "e90c7f7c67ecb98b5f9a861a4652eb75f7b94f72e4cd6646bd75f265f329b668"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
