@@ -149,12 +149,25 @@ public struct EngineVpParams: Codable, Sendable {
     public var verifierSessionId: String?
     public var transactionData: [String] = []
     public var selectionHandle: String?
+    /// The request as the engine verified it (wallet-core #33, v0.2.4): the wallet's
+    /// ZK policy gate reads `signed` AND `signatureVerification == "verified"` from
+    /// it, and the JARM audience is its certificate-authenticated `clientId` —
+    /// never the ask's `audience`. Absent for a request the engine did not verify.
+    public var verifiedRequest: VerifiedRequest?
+    /// The verifier's response encryption parameters (wallet-core #33/#35,
+    /// v0.2.4/v0.2.6): the JWK for direct_post.jwt's JARM, with the wrapping and
+    /// content algorithms. Absent for a plain response mode. The wallet's ZK
+    /// gate requires its presence; the ENGINE wraps the answer itself
+    /// (`response::submit_response`'s direct_post.jwt arm, the same verifier
+    /// key), so the wallet answers the `vp_token`, never a JWE.
+    public var responseEncryption: ResponseEncryptionRequest?
 
     public init(
         flowId: String? = nil, audience: String? = nil, nonce: String? = nil,
         selections: [EngineVpSelection] = [], responseUri: String? = nil,
         verifierJwkThumbprint: String? = nil, verifierSessionId: String? = nil,
-        transactionData: [String] = [], selectionHandle: String? = nil
+        transactionData: [String] = [], selectionHandle: String? = nil,
+        verifiedRequest: VerifiedRequest? = nil, responseEncryption: ResponseEncryptionRequest? = nil
     ) {
         self.flowId = flowId
         self.audience = audience
@@ -165,6 +178,8 @@ public struct EngineVpParams: Codable, Sendable {
         self.verifierSessionId = verifierSessionId
         self.transactionData = transactionData
         self.selectionHandle = selectionHandle
+        self.verifiedRequest = verifiedRequest
+        self.responseEncryption = responseEncryption
     }
 
     enum CodingKeys: String, CodingKey {
@@ -175,6 +190,8 @@ public struct EngineVpParams: Codable, Sendable {
         case verifierSessionId = "verifier_session_id"
         case transactionData = "transaction_data"
         case selectionHandle = "selection_handle"
+        case verifiedRequest = "verified_request"
+        case responseEncryption = "response_encryption"
     }
 }
 
