@@ -60,7 +60,7 @@ let package = Package(
         // Breaks every fresh resolve under 6.2 with "unknown attribute
         // 'nonexhaustive'" (5.1.0 and 5.1.1 both carry it). Lift the pin
         // with the floor, together.
-        .package(url: "https://github.com/apple/swift-crypto.git", "5.0.0"..<"5.1.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "5.0.0"..<"6.0.0"),
         // Circuits fetched from go-zk-circuits (see ZkCircuitClient,
         // SirosCredentials) are zstd-compressed; zk-cred-longfellow's
         // initializeProver expects already-decompressed bytes (confirmed
