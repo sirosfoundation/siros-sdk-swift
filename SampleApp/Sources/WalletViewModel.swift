@@ -116,16 +116,25 @@ final class WalletViewModel: ObservableObject {
     @Published var showPhotoIdOnboarding: Bool {
         didSet { UserDefaults.standard.set(showPhotoIdOnboarding, forKey: "siros_show_photo_id_onboarding") }
     }
-    /// See `WalletConfig.preferLocalReaderTrustEvaluation`'s doc comment.
+    /// Deprecated boolean view onto `readerTrustEvaluationMode` (true = LOCAL_ONLY).
     @Published var preferLocalReaderTrustEvaluation: Bool {
         didSet { UserDefaults.standard.set(preferLocalReaderTrustEvaluation, forKey: "siros_prefer_local_reader_trust_evaluation") }
     }
-    /// A single PEM-encoded RICAL root certificate for local reader-trust
-    /// fallback (see `WalletConfig.readerTrustRootCertificatesPem`) - blank
-    /// means none configured, matching that config field defaulting to an
-    /// empty list.
+    /// Reader (RICAL) trust evaluation mode (`WalletConfig.readerTrustEvaluationMode`).
+    @Published var readerTrustEvaluationMode: MdocTrustEvaluationMode {
+        didSet { UserDefaults.standard.set(readerTrustEvaluationMode.rawValue, forKey: "siros_reader_trust_evaluation_mode") }
+    }
+    /// The VICAL mirror of `readerTrustEvaluationMode` - independent of it.
+    @Published var issuerTrustEvaluationMode: MdocTrustEvaluationMode {
+        didSet { UserDefaults.standard.set(issuerTrustEvaluationMode.rawValue, forKey: "siros_issuer_trust_evaluation_mode") }
+    }
+    /// A single PEM-encoded RICAL root (see `WalletConfig.readerTrustRootCertificatesPem`).
     @Published var readerTrustRootCertificatePem: String {
         didSet { UserDefaults.standard.set(readerTrustRootCertificatePem, forKey: "siros_reader_trust_root_certificate_pem") }
+    }
+    /// The issuer-side mirror of `readerTrustRootCertificatePem` (VICAL).
+    @Published var issuerTrustRootCertificatePem: String {
+        didSet { UserDefaults.standard.set(issuerTrustRootCertificatePem, forKey: "siros_issuer_trust_root_certificate_pem") }
     }
     @Published var r2psEnabled: Bool = false
     @Published var r2psServerUrl: String = defaultR2psUrl
@@ -490,6 +499,16 @@ final class WalletViewModel: ObservableObject {
             .flatMap { $0.isEmpty ? nil : $0 } ?? [ZkCircuitClient.defaultZkCircuitUrl]
         self.preferLocalReaderTrustEvaluation = defaults.bool(forKey: "siros_prefer_local_reader_trust_evaluation")
         self.readerTrustRootCertificatePem = defaults.string(forKey: "siros_reader_trust_root_certificate_pem") ?? ""
+        // The mode knobs (2026-11-16): stored as the enum's rawValue; an
+        // unset key is the default (remoteWithLocalFallback), not a stored
+        // name, so an unknown value cannot silently narrow.
+        self.readerTrustEvaluationMode = MdocTrustEvaluationMode(
+            rawValue: defaults.string(forKey: "siros_reader_trust_evaluation_mode") ?? ""
+        ) ?? .remoteWithLocalFallback
+        self.issuerTrustEvaluationMode = MdocTrustEvaluationMode(
+            rawValue: defaults.string(forKey: "siros_issuer_trust_evaluation_mode") ?? ""
+        ) ?? .remoteWithLocalFallback
+        self.issuerTrustRootCertificatePem = defaults.string(forKey: "siros_issuer_trust_root_certificate_pem") ?? ""
         #if DEBUG
         applyFixtureCredentialsIfRequested()
         #endif
@@ -1094,81 +1113,14 @@ final class WalletViewModel: ObservableObject {
         wallet?.completeAuthorization(flowId: flowId, code: code, state: state)
     }
 
-    #if canImport(siros_wscd_managerFFI)
     /// Lazily-created so it can hold a weak reference back to `self`
     /// without `buildWscdSigner` needing to construct a fresh one per call
     /// (every plugin's `UniFFISigner` shares this one instance, matching
     /// how a single Kotlin `AuthProvider` object backs every plugin there
-    /// too).
-    private lazy var wscdAuthProvider = SampleAppAuthProvider(viewModel: self)
-
-    /// Builds a WSCD-backed `Signer` for a single plugin ID, using exactly
-    /// the `FfiWscdConfig`/`UniFFISigner`/R2PS-registration construction
-    /// `rebuildWalletIfNeeded` always used for its one `selectedPluginId`
-    /// signer - factored out here so `WalletConfig.availableKeystores` can
-    /// reuse it once per known plugin ID instead of duplicating it, per
-    /// `WscdSelectionPolicy`'s multi-plugin selection feature.
-    private func buildWscdSigner(forPlugin pluginId: String) -> UniFFISigner? {
-        do {
-            let wscdConfig = FfiWscdConfig(defaultPlugin: pluginId)
-            let signer = try UniFFISigner(config: wscdConfig, authProvider: wscdAuthProvider)
-
-            if pluginId == "fido2" {
-                // No USB HID host mode is available to third-party iOS
-                // apps (a real platform constraint, not a gap to fix), so
-                // unlike the Kotlin sample app's USB/NFC race
-                // (CompositeCtap2Transport), there's only one real
-                // transport to register here.
-                try signer.registerFido2Plugin(transport: NfcCtap2Transport())
-            }
-
-            if pluginId == "apple-se" {
-                // A Copilot review finding: `WscdPluginCapabilities.pluginTiers`
-                // (and so `pluginIdsToTry` below) already lists "apple-se",
-                // advertising it as an available keystore choice, but nothing
-                // registered the actual backend - every generate/sign call
-                // would have failed with `NoPlugin`. `SystemSecureEnclaveKeyStore`
-                // is always safe to register unconditionally here, the same
-                // way `fido2`'s `NfcCtap2Transport` is: if the device has no
-                // Secure Enclave, `generateKey`/`sign` throw `.notAvailable`
-                // (mapped to `Unsupported`) at call time, not registration
-                // time - the same graceful-failure shape every other plugin
-                // here already has.
-                try signer.registerAppleSecureEnclavePlugin(backend: SystemSecureEnclaveKeyStore())
-            }
-
-            if pluginId == "r2ps" {
-                // Ephemeral P-256 key pair for the R2PS message envelope
-                // (JWS/JWE identity) - required regardless of auth mode.
-                let clientKey = P256.Signing.PrivateKey()
-                // `serverPublicKeyPem` MUST be the R2PS SERVER's own public
-                // key (for JWE envelope encryption TO the server) - never
-                // the client's own key, which would break the security
-                // model entirely (encrypting to a key the client itself
-                // holds the private half of defeats the point). See
-                // `r2psServerPublicKeyPem`'s doc comment: no real dev server
-                // key is available to hardcode here, so this is left as an
-                // explicit dev-configurable placeholder rather than
-                // silently substituting `clientKey.publicKey` again.
-                let r2psConfig = R2psConfig(
-                    serverUrl: r2psServerUrl,
-                    clientId: "sample-app",
-                    context: "wallet",
-                    clientKeyPem: clientKey.pemRepresentation,
-                    serverPublicKeyPem: r2psServerPublicKeyPem,
-                    authMode: .opaque
-                )
-                let transport = URLSessionR2psTransport(serverUrl: r2psServerUrl)
-                try signer.registerR2psPlugin(config: r2psConfig, transport: transport)
-            }
-
-            return signer
-        } catch {
-            print("WSCD setup failed for plugin \(pluginId): \(error). Skipping.")
-            return nil
-        }
-    }
-    #endif
+    /// too). The builder itself lives in WalletViewModel+Wscd.swift - the
+    /// 2026-11-16 split that keeps this file under SwiftLint's 1500-line
+    /// limit.
+    lazy var wscdAuthProvider = SampleAppAuthProvider(viewModel: self)
 
     /// Internal (not private) so the unit tests can build the wallet without a real login.
     func rebuildWalletIfNeeded() {
@@ -1294,8 +1246,12 @@ final class WalletViewModel: ObservableObject {
             defaultWscdMapping: resolvedDefaultWscdMapping,
             requestWscdChoice: resolvedRequestWscdChoice,
             zkCircuitUrls: zkCircuitUrls,
-            readerTrustRootCertificatesPem: readerTrustRootCertificatePem.isEmpty ? [] : [readerTrustRootCertificatePem],
-            preferLocalReaderTrustEvaluation: preferLocalReaderTrustEvaluation
+            // The trust block (roots + modes): WalletViewModel+Trust.swift.
+            readerTrustRootCertificatesPem: trustConfig.readerRootPem,
+            preferLocalReaderTrustEvaluation: trustConfig.preferLocal,
+            issuerTrustRootCertificatesPem: trustConfig.issuerRootPem,
+            readerTrustEvaluationMode: trustConfig.readerMode,
+            issuerTrustEvaluationMode: trustConfig.issuerMode
         )
 
         // The prioritized engine providers (the SDK's engineProviders), the
