@@ -4,11 +4,6 @@
 // swiftlint:disable all
 import Foundation
 
-// siros_wscd_managerFFI's XCFramework only ships iOS slices - see
-// UniFFISigner.swift's matching #if os(iOS) gate for why this whole
-// vendored file is scoped the same way.
-#if os(iOS)
-
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
@@ -3029,11 +3024,27 @@ public func FfiConverterTypeFfiSignature_lower(_ value: FfiSignature) -> RustBuf
 
 public struct FfiWscdConfig: Equatable, Hashable {
     public var defaultPlugin: String
+    /**
+     * The softkey plugin's OWN durable backing file
+     * (`plugins.softkey.keys_file`): every generated key is durable
+     * BEFORE generate_key returns (the security invariant,
+     * 2026-11-15). Empty/unset: the historic volatile softkey
+     * (hosts that own durability themselves through export/import).
+     */
+    public var softkeyKeysFile: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultPlugin: String) {
+    public init(defaultPlugin: String, 
+        /**
+         * The softkey plugin's OWN durable backing file
+         * (`plugins.softkey.keys_file`): every generated key is durable
+         * BEFORE generate_key returns (the security invariant,
+         * 2026-11-15). Empty/unset: the historic volatile softkey
+         * (hosts that own durability themselves through export/import).
+         */softkeyKeysFile: String) {
         self.defaultPlugin = defaultPlugin
+        self.softkeyKeysFile = softkeyKeysFile
     }
 
     
@@ -3052,12 +3063,14 @@ public struct FfiConverterTypeFfiWscdConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiWscdConfig {
         return
             try FfiWscdConfig(
-                defaultPlugin: FfiConverterString.read(from: &buf)
+                defaultPlugin: FfiConverterString.read(from: &buf), 
+                softkeyKeysFile: FfiConverterString.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiWscdConfig, into buf: inout [UInt8]) {
         FfiConverterString.write(value.defaultPlugin, into: &buf)
+        FfiConverterString.write(value.softkeyKeysFile, into: &buf)
     }
 }
 
@@ -6177,4 +6190,3 @@ public func uniffiEnsureSirosWscdManagerInitialized() {
 }
 
 // swiftlint:enable all
-#endif // os(iOS)

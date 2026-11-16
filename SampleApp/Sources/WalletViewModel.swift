@@ -116,33 +116,23 @@ final class WalletViewModel: ObservableObject {
     @Published var showPhotoIdOnboarding: Bool {
         didSet { UserDefaults.standard.set(showPhotoIdOnboarding, forKey: "siros_show_photo_id_onboarding") }
     }
-    /// See `WalletConfig.preferLocalReaderTrustEvaluation`'s doc comment.
+    /// Deprecated boolean view onto `readerTrustEvaluationMode` (true = LOCAL_ONLY).
     @Published var preferLocalReaderTrustEvaluation: Bool {
         didSet { UserDefaults.standard.set(preferLocalReaderTrustEvaluation, forKey: "siros_prefer_local_reader_trust_evaluation") }
     }
-    /// Which path reader (RICAL) trust evaluation takes
-    /// (`WalletConfig.readerTrustEvaluationMode`) - the deprecated boolean
-    /// above covers only a fragment of this (LOCAL_ONLY is what that toggle
-    /// meant); the mode is the full setting (2026-11-16 review).
+    /// Reader (RICAL) trust evaluation mode (`WalletConfig.readerTrustEvaluationMode`).
     @Published var readerTrustEvaluationMode: MdocTrustEvaluationMode {
         didSet { UserDefaults.standard.set(readerTrustEvaluationMode.rawValue, forKey: "siros_reader_trust_evaluation_mode") }
     }
-    /// The VICAL mirror of `readerTrustEvaluationMode`
-    /// (`WalletConfig.issuerTrustEvaluationMode`) - independently
-    /// configurable, matching the two config fields' independence.
+    /// The VICAL mirror of `readerTrustEvaluationMode` - independent of it.
     @Published var issuerTrustEvaluationMode: MdocTrustEvaluationMode {
         didSet { UserDefaults.standard.set(issuerTrustEvaluationMode.rawValue, forKey: "siros_issuer_trust_evaluation_mode") }
     }
-    /// A single PEM-encoded RICAL root certificate for local reader-trust
-    /// fallback (see `WalletConfig.readerTrustRootCertificatesPem`) - blank
-    /// means none configured, matching that config field defaulting to an
-    /// empty list.
+    /// A single PEM-encoded RICAL root (see `WalletConfig.readerTrustRootCertificatesPem`).
     @Published var readerTrustRootCertificatePem: String {
         didSet { UserDefaults.standard.set(readerTrustRootCertificatePem, forKey: "siros_reader_trust_root_certificate_pem") }
     }
-    /// The issuer-side mirror of `readerTrustRootCertificatePem`
-    /// (`WalletConfig.issuerTrustRootCertificatesPem`) - previously
-    /// unexposed entirely.
+    /// The issuer-side mirror of `readerTrustRootCertificatePem` (VICAL).
     @Published var issuerTrustRootCertificatePem: String {
         didSet { UserDefaults.standard.set(issuerTrustRootCertificatePem, forKey: "siros_issuer_trust_root_certificate_pem") }
     }
@@ -1323,23 +1313,12 @@ final class WalletViewModel: ObservableObject {
             defaultWscdMapping: resolvedDefaultWscdMapping,
             requestWscdChoice: resolvedRequestWscdChoice,
             zkCircuitUrls: zkCircuitUrls,
-            readerTrustRootCertificatesPem: readerTrustRootCertificatePem.isEmpty ? [] : [readerTrustRootCertificatePem],
-            preferLocalReaderTrustEvaluation: preferLocalReaderTrustEvaluation,
-            // The issuer side (2026-11-16): the VICAL root - previously
-            // unexposed entirely. The deprecated boolean below stays
-            // honored by the config itself; the mode knobs ride in the
-            // init's own order (readerMode, then issuerMode).
-            issuerTrustRootCertificatesPem: issuerTrustRootCertificatePem.isEmpty ? [] : [issuerTrustRootCertificatePem],
-            // The mode knobs (2026-11-16 review): the deprecated boolean
-            // above stays honored (it maps to LOCAL_ONLY) but the mode is
-            // the full statement, so the mode wins where both are
-            // non-default; the issuer side rides directly.
-            readerTrustEvaluationMode: readerTrustEvaluationMode != .remoteWithLocalFallback
-                ? readerTrustEvaluationMode
-                : (preferLocalReaderTrustEvaluation ? .localOnly : nil),
-            issuerTrustEvaluationMode: issuerTrustEvaluationMode != .remoteWithLocalFallback
-                ? issuerTrustEvaluationMode
-                : nil
+            // The trust block (roots + modes): WalletViewModel+Trust.swift.
+            readerTrustRootCertificatesPem: trustConfig.readerRootPem,
+            preferLocalReaderTrustEvaluation: trustConfig.preferLocal,
+            issuerTrustRootCertificatesPem: trustConfig.issuerRootPem,
+            readerTrustEvaluationMode: trustConfig.readerMode,
+            issuerTrustEvaluationMode: trustConfig.issuerMode
         )
 
         // The prioritized engine providers (the SDK's engineProviders), the
