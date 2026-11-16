@@ -151,8 +151,13 @@ let package = Package(
         // unchanged from v0.2.2.
         .binaryTarget(
             name: "engine_adapter_sdkFFI",
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.9/engine_adapter_sdk.xcframework.zip",
-            checksum: "e90c7f7c67ecb98b5f9a861a4652eb75f7b94f72e4cd6646bd75f265f329b668"
+            // v0.2.17 (2026-11-16): the UA fix (0.2.11), the frontend-shaped
+            // DID resolve (0.2.12), the two #11 merge-sweep regressions
+            // restored (0.2.16 client_id form member; 0.2.17 the batch
+            // credentials[] decode) - both found via the wallet-frontend
+            // wasm integration, regression tests pinning both.
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.17/engine_adapter_sdk.xcframework.zip",
+            checksum: "ca9fc32bc908203be02d1ea81a5c4d2bb4f3cce8a596f76db6b18f982bbfcaac"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
@@ -279,8 +284,12 @@ let package = Package(
         // XCFramework's module.modulemap).
         .binaryTarget(
             name: "siros_wscd_managerFFI",
-            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.14.0/siros_wscd_manager.xcframework.zip",
-            checksum: "fc590e8424a0bab384fc5b66f9fab6911e52dd99edabc1a547fee6379a9f5239"
+            // v0.14.2 (2026-11-16): the softkey write-through security fix -
+            // KeyBackingStore + FileKeyBackingStore, every generated key
+            // durable BEFORE generate_key returns (the 2026-11-14 on-device
+            // orphaned-key class). Also the softkey_keys_file config surface.
+            url: "https://github.com/sirosfoundation/siros-wscd-manager/releases/download/v0.14.2/siros_wscd_manager.xcframework.zip",
+            checksum: "82d74db009ace62495cae414457172491f41e73943fac4508693ea60fa1cd6db"
         ),
 
         // --- Keystore: JWE-encrypted key management ---
