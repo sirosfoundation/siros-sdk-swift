@@ -4,6 +4,12 @@
 // swiftlint:disable all
 import Foundation
 
+// The vendored file is iOS-scoped (the same wrap the pre-0.14.2 vendored
+// file carried): the FFI module exists on iOS only - this package's CI
+// builds/tests SirosKeystore on bare macOS and Linux too, where the
+// xcframework target is absent and the FFI types must not be compiled.
+#if os(iOS)
+
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
@@ -6192,5 +6198,6 @@ public func uniffiEnsureSirosWscdManagerInitialized() {
         fatalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
+#endif // os(iOS)
 
 // swiftlint:enable all
