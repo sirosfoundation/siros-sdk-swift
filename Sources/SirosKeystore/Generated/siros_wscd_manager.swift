@@ -3034,7 +3034,11 @@ public struct FfiWscdConfig: Equatable, Hashable {
     public var softkeyKeysFile: String
 
     // Default memberwise initializers are never public by default, so we
-    // declare one manually.
+    // declare one manually. [softkeyKeysFile] defaults to empty (the
+    // historic volatile softkey) so existing call sites - the SDK tests,
+    // app-config builders constructed before 0.14.2 - keep compiling; the
+    // hosts that want durability pass the file path explicitly (the
+    // same default the Kotlin bindings carry).
     public init(defaultPlugin: String, 
         /**
          * The softkey plugin's OWN durable backing file
@@ -3042,7 +3046,7 @@ public struct FfiWscdConfig: Equatable, Hashable {
          * BEFORE generate_key returns (the security invariant,
          * 2026-11-15). Empty/unset: the historic volatile softkey
          * (hosts that own durability themselves through export/import).
-         */softkeyKeysFile: String) {
+         */softkeyKeysFile: String = "") {
         self.defaultPlugin = defaultPlugin
         self.softkeyKeysFile = softkeyKeysFile
     }

@@ -1129,7 +1129,16 @@ final class WalletViewModel: ObservableObject {
     /// `WscdSelectionPolicy`'s multi-plugin selection feature.
     private func buildWscdSigner(forPlugin pluginId: String) -> UniFFISigner? {
         do {
-            let wscdConfig = FfiWscdConfig(defaultPlugin: pluginId)
+            // The softkey plugin's OWN durable backing (the security
+            // invariant, 2026-11-15): every generated key is durable BEFORE
+            // generate_key returns - the plugin writes its container through
+            // to this file inside the mutating critical section, so an app
+            // restart can never orphan a stored credential's bound key.
+            // Empty would be the volatile historic behaviour.
+            let wscdConfig = FfiWscdConfig(
+                defaultPlugin: pluginId,
+                softkeyKeysFile: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("wscd_softkey_keys.json").path
+            )
             let signer = try UniFFISigner(config: wscdConfig, authProvider: wscdAuthProvider)
 
             if pluginId == "fido2" {
