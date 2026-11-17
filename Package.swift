@@ -151,13 +151,18 @@ let package = Package(
         // unchanged from v0.2.2.
         .binaryTarget(
             name: "engine_adapter_sdkFFI",
-            // v0.2.17 (2026-11-16): the UA fix (0.2.11), the frontend-shaped
-            // DID resolve (0.2.12), the two #11 merge-sweep regressions
-            // restored (0.2.16 client_id form member; 0.2.17 the batch
-            // credentials[] decode) - both found via the wallet-frontend
-            // wasm integration, regression tests pinning both.
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.17/engine_adapter_sdk.xcframework.zip",
-            checksum: "ca9fc32bc908203be02d1ea81a5c4d2bb4f3cce8a596f76db6b18f982bbfcaac"
+            // v0.2.20 (2026-11-17): the OID4VCI proof fix (7ef64ae - every
+            // proof 401'd invalid_proof "JWT signature validation failed"
+            // since the engine regression) and the #45 realeyes ZkpPresenter
+            // surface, on top of 0.2.17's (the UA fix, the frontend-shaped
+            // DID resolve, the two #11 merge-sweep regressions restored).
+            // The npm package @sirosfoundation/siros-wallet-core republished
+            // at the same version. The vendored bindings regenerated from
+            // the release's bindings.zip: MatchParams gained clientMetadata
+            // (the verifier's vp_formats_supported and the consent's
+            // client_name/logo_uri).
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.20/engine_adapter_sdk.xcframework.zip",
+            checksum: "9b4d2ab0c3d13e9559b0e8b3618d55ef9c3681bbd3bdc90947577f1426975957"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---

@@ -2721,6 +2721,13 @@ public struct MatchParams {
      * The transaction data entries, raw, for the UI's summary.
      */
     public var transactionData: [String]
+    /**
+     * The request's client metadata as raw JSON text — the verifier's
+     * `vp_formats_supported` (the zkp_req circuit lists the wallet's
+     * planner reads) and the consent's `client_name`/`logo_uri` ride it.
+     * Absent when the request carried none.
+     */
+    public var clientMetadata: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2739,12 +2746,19 @@ public struct MatchParams {
          */verifier: VerifierInfo, 
         /**
          * The transaction data entries, raw, for the UI's summary.
-         */transactionData: [String]) {
+         */transactionData: [String], 
+        /**
+         * The request's client metadata as raw JSON text — the verifier's
+         * `vp_formats_supported` (the zkp_req circuit lists the wallet's
+         * planner reads) and the consent's `client_name`/`logo_uri` ride it.
+         * Absent when the request carried none.
+         */clientMetadata: String?) {
         self.flowId = flowId
         self.dcqlQuery = dcqlQuery
         self.scope = scope
         self.verifier = verifier
         self.transactionData = transactionData
+        self.clientMetadata = clientMetadata
     }
 }
 
@@ -2767,6 +2781,9 @@ extension MatchParams: Equatable, Hashable {
         if lhs.transactionData != rhs.transactionData {
             return false
         }
+        if lhs.clientMetadata != rhs.clientMetadata {
+            return false
+        }
         return true
     }
 
@@ -2776,6 +2793,7 @@ extension MatchParams: Equatable, Hashable {
         hasher.combine(scope)
         hasher.combine(verifier)
         hasher.combine(transactionData)
+        hasher.combine(clientMetadata)
     }
 }
 
@@ -2791,7 +2809,8 @@ public struct FfiConverterTypeMatchParams: FfiConverterRustBuffer {
                 dcqlQuery: FfiConverterOptionString.read(from: &buf), 
                 scope: FfiConverterString.read(from: &buf), 
                 verifier: FfiConverterTypeVerifierInfo.read(from: &buf), 
-                transactionData: FfiConverterSequenceString.read(from: &buf)
+                transactionData: FfiConverterSequenceString.read(from: &buf), 
+                clientMetadata: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2801,6 +2820,7 @@ public struct FfiConverterTypeMatchParams: FfiConverterRustBuffer {
         FfiConverterString.write(value.scope, into: &buf)
         FfiConverterTypeVerifierInfo.write(value.verifier, into: &buf)
         FfiConverterSequenceString.write(value.transactionData, into: &buf)
+        FfiConverterOptionString.write(value.clientMetadata, into: &buf)
     }
 }
 
@@ -3521,6 +3541,13 @@ public struct VerifierInfo {
      * Why the decision was made (the PDP's reason).
      */
     public var reason: String
+    /**
+     * The PDP's response context as raw JSON text — go-trust's
+     * `verifier_ids` (the wallet's pseudonym sources read them to scope
+     * a nym_auth pseudonym) and the registry's `display_name` ride it
+     * verbatim. Absent when the PDP answered with no context.
+     */
+    public var trustContext: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3548,7 +3575,13 @@ public struct VerifierInfo {
          */framework: String, 
         /**
          * Why the decision was made (the PDP's reason).
-         */reason: String) {
+         */reason: String, 
+        /**
+         * The PDP's response context as raw JSON text — go-trust's
+         * `verifier_ids` (the wallet's pseudonym sources read them to scope
+         * a nym_auth pseudonym) and the registry's `display_name` ride it
+         * verbatim. Absent when the PDP answered with no context.
+         */trustContext: String?) {
         self.name = name
         self.clientId = clientId
         self.clientIdScheme = clientIdScheme
@@ -3557,6 +3590,7 @@ public struct VerifierInfo {
         self.trusted = trusted
         self.framework = framework
         self.reason = reason
+        self.trustContext = trustContext
     }
 }
 
@@ -3588,6 +3622,9 @@ extension VerifierInfo: Equatable, Hashable {
         if lhs.reason != rhs.reason {
             return false
         }
+        if lhs.trustContext != rhs.trustContext {
+            return false
+        }
         return true
     }
 
@@ -3600,6 +3637,7 @@ extension VerifierInfo: Equatable, Hashable {
         hasher.combine(trusted)
         hasher.combine(framework)
         hasher.combine(reason)
+        hasher.combine(trustContext)
     }
 }
 
@@ -3618,7 +3656,8 @@ public struct FfiConverterTypeVerifierInfo: FfiConverterRustBuffer {
                 logoUri: FfiConverterString.read(from: &buf), 
                 trusted: FfiConverterBool.read(from: &buf), 
                 framework: FfiConverterString.read(from: &buf), 
-                reason: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf), 
+                trustContext: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -3631,6 +3670,7 @@ public struct FfiConverterTypeVerifierInfo: FfiConverterRustBuffer {
         FfiConverterBool.write(value.trusted, into: &buf)
         FfiConverterString.write(value.framework, into: &buf)
         FfiConverterString.write(value.reason, into: &buf)
+        FfiConverterOptionString.write(value.trustContext, into: &buf)
     }
 }
 
@@ -3694,6 +3734,18 @@ public struct VpParams {
      * it (WMP OpenID4x 3.2.3.1): passed through unchanged.
      */
     public var selectionHandle: String?
+    /**
+     * The request as the engine verified it — the wallet's ZK policy
+     * gate and the JARM audience read it. Absent for a request the
+     * engine did not verify. Mirrors `engine_ports::VpVerifiedRequest`.
+     */
+    public var verifiedRequest: VpVerifiedRequest?
+    /**
+     * The verifier's response encryption parameters (the JWK for
+     * direct_post.jwt's JARM). Absent for a plain response mode.
+     * Mirrors `engine_ports::VpResponseEncryption`.
+     */
+    public var responseEncryption: VpResponseEncryption?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3727,7 +3779,17 @@ public struct VpParams {
         /**
          * The transport's selection handle, as the match answer carried
          * it (WMP OpenID4x 3.2.3.1): passed through unchanged.
-         */selectionHandle: String?) {
+         */selectionHandle: String?, 
+        /**
+         * The request as the engine verified it — the wallet's ZK policy
+         * gate and the JARM audience read it. Absent for a request the
+         * engine did not verify. Mirrors `engine_ports::VpVerifiedRequest`.
+         */verifiedRequest: VpVerifiedRequest?, 
+        /**
+         * The verifier's response encryption parameters (the JWK for
+         * direct_post.jwt's JARM). Absent for a plain response mode.
+         * Mirrors `engine_ports::VpResponseEncryption`.
+         */responseEncryption: VpResponseEncryption?) {
         self.flowId = flowId
         self.audience = audience
         self.nonce = nonce
@@ -3737,6 +3799,8 @@ public struct VpParams {
         self.verifierSessionId = verifierSessionId
         self.transactionData = transactionData
         self.selectionHandle = selectionHandle
+        self.verifiedRequest = verifiedRequest
+        self.responseEncryption = responseEncryption
     }
 }
 
@@ -3771,6 +3835,12 @@ extension VpParams: Equatable, Hashable {
         if lhs.selectionHandle != rhs.selectionHandle {
             return false
         }
+        if lhs.verifiedRequest != rhs.verifiedRequest {
+            return false
+        }
+        if lhs.responseEncryption != rhs.responseEncryption {
+            return false
+        }
         return true
     }
 
@@ -3784,6 +3854,8 @@ extension VpParams: Equatable, Hashable {
         hasher.combine(verifierSessionId)
         hasher.combine(transactionData)
         hasher.combine(selectionHandle)
+        hasher.combine(verifiedRequest)
+        hasher.combine(responseEncryption)
     }
 }
 
@@ -3803,7 +3875,9 @@ public struct FfiConverterTypeVpParams: FfiConverterRustBuffer {
                 verifierJwkThumbprint: FfiConverterString.read(from: &buf), 
                 verifierSessionId: FfiConverterString.read(from: &buf), 
                 transactionData: FfiConverterSequenceString.read(from: &buf), 
-                selectionHandle: FfiConverterOptionString.read(from: &buf)
+                selectionHandle: FfiConverterOptionString.read(from: &buf), 
+                verifiedRequest: FfiConverterOptionTypeVpVerifiedRequest.read(from: &buf), 
+                responseEncryption: FfiConverterOptionTypeVpResponseEncryption.read(from: &buf)
         )
     }
 
@@ -3817,6 +3891,8 @@ public struct FfiConverterTypeVpParams: FfiConverterRustBuffer {
         FfiConverterString.write(value.verifierSessionId, into: &buf)
         FfiConverterSequenceString.write(value.transactionData, into: &buf)
         FfiConverterOptionString.write(value.selectionHandle, into: &buf)
+        FfiConverterOptionTypeVpVerifiedRequest.write(value.verifiedRequest, into: &buf)
+        FfiConverterOptionTypeVpResponseEncryption.write(value.responseEncryption, into: &buf)
     }
 }
 
@@ -3833,6 +3909,104 @@ public func FfiConverterTypeVpParams_lift(_ buf: RustBuffer) throws -> VpParams 
 #endif
 public func FfiConverterTypeVpParams_lower(_ value: VpParams) -> RustBuffer {
     return FfiConverterTypeVpParams.lower(value)
+}
+
+
+/**
+ * The verifier's response encryption parameters — the embedded mirror
+ * of `engine_ports::VpResponseEncryption`.
+ */
+public struct VpResponseEncryption {
+    /**
+     * The verifier's JWK (the response-encryption key), as raw JSON
+     * text — the uniffi surface carries strings, the wallet parses.
+     */
+    public var jwk: String
+    /**
+     * The JARM key wrapping algorithm (RSA-OAEP, ECDH-ES, …).
+     */
+    public var alg: String
+    /**
+     * The content encryption algorithm (A128GCM, A256GCM, …).
+     */
+    public var enc: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The verifier's JWK (the response-encryption key), as raw JSON
+         * text — the uniffi surface carries strings, the wallet parses.
+         */jwk: String, 
+        /**
+         * The JARM key wrapping algorithm (RSA-OAEP, ECDH-ES, …).
+         */alg: String, 
+        /**
+         * The content encryption algorithm (A128GCM, A256GCM, …).
+         */enc: String) {
+        self.jwk = jwk
+        self.alg = alg
+        self.enc = enc
+    }
+}
+
+
+
+extension VpResponseEncryption: Equatable, Hashable {
+    public static func ==(lhs: VpResponseEncryption, rhs: VpResponseEncryption) -> Bool {
+        if lhs.jwk != rhs.jwk {
+            return false
+        }
+        if lhs.alg != rhs.alg {
+            return false
+        }
+        if lhs.enc != rhs.enc {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(jwk)
+        hasher.combine(alg)
+        hasher.combine(enc)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVpResponseEncryption: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VpResponseEncryption {
+        return
+            try VpResponseEncryption(
+                jwk: FfiConverterString.read(from: &buf), 
+                alg: FfiConverterString.read(from: &buf), 
+                enc: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VpResponseEncryption, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.jwk, into: &buf)
+        FfiConverterString.write(value.alg, into: &buf)
+        FfiConverterString.write(value.enc, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVpResponseEncryption_lift(_ buf: RustBuffer) throws -> VpResponseEncryption {
+    return try FfiConverterTypeVpResponseEncryption.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVpResponseEncryption_lower(_ value: VpResponseEncryption) -> RustBuffer {
+    return FfiConverterTypeVpResponseEncryption.lower(value)
 }
 
 
@@ -4016,6 +4190,162 @@ public func FfiConverterTypeVpSelection_lift(_ buf: RustBuffer) throws -> VpSele
 #endif
 public func FfiConverterTypeVpSelection_lower(_ value: VpSelection) -> RustBuffer {
     return FfiConverterTypeVpSelection.lower(value)
+}
+
+
+/**
+ * The request as the engine VERIFIED it — the embedded mirror of
+ * `engine_ports::VpVerifiedRequest`: the wallet's ZK policy gate reads
+ * `signed` AND `signature_verification == "verified"`, and the JARM
+ * audience is the certificate-authenticated `client_id`.
+ */
+public struct VpVerifiedRequest {
+    /**
+     * The client_id the request object's certificate authenticated.
+     */
+    public var clientId: String
+    /**
+     * The client_id scheme, as the engine inferred it.
+     */
+    public var clientIdScheme: String
+    /**
+     * The response mode's wire name.
+     */
+    public var responseMode: String
+    /**
+     * The response URI the engine validated.
+     */
+    public var responseUri: String
+    /**
+     * Whether the request object's signature was verified.
+     */
+    public var signed: Bool
+    /**
+     * `verified` or `none` — the engine verifies synchronously at
+     * parse and never defers.
+     */
+    public var signatureVerification: String
+    /**
+     * The raw request JWT, when the request object was signed.
+     */
+    public var requestJwt: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The client_id the request object's certificate authenticated.
+         */clientId: String, 
+        /**
+         * The client_id scheme, as the engine inferred it.
+         */clientIdScheme: String, 
+        /**
+         * The response mode's wire name.
+         */responseMode: String, 
+        /**
+         * The response URI the engine validated.
+         */responseUri: String, 
+        /**
+         * Whether the request object's signature was verified.
+         */signed: Bool, 
+        /**
+         * `verified` or `none` — the engine verifies synchronously at
+         * parse and never defers.
+         */signatureVerification: String, 
+        /**
+         * The raw request JWT, when the request object was signed.
+         */requestJwt: String?) {
+        self.clientId = clientId
+        self.clientIdScheme = clientIdScheme
+        self.responseMode = responseMode
+        self.responseUri = responseUri
+        self.signed = signed
+        self.signatureVerification = signatureVerification
+        self.requestJwt = requestJwt
+    }
+}
+
+
+
+extension VpVerifiedRequest: Equatable, Hashable {
+    public static func ==(lhs: VpVerifiedRequest, rhs: VpVerifiedRequest) -> Bool {
+        if lhs.clientId != rhs.clientId {
+            return false
+        }
+        if lhs.clientIdScheme != rhs.clientIdScheme {
+            return false
+        }
+        if lhs.responseMode != rhs.responseMode {
+            return false
+        }
+        if lhs.responseUri != rhs.responseUri {
+            return false
+        }
+        if lhs.signed != rhs.signed {
+            return false
+        }
+        if lhs.signatureVerification != rhs.signatureVerification {
+            return false
+        }
+        if lhs.requestJwt != rhs.requestJwt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(clientId)
+        hasher.combine(clientIdScheme)
+        hasher.combine(responseMode)
+        hasher.combine(responseUri)
+        hasher.combine(signed)
+        hasher.combine(signatureVerification)
+        hasher.combine(requestJwt)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVpVerifiedRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VpVerifiedRequest {
+        return
+            try VpVerifiedRequest(
+                clientId: FfiConverterString.read(from: &buf), 
+                clientIdScheme: FfiConverterString.read(from: &buf), 
+                responseMode: FfiConverterString.read(from: &buf), 
+                responseUri: FfiConverterString.read(from: &buf), 
+                signed: FfiConverterBool.read(from: &buf), 
+                signatureVerification: FfiConverterString.read(from: &buf), 
+                requestJwt: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VpVerifiedRequest, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.clientId, into: &buf)
+        FfiConverterString.write(value.clientIdScheme, into: &buf)
+        FfiConverterString.write(value.responseMode, into: &buf)
+        FfiConverterString.write(value.responseUri, into: &buf)
+        FfiConverterBool.write(value.signed, into: &buf)
+        FfiConverterString.write(value.signatureVerification, into: &buf)
+        FfiConverterOptionString.write(value.requestJwt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVpVerifiedRequest_lift(_ buf: RustBuffer) throws -> VpVerifiedRequest {
+    return try FfiConverterTypeVpVerifiedRequest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVpVerifiedRequest_lower(_ value: VpVerifiedRequest) -> RustBuffer {
+    return FfiConverterTypeVpVerifiedRequest.lower(value)
 }
 
 // Note that we don't yet support `indirect` for enums.
@@ -5810,6 +6140,54 @@ fileprivate struct FfiConverterOptionTypeSignRefusal: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeSignRefusal.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeVpResponseEncryption: FfiConverterRustBuffer {
+    typealias SwiftType = VpResponseEncryption?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeVpResponseEncryption.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeVpResponseEncryption.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeVpVerifiedRequest: FfiConverterRustBuffer {
+    typealias SwiftType = VpVerifiedRequest?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeVpVerifiedRequest.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeVpVerifiedRequest.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }

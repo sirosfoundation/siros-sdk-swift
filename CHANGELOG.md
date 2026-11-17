@@ -5,6 +5,21 @@ All notable changes to the SIROS SDK for iOS/macOS will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.3] - 2026-11-17
+
+### Engine
+
+- The embedded engine pin reaches **v0.2.20**: the OID4VCI proof fix
+  (`7ef64ae` — every proof 401'd `invalid_proof: JWT signature
+  validation failed` since the engine regression) and the #45 realeyes
+  `ZkpPresenter` surface. The npm package republished at the same
+  version.
+- The vendored UniFFI bindings regenerate from the v0.2.20 release's
+  `bindings.zip`: `MatchParams` gained `clientMetadata` (the verifier's
+  `vp_formats_supported`, the consent's `client_name`/`logo_uri`) plus the
+  surface's other 0.2.18–0.2.20 drift.
+
+
 ## [Unreleased]
 
 ## [0.17.0] - 2026-11-12
