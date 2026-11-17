@@ -81,6 +81,30 @@ public final class WmpSession: @unchecked Sendable {
         self.notificationContinuation = notifCont
     }
 
+    /// The engine's answers that mean the wallet's session is GONE
+    /// server-side (wallet-core#48): `-31000` "Session not found" — the
+    /// engine restarted or the store swept it — and `-31001` "Session
+    /// expired" — the record is present but its TTL passed. Both are
+    /// self-healable the same way: a transparent fresh `create` (the
+    /// engine session is stateless from the wallet's perspective; the
+    /// credentials live in the wallet's store, not the engine's).
+    /// Matched on the message text because every error path embeds it.
+    static func isSessionGone(_ message: String?) -> Bool {
+        guard let message else { return false }
+        return message.contains("Session not found") || message.contains("Session expired")
+    }
+
+    /// A fresh `create` replaying the saved auth, sender and capabilities —
+    /// the self-heal after the engine answered session loss (#48). The same
+    /// call the resume-exhaustion fallback makes; safe over a connected
+    /// transport (`resume` re-`connect`s the same way).
+    func recreate() async throws {
+        guard let token = savedAuthToken else {
+            throw WmpSessionError.noAuthTokenToRecreate
+        }
+        try await create(authToken: token, sender: savedSender, capabilitiesOffered: savedCapabilities)
+    }
+
     /// Create a new WMP session with the given auth token.
     public func create(
         authToken: String,
@@ -353,8 +377,15 @@ public final class WmpSession: @unchecked Sendable {
         // every request failed identically regardless of which credential
         // it named). The Kotlin twin is the same fix
         // (siros-sdk-kotlin's `fix/wmp-session-recovery`).
+        // A session-gone answer ("Session not found" for a swept/restarted
+        // session, "Session expired" for a present record whose TTL passed —
+        // #48: the wallet sat in the background past the engine's session
+        // TTL). The original cut matched only "Session not found", so the
+        // TTL-expiry answer fell through to FAILED here and every later
+        // flow start surfaced its error - the recovery the #48 fix re-found
+        // on-device (the Kotlin twin carries the same fix).
         if let message = (lastError as? WmpSessionError)?.errorDescription,
-           message.contains("Session not found"),
+           Self.isSessionGone(message),
            let token = savedAuthToken {
             do {
                 try await create(
@@ -422,6 +453,8 @@ public enum WmpSessionError: Error, Sendable {
     case sessionCreationFailed(String)
     case resumeFailed(String)
     case flowFailed(String)
+    /// A session recreation had no saved auth token to replay.
+    case noAuthTokenToRecreate
     case missingResult
     case noSession
     case noResumptionToken
@@ -438,6 +471,7 @@ extension WmpSessionError: LocalizedError {
         case .noSession: return "No active WMP session"
         case .noResumptionToken: return "No resumption token available"
         case .connectionFailed: return "WMP connection failed"
+        case .noAuthTokenToRecreate: return "No auth token saved to recreate the session with"
         }
     }
 }
