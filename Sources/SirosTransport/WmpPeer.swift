@@ -113,7 +113,29 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     // MARK: - Flow Convenience Methods
 
     /// Start a flow via wmp.flow.start.
+    ///
+    /// The session-loss self-heal (wallet-core#48): a start that names a
+    /// session the engine no longer honours - swept by a restart, or
+    /// expired while the wallet sat in the background - answers
+    /// "Session not found" / "Session expired" instead of running. The
+    /// transport-disconnect recovery never fires when no disconnect was
+    /// observed (the wallet foregrounded straight into a scan), so the
+    /// refusal IS the first notice: a fresh session (the engine session
+    /// is stateless from the wallet's side) and one retry; anything else
+    /// re-throws.
     public func startFlow(flowType: String, flowId: String, params: AnyCodable? = nil) async throws -> FlowStartResult {
+        do {
+            return try await performStart(flowType: flowType, flowId: flowId, params: params)
+        } catch {
+            guard let message = (error as? WmpSessionError)?.errorDescription,
+                  WmpSession.isSessionGone(message) else { throw error }
+            try await session.recreate()
+            return try await performStart(flowType: flowType, flowId: flowId, params: params)
+        }
+    }
+
+    /// The flow start itself, without the session-loss recovery.
+    private func performStart(flowType: String, flowId: String, params: AnyCodable?) async throws -> FlowStartResult {
         let reqParams = try codec.encodeParams(
             FlowStartParams(wmp: WmpMeta(), flowId: flowId, flowType: flowType, params: params)
         )
