@@ -228,7 +228,7 @@ extension SirosWallet {
            let resolved = try? await fetchIssuerMetadata(issuerUrl: flowOffer.credentialIssuerIdentifier),
            // The ENTRY's configuration (#28): a batch entry issues under its
            // own configuration id, not the offer's single one.
-           let configured = resolved.credentialConfigurationsSupported[entryConfigurationId]?.format,
+           let configured = entryConfigurationId.flatMap({ resolved.credentialConfigurationsSupported[$0]?.format }),
            !configured.isEmpty {
             format = configured
         } else {
