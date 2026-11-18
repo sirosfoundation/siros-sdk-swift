@@ -220,7 +220,12 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
         guard let chosen else {
             throw EngineAdapterSdk.SdkError.Cannot("credential selection is not supported by this wallet")
         }
-        return EngineAdapterSdk.CredentialSelectionResult(credentialConfigurationId: chosen)
+        // The one-element set: this handler's ask is single-credential (the
+        // user's pick); the multi-selection shape rides the same answer.
+        return EngineAdapterSdk.CredentialSelectionResult(
+            credentialConfigurationId: chosen,
+            credentialConfigurationIds: [chosen]
+        )
     }
 
     public func progress(flowId: String, step: String, detail: String?) {

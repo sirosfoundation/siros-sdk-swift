@@ -5,6 +5,29 @@ All notable changes to the SIROS SDK for iOS/macOS will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.5] - 2026-11-18
+
+### Engine
+
+- The embedded engine pin reaches **v0.2.24** (tag `296bee7`): **#55** —
+  the encrypted batch fill (`credentials[0].credential` → `credential`)
+  with the §7.1 plain-secret gate scoped to plain answers only, the
+  realeyes demo's 604-char-completion "no credential" repro's fix; and
+  **#56** — every configuration's sign/signing-key ask names its
+  `credential_configuration_id` (go-wallet-backend#558's twin). The
+  vendored bindings regenerate from the v0.2.24 release's bindings.zip:
+  `SignParams`/`SigningKeyParams` gained `credentialConfigurationId`,
+  and `CredentialSelectionResult` the `credentialConfigurationIds` set
+  (the single pick answers as a one-element set).
+
+### WMP
+
+- Carries the batch parity (#293): the `credentials[]` completion
+  dispatch with per-entry context — >1 credential per offer, Kotlin
+  parity (#419).
+
+## [0.17.4] - 2026-11-17
+
 ## [0.17.3] - 2026-11-17
 
 ### Engine

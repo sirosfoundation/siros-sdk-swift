@@ -161,8 +161,17 @@ let package = Package(
             // the release's bindings.zip: MatchParams gained clientMetadata
             // (the verifier's vp_formats_supported and the consent's
             // client_name/logo_uri).
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.20/engine_adapter_sdk.xcframework.zip",
-            checksum: "9b4d2ab0c3d13e9559b0e8b3618d55ef9c3681bbd3bdc90947577f1426975957"
+            // v0.2.24 (2026-11-18): #55 — the encrypted batch fill with the
+            // §7.1 plain-secret gate scoped to plain answers (the realeyes
+            // demo's 604-char-completion "no credential" repro's fix); #56 —
+            // every configuration's sign/signing-key ask names its
+            // credential_configuration_id (go-wallet-backend#558's twin), on
+            // top of v0.2.22's session-loss era. The vendored bindings
+            // regenerated from the v0.2.24 release's bindings.zip:
+            // SignParams/SigningKeyParams gained credentialConfigurationId and
+            // CredentialSelectionResult the credentialConfigurationIds set.
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.24/engine_adapter_sdk.xcframework.zip",
+            checksum: "86ca15dfe4866939785790efa38228788443349586fabdcdb589fa3040a53c7d"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
