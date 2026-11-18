@@ -60,26 +60,22 @@ extension SirosWallet {
             await handleFlowComplete(msg: tagged)
             return
         }
-        // siros-wallet-core's oid4vci completion is a single `credential` member
-        // beside the renewal relay and the notification members - the Rust
-        // engine's shape (the engine holds the response-encryption key itself and
-        // delivers the credential in the clear over the wallet↔engine channel, so
-        // there is no decrypt-your-own-response path). Everything else is the
-        // presentation completion set ({presented}, {declined}, …), which stores nothing.
-        if result?.objectValue?["credential"] != nil {
-            await handleWmpIssuanceComplete(flowId: flowId, result: result)
-            return
-        }
-        // The `credentials` array is the BATCH shape (issue #276): the engine
-        // issued more than one credential for one flow, and each entry is a
-        // completion of its own - stored, validated per format, renewal-relayed
-        // and acceptance-notified entry by entry, never "success with nothing
-        // stored" (the pre-fix handler checked the entries for emptiness and
-        // then fell through to the presentation branch, discarding a clean
-        // batch while the UI reported success). The Kotlin twin's shape
-        // (siros-sdk-kotlin, its own #398): a prohibited credential_metadata on
-        // ANY entry refuses the whole batch before anything is stored, and an
-        // empty batch is the engine's error path, not a plain completion.
+        // The `credentials` array is the BATCH shape (issue #276, #28): the
+        // engine's completions carry one entry per selected configuration
+        // BESIDE the flow-level legacy `credential` (the first entry's value)
+        // - so the ARRAY is checked FIRST: the single member is the legacy
+        // view and would short-circuit the batch, storing the first entry
+        // and dropping the rest (found as the >1-credential-in-an-offer gap;
+        // the Kotlin twin carries the same fix). Each entry is a completion
+        // of its own - stored, validated per format, renewal-relayed and
+        // acceptance-notified entry by entry, never "success with nothing
+        // stored" (the pre-fix handler checked the entries for emptiness
+        // and then fell through to the presentation branch, discarding a
+        // clean batch while the UI reported success). The Kotlin twin's
+        // shape (siros-sdk-kotlin, its own #398): a prohibited
+        // credential_metadata on ANY entry refuses the whole batch before
+        // anything is stored, and an empty batch is the engine's error
+        // path, not a plain completion.
         if let entries = result?.objectValue?["credentials"]?.arrayValue {
             guard !entries.isEmpty else {
                 await failIssuanceLocally(flowId: flowId, message: "The issuance delivered no credential")
@@ -100,9 +96,41 @@ extension SirosWallet {
                 )
                 return
             }
-            for entry in entries {
-                await handleWmpIssuanceComplete(flowId: flowId, result: entry)
+            // The per-entry members: the configurations' ids and the
+            // notifications, in entry order (the metadata gate already
+            // filled the wallet's own decrypted values where encrypted).
+            let entryConfigurationIds = entries.map { $0.objectValue?["credential_configuration_id"]?.stringValue }
+            let entryNotificationIds = entries.map { $0.objectValue?["notification_id"]?.stringValue }
+            for (index, entry) in entries.enumerated() {
+                await handleWmpIssuanceComplete(
+                    flowId: flowId, result: entry,
+                    batchContext: WmpIssuanceBatchContext(
+                        completion: result,
+                        index: index,
+                        entryConfigurationIds: entryConfigurationIds,
+                        entryNotificationIds: entryNotificationIds
+                    )
+                )
             }
+            // The engine's per-configuration failures (#28/#46): a partial
+            // batch reports WHICH configurations did not issue. The
+            // completion still succeeds - the stored entries stand - so
+            // these are logged for the operator, not surfaced as a flow
+            // error over the success.
+            for failure in result?.objectValue?["failures"]?.arrayValue ?? [] {
+                let members = failure.objectValue ?? [:]
+                let failedId = members["credential_configuration_id"]?.stringValue
+                let reason = members["error"]?.stringValue
+                #if canImport(os)
+                logger.warning("WMP issuance flow \(flowId): configuration \(failedId ?? "?") failed: \(reason ?? "?")")
+                #endif
+            }
+            return
+        }
+        // The single-`credential` completion (the legacy view, an engine
+        // without the batch): stored whole.
+        if result?.objectValue?["credential"] != nil {
+            await handleWmpIssuanceComplete(flowId: flowId, result: result)
             return
         }
         // The presentation-final branch: the engine's completion payload
@@ -130,12 +158,41 @@ extension SirosWallet {
     /// `wmp.credential.notification` is go-wmp's method and does not exist on the
     /// Rust engine), the guard resets and the state return are the legacy path's,
     /// reused one-for-one.
-    private func handleWmpIssuanceComplete(flowId: String, result: AnyCodable?) async {
+    /// One entry's context in a batch completion (#28, wallet-core#46): the
+    /// engine's completion carries one `credentials[]` entry per selected
+    /// configuration, with the flow-level legacy members beside the array.
+    /// `completion` is the whole completion object (the renewal relay and the
+    /// flow-level notification members live there), `index` the entry's
+    /// position (the `instanceId` of its `StoredCredential`), and the id
+    /// lists the per-entry members the metadata gate filled.
+    private struct WmpIssuanceBatchContext {
+        let completion: AnyCodable?
+        let index: Int
+        let entryConfigurationIds: [String?]
+        let entryNotificationIds: [String?]
+    }
+
+    private func handleWmpIssuanceComplete(
+        flowId: String,
+        result: AnyCodable?,
+        batchContext: WmpIssuanceBatchContext? = nil
+    ) async {
         let members = result?.objectValue ?? [:]
         let credential = members["credential"]?.stringValue ?? ""
-        let refreshToken = members["refresh_token"]?.stringValue
-        let dpopJwk = members["dpop_jwk"]?.stringValue
+        // The renewal relay (refresh_token, dpop_jwk) and the per-entry
+        // notification id are FLOW-LEVEL members on the engine's batch
+        // completions (#28/#46): per-entry calls read them from the
+        // completion object, not from the entry.
+        let flowMembers = batchContext?.completion?.objectValue ?? members
+        let refreshToken = flowMembers["refresh_token"]?.stringValue
+        let dpopJwk = flowMembers["dpop_jwk"]?.stringValue
         let notificationId = members["notification_id"]?.stringValue
+            ?? batchContext?.entryNotificationIds.dropFirst(batchContext.index).first ?? nil
+        // The configuration THIS entry issued under (#28): the engine's
+        // per-entry credential_configuration_id, else the offer's (the
+        // single-configuration legacy view).
+        let entryConfigurationId = batchContext?.entryConfigurationIds.dropFirst(batchContext.index).first ?? nil
+            ?? activeOffer?.credentialConfigurationId
         if credential.isEmpty {
             // deferred=true with no credential is the engine's error path (a
             // deferred credential the issuer never delivered) - reported, not
@@ -169,7 +226,9 @@ extension SirosWallet {
         let format: String
         if let flowOffer,
            let resolved = try? await fetchIssuerMetadata(issuerUrl: flowOffer.credentialIssuerIdentifier),
-           let configured = resolved.credentialConfigurationsSupported[flowOffer.credentialConfigurationId]?.format,
+           // The ENTRY's configuration (#28): a batch entry issues under its
+           // own configuration id, not the offer's single one.
+           let configured = resolved.credentialConfigurationsSupported[entryConfigurationId]?.format,
            !configured.isEmpty {
             format = configured
         } else {
@@ -182,7 +241,9 @@ extension SirosWallet {
             offer: flowOffer,
             vctm: flowVctm,
             notificationId: notificationId,
-            batchId: batchId
+            batchId: batchId,
+            instanceId: batchContext?.index ?? 0,
+            entryConfigurationId: entryConfigurationId
         )
         let stored = built.stored
         let storeFailureReason = built.failureReason
@@ -278,7 +339,9 @@ extension SirosWallet {
         offer: CredentialOffer?,
         vctm: Vctm?,
         notificationId: String?,
-        batchId: Int64
+        batchId: Int64,
+        instanceId: Int = 0,
+        entryConfigurationId: String? = nil
     ) async -> (stored: StoredCredential?, failureReason: String?) {
         if format == "mso_mdoc" {
             var parsedMdoc: DocumentMdoc?
@@ -312,9 +375,9 @@ extension SirosWallet {
                 metadata: mdocMetadata,
                 notificationId: notificationId,
                 credentialIssuerIdentifier: offer?.credentialIssuerIdentifier,
-                credentialConfigurationId: offer?.credentialConfigurationId,
+                credentialConfigurationId: entryConfigurationId ?? offer?.credentialConfigurationId,
                 batchId: batchId,
-                instanceId: 0
+                instanceId: instanceId
             ), nil)
         }
         let payload = CredentialUtils.parseJwtPayload(raw)
@@ -347,9 +410,9 @@ extension SirosWallet {
             expiresAt: (payload?["exp"] as? NSNumber)?.int64Value,
             notificationId: notificationId,
             credentialIssuerIdentifier: offer?.credentialIssuerIdentifier,
-            credentialConfigurationId: offer?.credentialConfigurationId,
+            credentialConfigurationId: entryConfigurationId ?? offer?.credentialConfigurationId,
             batchId: batchId,
-            instanceId: 0
+            instanceId: instanceId
         ), nil)
     }
 
