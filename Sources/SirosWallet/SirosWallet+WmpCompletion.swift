@@ -187,11 +187,11 @@ extension SirosWallet {
         let refreshToken = flowMembers["refresh_token"]?.stringValue
         let dpopJwk = flowMembers["dpop_jwk"]?.stringValue
         let notificationId = members["notification_id"]?.stringValue
-            ?? batchContext?.entryNotificationIds.dropFirst(batchContext.index).first ?? nil
+            ?? (batchContext?.entryNotificationIds.dropFirst(batchContext?.index ?? 0).first ?? nil)
         // The configuration THIS entry issued under (#28): the engine's
         // per-entry credential_configuration_id, else the offer's (the
         // single-configuration legacy view).
-        let entryConfigurationId = batchContext?.entryConfigurationIds.dropFirst(batchContext.index).first ?? nil
+        let entryConfigurationId = (batchContext?.entryConfigurationIds.dropFirst(batchContext?.index ?? 0).first ?? nil)
             ?? activeOffer?.credentialConfigurationId
         if credential.isEmpty {
             // deferred=true with no credential is the engine's error path (a
