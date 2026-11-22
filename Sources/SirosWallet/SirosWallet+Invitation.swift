@@ -123,7 +123,15 @@ extension SirosWallet {
             sendUrl: endpoints.send,
             sseUrl: endpoints.sse,
             tokenProvider: { [weak self] in
-                try? await self?.freshBackendToken()
+                // Rung 3 (the strict flip): a token from the INVITED backend's
+                // OWN AS — discovered (RFC 8414), a client dynamically
+                // registered there (RFC 7591), minted per request. NOT the
+                // wallet's own AS token: a strict engine pins `iss` and
+                // refuses a foreign issuer. A backend without an AS falls
+                // back to the wallet's own token (the subject is advisory
+                // in the no-AS mode).
+                guard let self else { return nil }
+                return try? await self.joinBearerFor(provider: provider)
             }
         )
         let peer = WmpPeer(session: WmpSession(transport: transport))
@@ -178,6 +186,129 @@ extension SirosWallet {
         }
     }
 
+    // MARK: - Rung 3: the invited backend's OWN AS (discover → DCR → mint)
+
+    /// The AS metadata a backend publishes (RFC 8414): the token + the
+    /// registration endpoints. `nil` when the backend runs without an AS.
+    private struct AsMetadata {
+        let tokenEndpoint: Foundation.URL
+        let registrationEndpoint: Foundation.URL?
+    }
+
+    /// Read the backend's RFC 8414 metadata (`/.well-known/oauth-authorization-server`).
+    private func discoverAsMetadata(_ backendBase: String) async -> AsMetadata? {
+        let url = backendBase.trimmingCharacters(in: CharacterSet(charactersIn: "/")) +
+            "/.well-known/oauth-authorization-server"
+        guard let base = Foundation.URL(string: url) else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: base)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let token = parsed["token_endpoint"] as? String,
+                  !token.isEmpty,
+                  let tokenUrl = Foundation.URL(string: token) else { return nil }
+            let registration = (parsed["registration_endpoint"] as? String)
+            let registrationUrl = registration.flatMap { $0.isEmpty ? nil : Foundation.URL(string: $0) }
+            return AsMetadata(
+                tokenEndpoint: tokenUrl,
+                registrationEndpoint: registrationUrl
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// Dynamically register a client at the backend's AS (RFC 7591, open
+    /// registration): the arbitrary-invite constraint — a wallet from
+    /// another deployment has no client there until it registers one.
+    /// `nil` when the AS has no registration endpoint.
+    private func dcrRegister(registrationEndpoint: Foundation.URL, clientName: String) async -> (id: String, secret: String)? {
+        let body: [String: Any] = [
+            "client_name": clientName,
+            "grant_types": ["client_credentials"],
+            "token_endpoint_auth_method": "client_secret_basic",
+        ]
+        do {
+            let data = try JSONSerialization.data(withJSONObject: body)
+            var request = URLRequest(url: registrationEndpoint)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = data
+            let (respData, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 201,
+                  let parsed = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                  let id = parsed["client_id"] as? String,
+                  let secret = parsed["client_secret"] as? String,
+                  !id.isEmpty, !secret.isEmpty else { return nil }
+            return (id, secret)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Mint a token at the backend's own AS (client_credentials, HTTP Basic).
+    private func tokenViaClientCredentials(
+        tokenEndpoint: Foundation.URL,
+        client: (id: String, secret: String)
+    ) async -> (token: String, expAtMs: Double)? {
+        let basic = Data("\(client.id):\(client.secret)".utf8).base64EncodedString()
+        var request = URLRequest(url: tokenEndpoint)
+        request.httpMethod = "POST"
+        request.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
+        request.httpBody = Data("grant_type=client_credentials".utf8)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let token = parsed["access_token"] as? String,
+                  !token.isEmpty else { return nil }
+            let expiresIn = (parsed["expires_in"] as? NSNumber)?.doubleValue ?? 3600
+            return (token, Date().addingTimeInterval(expiresIn - 60).timeIntervalSince1970 * 1000)
+        } catch {
+            return nil
+        }
+    }
+
+    /// A bearer for the invited backend (rung 3): a token from THAT backend's
+    /// own AS — discovered (RFC 8414), a client registered (RFC 7591), minted
+    /// and cached until near expiry. Falls back to the wallet's own AS token
+    /// when the backend publishes no AS (the no-AS mode: any bearer rides,
+    /// the subject is advisory) or the DCR/mint path fails.
+    private func joinBearerFor(provider: String) async throws -> String {
+        lock.lock()
+        let cachedToken = wmpJoinAsTokens[provider]
+        lock.unlock()
+        if let cachedToken, cachedToken.expAtMs > Date().timeIntervalSince1970 * 1000 {
+            return cachedToken.token
+        }
+        guard let meta = await discoverAsMetadata(provider) else {
+            return try await freshBackendToken()
+        }
+        lock.lock()
+        let cachedClient = wmpJoinAsClients[provider]
+        lock.unlock()
+        let client: (id: String, secret: String)
+        if let cachedClient {
+            client = cachedClient
+        } else {
+            guard let registration = meta.registrationEndpoint,
+                  let registered = await dcrRegister(registrationEndpoint: registration, clientName: "siros-wallet-ios") else {
+                return try await freshBackendToken()
+            }
+            lock.lock()
+            wmpJoinAsClients[provider] = registered
+            lock.unlock()
+            client = registered
+        }
+        guard let minted = await tokenViaClientCredentials(tokenEndpoint: meta.tokenEndpoint, client: client) else {
+            return try await freshBackendToken()
+        }
+        lock.lock()
+        wmpJoinAsTokens[provider] = minted
+        lock.unlock()
+        return minted.token
+    }
+
     /// The base64url `data` payload a `wmp://invite?data=…` (or the
     /// `https://…/wmp/invite#…` fallback) URI carries. Kotlin parity:
     /// `parseInvitationData`.
@@ -208,6 +339,8 @@ extension SirosWallet {
         wmpJoinPeers.removeAll()
         wmpJoinPeerUrls.removeAll()
         wmpJoinGroups.removeAll()
+        wmpJoinAsClients.removeAll()
+        wmpJoinAsTokens.removeAll()
         wmpMainUrls = nil
         lock.unlock()
         for peer in peers {
