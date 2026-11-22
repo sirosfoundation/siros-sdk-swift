@@ -60,15 +60,38 @@ extension SirosWallet {
         }
 
         let peer = try await joinPeerFor(provider: provider, invitation: invitation)
+        // The cold join: discovery + token mint CONCURRENT (one chain's
+        // latency, not two serialized — the Kotlin parity), and
+        // CANCELLATION-SAFE: a cancel mid-join (any navigation away) must
+        // not leave a poisoned cache — the nonce is single-use, spent by the
+        // create; a cached half-joined peer would make the NEXT scan consume
+        // the spent nonce and refuse. Close and drop it; the next scan
+        // rebuilds (the cache write happens only on a completed join).
+        #if canImport(Darwin)
         if peer.currentState == .closed {
-            let token = try await freshBackendToken()
-            try await peer.connectWithInvitation(
-                authToken: token,
-                invitationNonce: nonce,
-            )
+            do {
+                let token = try await freshBackendToken()
+                try await peer.connectWithInvitation(
+                    authToken: token,
+                    invitationNonce: nonce,
+                )
+            } catch is CancellationError {
+                lock.lock()
+                wmpJoinPeers[provider] = nil
+                lock.unlock()
+                _ = try? await peer.close()
+                throw CancellationError()
+            }
         } else {
             try await peer.recreateSession(invitationNonce: nonce)
         }
+        #else
+        // Non-Apple: the transport boundary (URLSession async bytes) —
+        // the same clear refusal makeWmpProviderTransport carries.
+        throw SirosError.wallet(
+            message: "joining an invited backend requires Apple platforms (WmpHttpSseTransport is URLSession-async-bytes based)"
+        )
+        #endif
     }
 
     /// The join peer for an invitation's OWN backend (issue #77): one cached
@@ -83,13 +106,19 @@ extension SirosWallet {
         lock.unlock()
         if let cached { return cached }
 
-        guard let endpoints = await discoverWmpEndpoints(provider) else {
+        // The cold path: the discovery and the token mint run CONCURRENTLY
+        // (independent chains — one chain's latency, not two serialized
+        // TLS round trips; the Kotlin parity).
+        #if canImport(Darwin)
+        async let endpointsTask = discoverWmpEndpoints(provider)
+        async let tokenTask = freshBackendToken()
+        guard let endpoints = await endpointsTask else {
             throw SirosError.wallet(
                 message: "The invitation's backend does not answer discovery " +
                     "(\(provider)/.well-known/wmp-configuration) — cannot join its group"
             )
         }
-        #if canImport(Darwin)
+        let _ = try? await tokenTask // warmed; the transport mints its own fresh per request
         let transport = WmpHttpSseTransport(
             sendUrl: endpoints.send,
             sseUrl: endpoints.sse,
