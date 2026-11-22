@@ -82,7 +82,7 @@ let package = Package(
         // SVG logo rasterization (pure Swift, zlib licence). Exact pin: it
         // parses untrusted issuer-supplied SVG, so upgrades are deliberate.
         // The refusal guard in SvgLogoRenderer.swift runs BEFORE it.
-        .package(url: "https://github.com/swhitty/SwiftDraw.git", exact: "0.29.0"),
+        .package(url: "https://github.com/swhitty/SwiftDraw.git", exact: "0.30.0"),
     ],
     targets: [
         // --- zk-cred-longfellow UniFFI bindings (XCFramework) ---
