@@ -682,6 +682,23 @@ public final class SirosWallet: @unchecked Sendable {
     // too - same cross-file-extension-access reason as `keystore` above.
     var wmpPeer: WmpPeer?
 
+    /// Issue #77 — the join peers: one per backend a scanned invitation
+    /// NAMED (the nonce exists only on the backend that minted it, so the
+    /// join lands there, never on the wallet's configured engine). Keyed
+    /// by the invitation's provider URL; guarded by `lock`; closed by
+    /// `teardownWmpInvitationPeers()` on logout/destroy/relogin.
+    var wmpJoinPeers: [String: WmpPeer] = [:]
+
+    /// The join peers' send/sse URLs, keyed the same as `wmpJoinPeers`
+    /// (`connectedWmpEndpoints()` reports them — the peer carries only
+    /// the session state, not its URLs).
+    var wmpJoinPeerUrls: [String: (send: String, sse: String)] = [:]
+
+    /// The main endpoint's send/sse URLs (or `nil` before a connect / for
+    /// the in-process local engine), captured at the connect site —
+    /// `connectedWmpEndpoints()` reports them.
+    var wmpMainUrls: (send: String, sse: String?)?
+
     /// The detached WMP issuance start (see `wmpStartIssuance`): cancelled by
     /// the next start so a cancelled attempt's late send cannot race it.
     var wmpIssuanceStartTask: Task<Void, Never>?

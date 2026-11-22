@@ -10,6 +10,11 @@ public enum DeepLinkType: Sendable, Equatable {
     case credentialOffer(uri: String)
     /// OID4VP presentation request.
     case presentationRequest(uri: String)
+    /// Issue #77: the wallet-to-wallet invitation (`wmp://invite?data=…` —
+    /// the QR the inviter's engine mints). Consumed by
+    /// `SirosWallet.consumeInvitation(uri:)`, joining the backend the
+    /// invitation names.
+    case invitation(uri: String)
     /// Unrecognised link.
     case unknown(uri: String)
 }
@@ -48,6 +53,16 @@ public enum DeepLinkClassifier {
         // Presentation request deep links
         if let scheme, presentationRequestSchemes.contains(scheme) {
             return .presentationRequest(uri: urlString)
+        }
+
+        // Issue #77: the wallet-to-wallet invitation — `wmp://invite?data=…`
+        // (the QR the inviter's engine mints; the join consumes the nonce
+        // on the backend the invitation names).
+        if scheme == "wmp", components.path.isEmpty || components.path == "/invite" {
+            return .invitation(uri: urlString)
+        }
+        if queryValue("data") != nil, urlString.contains("/wmp/invite") {
+            return .invitation(uri: urlString)
         }
 
         // Auth callback — has code + state. Checked before the broader

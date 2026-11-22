@@ -105,6 +105,10 @@ public struct SessionCreateParams: Codable, Sendable {
     public var security: [String: AnyCodable]?
     public var ttl: Int?
     public var auth: SessionAuth?
+    /// Issue #77: the invitation's single-use nonce — the engine's session
+    /// bootstrap validates it (expiry, signature) and answers the session
+    /// the invitation names. The join lands on the backend that MINTED it.
+    public var invitationNonce: String?
 
     public init(
         wmp: WmpMeta,
@@ -112,7 +116,8 @@ public struct SessionCreateParams: Codable, Sendable {
         capabilitiesOffered: [String: AnyCodable]? = nil,
         security: [String: AnyCodable]? = nil,
         ttl: Int? = nil,
-        auth: SessionAuth? = nil
+        auth: SessionAuth? = nil,
+        invitationNonce: String? = nil
     ) {
         self.wmp = wmp
         self.participants = participants
@@ -120,11 +125,13 @@ public struct SessionCreateParams: Codable, Sendable {
         self.security = security
         self.ttl = ttl
         self.auth = auth
+        self.invitationNonce = invitationNonce
     }
 
     enum CodingKeys: String, CodingKey {
         case wmp, participants, security, ttl, auth
         case capabilitiesOffered = "capabilities_offered"
+        case invitationNonce = "invitation_nonce"
     }
 }
 

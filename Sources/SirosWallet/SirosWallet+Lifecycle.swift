@@ -349,6 +349,8 @@ extension SirosWallet {
         credentialNotifier = nil
         apiClient = nil
         lock.unlock()
+        // Issue #77: the invite-backend join peers die with the wallet too.
+        teardownWmpInvitationPeers()
         engine?.disconnect()
         // The WMP session goes too, and its child-flow handlers stop before their state is cleared.
         peer?.shutdownProfiles()

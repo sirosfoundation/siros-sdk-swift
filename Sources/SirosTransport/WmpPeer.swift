@@ -61,6 +61,14 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     /// Session state stream.
     public var stateStream: AsyncStream<WmpSessionState> { session.stateStream }
 
+    /// The current session's id, when one is live (the join invitation's
+    /// group name, issue #77) — the Kotlin SDK's `WmpPeer.currentSessionId`.
+    public var currentSessionId: String? { session.currentSessionId }
+
+    /// The current session state (a synchronous read beside the
+    /// ``stateStream``) — the Kotlin SDK's `WmpPeer.state.value`.
+    public var currentState: WmpSessionState { session.currentState }
+
     // MARK: - Profile Registration
 
     /// Register a ``WmpProfile``. The profile may also conform to
@@ -88,6 +96,35 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
         installSessionHooks()
         try await session.create(authToken: authToken, sender: sender, capabilitiesOffered: capabilitiesOffered)
         startDispatch()
+    }
+
+    /// Connect consuming an invitation's single-use nonce (issue #77, the
+    /// invite's OWN backend): the engine's session bootstrap validates the
+    /// nonce (expiry, signature — every failure `-31002`) and answers the
+    /// session the invitation names — the wallet lands IN the inviter's
+    /// group. For a backend the wallet was never connected to: this FIRST
+    /// create consumes the nonce (a plain ``connect(authToken:)`` would
+    /// burn a nonce-less session first, and ``recreateSession(invitationNonce:)``
+    /// a second one after).
+    public func connectWithInvitation(
+        authToken: String,
+        invitationNonce: String,
+        capabilitiesOffered: [String: AnyCodable]? = nil
+    ) async throws {
+        installSessionHooks()
+        try await session.create(
+            authToken: authToken,
+            capabilitiesOffered: capabilitiesOffered,
+            invitationNonce: invitationNonce
+        )
+        startDispatch()
+    }
+
+    /// Recreate the session (issue #77), optionally consuming an
+    /// invitation's single-use nonce — the Kotlin SDK's
+    /// `WmpPeer.recreateSession` bridge, same shape.
+    public func recreateSession(invitationNonce: String? = nil) async throws {
+        try await session.recreate(invitationNonce: invitationNonce)
     }
 
     /// Close the session and stop dispatching.

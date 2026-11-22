@@ -27,6 +27,10 @@ public final class WmpSession: @unchecked Sendable {
 
     public var currentState: WmpSessionState { _state }
 
+    /// The current session's id, when one is live (issue #77: the join
+    /// invitation's group name) — read-only, the Kotlin SDK's shape.
+    public var currentSessionId: String? { sessionId }
+
     /// Called once when the session has ended for good: closed, or every reconnect attempt exhausted. NOT on a
     /// transient `.failed` (one failed resume that the retry loop goes on from). A hook rather than a state
     /// observer, so it never takes elements from `stateStream`, which a host may be reading.
@@ -98,21 +102,37 @@ public final class WmpSession: @unchecked Sendable {
     /// the self-heal after the engine answered session loss (#48). The same
     /// call the resume-exhaustion fallback makes; safe over a connected
     /// transport (`resume` re-`connect`s the same way).
-    func recreate() async throws {
+    ///
+    /// `invitationNonce` (issue #77): consume a scanned invitation's nonce
+    /// with the fresh create — the join lands on the backend that minted it.
+    func recreate(invitationNonce: String? = nil) async throws {
         guard let token = savedAuthToken else {
             throw WmpSessionError.noAuthTokenToRecreate
         }
-        try await create(authToken: token, sender: savedSender, capabilitiesOffered: savedCapabilities)
+        try await create(
+            authToken: token,
+            sender: savedSender,
+            capabilitiesOffered: savedCapabilities,
+            invitationNonce: invitationNonce
+        )
     }
 
     /// Create a new WMP session with the given auth token.
+    ///
+    /// `invitationNonce` (issue #77): consume an invitation's single-use
+    /// nonce with the create — the engine's session bootstrap validates it
+    /// (expiry, signature — every failure `-31002`) and answers the session
+    /// the invitation names. The join lands on the backend that MINTED the
+    /// invite; `nil` creates a plain session.
     public func create(
         authToken: String,
         sender: String? = nil,
-        capabilitiesOffered: [String: AnyCodable]? = nil
+        capabilitiesOffered: [String: AnyCodable]? = nil,
+        invitationNonce: String? = nil
     ) async throws {
         // Saved for the fresh-create fallback after a resume exhaustion
         // (see handleDisconnect): the same auth, sender and capabilities.
+        // (The nonce is NOT saved: it is single-use, spent by THIS create.)
         savedAuthToken = authToken
         savedSender = sender
         savedCapabilities = capabilitiesOffered
@@ -126,7 +146,8 @@ public final class WmpSession: @unchecked Sendable {
                 wmp: WmpMeta(sender: sender),
                 capabilitiesOffered: capabilitiesOffered,
                 ttl: config.sessionTtlSeconds,
-                auth: SessionAuth(type: "bearer", token: authToken)
+                auth: SessionAuth(type: "bearer", token: authToken),
+                invitationNonce: invitationNonce
             )
         )
 

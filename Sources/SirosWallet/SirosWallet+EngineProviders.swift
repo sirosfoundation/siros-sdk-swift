@@ -150,6 +150,12 @@ extension SirosWallet {
             guard let sse = URL(string: sseUrl), !sseUrl.isEmpty else {
                 throw SirosError.wallet(message: "remoteHttpSse needs sseUrl (the engine's GET /wmp/events endpoint)")
             }
+            // The endpoint surface (issue #77): the provider's own URLs,
+            // captured for connectedWmpEndpoints()'s report (the peer
+            // carries only the session state, not its URLs).
+            lock.lock()
+            wmpMainUrls = (sendUrl, sseUrl)
+            lock.unlock()
             // The kind follows the provider (the deployment's engine): the
             // same freshBearerProvider shape with the provider's tenant flag.
             let token: @Sendable () async -> String? = { [weak self] in
@@ -161,6 +167,11 @@ extension SirosWallet {
             throw SirosError.wallet(message: "remoteHttpSse requires Apple platforms (WmpHttpSseTransport is URLSession-async-bytes based)")
             #endif
         case .local(let factory):
+            // The endpoint surface (issue #77): the in-process engine has no
+            // URLs — "local" names it in connectedWmpEndpoints()'s report.
+            lock.lock()
+            wmpMainUrls = ("local", nil)
+            lock.unlock()
             let askHandler = WalletEngineAskHandler(wallet: self, lifetime: peerEpoch)
             let context = WmpEngineAskContext(
                 asks: askHandler,
