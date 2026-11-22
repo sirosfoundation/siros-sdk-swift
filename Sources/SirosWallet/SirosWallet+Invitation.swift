@@ -119,9 +119,18 @@ extension SirosWallet {
             )
         }
         let _ = try? await tokenTask // warmed; the transport mints its own fresh per request
+        // The transport takes URLs (Foundation's own type): the discovery
+        // strings convert here — a malformed one refuses the join cleanly.
+        guard let send = Foundation.URL(string: endpoints.send),
+              let sse = Foundation.URL(string: endpoints.sse) else {
+            throw SirosError.wallet(
+                message: "The invitation's backend names malformed endpoints " +
+                    "(send=\(endpoints.send), sse=\(endpoints.sse)) — cannot join its group"
+            )
+        }
         let transport = WmpHttpSseTransport(
-            sendUrl: endpoints.send,
-            sseUrl: endpoints.sse,
+            sendUrl: send,
+            sseUrl: sse,
             tokenProvider: { [weak self] in
                 // Rung 3 (the strict flip): a token from the INVITED backend's
                 // OWN AS — discovered (RFC 8414), a client dynamically
