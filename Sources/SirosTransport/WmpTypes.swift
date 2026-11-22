@@ -229,6 +229,10 @@ public enum WmpMethods {
 
     public static let messageDeliver = "wmp.message.deliver"
     public static let messageAck = "wmp.message.ack"
+    /// Issue #77: the mailbox read — the entries after `since` (a message id),
+    /// up to `limit`. The deliver's BODY rides the mailbox (the SSE ping
+    /// carries none), so the poll is how a recipient reads it.
+    public static let messagePoll = "wmp.message.poll"
 
     public static let capabilityUpdate = "wmp.capability.update"
 

@@ -43,6 +43,15 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     private let eventContinuation: AsyncStream<FlowEvent>.Continuation
     private let _flowEvents: AsyncStream<FlowEvent>
 
+    // Issue #77: every incoming `wmp.message.deliver` ping's params, live.
+    // The MESSAGE BODY does not ride the ping — it lands in the recipient
+    // session's mailbox (`wmp.message.poll` pulls it; SirosWallet's
+    // `pollGroupMessages` does). Emitted from the dispatch loop (the single
+    // consumer of the session's notification stream — a second consumer
+    // there would steal pings).
+    private let messageDeliverContinuation: AsyncStream<[String: AnyCodable]>.Continuation
+    private let _messageDeliveries: AsyncStream<[String: AnyCodable]>
+
     // Flow type tracking
     private nonisolated(unsafe) var flowTypeMap: [String: String] = [:]
     private let flowTypeLock = NSLock()
@@ -53,10 +62,18 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
         var cont: AsyncStream<FlowEvent>.Continuation!
         self._flowEvents = AsyncStream { cont = $0 }
         self.eventContinuation = cont
+
+        var deliverCont: AsyncStream<[String: AnyCodable]>.Continuation!
+        self._messageDeliveries = AsyncStream { deliverCont = $0 }
+        self.messageDeliverContinuation = deliverCont
     }
 
-    /// Observable stream of flow lifecycle events dispatched by profiles.
+       /// Observable stream of flow lifecycle events dispatched by profiles.
     public func flowEvents() -> AsyncStream<FlowEvent> { _flowEvents }
+
+    /// Issue #77: the live `wmp.message.deliver` pings — the raw params of
+    /// every delivery notification (the poll pulls the bodies).
+    public func messageDeliveries() -> AsyncStream<[String: AnyCodable]> { _messageDeliveries }
 
     /// Session state stream.
     public var stateStream: AsyncStream<WmpSessionState> { session.stateStream }
@@ -273,6 +290,13 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
         let paramsWrapped: AnyCodable? = msg.params.map { .object_($0) }
 
         switch msg.method {
+        case WmpMethods.messageDeliver:
+            // Issue #77: the mailbox ping — the body rides the recipient's
+            // mailbox (the poll pulls it). No flow state, no handler: the raw
+            // params reach the message surface.
+            if let params = msg.params {
+                messageDeliverContinuation.yield(params)
+            }
         case WmpMethods.flowProgress:   try await dispatchFlowProgress(paramsWrapped)
         case WmpMethods.flowComplete:   try await dispatchFlowComplete(paramsWrapped)
         case WmpMethods.flowError:      try await dispatchFlowError(paramsWrapped)

@@ -694,10 +694,21 @@ public final class SirosWallet: @unchecked Sendable {
     /// the session state, not its URLs).
     var wmpJoinPeerUrls: [String: (send: String, sse: String)] = [:]
 
+    /// Issue #77: the joined GROUPS — each invited backend's provider URL →
+    /// the GROUP session id its invitation named (the inviter's session; the
+    /// wallet's replies to the group name it as `to`). Captured at the
+    /// consume, cleared with the peers on teardown. Guarded by `lock`.
+    var wmpJoinGroups: [String: String] = [:]
+
     /// The main endpoint's send/sse URLs (or `nil` before a connect / for
     /// the in-process local engine), captured at the connect site —
     /// `connectedWmpEndpoints()` reports them.
     var wmpMainUrls: (send: String, sse: String?)?
+
+    /// Issue #77: the group-inbox poll cursors (backend:session → the last
+    /// `wmp_message_id` a poll answered) — `pollGroupMessages()`'s `since`.
+    /// Guarded by `lock`.
+    var wmpMessageCursors: [String: String] = [:]
 
     /// The detached WMP issuance start (see `wmpStartIssuance`): cancelled by
     /// the next start so a cancelled attempt's late send cannot race it.

@@ -59,7 +59,7 @@ extension SirosWallet {
             return
         }
 
-        let peer = try await joinPeerFor(provider: provider)
+        let peer = try await joinPeerFor(provider: provider, invitation: invitation)
         if peer.currentState == .closed {
             let token = try await freshBackendToken()
             try await peer.connectWithInvitation(
@@ -77,7 +77,7 @@ extension SirosWallet {
     /// wallet's own AS. The HTTP+SSE transport is Apple-only (URLSession
     /// async bytes): Linux fails closed with a clear error, the same
     /// boundary `makeWmpProviderTransport` carries for `remoteHttpSse`.
-    private func joinPeerFor(provider: String) async throws -> WmpPeer {
+    private func joinPeerFor(provider: String, invitation: [String: Any]) async throws -> WmpPeer {
         lock.lock()
         let cached = wmpJoinPeers[provider]
         lock.unlock()
@@ -101,6 +101,11 @@ extension SirosWallet {
         lock.lock()
         wmpJoinPeers[provider] = peer
         wmpJoinPeerUrls[provider] = endpoints
+        // The GROUP the invitation names (the reply path's `to`): captured
+        // here — `replyToGroup(backend:text:)` routes by it.
+        if let group = invitation["session_id"] as? String, !group.isEmpty {
+            wmpJoinGroups[provider] = group
+        }
         lock.unlock()
         return peer
         #else
@@ -173,6 +178,7 @@ extension SirosWallet {
         let peers = Array(wmpJoinPeers.values)
         wmpJoinPeers.removeAll()
         wmpJoinPeerUrls.removeAll()
+        wmpJoinGroups.removeAll()
         wmpMainUrls = nil
         lock.unlock()
         for peer in peers {
@@ -180,6 +186,231 @@ extension SirosWallet {
         }
     }
 
+    // MARK: - The send + the reply (issue #77's message passing)
+
+    /// Send one message to a peer session — the `wmp.message.deliver`
+    /// notification. `nil` (or the engine's origin) routes via the main
+    /// engine; an invited backend's provider URL routes via ITS join peer.
+    ///
+    /// Kotlin parity: `SirosWallet.sendMessage(backend:to:text:)`.
+    public func sendMessage(backend: String? = nil, to: String, text: String) async throws {
+        let peer: WmpPeer
+        switch backend {
+        case nil, "", WmpEndpointInfo.Origin.engine.rawValue:
+            lock.lock()
+            defer { lock.unlock() }
+            guard let main = wmpPeer else {
+                throw SirosError.wallet(message: "The wallet is not connected to an engine")
+            }
+            peer = main
+        default:
+            lock.lock()
+            let joined = wmpJoinPeers[backend!]
+            lock.unlock()
+            guard let joined else {
+                throw SirosError.wallet(message: "The wallet is not connected to the invited backend \(backend!)")
+            }
+            peer = joined
+        }
+        try await peer.notify(
+            method: WmpMethods.messageDeliver,
+            params: [
+                "wmp": .object_([
+                    "version": .string("0.1"),
+                    "session_id": .string(peer.currentSessionId ?? ""),
+                ]),
+                "to": .array([.string(to)]),
+                "content_type": .string("text/plain"),
+                "body": .object_([
+                    "text": .string(text),
+                ]),
+            ]
+        )
+    }
+
+    /// Reply to the GROUP an invited backend's invitation named (issue #77):
+    /// the message rides that backend's join peer, `to` the inviter's
+    /// session. Kotlin parity: `SirosWallet.replyToGroup`.
+    public func replyToGroup(backend: String, text: String) async throws {
+        lock.lock()
+        let group = wmpJoinGroups[backend]
+        lock.unlock()
+        guard let group else {
+            throw SirosError.wallet(message: "No joined group on the invited backend \(backend) to reply to")
+        }
+        try await sendMessage(backend: backend, to: group, text: text)
+    }
+
+    /// The group ids this wallet joined on invited backends (issue #77): the
+    /// provider URL → the inviter's session id. The apps' reply UIs read it.
+    /// Kotlin parity: `SirosWallet.joinedGroups`.
+    public func joinedGroups() -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return wmpJoinGroups
+    }
+
+    // MARK: - The message read surface (the group inbox)
+
+    /// Every WMP peer this wallet holds right now: the main engine plus
+    /// every invited backend's join peer, paired with its report name
+    /// (`WmpEndpointInfo.Origin.engine.rawValue` or the provider URL).
+    private func allWmpPeers() -> [(backend: String, peer: WmpPeer)] {
+        lock.lock()
+        defer { lock.unlock() }
+        var out: [(String, WmpPeer)] = []
+        if let peer = wmpPeer {
+            out.append((WmpEndpointInfo.Origin.engine.rawValue, peer))
+        }
+        for (provider, peer) in wmpJoinPeers {
+            out.append((provider, peer))
+        }
+        return out
+    }
+
+    /// Pull the recent group messages (issue #77): one `wmp.message.poll`
+    /// per connected session — the engine's mailbox fan-out (`to` naming a
+    /// group expands to every member's box) lands them there; the poll is
+    /// the read. Each backend poll is independent (one refusing does not
+    /// fail the rest). The cursor: per backend:session, the last
+    /// `wmp_message_id` a poll answered — the next poll takes `since` from
+    /// it (the engine answers the entries AFTER that id).
+    ///
+    /// Kotlin parity: `SirosWallet.pollGroupMessages`.
+    public func pollGroupMessages(limit: Int = 50) async -> [WmpGroupMessage] {
+        var out: [WmpGroupMessage] = []
+        for (backend, peer) in allWmpPeers() {
+            guard let sessionId = peer.currentSessionId else { continue }
+            guard peer.currentState == .active else { continue }
+            lock.lock()
+            let cursor = wmpMessageCursors["\(backend):\(sessionId)"] ?? ""
+            lock.unlock()
+            let params: [String: AnyCodable] = [
+                "wmp": .object_([
+                    "version": .string("0.1"),
+                    "session_id": .string(sessionId),
+                ]),
+                "since": .string(cursor),
+                "limit": .int(limit),
+            ]
+            guard let response = try? await peer.call(method: WmpMethods.messagePoll, params: params),
+                  response.error == nil,
+                  let result = response.result else { continue }
+            // The envelope the members receive carries the SENDER's params
+            // (the `to` the sender named — the group — never the engine's
+            // expansion): `from` is the sender's `wmp.session_id`, the text
+            // `body.text`. (JsonRpcResponse.result is the params dictionary
+            // itself — the envelope entries are the AnyCodable values.)
+            guard case .array(let messages)? = result["messages"] else { continue }
+            var last: String?
+            for message in messages {
+                guard case .object_(let envelope) = message,
+                      case .object_(let inner)? = envelope["params"] else { continue }
+                var from: String?
+                if case .object_(let wmp)? = inner["wmp"],
+                   case .string(let sender)? = wmp["session_id"] {
+                    from = sender
+                }
+                guard case .object_(let body)? = inner["body"],
+                      case .string(let text)? = body["text"] else { continue }
+                var messageId: String?
+                if case .string(let id)? = envelope["wmp_message_id"] {
+                    messageId = id
+                }
+                out.append(
+                    WmpGroupMessage(
+                        backend: backend,
+                        sessionId: sessionId,
+                        from: from,
+                        text: text,
+                        messageId: messageId
+                    )
+                )
+                if let messageId { last = messageId }
+            }
+            if let last {
+                lock.lock()
+                wmpMessageCursors["\(backend):\(sessionId)"] = last
+                lock.unlock()
+            }
+        }
+        return out
+    }
+
+    /// The live group messages (issue #77): every connected session's
+    /// `wmp.message.deliver` ping → its mailbox poll → the typed messages.
+    /// The SSE ping carries no body — the poll (`pollGroupMessages`'s
+    /// cursor path) is the read. The peers are snapshotted when the stream
+    /// is consumed — a backend joined after does not stream in
+    /// (re-consume to pick it up; `pollGroupMessages` always sees every
+    /// current peer).
+    ///
+    /// Kotlin parity: `SirosWallet.groupMessageEvents`.
+    public func groupMessageEvents() -> AsyncStream<WmpGroupMessage> {
+        AsyncStream { continuation in
+            let task = Task { [weak self] in
+                guard let self else { return }
+                let peers = self.allWmpPeers()
+                await withTaskGroup(of: Void.self) { group in
+                    for (_, peer) in peers {
+                        group.addTask {
+                            for await _ in peer.messageDeliveries() {
+                                // The ping fired: pull whatever landed since
+                                // the last poll (every session — the cheap
+                                // read; the pings are untargeted).
+                                let messages = await self.pollGroupMessages()
+                                for message in messages {
+                                    continuation.yield(message)
+                                }
+                            }
+                        }
+                    }
+                    await group.waitForAll()
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// Issue #77: one group message — a `wmp.message.deliver` the wallet's
+/// session received (pulled from its backend's mailbox, or arrived live
+/// via the ping → poll). Kotlin parity:
+/// `org.siros.sdk.wallet.WmpGroupMessage`.
+public struct WmpGroupMessage: Sendable, Equatable {
+    /// `WmpEndpointInfo.Origin.engine.rawValue` or the invited backend's
+    /// provider URL.
+    public let backend: String
+    /// The wallet's session on that backend (the box the message landed in).
+    public let sessionId: String
+    /// The sender's session id, when the envelope carries one.
+    public let from: String?
+    /// The message text (`params.body.text`).
+    public let text: String
+    /// The engine's message id (`wmp_message_id`), when carried.
+    public let messageId: String?
+
+    public init(
+        backend: String,
+        sessionId: String,
+        from: String?,
+        text: String,
+        messageId: String?
+    ) {
+        self.backend = backend
+        self.sessionId = sessionId
+        self.from = from
+        self.text = text
+        self.messageId = messageId
+    }
+
+    public static func == (lhs: WmpGroupMessage, rhs: WmpGroupMessage) -> Bool {
+        lhs.backend == rhs.backend && lhs.sessionId == rhs.sessionId &&
+            lhs.messageId == rhs.messageId && lhs.text == rhs.text
+    }
+}
+
+extension SirosWallet {
     // MARK: - The endpoint surface
 
     /// The connected WMP backends (issue #77's endpoint surface): the
