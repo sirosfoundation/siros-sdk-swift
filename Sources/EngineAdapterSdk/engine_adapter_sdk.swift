@@ -447,6 +447,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -769,6 +785,329 @@ public func FfiConverterTypeWmpEngine_lift(_ pointer: UnsafeMutableRawPointer) t
 #endif
 public func FfiConverterTypeWmpEngine_lower(_ value: WmpEngine) -> UnsafeMutableRawPointer {
     return FfiConverterTypeWmpEngine.lower(value)
+}
+
+
+
+
+/**
+ * The member's MLS crypto: ONE provider per wallet identity (one
+ * identity, one key store), the groups it belongs to.
+ */
+public protocol WmpMlsProtocol : AnyObject {
+    
+    /**
+     * Stage an add (spec §3.3): the commit for the group, the Welcome
+     * for the added member. The commit is merged here (the member set
+     * grew); carry the Welcome to the member.
+     */
+    func addMember(groupId: String, keyPackage: String) throws  -> MlsAddStaged
+    
+    /**
+     * Create a group (spec §3.1): THIS member's group, epoch 0. The
+     * members join by the add flow ([`Self::add_member`]) once their
+     * KeyPackages are at hand.
+     */
+    func createGroup(cipherSuite: Int64) throws  -> MlsGroupCreated
+    
+    /**
+     * Decrypt the group's ciphertext (spec §4.1): the plaintext, the
+     * epoch. A message this member sent itself refuses (MLS ratchets —
+     * the recipient's provider answers).
+     */
+    func decrypt(groupId: String, ciphertext: String) throws  -> MlsDecrypted
+    
+    /**
+     * Encrypt a message body to the group's current epoch key
+     * (spec §4.1): the base64url MLSMessage, the epoch. The relay
+     * carries this ciphertext opaque (it never sees plaintext).
+     */
+    func encrypt(groupId: String, plaintext: Data) throws  -> MlsEncrypted
+    
+    /**
+     * A fresh KeyPackage (spec §2.3) for the suite: publish it on the
+     * member's well-known for the add flows.
+     */
+    func generateKeyPackage(cipherSuite: Int64) throws  -> MlsKeyPackage
+    
+    /**
+     * The member's identity (the string `new` took).
+     */
+    func identity()  -> String
+    
+    /**
+     * Process a commit (a staged add/remove/update the member
+     * receives): the epoch it advanced to.
+     */
+    func processCommit(groupId: String, commit: String) throws  -> Int64
+    
+    /**
+     * Process a Welcome (spec §3.2): the member joins the group, the
+     * epoch it joined at. The Welcome rides the invitation or the
+     * group's message passing (out of band).
+     */
+    func processWelcome(welcome: String) throws  -> MlsJoined
+    
+    /**
+     * Stage a removal (spec §3.4): the commit (merged here) that
+     * cryptographically excludes the participant.
+     */
+    func removeMember(groupId: String, participant: String) throws  -> String
+    
+    /**
+     * A self-update commit (spec §3.5): the post-compromise rotation,
+     * merged here.
+     */
+    func selfUpdate(groupId: String) throws  -> String
+    
+}
+
+/**
+ * The member's MLS crypto: ONE provider per wallet identity (one
+ * identity, one key store), the groups it belongs to.
+ */
+open class WmpMls:
+    WmpMlsProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_engine_adapter_sdk_fn_clone_wmpmls(self.pointer, $0) }
+    }
+    /**
+     * A provider for the member `identity` (the WMP identifier string —
+     * the sender the session names).
+     */
+public convenience init(identity: String)throws  {
+    let pointer =
+        try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_constructor_wmpmls_new(
+        FfiConverterString.lower(identity),$0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_engine_adapter_sdk_fn_free_wmpmls(pointer, $0) }
+    }
+
+    
+
+    
+    /**
+     * Stage an add (spec §3.3): the commit for the group, the Welcome
+     * for the added member. The commit is merged here (the member set
+     * grew); carry the Welcome to the member.
+     */
+open func addMember(groupId: String, keyPackage: String)throws  -> MlsAddStaged {
+    return try  FfiConverterTypeMlsAddStaged.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_add_member(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),
+        FfiConverterString.lower(keyPackage),$0
+    )
+})
+}
+    
+    /**
+     * Create a group (spec §3.1): THIS member's group, epoch 0. The
+     * members join by the add flow ([`Self::add_member`]) once their
+     * KeyPackages are at hand.
+     */
+open func createGroup(cipherSuite: Int64)throws  -> MlsGroupCreated {
+    return try  FfiConverterTypeMlsGroupCreated.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_create_group(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(cipherSuite),$0
+    )
+})
+}
+    
+    /**
+     * Decrypt the group's ciphertext (spec §4.1): the plaintext, the
+     * epoch. A message this member sent itself refuses (MLS ratchets —
+     * the recipient's provider answers).
+     */
+open func decrypt(groupId: String, ciphertext: String)throws  -> MlsDecrypted {
+    return try  FfiConverterTypeMlsDecrypted.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_decrypt(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),
+        FfiConverterString.lower(ciphertext),$0
+    )
+})
+}
+    
+    /**
+     * Encrypt a message body to the group's current epoch key
+     * (spec §4.1): the base64url MLSMessage, the epoch. The relay
+     * carries this ciphertext opaque (it never sees plaintext).
+     */
+open func encrypt(groupId: String, plaintext: Data)throws  -> MlsEncrypted {
+    return try  FfiConverterTypeMlsEncrypted.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_encrypt(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),
+        FfiConverterData.lower(plaintext),$0
+    )
+})
+}
+    
+    /**
+     * A fresh KeyPackage (spec §2.3) for the suite: publish it on the
+     * member's well-known for the add flows.
+     */
+open func generateKeyPackage(cipherSuite: Int64)throws  -> MlsKeyPackage {
+    return try  FfiConverterTypeMlsKeyPackage.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_generate_key_package(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(cipherSuite),$0
+    )
+})
+}
+    
+    /**
+     * The member's identity (the string `new` took).
+     */
+open func identity() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_identity(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Process a commit (a staged add/remove/update the member
+     * receives): the epoch it advanced to.
+     */
+open func processCommit(groupId: String, commit: String)throws  -> Int64 {
+    return try  FfiConverterInt64.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_process_commit(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),
+        FfiConverterString.lower(commit),$0
+    )
+})
+}
+    
+    /**
+     * Process a Welcome (spec §3.2): the member joins the group, the
+     * epoch it joined at. The Welcome rides the invitation or the
+     * group's message passing (out of band).
+     */
+open func processWelcome(welcome: String)throws  -> MlsJoined {
+    return try  FfiConverterTypeMlsJoined.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_process_welcome(self.uniffiClonePointer(),
+        FfiConverterString.lower(welcome),$0
+    )
+})
+}
+    
+    /**
+     * Stage a removal (spec §3.4): the commit (merged here) that
+     * cryptographically excludes the participant.
+     */
+open func removeMember(groupId: String, participant: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_remove_member(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),
+        FfiConverterString.lower(participant),$0
+    )
+})
+}
+    
+    /**
+     * A self-update commit (spec §3.5): the post-compromise rotation,
+     * merged here.
+     */
+open func selfUpdate(groupId: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_self_update(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),$0
+    )
+})
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWmpMls: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = WmpMls
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> WmpMls {
+        return WmpMls(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: WmpMls) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WmpMls {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: WmpMls, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWmpMls_lift(_ pointer: UnsafeMutableRawPointer) throws -> WmpMls {
+    return try FfiConverterTypeWmpMls.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWmpMls_lower(_ value: WmpMls) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeWmpMls.lower(value)
 }
 
 
@@ -1415,6 +1754,189 @@ public func FfiConverterTypeCredentialSelectionResult_lift(_ buf: RustBuffer) th
 #endif
 public func FfiConverterTypeCredentialSelectionResult_lower(_ value: CredentialSelectionResult) -> RustBuffer {
     return FfiConverterTypeCredentialSelectionResult.lower(value)
+}
+
+
+/**
+ * The credential-response decrypt ask (issue #59): the host opens the
+ * JWE with the private half of the key it generated. Mirrors
+ * `engine_ports::DecryptCredentialResponseParams`/`Result`.
+ */
+public struct DecryptCredentialResponseParams {
+    /**
+     * The flow the ask belongs to.
+     */
+    public var flowId: String
+    /**
+     * The credential configuration this response is for (#558's
+     * pairing).
+     */
+    public var credentialConfigurationId: String
+    /**
+     * True when the JWE answers a Deferred Credential Request
+     * (OID4VCI 1.0 §9) — the Go engine's shape.
+     */
+    public var deferred: Bool
+    /**
+     * The compact JWE the issuer answered.
+     */
+    public var jwe: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The flow the ask belongs to.
+         */flowId: String, 
+        /**
+         * The credential configuration this response is for (#558's
+         * pairing).
+         */credentialConfigurationId: String, 
+        /**
+         * True when the JWE answers a Deferred Credential Request
+         * (OID4VCI 1.0 §9) — the Go engine's shape.
+         */deferred: Bool, 
+        /**
+         * The compact JWE the issuer answered.
+         */jwe: String) {
+        self.flowId = flowId
+        self.credentialConfigurationId = credentialConfigurationId
+        self.deferred = deferred
+        self.jwe = jwe
+    }
+}
+
+
+
+extension DecryptCredentialResponseParams: Equatable, Hashable {
+    public static func ==(lhs: DecryptCredentialResponseParams, rhs: DecryptCredentialResponseParams) -> Bool {
+        if lhs.flowId != rhs.flowId {
+            return false
+        }
+        if lhs.credentialConfigurationId != rhs.credentialConfigurationId {
+            return false
+        }
+        if lhs.deferred != rhs.deferred {
+            return false
+        }
+        if lhs.jwe != rhs.jwe {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(flowId)
+        hasher.combine(credentialConfigurationId)
+        hasher.combine(deferred)
+        hasher.combine(jwe)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDecryptCredentialResponseParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DecryptCredentialResponseParams {
+        return
+            try DecryptCredentialResponseParams(
+                flowId: FfiConverterString.read(from: &buf), 
+                credentialConfigurationId: FfiConverterString.read(from: &buf), 
+                deferred: FfiConverterBool.read(from: &buf), 
+                jwe: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DecryptCredentialResponseParams, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.flowId, into: &buf)
+        FfiConverterString.write(value.credentialConfigurationId, into: &buf)
+        FfiConverterBool.write(value.deferred, into: &buf)
+        FfiConverterString.write(value.jwe, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDecryptCredentialResponseParams_lift(_ buf: RustBuffer) throws -> DecryptCredentialResponseParams {
+    return try FfiConverterTypeDecryptCredentialResponseParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDecryptCredentialResponseParams_lower(_ value: DecryptCredentialResponseParams) -> RustBuffer {
+    return FfiConverterTypeDecryptCredentialResponseParams.lower(value)
+}
+
+
+/**
+ * The decrypt answer: the plaintext credential response, as JSON
+ * text.
+ */
+public struct DecryptCredentialResponseResult {
+    /**
+     * The decrypted credential response as JSON text.
+     */
+    public var response: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The decrypted credential response as JSON text.
+         */response: String) {
+        self.response = response
+    }
+}
+
+
+
+extension DecryptCredentialResponseResult: Equatable, Hashable {
+    public static func ==(lhs: DecryptCredentialResponseResult, rhs: DecryptCredentialResponseResult) -> Bool {
+        if lhs.response != rhs.response {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(response)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDecryptCredentialResponseResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DecryptCredentialResponseResult {
+        return
+            try DecryptCredentialResponseResult(
+                response: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DecryptCredentialResponseResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.response, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDecryptCredentialResponseResult_lift(_ buf: RustBuffer) throws -> DecryptCredentialResponseResult {
+    return try FfiConverterTypeDecryptCredentialResponseResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDecryptCredentialResponseResult_lower(_ value: DecryptCredentialResponseResult) -> RustBuffer {
+    return FfiConverterTypeDecryptCredentialResponseResult.lower(value)
 }
 
 
@@ -2933,6 +3455,511 @@ public func FfiConverterTypeMatchResult_lower(_ value: MatchResult) -> RustBuffe
 
 
 /**
+ * An add staged (spec §3.3): the commit for the group, the Welcome for
+ * the added member.
+ */
+public struct MlsAddStaged {
+    /**
+     * The base64url MLS Commit (merged into this member's group).
+     */
+    public var commit: String
+    /**
+     * The base64url MLS Welcome (hand to the added member).
+     */
+    public var welcome: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The base64url MLS Commit (merged into this member's group).
+         */commit: String, 
+        /**
+         * The base64url MLS Welcome (hand to the added member).
+         */welcome: String) {
+        self.commit = commit
+        self.welcome = welcome
+    }
+}
+
+
+
+extension MlsAddStaged: Equatable, Hashable {
+    public static func ==(lhs: MlsAddStaged, rhs: MlsAddStaged) -> Bool {
+        if lhs.commit != rhs.commit {
+            return false
+        }
+        if lhs.welcome != rhs.welcome {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(commit)
+        hasher.combine(welcome)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsAddStaged: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsAddStaged {
+        return
+            try MlsAddStaged(
+                commit: FfiConverterString.read(from: &buf), 
+                welcome: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MlsAddStaged, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.commit, into: &buf)
+        FfiConverterString.write(value.welcome, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsAddStaged_lift(_ buf: RustBuffer) throws -> MlsAddStaged {
+    return try FfiConverterTypeMlsAddStaged.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsAddStaged_lower(_ value: MlsAddStaged) -> RustBuffer {
+    return FfiConverterTypeMlsAddStaged.lower(value)
+}
+
+
+/**
+ * A message decrypted: the plaintext bytes, the epoch.
+ */
+public struct MlsDecrypted {
+    /**
+     * The plaintext bytes.
+     */
+    public var plaintext: Data
+    /**
+     * The epoch the ciphertext was encrypted under.
+     */
+    public var epoch: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The plaintext bytes.
+         */plaintext: Data, 
+        /**
+         * The epoch the ciphertext was encrypted under.
+         */epoch: Int64) {
+        self.plaintext = plaintext
+        self.epoch = epoch
+    }
+}
+
+
+
+extension MlsDecrypted: Equatable, Hashable {
+    public static func ==(lhs: MlsDecrypted, rhs: MlsDecrypted) -> Bool {
+        if lhs.plaintext != rhs.plaintext {
+            return false
+        }
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(plaintext)
+        hasher.combine(epoch)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsDecrypted: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsDecrypted {
+        return
+            try MlsDecrypted(
+                plaintext: FfiConverterData.read(from: &buf), 
+                epoch: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MlsDecrypted, into buf: inout [UInt8]) {
+        FfiConverterData.write(value.plaintext, into: &buf)
+        FfiConverterInt64.write(value.epoch, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsDecrypted_lift(_ buf: RustBuffer) throws -> MlsDecrypted {
+    return try FfiConverterTypeMlsDecrypted.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsDecrypted_lower(_ value: MlsDecrypted) -> RustBuffer {
+    return FfiConverterTypeMlsDecrypted.lower(value)
+}
+
+
+/**
+ * A message encrypted (spec §4): the base64url MLSMessage, the epoch
+ * it was encrypted under.
+ */
+public struct MlsEncrypted {
+    /**
+     * The base64url MLSMessage (the ciphertext the relay carries).
+     */
+    public var ciphertext: String
+    /**
+     * The epoch the encryption used.
+     */
+    public var epoch: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The base64url MLSMessage (the ciphertext the relay carries).
+         */ciphertext: String, 
+        /**
+         * The epoch the encryption used.
+         */epoch: Int64) {
+        self.ciphertext = ciphertext
+        self.epoch = epoch
+    }
+}
+
+
+
+extension MlsEncrypted: Equatable, Hashable {
+    public static func ==(lhs: MlsEncrypted, rhs: MlsEncrypted) -> Bool {
+        if lhs.ciphertext != rhs.ciphertext {
+            return false
+        }
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ciphertext)
+        hasher.combine(epoch)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsEncrypted: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsEncrypted {
+        return
+            try MlsEncrypted(
+                ciphertext: FfiConverterString.read(from: &buf), 
+                epoch: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MlsEncrypted, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.ciphertext, into: &buf)
+        FfiConverterInt64.write(value.epoch, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsEncrypted_lift(_ buf: RustBuffer) throws -> MlsEncrypted {
+    return try FfiConverterTypeMlsEncrypted.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsEncrypted_lower(_ value: MlsEncrypted) -> RustBuffer {
+    return FfiConverterTypeMlsEncrypted.lower(value)
+}
+
+
+/**
+ * A group creation (spec §3.1): the group's id, the epoch (0 — the
+ * create mints the group alone; members join by the add).
+ */
+public struct MlsGroupCreated {
+    /**
+     * The minted group id (`grp-<serial>`).
+     */
+    public var groupId: String
+    /**
+     * The epoch the create minted (0).
+     */
+    public var epoch: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The minted group id (`grp-<serial>`).
+         */groupId: String, 
+        /**
+         * The epoch the create minted (0).
+         */epoch: Int64) {
+        self.groupId = groupId
+        self.epoch = epoch
+    }
+}
+
+
+
+extension MlsGroupCreated: Equatable, Hashable {
+    public static func ==(lhs: MlsGroupCreated, rhs: MlsGroupCreated) -> Bool {
+        if lhs.groupId != rhs.groupId {
+            return false
+        }
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(groupId)
+        hasher.combine(epoch)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsGroupCreated: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsGroupCreated {
+        return
+            try MlsGroupCreated(
+                groupId: FfiConverterString.read(from: &buf), 
+                epoch: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MlsGroupCreated, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.groupId, into: &buf)
+        FfiConverterInt64.write(value.epoch, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsGroupCreated_lift(_ buf: RustBuffer) throws -> MlsGroupCreated {
+    return try FfiConverterTypeMlsGroupCreated.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsGroupCreated_lower(_ value: MlsGroupCreated) -> RustBuffer {
+    return FfiConverterTypeMlsGroupCreated.lower(value)
+}
+
+
+/**
+ * A Welcome processed (spec §3.2): the group the member joined, the
+ * epoch it joined at.
+ */
+public struct MlsJoined {
+    /**
+     * The group the Welcome opened (minted fresh on the join).
+     */
+    public var groupId: String
+    /**
+     * The epoch the member joined at.
+     */
+    public var epoch: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The group the Welcome opened (minted fresh on the join).
+         */groupId: String, 
+        /**
+         * The epoch the member joined at.
+         */epoch: Int64) {
+        self.groupId = groupId
+        self.epoch = epoch
+    }
+}
+
+
+
+extension MlsJoined: Equatable, Hashable {
+    public static func ==(lhs: MlsJoined, rhs: MlsJoined) -> Bool {
+        if lhs.groupId != rhs.groupId {
+            return false
+        }
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(groupId)
+        hasher.combine(epoch)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsJoined: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsJoined {
+        return
+            try MlsJoined(
+                groupId: FfiConverterString.read(from: &buf), 
+                epoch: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MlsJoined, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.groupId, into: &buf)
+        FfiConverterInt64.write(value.epoch, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsJoined_lift(_ buf: RustBuffer) throws -> MlsJoined {
+    return try FfiConverterTypeMlsJoined.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsJoined_lower(_ value: MlsJoined) -> RustBuffer {
+    return FfiConverterTypeMlsJoined.lower(value)
+}
+
+
+/**
+ * A member's KeyPackage (spec §2.3): the base64url package, its minted
+ * id, the suite. Published on the member's well-known for the add flows.
+ */
+public struct MlsKeyPackage {
+    /**
+     * The minted package id (`kp-<serial>`).
+     */
+    public var id: String
+    /**
+     * The cipher suite (0x0001 X25519 / 0x0002 P-256).
+     */
+    public var cipherSuite: Int64
+    /**
+     * The base64url-encoded MLS KeyPackage.
+     */
+    public var keyPackage: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The minted package id (`kp-<serial>`).
+         */id: String, 
+        /**
+         * The cipher suite (0x0001 X25519 / 0x0002 P-256).
+         */cipherSuite: Int64, 
+        /**
+         * The base64url-encoded MLS KeyPackage.
+         */keyPackage: String) {
+        self.id = id
+        self.cipherSuite = cipherSuite
+        self.keyPackage = keyPackage
+    }
+}
+
+
+
+extension MlsKeyPackage: Equatable, Hashable {
+    public static func ==(lhs: MlsKeyPackage, rhs: MlsKeyPackage) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.cipherSuite != rhs.cipherSuite {
+            return false
+        }
+        if lhs.keyPackage != rhs.keyPackage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(cipherSuite)
+        hasher.combine(keyPackage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsKeyPackage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsKeyPackage {
+        return
+            try MlsKeyPackage(
+                id: FfiConverterString.read(from: &buf), 
+                cipherSuite: FfiConverterInt64.read(from: &buf), 
+                keyPackage: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MlsKeyPackage, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterInt64.write(value.cipherSuite, into: &buf)
+        FfiConverterString.write(value.keyPackage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsKeyPackage_lift(_ buf: RustBuffer) throws -> MlsKeyPackage {
+    return try FfiConverterTypeMlsKeyPackage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMlsKeyPackage_lower(_ value: MlsKeyPackage) -> RustBuffer {
+    return FfiConverterTypeMlsKeyPackage.lower(value)
+}
+
+
+/**
  * The metadata resolution request. Mirrors
  * `engine_ports::ResolveRequest`.
  */
@@ -3095,6 +4122,195 @@ public func FfiConverterTypeResolveResponse_lift(_ buf: RustBuffer) throws -> Re
 #endif
 public func FfiConverterTypeResolveResponse_lower(_ value: ResolveResponse) -> RustBuffer {
     return FfiConverterTypeResolveResponse.lower(value)
+}
+
+
+/**
+ * The response-encryption key ask (issue #59): the host generates a
+ * fresh P-256 pair for one credential request's encryption offer and
+ * answers with the PUBLIC JWK only — the private half stays on the
+ * host (the Go wallet-frontend's client-held key). Mirrors
+ * `engine_ports::ResponseEncryptionKeyParams`/`Result`.
+ */
+public struct ResponseEncryptionKeyParams {
+    /**
+     * The flow the ask belongs to.
+     */
+    public var flowId: String
+    /**
+     * The credential configuration this key encrypts the response of
+     * (the #558 pairing): the client pairs the key — and the
+     * credential it decrypts — with the completion entry of the same
+     * id.
+     */
+    public var credentialConfigurationId: String
+    /**
+     * The negotiated key-agreement algorithm (the engine resolved it
+     * against the issuer's credential_response_encryption).
+     */
+    public var alg: String
+    /**
+     * The negotiated content-encryption method.
+     */
+    public var enc: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The flow the ask belongs to.
+         */flowId: String, 
+        /**
+         * The credential configuration this key encrypts the response of
+         * (the #558 pairing): the client pairs the key — and the
+         * credential it decrypts — with the completion entry of the same
+         * id.
+         */credentialConfigurationId: String, 
+        /**
+         * The negotiated key-agreement algorithm (the engine resolved it
+         * against the issuer's credential_response_encryption).
+         */alg: String, 
+        /**
+         * The negotiated content-encryption method.
+         */enc: String) {
+        self.flowId = flowId
+        self.credentialConfigurationId = credentialConfigurationId
+        self.alg = alg
+        self.enc = enc
+    }
+}
+
+
+
+extension ResponseEncryptionKeyParams: Equatable, Hashable {
+    public static func ==(lhs: ResponseEncryptionKeyParams, rhs: ResponseEncryptionKeyParams) -> Bool {
+        if lhs.flowId != rhs.flowId {
+            return false
+        }
+        if lhs.credentialConfigurationId != rhs.credentialConfigurationId {
+            return false
+        }
+        if lhs.alg != rhs.alg {
+            return false
+        }
+        if lhs.enc != rhs.enc {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(flowId)
+        hasher.combine(credentialConfigurationId)
+        hasher.combine(alg)
+        hasher.combine(enc)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeResponseEncryptionKeyParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ResponseEncryptionKeyParams {
+        return
+            try ResponseEncryptionKeyParams(
+                flowId: FfiConverterString.read(from: &buf), 
+                credentialConfigurationId: FfiConverterString.read(from: &buf), 
+                alg: FfiConverterString.read(from: &buf), 
+                enc: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ResponseEncryptionKeyParams, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.flowId, into: &buf)
+        FfiConverterString.write(value.credentialConfigurationId, into: &buf)
+        FfiConverterString.write(value.alg, into: &buf)
+        FfiConverterString.write(value.enc, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResponseEncryptionKeyParams_lift(_ buf: RustBuffer) throws -> ResponseEncryptionKeyParams {
+    return try FfiConverterTypeResponseEncryptionKeyParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResponseEncryptionKeyParams_lower(_ value: ResponseEncryptionKeyParams) -> RustBuffer {
+    return FfiConverterTypeResponseEncryptionKeyParams.lower(value)
+}
+
+
+/**
+ * The response-encryption key answer: the public JWK of the pair the
+ * host generated and holds.
+ */
+public struct ResponseEncryptionKeyResult {
+    /**
+     * The public JWK as JSON text, public members only.
+     */
+    public var publicJwk: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The public JWK as JSON text, public members only.
+         */publicJwk: String) {
+        self.publicJwk = publicJwk
+    }
+}
+
+
+
+extension ResponseEncryptionKeyResult: Equatable, Hashable {
+    public static func ==(lhs: ResponseEncryptionKeyResult, rhs: ResponseEncryptionKeyResult) -> Bool {
+        if lhs.publicJwk != rhs.publicJwk {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(publicJwk)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeResponseEncryptionKeyResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ResponseEncryptionKeyResult {
+        return
+            try ResponseEncryptionKeyResult(
+                publicJwk: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ResponseEncryptionKeyResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.publicJwk, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResponseEncryptionKeyResult_lift(_ buf: RustBuffer) throws -> ResponseEncryptionKeyResult {
+    return try FfiConverterTypeResponseEncryptionKeyResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResponseEncryptionKeyResult_lower(_ value: ResponseEncryptionKeyResult) -> RustBuffer {
+    return FfiConverterTypeResponseEncryptionKeyResult.lower(value)
 }
 
 
@@ -4977,6 +6193,68 @@ extension FetchPurpose: Equatable, Hashable {}
 
 
 
+
+/**
+ * An MLS operation refused: the message names the cause (never a panic
+ * in library code).
+ */
+public enum MlsException {
+
+    
+    
+    /**
+     * The operation refused; the detail names the cause.
+     */
+    case Refused(String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMlsException: FfiConverterRustBuffer {
+    typealias SwiftType = MlsException
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MlsException {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Refused(
+            try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MlsException, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .Refused(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+extension MlsException: Equatable, Hashable {}
+
+extension MlsException: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
@@ -5226,6 +6504,25 @@ public protocol Host : AnyObject {
      * auto-selected and never asked).
      */
     func requestCredentialSelection(params: CredentialSelectionParams) async throws  -> CredentialSelectionResult
+    
+    /**
+     * Asks the host to generate the response-encryption key pair for
+     * one credential request's offer (issue #59): answer with the
+     * PUBLIC JWK, hold the private half for
+     * [`Host::request_decrypt_credential_response`]. The default
+     * refusal keeps pre-#59 hosts working (the legacy engine-held
+     * ephemeral key).
+     */
+    func requestResponseEncryptionKey(params: ResponseEncryptionKeyParams) async throws  -> ResponseEncryptionKeyResult
+    
+    /**
+     * Asks the host to open a JWE-encrypted credential response with
+     * the private half of the key its
+     * [`Host::request_response_encryption_key`] answer generated
+     * (issue #59). The default refusal keeps pre-#59 hosts working
+     * (the legacy engine-held decrypt).
+     */
+    func requestDecryptCredentialResponse(params: DecryptCredentialResponseParams) async throws  -> DecryptCredentialResponseResult
     
     /**
      * Reports progress on a flow.
@@ -5657,6 +6954,92 @@ fileprivate struct UniffiCallbackInterfaceHost {
                     uniffiCallbackData,
                     UniffiForeignFutureStructRustBuffer(
                         returnValue: FfiConverterTypeCredentialSelectionResult.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeSdkError.lower
+            )
+            uniffiOutReturn.pointee = uniffiForeignFuture
+        },
+        requestResponseEncryptionKey: { (
+            uniffiHandle: UInt64,
+            params: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+        ) in
+            let makeCall = {
+                () async throws -> ResponseEncryptionKeyResult in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceHost.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.requestResponseEncryptionKey(
+                     params: try FfiConverterTypeResponseEncryptionKeyParams.lift(params)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: ResponseEncryptionKeyResult) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBuffer(
+                        returnValue: FfiConverterTypeResponseEncryptionKeyResult.lower(returnValue),
+                        callStatus: RustCallStatus()
+                    )
+                )
+            }
+            let uniffiHandleError = { (statusCode, errorBuf) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBuffer(
+                        returnValue: RustBuffer.empty(),
+                        callStatus: RustCallStatus(code: statusCode, errorBuf: errorBuf)
+                    )
+                )
+            }
+            let uniffiForeignFuture = uniffiTraitInterfaceCallAsyncWithError(
+                makeCall: makeCall,
+                handleSuccess: uniffiHandleSuccess,
+                handleError: uniffiHandleError,
+                lowerError: FfiConverterTypeSdkError.lower
+            )
+            uniffiOutReturn.pointee = uniffiForeignFuture
+        },
+        requestDecryptCredentialResponse: { (
+            uniffiHandle: UInt64,
+            params: RustBuffer,
+            uniffiFutureCallback: @escaping UniffiForeignFutureCompleteRustBuffer,
+            uniffiCallbackData: UInt64,
+            uniffiOutReturn: UnsafeMutablePointer<UniffiForeignFuture>
+        ) in
+            let makeCall = {
+                () async throws -> DecryptCredentialResponseResult in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceHost.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return try await uniffiObj.requestDecryptCredentialResponse(
+                     params: try FfiConverterTypeDecryptCredentialResponseParams.lift(params)
+                )
+            }
+
+            let uniffiHandleSuccess = { (returnValue: DecryptCredentialResponseResult) in
+                uniffiFutureCallback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBuffer(
+                        returnValue: FfiConverterTypeDecryptCredentialResponseResult.lower(returnValue),
                         callStatus: RustCallStatus()
                     )
                 )
@@ -6646,6 +8029,39 @@ private var initializationResult: InitializationResult = {
     if (uniffi_engine_adapter_sdk_checksum_method_wmpengine_take_notifications() != 42796) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_add_member() != 7665) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_create_group() != 45007) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_decrypt() != 43631) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_encrypt() != 53426) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_generate_key_package() != 10074) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_identity() != 26559) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_process_commit() != 42733) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_process_welcome() != 3370) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_remove_member() != 55213) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_self_update() != 38788) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_constructor_wmpmls_new() != 25503) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_engine_adapter_sdk_checksum_method_host_request_sign() != 1394) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6676,7 +8092,13 @@ private var initializationResult: InitializationResult = {
     if (uniffi_engine_adapter_sdk_checksum_method_host_request_credential_selection() != 63084) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_engine_adapter_sdk_checksum_method_host_progress() != 3981) {
+    if (uniffi_engine_adapter_sdk_checksum_method_host_request_response_encryption_key() != 16057) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_host_request_decrypt_credential_response() != 59020) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_host_progress() != 34788) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_engine_adapter_sdk_checksum_method_httpclient_send() != 49403) {

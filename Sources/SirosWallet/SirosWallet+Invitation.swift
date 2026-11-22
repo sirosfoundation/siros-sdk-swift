@@ -343,6 +343,13 @@ extension SirosWallet {
         wmpJoinAsTokens.removeAll()
         wmpMainUrls = nil
         lock.unlock()
+        // Issue #77: the store dies with the session (the logout/relogin
+        // path) — the cursors too, so the next login re-reads from the top.
+        // The config-supplied store clears with it (an app that wants to
+        // KEEP history across logins supplies a store whose clear() is its
+        // own business — the protocol is the seam).
+        let store = config.wmpMessageStore ?? InMemoryWmpMessageStore.sharedDefault
+        store.clear()
         for peer in peers {
             Task { try? await peer.close() }
         }
@@ -434,19 +441,24 @@ extension SirosWallet {
     /// per connected session — the engine's mailbox fan-out (`to` naming a
     /// group expands to every member's box) lands them there; the poll is
     /// the read. Each backend poll is independent (one refusing does not
-    /// fail the rest). The cursor: per backend:session, the last
-    /// `wmp_message_id` a poll answered — the next poll takes `since` from
-    /// it (the engine answers the entries AFTER that id).
+    /// fail the rest).
+    ///
+    /// The store (the app-supplied ``WmpMessageStore``): every answered
+    /// message APPENDS to it (the persistent inbox, the cursors riding
+    /// along) and the poll answers the store's tail — a persistent store
+    /// means a restart resumes where the last poll left off, not from the
+    /// top (the replay).
     ///
     /// Kotlin parity: `SirosWallet.pollGroupMessages`.
     public func pollGroupMessages(limit: Int = 50) async -> [WmpGroupMessage] {
         var out: [WmpGroupMessage] = []
+        let store = wmpMessageStore
         for (backend, peer) in allWmpPeers() {
             guard let sessionId = peer.currentSessionId else { continue }
             guard peer.currentState == .active else { continue }
-            lock.lock()
-            let cursor = wmpMessageCursors["\(backend):\(sessionId)"] ?? ""
-            lock.unlock()
+            // The cursor rides the STORE (a persistent store keeps the
+            // read's place across restarts).
+            let cursor = store.cursor(backend: backend, sessionId: sessionId) ?? ""
             let params: [String: AnyCodable] = [
                 "wmp": .object_([
                     "version": .string("0.1"),
@@ -458,7 +470,7 @@ extension SirosWallet {
             guard let response = try? await peer.call(method: WmpMethods.messagePoll, params: params),
                   response.error == nil,
                   let result = response.result else { continue }
-            // The envelope the members receive carries the SENDER's params
+            // The envelope the members receive carry the SENDER's params
             // (the `to` the sender named — the group — never the engine's
             // expansion): `from` is the sender's `wmp.session_id`, the text
             // `body.text`. (JsonRpcResponse.result is the params dictionary
@@ -479,24 +491,39 @@ extension SirosWallet {
                 if case .string(let id)? = envelope["wmp_message_id"] {
                     messageId = id
                 }
-                out.append(
-                    WmpGroupMessage(
-                        backend: backend,
-                        sessionId: sessionId,
-                        from: from,
-                        text: text,
-                        messageId: messageId
-                    )
+                let parsed = WmpGroupMessage(
+                    backend: backend,
+                    sessionId: sessionId,
+                    from: from,
+                    text: text,
+                    messageId: messageId
                 )
+                // Every answered message appends (idempotent by the id when
+                // present) — the store IS the inbox.
+                store.append(parsed)
+                out.append(parsed)
                 if let messageId { last = messageId }
             }
             if let last {
-                lock.lock()
-                wmpMessageCursors["\(backend):\(sessionId)"] = last
-                lock.unlock()
+                store.setCursor(backend: backend, sessionId: sessionId, since: last)
             }
         }
+        store.prune(keep: 50)
         return out
+    }
+
+    /// The wallet's group inbox (issue #77): the messages every session
+    /// holds, from the STORE (the app-supplied ``WmpMessageStore`` — its
+    /// persistence, its retention). The apps render this snapshot;
+    /// ``pollGroupMessages`` keeps it fresh.
+    ///
+    /// Kotlin parity: `SirosWallet.wmpGroupInbox`.
+    public func wmpGroupInbox(limit: Int = 50) -> [WmpGroupMessage] {
+        let store = wmpMessageStore
+        return allWmpPeers().flatMap { (backend, peer) -> [WmpGroupMessage] in
+            guard let sessionId = peer.currentSessionId else { return [] }
+            return store.load(backend: backend, sessionId: sessionId, limit: limit)
+        }
     }
 
     /// The live group messages (issue #77): every connected session's

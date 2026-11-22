@@ -143,6 +143,12 @@ public struct WalletConfig: Sendable {
     /// rides out a blip; a dead provider costs one extra attempt, not a
     /// hang. The same stored-property precedent.
     public var engineConnectRetries: Int = 2
+    /// Issue #77: the wallet's group message store (the inbox + the outbox
+    /// + the poll cursors) — CLIENT-SIDE ONLY (never the backend: the relay
+    /// is the Delivery Service). The app constructs its own persistence
+    /// against ``WmpMessageStore``; `nil` (the default) runs the in-memory
+    /// store, gone with the process. Kotlin parity: `WalletConfig.wmpMessageStore`.
+    public var wmpMessageStore: (any WmpMessageStore)? = nil
 
     /// Initial value of ``SirosWallet/transactionDataEnabled`` (EC TS12
     /// payment SCA). Default `false`. A runtime setting, not a build flag:

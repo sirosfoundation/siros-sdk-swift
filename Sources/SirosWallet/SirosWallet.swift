@@ -713,10 +713,15 @@ public final class SirosWallet: @unchecked Sendable {
     /// `connectedWmpEndpoints()` reports them.
     var wmpMainUrls: (send: String, sse: String?)?
 
-    /// Issue #77: the group-inbox poll cursors (backend:session → the last
-    /// `wmp_message_id` a poll answered) — `pollGroupMessages()`'s `since`.
-    /// Guarded by `lock`.
-    var wmpMessageCursors: [String: String] = [:]
+    /// Issue #77: the wallet's group message store — the app-supplied
+    /// persistence (`WalletConfig.wmpMessageStore`, the in-memory default
+    /// when nil). The poll reads/advances its cursors, every answered
+    /// message appends (the store IS the inbox), the teardown clears it.
+    /// CLIENT-SIDE ONLY (never the backend: the relay is the Delivery
+    /// Service). Kotlin parity: `SirosWallet.wmpMessageStore`.
+    var wmpMessageStore: any WmpMessageStore {
+        config.wmpMessageStore ?? InMemoryWmpMessageStore.sharedDefault
+    }
 
     /// The detached WMP issuance start (see `wmpStartIssuance`): cancelled by
     /// the next start so a cancelled attempt's late send cannot race it.
