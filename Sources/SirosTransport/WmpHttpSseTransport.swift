@@ -141,9 +141,33 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     /// The stream, opened with the session the wallet created: `?session_id=` names it (the engine
     /// routes the replay and the live events by it).
     public func onSessionCreated(sessionId: String) async {
-        if sseSessionId == nil { sseSessionId = sessionId }
-        if _state != .connected {
+        let previous = sseSessionId
+        sseSessionId = sessionId
+        switch previous {
+        case nil:
+            // The first create: open the stream on it.
+            if _state != .connected { try? await connect() }
+        case .some(let old) where old != sessionId:
+            // A re-create minted a NEW session id (the re-scan path,
+            // `WmpSession.recreate` — a second invitation consume on a live
+            // peer): the old stream still names the RETIRED id, and the engine
+            // routes every event by `?session_id=` — the new session's outbox
+            // pushes never reach it (found live: a re-scan left the wallet
+            // deaf to its group; heartbeats flowed, zero data). Stop the
+            // retired reader and open on the fresh id, with fresh event state:
+            // the engine's replay then re-delivers everything the new
+            // session's mailbox holds from the top.
+            readerGate.stop {
+                sseTask?.cancel()
+                sseTask = nil
+                setState(.disconnected)
+            }
+            eventParser = SseEventParser()
+            replayFilter = SseReplayFilter()
             try? await connect()
+        default:
+            // The same id again: the stream stays as it is.
+            if _state != .connected { try? await connect() }
         }
     }
 
