@@ -53,6 +53,32 @@ final class EngineTypesTests: XCTestCase {
         XCTAssertFalse(text.contains("client_attestation_pop"))
     }
 
+    /// The stateless OID4VCI resume carries the backend's signed
+    /// `authorization_context` (go-wallet-backend d5eb7d4d+ refuses the
+    /// resume without it - sirosid-dev#187), and omits it entirely when the
+    /// backend never sent one (backends predating the field must not see it).
+    func testFlowStartResumeEncodesAuthorizationContext() throws {
+        let msg = FlowStartMessage(
+            protocol: "oid4vci",
+            redirectUri: "app://callback",
+            authCode: "ac",
+            codeVerifier: "v",
+            authorizationContext: "ctx-jwt-signed-transaction"
+        )
+        let text = String(data: try encoder.encode(msg), encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("\"authorization_context\":\"ctx-jwt-signed-transaction\""))
+
+        let without = FlowStartMessage(
+            protocol: "oid4vci",
+            redirectUri: "app://callback",
+            authCode: "ac",
+            codeVerifier: "v"
+        )
+        let textWithout = String(data: try encoder.encode(without), encoding: .utf8)!
+        XCTAssertFalse(textWithout.contains("authorization_context"))
+    }
+
     /// `sign_client_auth` reply (go-wallet-backend#317): the key identifier,
     /// DPoP proof and fresh attestation ride on the sign_response under the
     /// backend's `SignResponseMessage` wire names.

@@ -64,6 +64,7 @@ extension SirosWallet {
                 redirectUri: redirectUri,
                 codeVerifier: members["code_verifier"]?.stringValue,
                 state: state,
+                authorizationContext: members["authorization_context"]?.stringValue,
                 startEpoch: nil
             )
         }

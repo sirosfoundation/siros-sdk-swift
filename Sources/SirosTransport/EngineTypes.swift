@@ -179,6 +179,15 @@ public struct FlowStartMessage: Codable, Sendable {
     /// that constructs this message listing its existing arguments in
     /// declaration order without yet naming this new one (review finding).
     public var authorizationDetails: [AuthorizationDetail]?
+    /// The backend's signed `authorization_context` (go-wallet-backend's
+    /// stateless-resume transaction JWT, handed over with the authorization
+    /// URL at the redirect step and sent back verbatim on the resumed flow).
+    /// Backends that require it (d5eb7d4d+, 2026-11-13) refuse the resume
+    /// without it - "authorization_context is required for flow resumption";
+    /// backends predating it don't send it and ignore it here. Appended after
+    /// every pre-existing field for positional-caller compatibility, per this
+    /// type's `authorizationDetails` review finding.
+    public var authorizationContext: String?
 
     public init(
         type: String = MessageTypes.flowStart,
@@ -201,7 +210,8 @@ public struct FlowStartMessage: Codable, Sendable {
         dpopKeyId: String? = nil,
         timestamp: String? = nil,
         authorizationDetails: [AuthorizationDetail]? = nil,
-        features: [String]? = nil
+        features: [String]? = nil,
+        authorizationContext: String? = nil
     ) {
         self.type = type
         self.protocol = `protocol`
@@ -224,6 +234,7 @@ public struct FlowStartMessage: Codable, Sendable {
         self.authorizationDetails = authorizationDetails
         self.features = (features?.isEmpty ?? true) ? nil : features
         self.timestamp = timestamp
+        self.authorizationContext = authorizationContext
     }
 
     enum CodingKeys: String, CodingKey {
@@ -244,6 +255,7 @@ public struct FlowStartMessage: Codable, Sendable {
         case authorizationDetails = "authorization_details"
         case dpopJwk = "dpop_jwk"
         case dpopKeyId = "dpop_key_id"
+        case authorizationContext = "authorization_context"
     }
 }
 
