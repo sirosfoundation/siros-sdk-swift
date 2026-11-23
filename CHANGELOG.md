@@ -5,6 +5,18 @@ All notable changes to the SIROS SDK for iOS/macOS will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.6] - 2026-11-23
+
+### Fixed
+
+- **Stateless OID4VCI resume sends the `authorization_context`** — go-wallet-backend `d5eb7d4d` (2026-11-13) requires the signed
+  transaction JWT on the post-redirect resume; `FlowStartMessage` never carried it, so every browser-authorization issuance resuming
+  on a fresh flow failed with *"authorization_context is required for flow resumption"* against such backends (GDC deployed it
+  Nov 19–20 — [sirosid-dev#187](https://github.com/sirosfoundation/sirosid-dev/issues/187)). The stash now captures it from the
+  redirect's progress data (both the engine-session and WMP paths) and `resumeIssuance` re-sends it; `FlowStartMessage.authorizationContext`
+  appended after every pre-existing field per the positional-caller convention. Backends predating the field don't send it and
+  ignore it — both directions stay compatible.
+
 ## [0.17.5] - 2026-11-18
 
 ### Engine
@@ -42,8 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `vp_formats_supported`, the consent's `client_name`/`logo_uri`) plus the
   surface's other 0.2.18–0.2.20 drift.
 
-
-## [Unreleased]
 
 ## [0.17.0] - 2026-11-12
 
