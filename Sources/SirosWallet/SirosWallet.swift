@@ -29,6 +29,12 @@ struct PendingAuthorization: Sendable {
     let redirectUri: String?
     let codeVerifier: String?
     let state: String
+    /// The backend's signed `authorization_context` (go-wallet-backend's
+    /// stateless-resume transaction JWT, handed over with the authorization
+    /// URL). The stateless resume REQUIRES it on backends d5eb7d4d+
+    /// (2026-11-13) - it rides the stash from the redirect to the resume
+    /// exactly like the code verifier. Nil on backends predating it.
+    let authorizationContext: String?
     /// The issuance epoch the ORIGINATING flow started under (its start tag), carried
     /// to the resume instead of re-sampling the current epoch after the browser
     /// round-trip and the token/connection awaits. Nil when the session could not

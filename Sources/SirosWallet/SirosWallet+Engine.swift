@@ -1230,6 +1230,7 @@ extension SirosWallet {
                             redirectUri: redirectUri,
                             codeVerifier: payloadDict["code_verifier"]?.stringValue,
                             state: effectiveState,
+                            authorizationContext: payloadDict["authorization_context"]?.stringValue,
                             startEpoch: engine.startTag(forFlow: msg.flowId)
                         )
                         lock.lock()

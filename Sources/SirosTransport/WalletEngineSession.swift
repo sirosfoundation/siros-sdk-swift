@@ -1102,7 +1102,8 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
         redirectUri: String? = nil,
         authCode: String,
         codeVerifier: String? = nil,
-        startTag: Int? = nil
+        startTag: Int? = nil,
+        authorizationContext: String? = nil
     ) {
         sendFlowStart(FlowStartMessage(
             protocol: "oid4vci",
@@ -1110,7 +1111,8 @@ public final class WalletEngineSession: CredentialNotifier, @unchecked Sendable 
             credentialOfferUri: credentialOfferUri,
             redirectUri: redirectUri,
             authCode: authCode,
-            codeVerifier: codeVerifier
+            codeVerifier: codeVerifier,
+            authorizationContext: authorizationContext
         ), tag: startTag)
     }
 
