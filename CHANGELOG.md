@@ -5,6 +5,17 @@ All notable changes to the SIROS SDK for iOS/macOS will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.7] - 2026-11-24
+
+### Fixed
+- **A re-created WMP session retargets the SSE stream** — a *second* scan of a re-minted invite (the re-scan path,
+  `WmpSession.recreate`) left the wallet deaf to its group: `onSessionCreated` kept the retired session id and skipped
+  the re-open while the old stream was connected, and the engine routes every event by `?session_id=` — the new
+  session's pushes went to a stream nobody listened on. The transport adopts the fresh id, cancels the retired reader
+  and re-opens with fresh event state — the replay re-delivers from the top. The Kotlin twin's executed proof:
+  `aRecreateRetargetsTheLiveStream` (siros-sdk-kotlin #434, released as v0.23.12); this transport is
+  `canImport(Darwin)`-gated so its proof rides macOS CI.
+
 ## [0.17.6] - 2026-11-23
 
 ### Fixed
