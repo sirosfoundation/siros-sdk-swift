@@ -115,7 +115,7 @@ extension SirosWallet {
         guard let endpoints = await endpointsTask else {
             throw SirosError.wallet(
                 message: "The invitation's backend does not answer discovery " +
-                    "(\(provider)/.well-known/wmp-configuration) — cannot join its group"
+                    "(the well-known WMP configuration of \(provider)) — cannot join its group"
             )
         }
         let _ = try? await tokenTask // warmed; the transport mints its own fresh per request
@@ -173,18 +173,24 @@ extension SirosWallet {
         return try await tokens.ensureBackendToken().raw
     }
 
-    /// The WMP endpoints a backend's well-known names
-    /// (`/.well-known/wmp-configuration`, path-preserving: a reverse-proxied
-    /// deployment serves it under its own path). `nil` when the backend
-    /// does not answer or carries no `endpoints.wmp`/`endpoints.events`.
+    /// The WMP endpoints a backend's well-known configuration names (WMP
+    /// Core 7.5.1). A backend under a path is a tenant of its host: its
+    /// configuration is at `https://<host>/.well-known/wmp-configuration<path>`
+    /// and names the backend in `discovery_base`. `nil` when the backend has
+    /// no discovery base, does not answer, answers for another base, or
+    /// carries no `endpoints.wmp`/`endpoints.events`.
     private func discoverWmpEndpoints(_ backendBase: String) async -> (send: String, sse: String)? {
-        let url = backendBase.trimmingCharacters(in: CharacterSet(charactersIn: "/")) +
-            "/.well-known/wmp-configuration"
-        guard let base = Foundation.URL(string: url) else { return nil }
+        guard let base = WmpDiscoveryBase(identifier: backendBase),
+              let url = Foundation.URL(string: base.wellKnownURL) else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(from: base)
+            let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            // `discovery_base` is a string or absent; any other type refuses.
+            let declared = parsed["discovery_base"]
+            guard declared == nil || declared is String,
+                  base.isDescribed(by: declared as? String),
                   let endpoints = parsed["endpoints"] as? [String: Any],
                   let send = endpoints["wmp"] as? String,
                   let events = endpoints["events"] as? String,
