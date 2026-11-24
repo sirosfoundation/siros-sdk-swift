@@ -171,8 +171,13 @@ let package = Package(
             // (WmpMls + the Mls* records — v0.3.7 is the first release whose
             // XCFramework carries the MLS symbols, per wallet-core #96/#98:
             // the binary AND the bindings are feature-symmetric at last).
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.3.7/engine_adapter_sdk.xcframework.zip",
-            checksum: "417676935696e3555c261d012f820de9722a7101741b84a8662085532de3ba5a"
+            // v0.3.8 (2026-11-24): the FULL artifact symmetry — the
+            // XCFramework's headers carry the MLS declarations alongside the
+            // binary's symbols (wallet-core #98: the bindgen's LIBRARY builds
+            // with mls; v0.3.7's binary had the symbols but its headers came
+            // from the MLS-less bindgen — the iOS compile error's cause).
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.3.8/engine_adapter_sdk.xcframework.zip",
+            checksum: "72ce5631640e889b3393448f99afbbc41539fbf03c1f6afdd4118fb7d16c97b8"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
