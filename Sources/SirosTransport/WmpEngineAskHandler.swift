@@ -55,10 +55,36 @@ public protocol WmpEngineAskHandler: AnyObject, Sendable {
     /// refuse (the engine-ports default: the flow fails closed rather than guessing).
     func requestCredentialSelection(flowId: String, available: [EngineAvailableCredential]) async throws -> String?
 
+    /// Issue #59 (wallet-core): the `response_encryption_key` ask — generate the
+    /// P-256 pair for one credential request's encryption offer and answer with
+    /// the PUBLIC JWK only (the private half stays on the wallet; the issuer's
+    /// encrypted response opens through `requestDecryptCredentialResponse`).
+    /// Returning nil (the default) keeps the engine-held legacy pair — the
+    /// engine falls back on the refusal.
+    func requestResponseEncryptionKey(flowId: String, params: EngineResponseEncryptionKeyParams) async throws -> EngineResponseEncryptionKeyResult?
+
+    /// Issue #59 (wallet-core): the `decrypt_credential_response` ask — open the
+    /// engine-relayed JWE with the wallet-held private half of the pair
+    /// `requestResponseEncryptionKey` generated. Returning nil (the default)
+    /// keeps the engine's in-process decrypt — the engine falls back on the
+    /// refusal.
+    func requestDecryptCredentialResponse(flowId: String, params: EngineDecryptCredentialResponseParams) async throws -> EngineDecryptCredentialResponseResult?
+
     /// The engine's progress relay (the local carrier has no SSE stream for the wallet's
     /// own UI - the Host port is the only channel). Non-throwing: the engine calls it
     /// synchronously and expects nothing back.
     func onProgress(flowId: String, step: String, detail: String?)
+}
+
+extension WmpEngineAskHandler {
+    /// The Kotlin twin declares #59's two asks with `= null` interface defaults;
+    /// this extension carries the same "no answer" for wallets that keep their
+    /// response-encryption keys engine-held — the engine falls back on the
+    /// refusal (negotiate_with_host keeps the legacy ephemeral pair and the
+    /// in-process decrypt).
+    public func requestResponseEncryptionKey(flowId: String, params: EngineResponseEncryptionKeyParams) async throws -> EngineResponseEncryptionKeyResult? { nil }
+
+    public func requestDecryptCredentialResponse(flowId: String, params: EngineDecryptCredentialResponseParams) async throws -> EngineDecryptCredentialResponseResult? { nil }
 }
 
 /// `EngineAdapterSdk.Host` over a ``WmpEngineAskHandler``: the class the app hands
@@ -226,6 +252,48 @@ public final class UniFfiEngineAskHost: EngineAdapterSdk.Host, @unchecked Sendab
             credentialConfigurationId: chosen,
             credentialConfigurationIds: [chosen]
         )
+    }
+
+    public func requestResponseEncryptionKey(params: EngineAdapterSdk.ResponseEncryptionKeyParams) async throws -> EngineAdapterSdk.ResponseEncryptionKeyResult {
+        // Issue #59: the nil answer (the handler's default) maps to the
+        // engine-ports refusal — negotiate_with_host falls back to the
+        // engine-held ephemeral pair. A JSON-object answer's wire form is a
+        // JSON string (the uniffi-Record text shape).
+        guard let result = try await handler.requestResponseEncryptionKey(
+            flowId: params.flowId,
+            params: EngineResponseEncryptionKeyParams(
+                flowId: params.flowId,
+                credentialConfigurationId: params.credentialConfigurationId,
+                alg: params.alg,
+                enc: params.enc
+            )
+        ),
+              let codable = AnyCodable.object_(result.publicJwk).any,
+              JSONSerialization.isValidJSONObject(codable),
+              let data = try? JSONSerialization.data(withJSONObject: codable),
+              let json = String(data: data, encoding: .utf8) else {
+            throw EngineAdapterSdk.SdkError.Cannot("response-encryption keys are engine-held on this wallet")
+        }
+        return EngineAdapterSdk.ResponseEncryptionKeyResult(publicJwk: json)
+    }
+
+    public func requestDecryptCredentialResponse(params: EngineAdapterSdk.DecryptCredentialResponseParams) async throws -> EngineAdapterSdk.DecryptCredentialResponseResult {
+        guard let result = try await handler.requestDecryptCredentialResponse(
+            flowId: params.flowId,
+            params: EngineDecryptCredentialResponseParams(
+                flowId: params.flowId,
+                credentialConfigurationId: params.credentialConfigurationId,
+                deferred: params.deferred,
+                jwe: params.jwe
+            )
+        ),
+              let codable = AnyCodable.object_(result.response).any,
+              JSONSerialization.isValidJSONObject(codable),
+              let data = try? JSONSerialization.data(withJSONObject: codable),
+              let json = String(data: data, encoding: .utf8) else {
+            throw EngineAdapterSdk.SdkError.Cannot("credential responses are engine-decrypted on this wallet")
+        }
+        return EngineAdapterSdk.DecryptCredentialResponseResult(response: json)
     }
 
     public func progress(flowId: String, step: String, detail: String?) {
