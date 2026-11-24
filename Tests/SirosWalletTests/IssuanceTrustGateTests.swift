@@ -476,10 +476,10 @@ final class IssuanceTrustGateTests: XCTestCase {
 
     // MARK: - OAuth resume carries the originating issuance's epoch
 
-    private func pendingAuthorization(startEpoch: Int?) -> PendingAuthorization {
+    private func pendingAuthorization(startEpoch: Int?, authorizationContext: String? = nil) -> PendingAuthorization {
         PendingAuthorization(
             offer: "{}", credentialOfferUri: nil, redirectUri: "https://wallet/cb",
-            codeVerifier: "v", state: "s", startEpoch: startEpoch
+            codeVerifier: "v", state: "s", authorizationContext: authorizationContext, startEpoch: startEpoch
         )
     }
 
@@ -561,6 +561,32 @@ final class IssuanceTrustGateTests: XCTestCase {
         XCTAssertFalse(usedNewSession.value, "A's callback must not use B's engine or tokens")
         XCTAssertNil(wallet.pendingAuthorizations["A"], "the stale context is consumed, not left to be replayed")
         XCTAssertTrue(h.listener.completed.isEmpty)
+    }
+
+    /// The authorization redirect's progress data hands the signed
+    /// `authorization_context` over with the authorization URL; the stash
+    /// must capture it alongside the code verifier so the stateless resume
+    /// can re-send it (go-wallet-backend d5eb7d4d+ refuses the resume
+    /// without it - sirosid-dev#187).
+    func testTheWmpAuthorizationProgressStashesTheAuthorizationContext() async throws {
+        let h = makeHarness()
+        let wallet = h.wallet
+        await wallet.handleWmpProgress(
+            flowId: "A",
+            step: "authorization_required",
+            payload: AnyCodable([
+                "authorization_url": "https://as.example/auth?state=s",
+                "expected_redirect_uri": "app://callback",
+                "state": "s",
+                "code_verifier": "v",
+                "authorization_context": "ctx-jwt-signed-transaction",
+            ])
+        )
+        let pending = wallet.pendingAuthorizations["A"]
+        XCTAssertNotNil(pending, "the stash captures the authorization round before the browser opens")
+        XCTAssertEqual(pending?.authorizationContext, "ctx-jwt-signed-transaction",
+                       "the backend's transaction JWT rides the stash to the resume")
+        XCTAssertEqual(pending?.codeVerifier, "v")
     }
 
     func testAPresentationCompletionDoesNotClearAnIssuanceInFlightBesideIt() async {

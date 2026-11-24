@@ -334,7 +334,8 @@ extension SirosWallet {
             redirectUri: pending.redirectUri,
             authCode: code,
             codeVerifier: pending.codeVerifier,
-            startTag: startEpoch
+            startTag: startEpoch,
+            authorizationContext: pending.authorizationContext
         )
     }
 
