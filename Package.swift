@@ -176,8 +176,17 @@ let package = Package(
             // binary's symbols (wallet-core #98: the bindgen's LIBRARY builds
             // with mls; v0.3.7's binary had the symbols but its headers came
             // from the MLS-less bindgen — the iOS compile error's cause).
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.3.8/engine_adapter_sdk.xcframework.zip",
-            checksum: "72ce5631640e889b3393448f99afbbc41539fbf03c1f6afdd4118fb7d16c97b8"
+            // v0.3.9 (2026-11-24): wallet-core #106 (closes #105) — the
+            // authorization answer's state correlation: an EBW-OID issuance
+            // with PID authentication died at the credential step with
+            // `Method not found` because the openid4vp login is its own flow
+            // and the oid4vp family refused every action; the state now
+            // routes the answer to the stashed grant's owner flow. The
+            // change is engine-core only — the FFI surface is identical to
+            // v0.3.8's, so the vendored bindings stay untouched and only
+            // the pin's url and checksum move.
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.3.9/engine_adapter_sdk.xcframework.zip",
+            checksum: "67a7247ee10e142551ec3d99a9dd6d8ddb3003d36cebbec73aae53f01a5c6d5c"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
