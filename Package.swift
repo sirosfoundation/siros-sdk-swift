@@ -167,11 +167,12 @@ let package = Package(
             // every configuration's sign/signing-key ask names its
             // credential_configuration_id (go-wallet-backend#558's twin), on
             // top of v0.2.22's session-loss era. The vendored bindings
-            // regenerated from the v0.2.24 release's bindings.zip:
-            // SignParams/SigningKeyParams gained credentialConfigurationId and
-            // CredentialSelectionResult the credentialConfigurationIds set.
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.2.24/engine_adapter_sdk.xcframework.zip",
-            checksum: "86ca15dfe4866939785790efa38228788443349586fabdcdb589fa3040a53c7d"
+            // regenerated from the v0.3.7 release: the full MLS surface
+            // (WmpMls + the Mls* records — v0.3.7 is the first release whose
+            // XCFramework carries the MLS symbols, per wallet-core #96/#98:
+            // the binary AND the bindings are feature-symmetric at last).
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.3.7/engine_adapter_sdk.xcframework.zip",
+            checksum: "417676935696e3555c261d012f820de9722a7101741b84a8662085532de3ba5a"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---
