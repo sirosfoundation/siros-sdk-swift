@@ -64,7 +64,7 @@ final class WmpMlsCryptoTests: XCTestCase {
         // The message (spec §4.1): Alice encrypts to the epoch key, Bob
         // decrypts. MLS ratchets: Alice's own provider refuses her own
         // ciphertext (the recipient's provider answers).
-        let plaintext = Array("hello from alice, under the epoch key".utf8)
+        let plaintext = Data("hello from alice, under the epoch key".utf8)
         let sent = try alice.encrypt(groupId: group.groupId, plaintext: plaintext)
         XCTAssertGreaterThanOrEqual(sent.epoch, 1)
         XCTAssertFalse(sent.ciphertext.isEmpty)
