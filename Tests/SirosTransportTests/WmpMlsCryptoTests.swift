@@ -64,13 +64,17 @@ final class WmpMlsCryptoTests: XCTestCase {
         // The message (spec §4.1): Alice encrypts to the epoch key, Bob
         // decrypts. MLS ratchets: Alice's own provider refuses her own
         // ciphertext (the recipient's provider answers).
-        let plaintext = Data("hello from alice, under the epoch key".utf8)
+        let plaintext = Array("hello from alice, under the epoch key".utf8)
         let sent = try alice.encrypt(groupId: group.groupId, plaintext: plaintext)
         XCTAssertGreaterThanOrEqual(sent.epoch, 1)
         XCTAssertFalse(sent.ciphertext.isEmpty)
 
         let received = try bob.decrypt(groupId: group.groupId, ciphertext: sent.ciphertext)
-        XCTAssertEqual(received.plaintext, plaintext)
+        // The wrapper's encrypt is Kotlin-parity ([UInt8] - ByteArray
+        // there), while the v0.3.8-generated record returns plaintext as
+        // Data (the Kotlin record is ByteArray - symmetric only there):
+        // compare across the boundary, not through it.
+        XCTAssertEqual(Data(plaintext), received.plaintext)
         XCTAssertEqual(received.epoch, sent.epoch)
 
         XCTAssertThrowsError(
