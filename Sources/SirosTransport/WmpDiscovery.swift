@@ -62,6 +62,9 @@ public struct WmpDiscoveryBase: Equatable, Sendable {
     /// whole host may leave it out (`nil`).
     public func isDescribed(by discoveryBase: String?) -> Bool {
         guard let discoveryBase, !discoveryBase.isEmpty else { return tenantPath.isEmpty }
+        // The declared base is compared as written: a trailing `/` is not
+        // the base, only an identifier's path is trimmed.
+        guard !discoveryBase.hasSuffix("/") else { return false }
         // The scheme compares case-insensitively, like the host.
         let scheme = "https:"
         var normalized = discoveryBase

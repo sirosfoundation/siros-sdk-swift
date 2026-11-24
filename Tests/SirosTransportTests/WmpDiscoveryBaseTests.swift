@@ -54,7 +54,8 @@ final class WmpDiscoveryBaseTests: XCTestCase {
     func testATenantDocumentMustNameTheTenant() throws {
         let tenant = try XCTUnwrap(WmpDiscoveryBase(identifier: "https://example.com/tenants/acme"))
         XCTAssertTrue(tenant.isDescribed(by: "https://example.com/tenants/acme"))
-        XCTAssertTrue(tenant.isDescribed(by: "HTTPS://EXAMPLE.com/tenants/acme/"))
+        XCTAssertTrue(tenant.isDescribed(by: "HTTPS://EXAMPLE.com/tenants/acme"))
+        XCTAssertFalse(tenant.isDescribed(by: "https://example.com/tenants/acme/"), "trailing slash")
         XCTAssertFalse(tenant.isDescribed(by: nil), "absent")
         XCTAssertFalse(tenant.isDescribed(by: ""), "empty")
         XCTAssertFalse(tenant.isDescribed(by: "https://example.com"), "the host's")
@@ -68,7 +69,7 @@ final class WmpDiscoveryBaseTests: XCTestCase {
         let host = try XCTUnwrap(WmpDiscoveryBase(identifier: "x509:san:dns:example.com"))
         XCTAssertTrue(host.isDescribed(by: nil))
         XCTAssertTrue(host.isDescribed(by: "https://example.com"))
-        XCTAssertTrue(host.isDescribed(by: "https://example.com/"))
+        XCTAssertFalse(host.isDescribed(by: "https://example.com/"), "trailing slash")
         XCTAssertFalse(host.isDescribed(by: "https://example.com/tenant1"))
         XCTAssertFalse(host.isDescribed(by: "https://evil.example"))
     }
