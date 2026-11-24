@@ -83,7 +83,9 @@ public final class WmpMlsCrypto: @unchecked Sendable {
     /// (spec §4.1): the base64url MLSMessage + the epoch. The relay
     /// carries this ciphertext opaque.
     public func encrypt(groupId: String, plaintext: [UInt8]) throws -> MlsEncrypted {
-        let it = try inner.encrypt(groupId: groupId, plaintext: plaintext)
+        // The v0.3.8-generated bindings take Data (the regenerated
+        // surface — the [UInt8] form was the pre-#98 bindgen's).
+        let it = try inner.encrypt(groupId: groupId, plaintext: Data(plaintext))
         return MlsEncrypted(ciphertext: it.ciphertext, epoch: it.epoch)
     }
 

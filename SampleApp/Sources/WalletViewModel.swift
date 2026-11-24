@@ -1003,6 +1003,12 @@ final class WalletViewModel: ObservableObject {
             startFlow(type: "issuance") { try await self.wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
             startFlow(type: "presentation") { try await self.wallet?.startPresentation(requestUri: uri) ?? true }
+        case .invitation(let uri):
+            // Issue #77: the wallet-to-wallet invitation — the scanned QR
+            // bootstraps a session (the engine consumes the nonce single-use).
+            // Not a flow: the consume answer IS the session, ready for
+            // whatever follows; the same "working…" indicator reads.
+            startFlow(type: "invitation") { try await self.wallet?.consumeInvitation(uri: uri) }
         case .authCallback(let authCode, let state):
             handleAuthRedirect(code: authCode, state: state)
         case .unknown(let uri):
@@ -1067,6 +1073,10 @@ final class WalletViewModel: ObservableObject {
         switch linkType {
         case .authCallback(let code, let state):
             handleAuthRedirect(code: code, state: state)
+        case .invitation(let uri):
+            // Issue #77: the invitation deep-link — the same consume path
+            // as the scanned QR (a session bootstrap, not a flow).
+            startFlow(type: "invitation") { try await self.wallet?.consumeInvitation(uri: uri) }
         case .credentialOffer(let uri):
             startFlow(type: "issuance") { try await self.wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):

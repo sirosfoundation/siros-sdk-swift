@@ -62,6 +62,14 @@ final class WmpUniFFITransportTests: XCTestCase {
             throw SdkError.Cannot("no selection")
         }
 
+        func requestResponseEncryptionKey(params: ResponseEncryptionKeyParams) async throws -> ResponseEncryptionKeyResult {
+            throw SdkError.Cannot("no response-encryption key")
+        }
+
+        func requestDecryptCredentialResponse(params: DecryptCredentialResponseParams) async throws -> DecryptCredentialResponseResult {
+            throw SdkError.Cannot("no decrypt")
+        }
+
         func progress(flowId: String, step: String, detail: String?) {}
     }
 

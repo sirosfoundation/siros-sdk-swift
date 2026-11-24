@@ -77,6 +77,84 @@ public struct EngineSigningKeyResult: Sendable {
     }
 }
 
+/// Issue #59 (wallet-core): the `response_encryption_key` ask — the HOST
+/// generates the P-256 pair for one credential request's encryption offer
+/// and answers with the PUBLIC JWK only. The private half stays on the
+/// wallet; the issuer's encrypted response opens through the
+/// `EngineDecryptCredentialResponseParams` ask. Refusing (nil handler)
+/// keeps the engine-held legacy path.
+public struct EngineResponseEncryptionKeyParams: Codable, Sendable {
+    public var flowId: String?
+    /// The configuration this key encrypts the response of (#558's pairing).
+    public var credentialConfigurationId: String
+    /// The negotiated key-agreement algorithm (§7.3 — the engine resolved it).
+    public var alg: String
+    /// The negotiated content-encryption method.
+    public var enc: String
+
+    public init(
+        flowId: String? = nil, credentialConfigurationId: String = "", alg: String = "", enc: String = ""
+    ) {
+        self.flowId = flowId
+        self.credentialConfigurationId = credentialConfigurationId
+        self.alg = alg
+        self.enc = enc
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case flowId = "flow_id"
+        case credentialConfigurationId = "credential_configuration_id"
+        case alg, enc
+    }
+}
+
+/// The answer to an [EngineResponseEncryptionKeyParams]: the public JWK of the wallet-held pair.
+public struct EngineResponseEncryptionKeyResult: Sendable {
+    public var publicJwk: [String: AnyCodable]
+
+    public init(publicJwk: [String: AnyCodable]) {
+        self.publicJwk = publicJwk
+    }
+}
+
+/// Issue #59 (wallet-core): the `decrypt_credential_response` ask — the
+/// engine relays the issuer's JWE (compact, five dot-separated parts) and
+/// the HOST opens it with the private half of its held pair. The plaintext
+/// response JSON travels back; the engine parses it, nothing else.
+public struct EngineDecryptCredentialResponseParams: Codable, Sendable {
+    public var flowId: String?
+    /// The configuration this response is for (#558's pairing).
+    public var credentialConfigurationId: String
+    /// True when the JWE answers a Deferred Credential Request (the Go engine's shape).
+    public var deferred: Bool
+    /// The compact JWE the issuer answered.
+    public var jwe: String
+
+    public init(
+        flowId: String? = nil, credentialConfigurationId: String = "", deferred: Bool = false, jwe: String = ""
+    ) {
+        self.flowId = flowId
+        self.credentialConfigurationId = credentialConfigurationId
+        self.deferred = deferred
+        self.jwe = jwe
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case flowId = "flow_id"
+        case credentialConfigurationId = "credential_configuration_id"
+        case deferred, jwe
+    }
+}
+
+/// The answer to an [EngineDecryptCredentialResponseParams]: the plaintext response JSON.
+public struct EngineDecryptCredentialResponseResult: Sendable {
+    public var response: [String: AnyCodable]
+
+    public init(response: [String: AnyCodable]) {
+        self.response = response
+    }
+}
+
 /// The `consent` ask (engine-ports `ConsentParams`): the engine asks the wallet's
 /// USER whether this presentation may proceed. `consented: false` is the decline
 /// path (the verifier is told `access_denied`), never a flow error.
