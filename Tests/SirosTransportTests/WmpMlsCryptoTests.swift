@@ -70,7 +70,11 @@ final class WmpMlsCryptoTests: XCTestCase {
         XCTAssertFalse(sent.ciphertext.isEmpty)
 
         let received = try bob.decrypt(groupId: group.groupId, ciphertext: sent.ciphertext)
-        XCTAssertEqual(received.plaintext, plaintext)
+        // The wrapper's encrypt is Kotlin-parity ([UInt8] - ByteArray
+        // there), while the v0.3.8-generated record returns plaintext as
+        // Data (the Kotlin record is ByteArray - symmetric only there):
+        // compare across the boundary, not through it.
+        XCTAssertEqual(Data(plaintext), received.plaintext)
         XCTAssertEqual(received.epoch, sent.epoch)
 
         XCTAssertThrowsError(
