@@ -72,7 +72,10 @@ public struct WmpDiscoveryBase: Equatable, Sendable {
             normalized = scheme + discoveryBase.dropFirst(scheme.count)
         }
         guard let got = Self.ofURL(normalized) else { return false }
-        return got.host.lowercased() == host.lowercased() && got.tenantPath == tenantPath
+        // The tenant path compares byte for byte: `String ==` equates
+        // canonically equivalent spellings that are distinct URL paths.
+        return got.host.lowercased() == host.lowercased()
+            && got.tenantPath.utf8.elementsEqual(tenantPath.utf8)
     }
 
     // MARK: - Parsing

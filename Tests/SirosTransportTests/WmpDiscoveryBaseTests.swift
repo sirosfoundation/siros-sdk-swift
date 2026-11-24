@@ -63,6 +63,11 @@ final class WmpDiscoveryBaseTests: XCTestCase {
         XCTAssertFalse(tenant.isDescribed(by: "https://evil.example/tenants/acme"), "another host's")
         XCTAssertFalse(tenant.isDescribed(by: "https://example.com:8443/tenants/acme"), "another port's")
         XCTAssertFalse(tenant.isDescribed(by: "https://example.com/tenants/ACME"), "path case")
+
+        // Canonically equivalent spellings are distinct URL paths.
+        let composed = try XCTUnwrap(WmpDiscoveryBase(identifier: "https://example.com/caf\u{00E9}"))
+        XCTAssertTrue(composed.isDescribed(by: "https://example.com/caf\u{00E9}"))
+        XCTAssertFalse(composed.isDescribed(by: "https://example.com/cafe\u{0301}"), "decomposed")
     }
 
     func testAHostDocumentMayLeaveTheBaseOutButNotNameAnother() throws {
