@@ -334,14 +334,6 @@ final class WalletViewModel: ObservableObject {
 
     @Published var presentationHistory: [PresentationRecord] = []
 
-// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-
-import SirosWallet
-
-/// The WMP Groups screen's state and actions (split from WalletViewModel to
-/// keep the view model below the file-length lint ceiling).
-extension WalletViewModel {
-
     @Published var wmpEndpoints: [WmpEndpointInfo] = []
     @Published var wmpMessages: [WmpGroupMessage] = []
     var wmpEventsJob: Task<Void, Never>?
