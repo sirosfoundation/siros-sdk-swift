@@ -82,6 +82,9 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     /// group name, issue #77) — the Kotlin SDK's `WmpPeer.currentSessionId`.
     public var currentSessionId: String? { session.currentSessionId }
 
+    /// The latest resumption token (rotated on every resume), for persistence.
+    public var currentResumptionToken: String? { session.currentResumptionToken }
+
     /// The current session state (a synchronous read beside the
     /// ``stateStream``) — the Kotlin SDK's `WmpPeer.state.value`.
     public var currentState: WmpSessionState { session.currentState }
@@ -134,6 +137,13 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
             capabilitiesOffered: capabilitiesOffered,
             invitationNonce: invitationNonce
         )
+        startDispatch()
+    }
+
+    /// Restore a persisted session after an app restart and resume it.
+    public func resume(sessionId: String, resumptionToken: String) async throws {
+        installSessionHooks()
+        try await session.resumeWith(sessionId: sessionId, resumptionToken: resumptionToken)
         startDispatch()
     }
 

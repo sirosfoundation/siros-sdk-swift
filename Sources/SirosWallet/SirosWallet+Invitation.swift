@@ -85,6 +85,7 @@ extension SirosWallet {
         } else {
             try await peer.recreateSession(invitationNonce: nonce)
         }
+        rememberWmpJoinMetadata(provider: provider, invitation: invitation)
         #else
         // Non-Apple: the transport boundary (URLSession async bytes) —
         // the same clear refusal makeWmpProviderTransport carries.
@@ -159,6 +160,19 @@ extension SirosWallet {
             message: "joining an invited backend requires Apple platforms (WmpHttpSseTransport is URLSession-async-bytes based)"
         )
         #endif
+    }
+
+    /// Remember the invitation's group identity after a successful consume.
+    private func rememberWmpJoinMetadata(provider: String, invitation: [String: Any]) {
+        let groupName = (invitation["label"] as? String) ?? (invitation["group_name"] as? String)
+        lock.lock()
+        if let group = invitation["session_id"] as? String, !group.isEmpty {
+            wmpJoinGroups[provider] = group
+        }
+        if let groupName, !groupName.isEmpty {
+            wmpJoinGroupNames[provider] = groupName
+        }
+        lock.unlock()
     }
 
     /// A backend token for the join (the wallet's own AS — fresh per call:
@@ -354,6 +368,7 @@ extension SirosWallet {
         wmpJoinPeers.removeAll()
         wmpJoinPeerUrls.removeAll()
         wmpJoinGroups.removeAll()
+        wmpJoinGroupNames.removeAll()
         wmpJoinAsClients.removeAll()
         wmpJoinAsTokens.removeAll()
         wmpMainUrls = nil
@@ -445,6 +460,64 @@ extension SirosWallet {
         lock.lock()
         defer { lock.unlock() }
         return wmpJoinGroups
+    }
+
+    /// Snapshot of a joined backend for persistence across app restarts.
+    public func wmpJoinRecord(provider: String) -> WmpJoinRecord? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let peer = wmpJoinPeers[provider],
+              let urls = wmpJoinPeerUrls[provider],
+              let sessionId = peer.currentSessionId,
+              let resumptionToken = peer.currentResumptionToken else { return nil }
+        return WmpJoinRecord(
+            providerUrl: provider,
+            sendUrl: urls.send,
+            sseUrl: urls.sse,
+            sessionId: sessionId,
+            resumptionToken: resumptionToken,
+            groupId: wmpJoinGroups[provider],
+            groupName: wmpJoinGroupNames[provider]
+        )
+    }
+
+    /// Restore a persisted group with its latest resumption token, never by
+    /// re-consuming the invitation's single-use nonce.
+    public func resumeWmpJoin(record: WmpJoinRecord) async -> Bool {
+        #if canImport(Darwin)
+        guard let sendUrl = Foundation.URL(string: record.sendUrl),
+              let sseUrl = Foundation.URL(string: record.sseUrl) else { return false }
+        let transport = WmpHttpSseTransport(
+            sendUrl: sendUrl,
+            sseUrl: sseUrl,
+            tokenProvider: { [weak self] in
+                guard let self else { return nil }
+                return try? await self.joinBearerFor(provider: record.providerUrl)
+            }
+        )
+        let peer = WmpPeer(session: WmpSession(transport: transport))
+        do {
+            try await peer.resume(
+                sessionId: record.sessionId,
+                resumptionToken: record.resumptionToken
+            )
+            lock.lock()
+            wmpJoinPeers[record.providerUrl] = peer
+            wmpJoinPeerUrls[record.providerUrl] = (send: record.sendUrl, sse: record.sseUrl)
+            if let groupId = record.groupId {
+                wmpJoinGroups[record.providerUrl] = groupId
+            }
+            if let groupName = record.groupName {
+                wmpJoinGroupNames[record.providerUrl] = groupName
+            }
+            lock.unlock()
+            return true
+        } catch {
+            return false
+        }
+        #else
+        return false
+        #endif
     }
 
     // MARK: - The message read surface (the group inbox)
@@ -590,6 +663,36 @@ extension SirosWallet {
     }
 }
 
+/// The minimum state needed to restore a joined WMP group after an app
+/// restart. The invitation nonce is single-use and is deliberately absent.
+public struct WmpJoinRecord: Codable, Sendable, Equatable {
+    public let providerUrl: String
+    public let sendUrl: String
+    public let sseUrl: String
+    public let sessionId: String
+    public let resumptionToken: String
+    public let groupId: String?
+    public let groupName: String?
+
+    public init(
+        providerUrl: String,
+        sendUrl: String,
+        sseUrl: String,
+        sessionId: String,
+        resumptionToken: String,
+        groupId: String? = nil,
+        groupName: String? = nil
+    ) {
+        self.providerUrl = providerUrl
+        self.sendUrl = sendUrl
+        self.sseUrl = sseUrl
+        self.sessionId = sessionId
+        self.resumptionToken = resumptionToken
+        self.groupId = groupId
+        self.groupName = groupName
+    }
+}
+
 /// Issue #77: one group message — a `wmp.message.deliver` the wallet's
 /// session received (pulled from its backend's mailbox, or arrived live
 /// via the ping → poll). Kotlin parity:
@@ -666,6 +769,7 @@ extension SirosWallet {
                     state: peer.currentState.rawValue.lowercased(),
                     sessionId: peer.currentSessionId,
                     groupId: wmpJoinGroups[provider],
+                    groupName: wmpJoinGroupNames[provider],
                 )
             )
         }

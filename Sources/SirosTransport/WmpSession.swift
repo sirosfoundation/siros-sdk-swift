@@ -31,6 +31,9 @@ public final class WmpSession: @unchecked Sendable {
     /// invitation's group name) — read-only, the Kotlin SDK's shape.
     public var currentSessionId: String? { sessionId }
 
+    /// The latest resumption token (rotated on every resume), for persistence.
+    public var currentResumptionToken: String? { resumptionToken }
+
     /// Called once when the session has ended for good: closed, or every reconnect attempt exhausted. NOT on a
     /// transient `.failed` (one failed resume that the retry loop goes on from). A hook rather than a state
     /// observer, so it never takes elements from `stateStream`, which a host may be reading.
@@ -179,6 +182,14 @@ public final class WmpSession: @unchecked Sendable {
         setState(.active)
     }
 
+    /// Restore a previously persisted session and resume it (after an app
+    /// restart): seeds the stored session id + token, then runs the normal resume flow.
+    public func resumeWith(sessionId: String, resumptionToken: String) async throws {
+        self.sessionId = sessionId
+        self.resumptionToken = resumptionToken
+        try await resume()
+    }
+
     /// Resume an existing session after reconnection.
     public func resume() async throws {
         guard let sid = sessionId else { throw WmpSessionError.noSession }
@@ -202,6 +213,18 @@ public final class WmpSession: @unchecked Sendable {
             setState(.failed)
             throw WmpSessionError.resumeFailed(error.message)
         }
+
+        // The resumption token rotates on every resume. Persist this new one,
+        // not the already-spent token that was presented above.
+        if let result = response.result,
+           let resultData = try? JSONEncoder().encode(result),
+           let parsed = try? JSONDecoder().decode(SessionResumeResult.self, from: resultData),
+           let rotatedToken = parsed.resumptionToken {
+            resumptionToken = rotatedToken
+        }
+        // A fresh HTTP+SSE transport learns the restored session id here and
+        // opens its event stream; an existing transport keeps its live stream.
+        await transport.onSessionCreated(sessionId: sid)
 
         setState(.active)
         onResumed?()
