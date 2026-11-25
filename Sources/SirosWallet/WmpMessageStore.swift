@@ -39,7 +39,7 @@ public protocol WmpMessageStore: Sendable {
 /// The message id's dedup key (absent ids fall back to the text).
 extension WmpGroupMessage {
     var storeKey: String {
-        "\(backend):\(sessionId):\(messageId ?? text)"
+        "\(backend):\(sessionId):\(outbound ? "outbound" : "inbound"):\(messageId ?? text)"
     }
 }
 

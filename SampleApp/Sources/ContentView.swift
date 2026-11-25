@@ -62,6 +62,8 @@ struct ContentView: View {
                         WscdSettingsView()
                     } else if viewModel.showDevices {
                         DevicesView()
+                    } else if viewModel.showWmpEndpoints {
+                        WalletChrome { WmpEndpointsScreen() }
                     } else {
                         MainTabView()
                     }

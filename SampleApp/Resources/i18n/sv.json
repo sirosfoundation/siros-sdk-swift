@@ -484,10 +484,18 @@
   },
   "menu": {
     "history": "Historik",
+    "groups": "Grupper",
     "about": "Om",
     "verify": "Verifiera ett intyg",
     "logout": "Logga ut",
     "poweredBy": "Powered by SIROS Foundation"
+  },
+  "wmpEndpoints": {
+    "trace": "Spår",
+    "empty": "Inga anslutna grupper",
+    "reply": "Svara",
+    "send": "Skicka",
+    "refresh": "Uppdatera"
   },
   "share": {
     "title": "Dela på plats",

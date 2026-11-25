@@ -19,6 +19,7 @@ enum MenuItem: String, CaseIterable {
     case manageCredentials
     case shareInPerson
     case history
+    case wmpEndpoints
     case addCredentials
     case settings
     case about
@@ -44,6 +45,7 @@ extension WalletViewModel {
         closeIDVPreparation()
         closeAddCredential()
         closeHistory()
+        closeWmpEndpoints()
     }
 
     /// Goes to `destination`, leaving any stacked screen.
@@ -54,6 +56,7 @@ extension WalletViewModel {
 
     /// The menu row of the screen now showing; nil on Home and on the menu.
     var currentMenuItem: MenuItem? {
+        if showWmpEndpoints { return .wmpEndpoints }
         if showHistory { return .history }
         if showAddCredential || showIDVPreparation { return .addCredentials }
         switch destination {

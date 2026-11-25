@@ -379,6 +379,7 @@ extension SirosWallet {
     /// Kotlin parity: `SirosWallet.sendMessage(backend:to:text:)`.
     public func sendMessage(backend: String? = nil, to: String, text: String) async throws {
         let peer: WmpPeer
+        let messageBackend: String
         switch backend {
         case nil, "", WmpEndpointInfo.Origin.engine.rawValue:
             lock.lock()
@@ -387,6 +388,7 @@ extension SirosWallet {
                 throw SirosError.wallet(message: "The wallet is not connected to an engine")
             }
             peer = main
+            messageBackend = WmpEndpointInfo.Origin.engine.rawValue
         default:
             lock.lock()
             let joined = wmpJoinPeers[backend!]
@@ -395,6 +397,7 @@ extension SirosWallet {
                 throw SirosError.wallet(message: "The wallet is not connected to the invited backend \(backend!)")
             }
             peer = joined
+            messageBackend = backend!
         }
         try await peer.notify(
             method: WmpMethods.messageDeliver,
@@ -410,6 +413,16 @@ extension SirosWallet {
                 ]),
             ]
         )
+        if let sessionId = peer.currentSessionId {
+            wmpMessageStore.append(WmpGroupMessage(
+                backend: messageBackend,
+                sessionId: sessionId,
+                from: sessionId,
+                text: text,
+                messageId: nil,
+                outbound: true
+            ))
+        }
     }
 
     /// Reply to the GROUP an invited backend's invitation named (issue #77):
@@ -593,24 +606,28 @@ public struct WmpGroupMessage: Sendable, Equatable {
     public let text: String
     /// The engine's message id (`wmp_message_id`), when carried.
     public let messageId: String?
+    /// Whether this wallet sent the message; polled messages default to inbound.
+    public let outbound: Bool
 
     public init(
         backend: String,
         sessionId: String,
         from: String?,
         text: String,
-        messageId: String?
+        messageId: String?,
+        outbound: Bool = false
     ) {
         self.backend = backend
         self.sessionId = sessionId
         self.from = from
         self.text = text
         self.messageId = messageId
+        self.outbound = outbound
     }
 
     public static func == (lhs: WmpGroupMessage, rhs: WmpGroupMessage) -> Bool {
         lhs.backend == rhs.backend && lhs.sessionId == rhs.sessionId &&
-            lhs.messageId == rhs.messageId && lhs.text == rhs.text
+            lhs.messageId == rhs.messageId && lhs.text == rhs.text && lhs.outbound == rhs.outbound
     }
 }
 
@@ -648,6 +665,7 @@ extension SirosWallet {
                     sseUrl: urls?.sse,
                     state: peer.currentState.rawValue.lowercased(),
                     sessionId: peer.currentSessionId,
+                    groupId: wmpJoinGroups[provider],
                 )
             )
         }
@@ -678,6 +696,10 @@ public struct WmpEndpointInfo: Sendable, Equatable {
     public let state: String
     /// The live session's id on this backend, when one exists.
     public let sessionId: String?
+    /// The invited group's id, when this endpoint came from an invitation.
+    public let groupId: String?
+    /// An optional display name supplied by the host app.
+    public let groupName: String?
 
     public init(
         origin: WmpEndpointInfo.Origin,
@@ -685,7 +707,9 @@ public struct WmpEndpointInfo: Sendable, Equatable {
         sendUrl: String,
         sseUrl: String?,
         state: String,
-        sessionId: String?
+        sessionId: String?,
+        groupId: String? = nil,
+        groupName: String? = nil
     ) {
         self.origin = origin
         self.providerUrl = providerUrl
@@ -693,6 +717,8 @@ public struct WmpEndpointInfo: Sendable, Equatable {
         self.sseUrl = sseUrl
         self.state = state
         self.sessionId = sessionId
+        self.groupId = groupId
+        self.groupName = groupName
     }
 
     public static func == (lhs: WmpEndpointInfo, rhs: WmpEndpointInfo) -> Bool {

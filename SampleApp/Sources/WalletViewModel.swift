@@ -244,6 +244,7 @@ final class WalletViewModel: ObservableObject {
     @Published var showHistory = false
     @Published var showWscaDeveloper = false
     @Published var showDevices = false
+    @Published var showWmpEndpoints = false
     /// The real entry point for FaceTec IDV capture (`startIDV()`) - see
     /// `WalletViewModel+PhotoIdOnboarding.swift`.
     @Published var showIDVPreparation = false
@@ -332,6 +333,12 @@ final class WalletViewModel: ObservableObject {
     // MARK: - Presentation history
 
     @Published var presentationHistory: [PresentationRecord] = []
+
+    // MARK: - WMP groups
+
+    @Published var wmpEndpoints: [WmpEndpointInfo] = []
+    @Published var wmpMessages: [WmpGroupMessage] = []
+    var wmpEventsJob: Task<Void, Never>?
 
     // MARK: - WSCD lifecycle
 
@@ -590,12 +597,60 @@ final class WalletViewModel: ObservableObject {
         showActivate = false
         showWscaDeveloper = false
         showIDVPreparation = false
+        closeWmpEndpoints()
         resetTransactionDataState()
         resetDevicesNavigation()
     }
 
     func cancelCurrentFlow() {
         wallet?.cancelCurrentFlow()
+    }
+
+    // MARK: - WMP groups
+
+    func openWmpEndpoints() {
+        showWmpEndpoints = true
+        refreshWmpEndpoints()
+        wmpEventsJob?.cancel()
+        guard let wallet else { return }
+        wmpEventsJob = Task { @MainActor [weak self, wallet] in
+            for await _ in wallet.groupMessageEvents() {
+                self?.wmpMessages = wallet.wmpGroupInbox()
+            }
+        }
+    }
+
+    func closeWmpEndpoints() {
+        showWmpEndpoints = false
+        wmpEventsJob?.cancel()
+        wmpEventsJob = nil
+    }
+
+    func refreshWmpEndpoints() {
+        guard let wallet else {
+            wmpEndpoints = []
+            wmpMessages = []
+            return
+        }
+        wmpEndpoints = wallet.connectedWmpEndpoints()
+        wmpMessages = wallet.wmpGroupInbox()
+        Task { @MainActor in
+            await wallet.pollGroupMessages()
+            wmpEndpoints = wallet.connectedWmpEndpoints()
+            wmpMessages = wallet.wmpGroupInbox()
+        }
+    }
+
+    func sendWmpGroupReply(backend: String, text: String) {
+        guard let wallet else { return }
+        Task { @MainActor in
+            do {
+                try await wallet.replyToGroup(backend: backend, text: text)
+                wmpMessages = wallet.wmpGroupInbox()
+            } catch {
+                setError(error.localizedDescription)
+            }
+        }
     }
 
     // MARK: - Devices (wallet instance lifecycle, SID-AUTH-06)
