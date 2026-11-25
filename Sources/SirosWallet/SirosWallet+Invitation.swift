@@ -385,6 +385,36 @@ extension SirosWallet {
         }
     }
 
+    /// Leave one invited backend's group — the reverse of the join: closes
+    /// that join peer's session (`wmp.session.close` — the backend releases
+    /// the session and its mailbox) and forgets the backend's join state.
+    /// The wallet's other joined backends and its engine session are
+    /// untouched. The invitation nonce is single-use and never replayable:
+    /// rejoining needs a fresh invite. The app removes its persisted record
+    /// so the next startup does not try to resume a closed session.
+    ///
+    /// Local state is dropped even when the close fails (the backend sweeps
+    /// the session at its TTL regardless); the failure is swallowed and
+    /// logged. Kotlin parity: `SirosWallet.leaveWmpJoin`.
+    public func leaveWmpJoin(provider: String) async {
+        lock.lock()
+        let peer = wmpJoinPeers.removeValue(forKey: provider)
+        wmpJoinPeerUrls.removeValue(forKey: provider)
+        wmpJoinGroups.removeValue(forKey: provider)
+        wmpJoinGroupNames.removeValue(forKey: provider)
+        wmpJoinAsClients.removeValue(forKey: provider)
+        wmpJoinAsTokens.removeValue(forKey: provider)
+        lock.unlock()
+        guard let peer else { return }
+        do {
+            try await peer.close(reason: "left_group")
+        } catch {
+            // The local state is already dropped; a dead backend must not
+            // pin the membership. Its copy dies at the session TTL.
+            print("WMP group close failed for \(provider): \(error)")
+        }
+    }
+
     // MARK: - The send + the reply (issue #77's message passing)
 
     /// Send one message to a peer session — the `wmp.message.deliver`

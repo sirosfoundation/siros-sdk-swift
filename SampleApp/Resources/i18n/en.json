@@ -495,7 +495,11 @@
     "empty": "No connected groups",
     "reply": "Reply",
     "send": "Send",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "leave": "Leave group",
+    "leaveConfirmTitle": "Leave group?",
+    "leaveConfirmText": "The wallet closes its session in \"%@\" and forgets the group. Rejoining needs a fresh invite.",
+    "leaveConfirm": "Leave"
   },
   "share": {
     "title": "Share In-Person",

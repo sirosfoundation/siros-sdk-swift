@@ -495,7 +495,11 @@
     "empty": "Inga anslutna grupper",
     "reply": "Svara",
     "send": "Skicka",
-    "refresh": "Uppdatera"
+    "refresh": "Uppdatera",
+    "leave": "Lämna grupp",
+    "leaveConfirmTitle": "Lämna gruppen?",
+    "leaveConfirmText": "Plånboken stänger sin session i \"%@\" och glömmer gruppen. För att gå med igen krävs en ny inbjudan.",
+    "leaveConfirm": "Lämna"
   },
   "share": {
     "title": "Dela på plats",
