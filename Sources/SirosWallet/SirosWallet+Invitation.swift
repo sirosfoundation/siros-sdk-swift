@@ -470,6 +470,7 @@ extension SirosWallet {
               let urls = wmpJoinPeerUrls[provider],
               let sessionId = peer.currentSessionId,
               let resumptionToken = peer.currentResumptionToken else { return nil }
+        let asClient = wmpJoinAsClients[provider]
         return WmpJoinRecord(
             providerUrl: provider,
             sendUrl: urls.send,
@@ -477,8 +478,20 @@ extension SirosWallet {
             sessionId: sessionId,
             resumptionToken: resumptionToken,
             groupId: wmpJoinGroups[provider],
-            groupName: wmpJoinGroupNames[provider]
+            groupName: wmpJoinGroupNames[provider],
+            asClientId: asClient?.id,
+            asClientSecret: asClient?.secret
         )
+    }
+
+    /// The per-restore bearer gate: captured by the transport's token
+    /// provider and flipped by the refusal retry. An actor because the
+    /// provider runs on the transport's I/O while the retry flips it from
+    /// the restore's task — a captured `var` would race.
+    private actor JoinBearerGate {
+        private(set) var on: Bool
+        init(_ on: Bool) { self.on = on }
+        func turnOff() { on = false }
     }
 
     /// Restore a persisted group with its latest resumption token, never by
@@ -487,20 +500,66 @@ extension SirosWallet {
         #if canImport(Darwin)
         guard let sendUrl = Foundation.URL(string: record.sendUrl),
               let sseUrl = Foundation.URL(string: record.sseUrl) else { return false }
+        // HTTPS sessions belong to the authenticated principal, not to the
+        // bearer string (wmp-transport §4.3.1). Reuse the join's registered
+        // client so a renewed token still names that principal; a fresh DCR
+        // registration is a DIFFERENT principal and gets the spec's
+        // indistinguishable -31000.
+        if let id = record.asClientId, !id.isEmpty,
+           let secret = record.asClientSecret, !secret.isEmpty {
+            lock.lock()
+            wmpJoinAsClients[record.providerUrl] = (id: id, secret: secret)
+            lock.unlock()
+        }
+        lock.lock()
+        let hasStoredClient = wmpJoinAsClients[record.providerUrl] != nil
+        lock.unlock()
+        // Records from before client persistence have no principal to reuse.
+        // Send no Authorization and let an invitation front supply the join
+        // principal (the wmp-mcp public wallet door substitutes its own on
+        // nonce-bearing creates) instead of presenting the wallet's own token
+        // to a strict engine that refuses foreign issuers.
+        let gate = JoinBearerGate(hasStoredClient)
         let transport = WmpHttpSseTransport(
             sendUrl: sendUrl,
             sseUrl: sseUrl,
             tokenProvider: { [weak self] in
+                guard await gate.on else { return nil }
                 guard let self else { return nil }
                 return try? await self.joinBearerFor(provider: record.providerUrl)
             }
         )
         let peer = WmpPeer(session: WmpSession(transport: transport))
         do {
-            try await peer.resume(
-                sessionId: record.sessionId,
-                resumptionToken: record.resumptionToken
-            )
+            do {
+                try await peer.resume(
+                    sessionId: record.sessionId,
+                    resumptionToken: record.resumptionToken
+                )
+            } catch {
+                // A front redeploy can wipe its AS's client registry: the
+                // stored client's mint then fails, the bearer falls back to
+                // the wallet's OWN token, and a strict engine refuses the
+                // foreign issuer (-31002 "Not authorized") exactly as it
+                // refuses an unknown principal (-31000 "Session not found").
+                // Retry once with NO Authorization; the front then supplies
+                // the SAME anonymous principal its proxy used at the join.
+                // The resumption token remains mandatory either way.
+                let message = (error as? WmpSessionError)?.errorDescription
+                    ?? String(describing: error)
+                let refusal = message.contains("Session not found") ||
+                    message.contains("Not authorized")
+                guard await gate.on, refusal else { throw error }
+                await gate.turnOff()
+                lock.lock()
+                wmpJoinAsClients.removeValue(forKey: record.providerUrl)
+                wmpJoinAsTokens.removeValue(forKey: record.providerUrl)
+                lock.unlock()
+                try await peer.resume(
+                    sessionId: record.sessionId,
+                    resumptionToken: record.resumptionToken
+                )
+            }
             lock.lock()
             wmpJoinPeers[record.providerUrl] = peer
             wmpJoinPeerUrls[record.providerUrl] = (send: record.sendUrl, sse: record.sseUrl)
@@ -673,6 +732,15 @@ public struct WmpJoinRecord: Codable, Sendable, Equatable {
     public let resumptionToken: String
     public let groupId: String?
     public let groupName: String?
+    /// The invited AS's dynamically registered client id, when the join used
+    /// DCR. HTTPS sessions are principal-bound (wmp-transport §4.3.1), so a
+    /// restart must mint the replacement bearer for the SAME client instead
+    /// of registering a fresh principal.
+    public let asClientId: String?
+    /// The registered client secret; the app protects it like the resumption
+    /// token. Optional and absent in records persisted before this field —
+    /// old files decode with `nil`.
+    public let asClientSecret: String?
 
     public init(
         providerUrl: String,
@@ -681,7 +749,9 @@ public struct WmpJoinRecord: Codable, Sendable, Equatable {
         sessionId: String,
         resumptionToken: String,
         groupId: String? = nil,
-        groupName: String? = nil
+        groupName: String? = nil,
+        asClientId: String? = nil,
+        asClientSecret: String? = nil
     ) {
         self.providerUrl = providerUrl
         self.sendUrl = sendUrl
@@ -690,6 +760,8 @@ public struct WmpJoinRecord: Codable, Sendable, Equatable {
         self.resumptionToken = resumptionToken
         self.groupId = groupId
         self.groupName = groupName
+        self.asClientId = asClientId
+        self.asClientSecret = asClientSecret
     }
 }
 
