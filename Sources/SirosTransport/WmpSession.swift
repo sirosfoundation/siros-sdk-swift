@@ -472,14 +472,22 @@ public enum WmpSessionState: String, Sendable {
 }
 
 public struct WmpSessionConfig: Sendable {
-    public var sessionTtlSeconds: Int
+    /// The session create's requested TTL, seconds. **Nil (the default)
+    /// omits the `ttl` member** so the engine's own default applies —
+    /// an explicit value overrides it (the reference engine caps a named
+    /// ttl at its max). The old 3600 default reaped live join sessions
+    /// at one hour against engines defaulting to days (found live:
+    /// golden-fox, 2026-11-25 — the join session died at its ttl while
+    /// the inviter's carried 24h, and the group vanished on restart).
+    /// A caller that wants a bounded session names one.
+    public var sessionTtlSeconds: Int?
     public var requestTimeoutMs: Int64
     public var maxReconnectAttempts: Int
     public var reconnectBaseMs: Int64
     public var reconnectMaxMs: Int64
 
     public init(
-        sessionTtlSeconds: Int = 3600,
+        sessionTtlSeconds: Int? = nil,
         requestTimeoutMs: Int64 = 30_000,
         maxReconnectAttempts: Int = 10,
         reconnectBaseMs: Int64 = 1_000,

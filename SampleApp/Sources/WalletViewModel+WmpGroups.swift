@@ -62,6 +62,19 @@ extension WalletViewModel {
         }
     }
 
+    /// Leave one invited backend's group: the SDK closes the join session
+    /// server-side and forgets the backend; the persisted record goes with
+    /// it so a restart never resumes a closed session. Rejoining needs a
+    /// fresh invite (the nonce is single-use).
+    func leaveGroup(backend: String) {
+        guard let wallet else { return }
+        Task { @MainActor in
+            await wallet.leaveWmpJoin(provider: backend)
+            wmpJoinStore.remove(providerUrl: backend)
+            refreshWmpEndpoints()
+        }
+    }
+
     /// Restore sessions only. Groups deliberately refresh their published
     /// endpoint/message state when the user opens the Groups screen.
     func restoreWmpJoinsIfNeeded() {

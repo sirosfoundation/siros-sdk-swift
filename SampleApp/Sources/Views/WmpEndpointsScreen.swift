@@ -47,7 +47,10 @@ struct WmpEndpointsScreen: View {
                                 messages: viewModel.wmpMessages,
                                 onSend: { text in
                                     viewModel.sendWmpGroupReply(backend: endpoint.wmpBackend, text: text)
-                                }
+                                },
+                                onLeave: endpoint.origin == .invitation ? { backend in
+                                    viewModel.leaveGroup(backend: backend)
+                                } : nil
                             )
                             .walletCard(padding: 14)
                         }
@@ -66,14 +69,24 @@ private struct WmpEndpointCard: View {
     let endpoint: WmpEndpointInfo
     let messages: [WmpGroupMessage]
     let onSend: (String) -> Void
+    /// The leave affordance — nil on the engine card (its "session" is the
+    /// wallet's own connection, not a group membership).
+    let onLeave: ((String) -> Void)?
 
     @State private var reply = ""
     @State private var traceEnabled: Bool
+    @State private var confirmingLeave = false
 
-    init(endpoint: WmpEndpointInfo, messages: [WmpGroupMessage], onSend: @escaping (String) -> Void) {
+    init(
+        endpoint: WmpEndpointInfo,
+        messages: [WmpGroupMessage],
+        onSend: @escaping (String) -> Void,
+        onLeave: ((String) -> Void)? = nil
+    ) {
         self.endpoint = endpoint
         self.messages = messages
         self.onSend = onSend
+        self.onLeave = onLeave
         _traceEnabled = State(initialValue: WmpTracePreference.isEnabled(for: endpoint.wmpBackend))
     }
 
@@ -131,6 +144,39 @@ private struct WmpEndpointCard: View {
                 .buttonStyle(.borderedProminent)
                 .tint(SirosTheme.brand)
                 .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            // The leave is destructive (a fresh invite is needed to rejoin):
+            // invitation cards only, behind a confirmation naming the group.
+            if let onLeave {
+                HStack {
+                    Spacer()
+                    Button(L10n.string("wmpEndpoints.leave")) {
+                        confirmingLeave = true
+                    }
+                    .font(.caption)
+                    .foregroundColor(SirosTheme.error)
+                    .confirmationDialog(
+                        L10n.string("wmpEndpoints.leaveConfirmTitle"),
+                        isPresented: $confirmingLeave,
+                        titleVisibility: .visible
+                    ) {
+                        Button(
+                            L10n.string("wmpEndpoints.leaveConfirm"),
+                            role: .destructive
+                        ) {
+                            onLeave(endpoint.wmpBackend)
+                        }
+                        Button(L10n.string("common.cancel"), role: .cancel) {}
+                    } message: {
+                        Text(
+                            L10n.string(
+                                "wmpEndpoints.leaveConfirmText",
+                                endpoint.groupName ?? endpoint.groupId ?? endpoint.wmpBackend
+                            )
+                        )
+                    }
+                }
             }
         }
     }
