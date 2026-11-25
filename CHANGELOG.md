@@ -5,6 +5,37 @@ All notable changes to the SIROS SDK for iOS/macOS will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-11-25
+
+### Added
+
+- **Per-group opt-in WMP message trace (#303):** a persisted Trace
+  toggle per backend, off by default. The trace category shows the
+  latest messages for the group (outbound → / inbound ←); toggles take
+  effect immediately and independently per group, and trace messages
+  need no restart persistence.
+- **Joined-group persistence across app restarts (#303):** joined
+  sessions persist their id and latest resumption token (rotated on
+  every resume); on startup the groups restore by token, never by
+  re-consuming a spent invitation nonce, and logout clears the store.
+  `WmpSession`/`WmpPeer` gain the restore surface
+  (`resume(sessionId:resumptionToken:)`, `currentResumptionToken`), and
+  the sample's `JsonFileWmpJoinStore` writes atomically with a
+  corrupt-file fallback.
+
+### Fixed
+
+- **Opening Groups waits for restoration (#303):** the entry waits for
+  the startup restore, then refreshes the endpoints and starts its
+  collector — fixing both the initialization crash and the restore/open
+  race where the screen snapshotted a wallet mid-restore and stayed
+  empty; the login-time wallet rebuild re-runs the restore on the
+  replacement instance.
+- **Resume reconnects the event stream:** a cold-restored session saves
+  the rotated token and re-opens the HTTP+SSE stream for the restored
+  session id — previously a restored peer could poll yet never received
+  live deliveries.
+
 ## [0.17.5] - 2026-11-18
 
 ### Engine
