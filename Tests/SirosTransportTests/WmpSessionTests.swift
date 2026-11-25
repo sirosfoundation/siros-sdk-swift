@@ -93,6 +93,34 @@ final class WmpSessionTests: XCTestCase {
         try await session.close()
     }
 
+    func testResumeWithSeedsPersistedSessionAndRotatesToken() async throws {
+        let transport = FakeTransport()
+        let session = WmpSession(
+            transport: transport,
+            config: WmpSessionConfig(requestTimeoutMs: 2_000)
+        )
+
+        let resumeTask = Task {
+            try await session.resumeWith(sessionId: "session-123", resumptionToken: "resume-abc")
+        }
+        try await waitForSentCount(transport, expected: 1)
+        let request = try codec.decodeRequest(transport.sentMessages.last!)
+        XCTAssertEqual(request.method, "wmp.session.resume")
+        let requestText = String(decoding: transport.sentMessages.last!, as: UTF8.self)
+        XCTAssertTrue(requestText.contains("session-123"))
+        XCTAssertTrue(requestText.contains("resume-abc"))
+
+        transport.receiveFromServer(Data(
+            #"{"jsonrpc":"2.0","id":"\#(request.id!)","result":{"wmp":{"version":"0.1","session_id":"session-123"},"resumed":true,"resumption_token":"resume-rotated"}}"#.utf8
+        ))
+        try await resumeTask.value
+
+        XCTAssertEqual(session.currentState, .active)
+        XCTAssertEqual(session.currentSessionId, "session-123")
+        XCTAssertEqual(session.currentResumptionToken, "resume-rotated")
+        try await session.close()
+    }
+
     // MARK: - Helpers
 
     /// `onTerminal` fires when the session ends for good: on close, and once every reconnect attempt has failed;

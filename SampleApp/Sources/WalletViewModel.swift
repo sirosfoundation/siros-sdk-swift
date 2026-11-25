@@ -244,6 +244,7 @@ final class WalletViewModel: ObservableObject {
     @Published var showHistory = false
     @Published var showWscaDeveloper = false
     @Published var showDevices = false
+    @Published var showWmpEndpoints = false
     /// The real entry point for FaceTec IDV capture (`startIDV()`) - see
     /// `WalletViewModel+PhotoIdOnboarding.swift`.
     @Published var showIDVPreparation = false
@@ -332,6 +333,15 @@ final class WalletViewModel: ObservableObject {
     // MARK: - Presentation history
 
     @Published var presentationHistory: [PresentationRecord] = []
+
+    @Published var wmpEndpoints: [WmpEndpointInfo] = []
+    @Published var wmpMessages: [WmpGroupMessage] = []
+    var wmpEventsJob: Task<Void, Never>?
+    // Internal, not private: the WMP Groups extension file
+    // (WalletViewModel+WmpGroups.swift) reads and writes these.
+    lazy var wmpJoinStore = JsonFileWmpJoinStore()
+    var wmpJoinsRestored = false
+    var wmpJoinRestoreJob: Task<Void, Never>?
 
     // MARK: - WSCD lifecycle
 
@@ -581,6 +591,9 @@ final class WalletViewModel: ObservableObject {
     }
 
     func disconnect() {
+        wmpJoinRestoreJob?.cancel()
+        wmpJoinsRestored = false
+        wmpJoinStore.clear()
         wallet?.logout()
         selectedTab = 1
         showAddCredential = false
@@ -590,12 +603,9 @@ final class WalletViewModel: ObservableObject {
         showActivate = false
         showWscaDeveloper = false
         showIDVPreparation = false
+        closeWmpEndpoints()
         resetTransactionDataState()
         resetDevicesNavigation()
-    }
-
-    func cancelCurrentFlow() {
-        wallet?.cancelCurrentFlow()
     }
 
     // MARK: - Devices (wallet instance lifecycle, SID-AUTH-06)
@@ -1008,7 +1018,10 @@ final class WalletViewModel: ObservableObject {
             // bootstraps a session (the engine consumes the nonce single-use).
             // Not a flow: the consume answer IS the session, ready for
             // whatever follows; the same "working…" indicator reads.
-            startFlow(type: "invitation") { try await self.wallet?.consumeInvitation(uri: uri) }
+            startFlow(type: "invitation") { () async throws -> Void in
+                try await self.wallet?.consumeInvitation(uri: uri)
+                self.persistJoinedGroups()
+            }
         case .authCallback(let authCode, let state):
             handleAuthRedirect(code: authCode, state: state)
         case .unknown(let uri):
@@ -1076,7 +1089,10 @@ final class WalletViewModel: ObservableObject {
         case .invitation(let uri):
             // Issue #77: the invitation deep-link — the same consume path
             // as the scanned QR (a session bootstrap, not a flow).
-            startFlow(type: "invitation") { try await self.wallet?.consumeInvitation(uri: uri) }
+            startFlow(type: "invitation") { () async throws -> Void in
+                try await self.wallet?.consumeInvitation(uri: uri)
+                self.persistJoinedGroups()
+            }
         case .credentialOffer(let uri):
             startFlow(type: "issuance") { try await self.wallet?.startIssuance(offerUri: uri) }
         case .presentationRequest(let uri):
@@ -1150,6 +1166,8 @@ final class WalletViewModel: ObservableObject {
         }
 
         guard needsRebuild else { return }
+        wmpJoinRestoreJob?.cancel()
+        wmpJoinsRestored = false
 
         // Build WSCD-backed keystore with selected plugin
         var keystore: KeystoreManager?
@@ -1340,6 +1358,7 @@ final class WalletViewModel: ObservableObject {
             cachedAccounts = accounts
             listPasskeysForUI()
             maybeOfferWscdAutoEnroll()
+            restoreWmpJoinsIfNeeded()
             refreshCredentialStatuses(for: creds)
         case .keystoreLocked(_, let name):
             walletState = .connecting

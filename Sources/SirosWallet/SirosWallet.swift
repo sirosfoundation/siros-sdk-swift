@@ -706,6 +706,9 @@ public final class SirosWallet: @unchecked Sendable {
     /// consume, cleared with the peers on teardown. Guarded by `lock`.
     var wmpJoinGroups: [String: String] = [:]
 
+    /// The joined groups' optional display names, keyed like `wmpJoinGroups`.
+    var wmpJoinGroupNames: [String: String] = [:]
+
     /// Rung 3: the dynamically registered clients, per invited backend
     /// (provider → id + secret, RFC 7591). Guarded by `lock`.
     var wmpJoinAsClients: [String: (id: String, secret: String)] = [:]

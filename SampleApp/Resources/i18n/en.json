@@ -484,10 +484,18 @@
   },
   "menu": {
     "history": "History",
+    "groups": "Groups",
     "about": "About",
     "verify": "Verify a credential",
     "logout": "Logout",
     "poweredBy": "Powered by SIROS Foundation"
+  },
+  "wmpEndpoints": {
+    "trace": "Trace",
+    "empty": "No connected groups",
+    "reply": "Reply",
+    "send": "Send",
+    "refresh": "Refresh"
   },
   "share": {
     "title": "Share In-Person",
