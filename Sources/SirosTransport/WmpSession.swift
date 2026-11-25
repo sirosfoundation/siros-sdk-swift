@@ -65,6 +65,9 @@ public final class WmpSession: @unchecked Sendable {
     // Send serialization — actor ensures no concurrent sends without holding locks across await
     private let sendSerializer = SendSerializer()
 
+    /// One recovery at a time, with waiting (#306): see ``handleDisconnect``.
+    private let recoveryGate = RecoveryGate()
+
     /// Notifications from the server (flow.progress, flow.complete, etc.).
     public func notifications() -> AsyncStream<JsonRpcRequest> {
         _notifications
@@ -350,9 +353,19 @@ public final class WmpSession: @unchecked Sendable {
             for await transportState in transport.stateStream {
                 switch transportState {
                 case .disconnected, .failed:
-                    if _state == .active {
-                        await handleDisconnect()
-                    }
+                    // #306: the failure is handled whatever the session state
+                    // is. The old `.active`-only guard silently DROPPED a
+                    // failure that landed while the session was resuming or
+                    // connecting, and the session stranded: the transport was
+                    // dead, the resume that would have healed it never ran,
+                    // and every later flow.start orphaned — the engine's asks
+                    // still went to a stream nobody read. handleDisconnect
+                    // itself skips the terminal states and the recovery gate is
+                    // single-flight, so a redundant call costs nothing; a
+                    // dropped one strands the session (the resume path is
+                    // idempotent — a repeated recovery only presents the
+                    // current resumption token and rotates it again).
+                    await handleDisconnect()
                 default:
                     break
                 }
@@ -384,7 +397,39 @@ public final class WmpSession: @unchecked Sendable {
         }
     }
 
+    /// #306: a request that timed out over a carrier that may be half-open —
+    /// the kernel still calls the socket established but no byte flows, so the
+    /// request's ANSWER died with the stream nobody read (the POST channel is
+    /// independent; the answers ride the event stream). Force the carrier
+    /// closed — the heartbeat clock has not tripped yet; this acts on demand,
+    /// now — then run the reconnect path: the resume re-opens the stream from
+    /// the `Last-Event-ID` cursor and rotates the resumption token, so the
+    /// engine's asks reach the wallet again. The caller retries its request
+    /// over the healed session once this returns.
+    func recoverStalledTransport() async {
+        await transport.forceClose()
+        await handleDisconnect()
+    }
+
     private func handleDisconnect() async {
+        // A session already ended — closed by the host, or a recovery that
+        // exhausted its attempts — has nothing left to recover: its pending
+        // requests were already failed and its terminal hook fired. Checked
+        // BEFORE the gate, so the transport-failure events that queue up
+        // behind a finished recovery end here instead of in another loop.
+        guard _state != .closed, _state != .failed else { return }
+
+        // Single-flight with waiting (#306): the transport-state collector and
+        // a caller's on-demand recovery share the resume loop. A caller that
+        // arrives while one runs WAITS — the outcome it wants (the session
+        // resumed) is being produced — and then returns without starting
+        // another, so exactly one recovery runs however many failure events
+        // landed, and the on-demand caller proceeds only once the session is
+        // healed.
+        await recoveryGate.runOnce { await self.performRecovery() }
+    }
+
+    private func performRecovery() async {
         // Without a resumption token there is nothing to retry: the loss is final, and ends the session the same way.
         let attempts = resumptionToken == nil ? 0 : config.maxReconnectAttempts
         if attempts > 0 { setState(.resuming) }
@@ -543,5 +588,58 @@ extension WmpTimeoutError: LocalizedError {
 private actor SendSerializer {
     func send(_ data: Data, via transport: any TransportProtocol) async throws {
         try await transport.send(data)
+    }
+}
+
+/// One recovery at a time, with waiting (#306): the transport-state collector
+/// and a caller's on-demand recovery (a timed-out request's
+/// force-close-and-resume) share the resume loop. A caller that arrives while
+/// one runs suspends until it finishes — the outcome it wants (the session
+/// resumed) is being produced — and then returns without starting another.
+private final class RecoveryGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = false
+    private var waiters: [CheckedContinuation<Bool, Never>] = []
+
+    /// Runs `body` unless one is already running: a concurrent caller
+    /// suspends until THAT one finishes and then returns `false` (its outcome
+    /// is the running recovery's). True when this caller ran `body` to
+    /// completion. The lock lives in the sync helpers (`admit`/`release`):
+    /// `NSLock` in an async context is a concurrency violation.
+    @discardableResult
+    func runOnce(_ body: @escaping @Sendable () async -> Void) async -> Bool {
+        let runs: Bool = await withCheckedContinuation { cont in
+            self.admit(cont)
+        }
+        guard runs else { return false }
+        await body()
+        for waiter in release() { waiter.resume(returning: false) }
+        return true
+    }
+
+    /// Claims the gate for one caller, or parks the caller's continuation
+    /// behind the running one. Under the lock, so two concurrent callers
+    /// cannot both see `running == false`.
+    private func admit(_ cont: CheckedContinuation<Bool, Never>) {
+        lock.lock()
+        if running {
+            waiters.append(cont)
+            lock.unlock()
+        } else {
+            running = true
+            lock.unlock()
+            cont.resume(returning: true)
+        }
+    }
+
+    /// Frees the gate and hands the waiters their answer: they rode the
+    /// finished recovery, they do not start another.
+    private func release() -> [CheckedContinuation<Bool, Never>] {
+        lock.lock()
+        running = false
+        let resumees = waiters
+        waiters = []
+        lock.unlock()
+        return resumees
     }
 }

@@ -24,6 +24,17 @@ public protocol TransportProtocol: AnyObject, Sendable {
     /// in-process bindings need nothing (their carrier is bound another way).
     func onSessionCreated(sessionId: String) async
 
+    /// Force the carrier closed WITHOUT ending the session (#306): unlike
+    /// ``disconnect()`` the incoming and state streams live on, so the
+    /// reconnect that immediately follows finds them alive and re-opens the
+    /// carrier. For the SSE binding this kills a reader the kernel still
+    /// calls established (a half-open socket: no bytes flow, no error
+    /// surfaces, the heartbeat clock has not tripped yet) — a request that
+    /// timed out over such a stream gets its carrier torn down and rebuilt
+    /// before its retry. The default no-op fits the bindings whose carrier
+    /// cannot silently die (in-process, a WebSocket with its own liveness).
+    func forceClose() async
+
     /// Send a raw JSON-RPC message.
     func send(_ message: Data) async throws
 
@@ -37,6 +48,10 @@ public protocol TransportProtocol: AnyObject, Sendable {
 extension TransportProtocol {
     /// The default: bindings that do not name their stream (WS, in-process).
     public func onSessionCreated(sessionId: String) async {}
+
+    /// The default: bindings whose carrier cannot silently die need no
+    /// forced close.
+    public func forceClose() async {}
 }
 
 /// Connection state for a transport.

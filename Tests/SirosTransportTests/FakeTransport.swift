@@ -23,6 +23,32 @@ final class FakeTransport: TransportProtocol, @unchecked Sendable {
         return _sent
     }
 
+    /// An ordered lifecycle log for the reconnect-ordering tests (#306):
+    /// "connect", "disconnect", "forceClose", "send:<method>" — the order
+    /// the transport's carrier was torn down and rebuilt.
+    private let eventLock = NSLock()
+    private var _events: [String] = []
+    var events: [String] {
+        eventLock.lock()
+        defer { eventLock.unlock() }
+        return _events
+    }
+
+    private func recordEvent(_ event: String) {
+        eventLock.lock()
+        _events.append(event)
+        eventLock.unlock()
+    }
+
+    /// The JSON-RPC method of a raw message, for the event log.
+    private func method(of message: Data) -> String? {
+        let text = String(decoding: message, as: UTF8.self)
+        guard let at = text.range(of: "\"method\":\"") else { return nil }
+        let rest = text[at.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return nil }
+        return String(rest[..<end])
+    }
+
     init() {
         var sc: AsyncStream<TransportState>.Continuation!
         self.stateStream = AsyncStream { sc = $0 }
@@ -34,6 +60,7 @@ final class FakeTransport: TransportProtocol, @unchecked Sendable {
     }
 
     func connect() async throws {
+        recordEvent("connect")
         _currentState = .connected
         stateCont.yield(.connected)
     }
@@ -54,6 +81,7 @@ final class FakeTransport: TransportProtocol, @unchecked Sendable {
         lock.lock()
         _sent.append(message)
         lock.unlock()
+        recordEvent("send:\(method(of: message) ?? "?")")
     }
 
     func incoming() -> AsyncStream<Data> {
@@ -61,8 +89,19 @@ final class FakeTransport: TransportProtocol, @unchecked Sendable {
     }
 
     func disconnect() async {
+        recordEvent("disconnect")
         _currentState = .disconnected
         stateCont.yield(.disconnected)
+    }
+
+    /// #306: the forced close — the reader dies, the state shows FAILED, but
+    /// the streams LIVE (a disconnect would end them): the resume that
+    /// immediately follows re-opens them. The event is recorded BEFORE the
+    /// failure yield, so an ordering test sees forceClose → connect.
+    func forceClose() async {
+        recordEvent("forceClose")
+        _currentState = .failed
+        stateCont.yield(.failed)
     }
 
     /// Simulate receiving a message from the server.
