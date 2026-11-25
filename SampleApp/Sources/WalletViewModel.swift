@@ -337,9 +337,11 @@ final class WalletViewModel: ObservableObject {
     @Published var wmpEndpoints: [WmpEndpointInfo] = []
     @Published var wmpMessages: [WmpGroupMessage] = []
     var wmpEventsJob: Task<Void, Never>?
-    private lazy var wmpJoinStore = JsonFileWmpJoinStore()
-    private var wmpJoinsRestored = false
-    private var wmpJoinRestoreJob: Task<Void, Never>?
+    // Internal, not private: the WMP Groups extension file
+    // (WalletViewModel+WmpGroups.swift) reads and writes these.
+    lazy var wmpJoinStore = JsonFileWmpJoinStore()
+    var wmpJoinsRestored = false
+    var wmpJoinRestoreJob: Task<Void, Never>?
 
     // MARK: - WSCD lifecycle
 
