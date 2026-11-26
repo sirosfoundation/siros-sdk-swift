@@ -188,11 +188,169 @@ final class WmpSessionTests: XCTestCase {
         XCTAssertEqual(fired, 1)
     }
 
+    // MARK: - The transport-state collector handles a failure whatever the session state (#306)
+
+    /// #306: a transport failure while the session is CONNECTING (the create
+    /// in flight) used to be silently dropped — the collector only acted on
+    /// ACTIVE — so the create then hung to its full request timeout and
+    /// orphaned. The failure is now handled whatever the session state: the
+    /// recovery fails the create's pending request at once, the session is
+    /// FAILED and the terminal hook fires.
+    func testATransportFailureWhileConnectingEndsTheCreateAtOnce() async throws {
+        actor Count { var n = 0; func bump() { n += 1 }; var value: Int { n } }
+        let counter = Count()
+        let transport = FakeTransport()
+        let session = WmpSession(transport: transport, config: WmpSessionConfig(requestTimeoutMs: 5_000))
+        session.onTerminal = { Task { await counter.bump() } }
+
+        let createTask = Task { try await session.create(authToken: "t") }
+        // The create POST is out but unanswered when the transport fails.
+        try await waitForSentCount(transport, expected: 1)
+        transport.simulateFailure()
+
+        // Handled despite the session being CONNECTING: fast, not the 5 s
+        // request timeout the old drop condemned it to.
+        do {
+            _ = try await createTask.value
+            XCTFail("the create must fail when its transport does")
+        } catch WmpSessionError.connectionFailed {
+            // the recovery failed the pending create request
+        } catch {
+            XCTFail("expected WmpSessionError.connectionFailed, got \(error)")
+        }
+        XCTAssertEqual(session.currentState, .failed)
+        let fired = await counter.value
+        XCTAssertEqual(fired, 1)
+    }
+
+    /// #306: a transport failure while the session is RESUMING (the resume in
+    /// flight) used to be silently dropped the same way: the resume threw its
+    /// timeout and the session stranded — the transport was dead and nothing
+    /// ran the recovery. The failure is now handled whatever the state: the
+    /// recovery's own resume re-opens the stream, rotates the token, and the
+    /// session comes back ACTIVE (the resume path is idempotent).
+    func testATransportFailureWhileResumingIsRecovered() async throws {
+        let transport = FakeTransport()
+        let session = WmpSession(
+            transport: transport,
+            config: WmpSessionConfig(requestTimeoutMs: 5_000, maxReconnectAttempts: 2, reconnectBaseMs: 1, reconnectMaxMs: 1)
+        )
+
+        // A resume in flight: the POST is out but unanswered.
+        let resumeTask = Task { try await session.resumeWith(sessionId: "session-123", resumptionToken: "resume-abc") }
+        try await waitForSentCount(transport, expected: 1)
+
+        // The recovery's resume (the SECOND one — the first is the in-flight
+        // call this failure interrupts), answered on sight.
+        let answerer = Task { await self.answerResumes(on: transport, fromResume: 2) }
+
+        // The transport fails WHILE the session is resuming.
+        transport.simulateFailure()
+
+        // The failure is handled despite RESUMING: the recovery loop resumes
+        // and the session is active again over the re-opened stream.
+        let deadline = Date().addingTimeInterval(3)
+        while session.currentState != .active, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(session.currentState, .active, "the dropped disconnect used to strand the session at .resuming forever")
+        _ = await answerer.value
+        // The superseded in-flight resume times out into the void a few
+        // seconds later; its caller's error is not the session's state, and
+        // the session stays healed regardless of it.
+        _ = resumeTask
+    }
+
+    /// #306 end to end: a stream that goes silent — no line for the
+    /// watchdog's idle limit (the production limit is 60 s at the engine's
+    /// ~15 s heartbeats; milliseconds here) — fails the transport, and the
+    /// session's collector answers with the existing reconnect: the resume
+    /// re-opens the stream and rotates the token.
+    func testASilentStreamFailsTheTransportAndTheSessionResumes() async throws {
+        let transport = FakeTransport()
+        let session = WmpSession(
+            transport: transport,
+            config: WmpSessionConfig(requestTimeoutMs: 2_000, maxReconnectAttempts: 2, reconnectBaseMs: 1, reconnectMaxMs: 1)
+        )
+
+        let createTask = Task { try await session.create(authToken: "t", sender: "s") }
+        try await waitForSentCount(transport, expected: 1)
+        let req = try codec.decodeRequest(transport.sentMessages.last!)
+        transport.receiveFromServer(createSuccessResponse(requestId: req.id!).data(using: .utf8)!)
+        try await createTask.value
+        XCTAssertEqual(session.currentState, .active)
+
+        actor Count { var n = 0; func bump() { n += 1 }; var value: Int { n } }
+        let counter = Count()
+
+        // The watchdog, wired the way the HTTP+SSE transport wires it (#306):
+        // no line for the idle limit — the half-open socket case, the kernel
+        // still calls the connection established — marks the transport FAILED.
+        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.2)
+        watchdog.onIdle = {
+            Task { await counter.bump() }
+            transport.simulateFailure()
+        }
+        watchdog.arm()
+
+        // The recovery's resume, answered on sight.
+        let answerer = Task { await self.answerResumes(on: transport) }
+
+        // Silent stream → watchdog trip → transport FAILED → the collector's
+        // reconnect → the session active again over the re-opened stream.
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await counter.value > 0, session.currentState == .active { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(session.currentState, .active, "the watchdog's FAILED must run the session's reconnect")
+        let fired = await counter.value
+        XCTAssertEqual(fired, 1, "the silent stream trips the watchdog once")
+        let events = transport.events
+        XCTAssertEqual(events.filter { $0 == "connect" }.count, 2, "the stream re-opened for the resume")
+        XCTAssertTrue(events.contains("send:wmp.session.resume"), "the recovery resumed the session")
+        watchdog.stop()
+        _ = await answerer.value
+    }
+
     private func waitForSentCount(_ transport: FakeTransport, expected: Int) async throws {
         let deadline = Date().addingTimeInterval(2)
         while transport.sentMessages.count < expected {
             if Date() > deadline { throw TimeoutError() }
             try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    /// Answers `wmp.session.resume` requests on sight — from the `fromResume`-th
+    /// one on (the earlier ones belong to the interrupted caller), rotating
+    /// the resumption token — returning once `untilAnswered` answers went
+    /// out. Bounded by `seconds`, so a test can also leave it polling on a
+    /// task.
+    private func answerResumes(
+        on transport: FakeTransport,
+        fromResume: Int = 1,
+        rotatingTo token: String = "resume-rotated",
+        untilAnswered: Int = 1,
+        seconds: Double = 5
+    ) async {
+        var answered = Set<Int>()
+        var resumes = 0
+        var answeredCount = 0
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            for (i, data) in transport.sentMessages.enumerated() where !answered.contains(i) {
+                answered.insert(i)
+                guard let req = try? codec.decodeRequest(data),
+                      req.method == "wmp.session.resume" else { continue }
+                resumes += 1
+                guard resumes >= fromResume else { continue }
+                transport.receiveFromServer(
+                    #"{"jsonrpc":"2.0","id":"\#(req.id!)","result":{"wmp":{"version":"0.1","session_id":"session-123"},"resumed":true,"resumption_token":"\#(token)"}}"#.data(using: .utf8)!
+                )
+                answeredCount += 1
+                if answeredCount >= untilAnswered { return }
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
         }
     }
 

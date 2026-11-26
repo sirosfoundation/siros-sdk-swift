@@ -39,6 +39,14 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     private var replayFilter = SseReplayFilter()
     // One reader at a time: two overlapping connects must not feed one parser from two tasks.
     private let readerGate = SseReaderGate()
+    /// The stream's liveness clock (#306 — the Kotlin binding sets OkHttp's read
+    /// timeout; URLSession has none, so the Swift twin watches the clock itself):
+    /// every line received — heartbeat or data — notes the time, a periodic check
+    /// (~30 s) trips when four heartbeats went missing (~60 s at the engine's
+    /// ~15 s cadence) and the transport is marked FAILED — the session's
+    /// reconnect replays from `Last-Event-ID`. Armed by each reader, stopped
+    /// with it, so a dead reader's silence never fails a stopped transport.
+    private let liveness = SseLivenessWatchdog()
     /// The session this stream belongs to, from `onSessionCreated`. The engine's SSE route REQUIRES
     /// `?session_id=` (it routes the replay and the live events by it), so the stream cannot open
     /// before the create answers - `connect()` defers to `onSessionCreated` until the id arrives.
@@ -64,6 +72,21 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
         var ic: AsyncStream<Data>.Continuation!
         self._incoming = AsyncStream { ic = $0 }
         self.incomingCont = ic
+
+        // The half-open socket's undertaker (#306): the kernel still calls
+        // the connection established, but no line arrived for four missed
+        // heartbeats — the reader is cancelled (its read would block
+        // forever), the gate frees (the reconnect that follows installs a
+        // fresh reader) and the FAILED state reaches the session's
+        // collector, which runs the resume.
+        liveness.onIdle = { [weak self] in
+            guard let self else { return }
+            self.readerGate.stop {
+                self.sseTask?.cancel()
+                self.sseTask = nil
+                self.setState(.failed)
+            }
+        }
     }
 
     public func connect() async throws {
@@ -98,11 +121,19 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
     }
 
     private func runReader(generation: Int, request: URLRequest) async {
+            // The liveness clock starts with the reader (#306): a connect that
+            // never delivers a byte and a stream that goes silent are the same
+            // death — the kernel still calls the connection established either
+            // way. Every line received below keeps the clock fresh.
+            liveness.arm()
             do {
                 let (bytes, response) = try await self.urlSession.bytes(for: request)
                 guard let httpResponse = response as? HTTPURLResponse,
                       (200..<300).contains(httpResponse.statusCode) else {
-                    self.readerGate.finish(generation) { self.setState(.failed) }
+                    self.readerGate.finish(generation) {
+                        self.liveness.stop()
+                        self.setState(.failed)
+                    }
                     return
                 }
                 // Checking that this reader is still current, publishing `.connected` and starting the response
@@ -122,6 +153,8 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                     // The parser and filter are touched only while this reader is the current one, and the gate
                     // is held for that whole step: a replaced or stopped reader never mutates its successor's state.
                     let delivered: Data?? = self.readerGate.ifCurrent(generation) { () -> Data? in
+                        // Heartbeat or data, a line is proof the stream is alive (#306).
+                        self.liveness.noteActivity()
                         guard let event = self.eventParser.feed(line: line), self.replayFilter.admit(event) else { return Data?.none }
                         return event.data.data(using: .utf8)
                     }
@@ -130,9 +163,13 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
                 }
                 // Free the gate and publish the state as one step: a consumer that reconnects as soon as it sees
                 // `.disconnected` finds the gate open, and a stale reader never overwrites its successor's state.
-                self.readerGate.finish(generation) { self.setState(.disconnected) }
+                self.readerGate.finish(generation) {
+                    self.liveness.stop()
+                    self.setState(.disconnected)
+                }
             } catch {
                 self.readerGate.finish(generation) {
+                    self.liveness.stop()
                     if self._state != .disconnected { self.setState(.failed) }
                 }
             }
@@ -160,6 +197,7 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
             readerGate.stop {
                 sseTask?.cancel()
                 sseTask = nil
+                liveness.stop()
                 setState(.disconnected)
             }
             eventParser = SseEventParser()
@@ -214,10 +252,28 @@ public final class WmpHttpSseTransport: TransportProtocol, @unchecked Sendable {
         readerGate.stop {
             sseTask?.cancel()
             sseTask = nil
+            liveness.stop()
             setState(.disconnected)
         }
         incomingCont.finish()
         stateCont.finish()
+    }
+
+    /// #306: force the stream closed WITHOUT ending the session — the incoming
+    /// and state streams live on (unlike ``disconnect()``, which finishes them
+    /// for good), so the resume that immediately follows re-opens the reader
+    /// over a fresh socket. This kills a reader the kernel still calls
+    /// established: a `flow.start` POST that timed out usually died with its
+    /// ANSWER — the POST channel is independent, the answer rides the event
+    /// stream, and a stream nobody reads is a stream the answer never reaches.
+    /// The FAILED state reaches the session's collector, which runs the resume.
+    public func forceClose() async {
+        readerGate.stop {
+            sseTask?.cancel()
+            sseTask = nil
+            liveness.stop()
+            setState(.failed)
+        }
     }
 
     private func setState(_ state: TransportState) {

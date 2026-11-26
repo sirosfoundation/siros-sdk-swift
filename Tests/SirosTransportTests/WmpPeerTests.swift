@@ -441,6 +441,76 @@ final class WmpPeerTests: XCTestCase {
         }
     }
 
+    /// #306: a `wmp.flow.start` POST that times out retries over a HEALED
+    /// transport. The old code replayed the POST while the SSE stream stayed
+    /// dead — the POST channel is independent, the answer rides the event
+    /// stream, so the retry orphaned exactly like the first attempt. The
+    /// recovery force-closes the stream, resumes (the token rotates, the
+    /// stream re-opens) and only THEN the retry rides a stream the engine can
+    /// answer on.
+    func testAFlowStartTimeoutHealsTheTransportBeforeTheRetry() async throws {
+        let transport = FakeTransport()
+        let session = WmpSession(
+            transport: transport,
+            config: WmpSessionConfig(requestTimeoutMs: 150, maxReconnectAttempts: 2, reconnectBaseMs: 1, reconnectMaxMs: 1)
+        )
+        let peer = WmpPeer(session: session)
+        peer.use(StubProfile())
+        try await connectPeer(peer, transport: transport)
+
+        // The server side: resumes are answered on sight (a missed answer
+        // must not doom the recovery); the FIRST flow.start is never answered
+        // — that IS the timeout; the RETRY is.
+        let answerer = Task {
+            var answered = Set<Int>()
+            var flowStarts = 0
+            let codec = WmpCodec()
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline {
+                for (i, data) in transport.sentMessages.enumerated() where !answered.contains(i) {
+                    answered.insert(i)
+                    guard let req = try? codec.decodeRequest(data) else { continue }
+                    switch req.method {
+                    case "wmp.session.resume":
+                        transport.receiveFromServer(
+                            #"{"jsonrpc":"2.0","id":"\#(req.id!)","result":{"wmp":{"version":"0.1","session_id":"ses-1"},"resumed":true,"resumption_token":"rt-2"}}"#.data(using: .utf8)!
+                        )
+                    case "wmp.flow.start":
+                        flowStarts += 1
+                        if flowStarts == 2 {
+                            transport.receiveFromServer(
+                                #"{"jsonrpc":"2.0","id":"\#(req.id!)","result":{"wmp":{"version":"0.1"},"flow_id":"f-t1","flow_type":"stub.flow"}}"#.data(using: .utf8)!
+                            )
+                            return
+                        }
+                    default:
+                        break
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+
+        let startTask = Task { try await peer.startFlow(flowType: "stub.flow", flowId: "f-t1") }
+        let result = try await withTimeout(seconds: 6) { try await startTask.value }
+        XCTAssertEqual(result.flowId, "f-t1")
+        _ = try? await answerer.value
+
+        // The heal happened, once, and BEFORE the retry:
+        // force-close → re-open → resume POST → retry POST.
+        let events = transport.events
+        let forceClose = try XCTUnwrap(events.firstIndex(of: "forceClose"))
+        let reopen = try XCTUnwrap(events.lastIndex(of: "connect"))
+        let resume = try XCTUnwrap(events.lastIndex { $0 == "send:wmp.session.resume" })
+        let retry = try XCTUnwrap(events.lastIndex { $0 == "send:wmp.flow.start" })
+        XCTAssertEqual(events.filter { $0 == "forceClose" }.count, 1, "one forced close, not one per attempt")
+        XCTAssertLessThan(forceClose, reopen, "the stream is force-closed before it re-opens")
+        XCTAssertLessThan(reopen, resume, "the stream re-opens before the resume POST")
+        XCTAssertLessThan(resume, retry, "the resume POST goes out before the retry")
+        XCTAssertEqual(events.filter { $0 == "send:wmp.flow.start" }.count, 2, "the start is retried exactly once")
+        XCTAssertEqual(session.currentResumptionToken, "rt-2", "the recovery rotated the resumption token")
+    }
+
     // MARK: - Helpers
 
     private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {

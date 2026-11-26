@@ -187,8 +187,23 @@ public final class WmpPeer: WmpPeerContext, @unchecked Sendable {
     /// refusal IS the first notice: a fresh session (the engine session
     /// is stateless from the wallet's side) and one retry; anything else
     /// re-throws.
+    ///
+    /// The stalled-transport heal (#306): a start that TIMES OUT usually
+    /// died with its ANSWER - the POST channel is independent, the answer
+    /// rides the SSE stream, and a stream nobody reads is a stream the
+    /// answer never reaches (the half-open socket the heartbeat watchdog
+    /// catches within a minute; this acts on demand, now). Force-close the
+    /// stream, resume the session (the token rotates, the stream re-opens
+    /// from the Last-Event-ID cursor) and only then retry - the old code
+    /// replayed the POST over the same dead stream, so the retry orphaned
+    /// exactly like the first attempt and every later start did too. A
+    /// second timeout re-throws: a genuinely slow flow is not healed by a
+    /// reconnect.
     public func startFlow(flowType: String, flowId: String, params: AnyCodable? = nil) async throws -> FlowStartResult {
         do {
+            return try await performStart(flowType: flowType, flowId: flowId, params: params)
+        } catch is WmpTimeoutError {
+            await session.recoverStalledTransport()
             return try await performStart(flowType: flowType, flowId: flowId, params: params)
         } catch {
             guard let message = (error as? WmpSessionError)?.errorDescription,
