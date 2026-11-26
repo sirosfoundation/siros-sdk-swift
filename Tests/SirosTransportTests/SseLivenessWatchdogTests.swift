@@ -38,14 +38,19 @@ final class SseLivenessWatchdogTests: XCTestCase {
     /// clock never trips while lines flow, whatever their spacing.
     func testALineKeepsTheStreamAlive() async {
         let counter = Count()
-        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.2)
+        // The margins: each sleep stays at half the idle limit, so a loaded
+        // CI runner can oversleep any single sleep before the clock
+        // legitimately trips (the v0.19.0 release runs flaked on the
+        // 100ms-against-0.2s family — this file's discipline is now
+        // half-limit sleeps everywhere a short sleep must stay under).
+        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.6)
         watchdog.onIdle = { Task { await counter.bump() } }
         watchdog.arm()
 
-        // Ten check intervals' worth of heartbeats, each comfortably within
-        // the limit: never fires.
-        for _ in 0..<10 {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        // Several check intervals' worth of heartbeats, each comfortably
+        // within the limit: never fires.
+        for _ in 0..<5 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
             watchdog.noteActivity()
         }
         let fired = await counter.value
@@ -73,21 +78,24 @@ final class SseLivenessWatchdogTests: XCTestCase {
     /// must not fire on the new reader's silence before ITS limit passes.
     func testARestartedReaderRearmsTheClock() async {
         let counter = Count()
-        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.2)
+        // The margins: each sleep stays at half the idle limit (the file's
+        // discipline — see testALineKeepsTheStreamAlive); the v0.19.0
+        // release rerun flaked on this test's 100ms-against-0.2s window.
+        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.6)
         watchdog.onIdle = { Task { await counter.bump() } }
         watchdog.arm()
 
         // Half the limit passes, then the reader is replaced: the fresh
         // arming's clock starts from NOW.
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         watchdog.stop()
         watchdog.arm()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         var fired = await counter.value
         XCTAssertEqual(fired, 0, "the fresh arming restarted the clock: the old arming's age does not count")
 
         // No lines follow: the fresh reader's own limit trips it.
-        try? await waitFor(within: 2) { await counter.value > 0 }
+        try? await waitFor(within: 3) { await counter.value > 0 }
         fired = await counter.value
         XCTAssertEqual(fired, 1)
     }
