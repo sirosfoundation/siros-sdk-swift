@@ -5,6 +5,26 @@ All notable changes to the SIROS SDK for iOS/macOS will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-11-26
+
+The leave-group UX and the SSE keepalive — the Kotlin v0.26.0 parity.
+
+### Added
+
+- **Leave a group from the UX (#305):** the group list's leave action — the `wmp.group.leave`
+  call, the membership teardown, the persisted joined-group set updated on the way out. The
+  create names no `ttl` by default (the engine's own applies) in the same change.
+- **The SSE keepalive (#307):** the engine session's SSE stream gained a liveness watchdog
+  (a dead idle stream surfaces within the keepalive window instead of hanging silently), a
+  reconnect-on-demand on the flow-start timeout, and a session-state guard that keeps a
+  reconnect from stealing a live session's responses. Found live on the GDC acceptance
+  round: hours of idle killed the stream and every subsequent `flow.start` orphaned.
+
+### Fixed
+
+- **The refusal retry (#304):** the restored join reuses the join's AS client and retries
+  past refusals.
+
 ## [0.18.0] - 2026-11-25
 
 ### Added
