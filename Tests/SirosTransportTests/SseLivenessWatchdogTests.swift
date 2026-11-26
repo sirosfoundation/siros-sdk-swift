@@ -98,21 +98,27 @@ final class SseLivenessWatchdogTests: XCTestCase {
     /// can never fire.
     func testArmingARunningClockOnlyFreshensIt() async {
         let counter = Count()
-        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.2)
+        // The margins: each stretch sleeps half the idle limit, so a
+        // loaded CI runner can oversleep a sleep by 300ms before the
+        // freshened clock legitimately trips. The v0.19.0 release run
+        // flaked on this test's 80ms margin (0.12s sleeps against a 0.2s
+        // limit); 0.3s against 0.6s keeps the guarantee pinned without the
+        // flake window.
+        let watchdog = SseLivenessWatchdog(checkInterval: 0.05, idleLimit: 0.6)
         watchdog.onIdle = { Task { await counter.bump() } }
         watchdog.arm()
 
         // More than the limit elapses in TOTAL, but each stretch stays
         // within it: the clock is freshened by the re-arm and never trips.
         for _ in 0..<3 {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 300_000_000)
             watchdog.arm()
         }
         var fired = await counter.value
         XCTAssertEqual(fired, 0, "the freshened clock does not count the stretches before the re-arms")
 
         // The running tick can still fire once the stream goes silent.
-        try? await waitFor(within: 2) { await counter.value > 0 }
+        try? await waitFor(within: 3) { await counter.value > 0 }
         fired = await counter.value
         XCTAssertEqual(fired, 1)
     }
