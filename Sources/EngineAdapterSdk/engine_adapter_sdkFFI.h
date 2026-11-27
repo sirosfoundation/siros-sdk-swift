@@ -457,6 +457,11 @@ RustBuffer uniffi_engine_adapter_sdk_fn_method_wmpmls_decrypt(void*_Nonnull ptr,
 RustBuffer uniffi_engine_adapter_sdk_fn_method_wmpmls_encrypt(void*_Nonnull ptr, RustBuffer group_id, RustBuffer plaintext, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_FN_METHOD_WMPMLS_EXPORT_GROUP_INFO
+#define UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_FN_METHOD_WMPMLS_EXPORT_GROUP_INFO
+RustBuffer uniffi_engine_adapter_sdk_fn_method_wmpmls_export_group_info(void*_Nonnull ptr, RustBuffer group_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_FN_METHOD_WMPMLS_GENERATE_KEY_PACKAGE
 #define UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_FN_METHOD_WMPMLS_GENERATE_KEY_PACKAGE
 RustBuffer uniffi_engine_adapter_sdk_fn_method_wmpmls_generate_key_package(void*_Nonnull ptr, int64_t cipher_suite, RustCallStatus *_Nonnull out_status
@@ -861,6 +866,12 @@ uint16_t uniffi_engine_adapter_sdk_checksum_method_wmpmls_decrypt(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_CHECKSUM_METHOD_WMPMLS_ENCRYPT
 #define UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_CHECKSUM_METHOD_WMPMLS_ENCRYPT
 uint16_t uniffi_engine_adapter_sdk_checksum_method_wmpmls_encrypt(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_CHECKSUM_METHOD_WMPMLS_EXPORT_GROUP_INFO
+#define UNIFFI_FFIDEF_UNIFFI_ENGINE_ADAPTER_SDK_CHECKSUM_METHOD_WMPMLS_EXPORT_GROUP_INFO
+uint16_t uniffi_engine_adapter_sdk_checksum_method_wmpmls_export_group_info(void
     
 );
 #endif
