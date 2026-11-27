@@ -185,8 +185,18 @@ let package = Package(
             // change is engine-core only — the FFI surface is identical to
             // v0.3.8's, so the vendored bindings stay untouched and only
             // the pin's url and checksum move.
-            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.3.9/engine_adapter_sdk.xcframework.zip",
-            checksum: "67a7247ee10e142551ec3d99a9dd6d8ddb3003d36cebbec73aae53f01a5c6d5c"
+            // v0.7.0 (2026-11-27): the consolidated line — the jose-rs
+            // upstream re-pin (the fork ride retired; the 4 MiB token cap
+            // stays), the x509 SAN binding fix, the signed well-known +
+            // participant_id (CS-15 §7.2), the participant credential
+            // port with the PKCS#11 home, and the wmp-mls Welcome
+            // hardening (refuse-before-commit joins, certificate-bound
+            // KeyPackages). The FFI surface gains exactly one method
+            // since v0.3.9 — exportGroupInfo (wallet-core #118, issue
+            // #108): the vendored bindings regenerate from the release's
+            // bindings.zip; everything else in the span is engine-internal.
+            url: "https://github.com/sirosfoundation/siros-wallet-core/releases/download/v0.7.0/engine_adapter_sdk.xcframework.zip",
+            checksum: "81bbdcbb601ec8cbf7c5d2e35ded0f9cfb405f6be718f8fcea97b61226407e50"
         ),
 
         // --- Credentials: data models, DCQL matcher, VCTM types ---

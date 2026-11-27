@@ -825,6 +825,18 @@ public protocol WmpMlsProtocol : AnyObject {
     func encrypt(groupId: String, plaintext: Data) throws  -> MlsEncrypted
     
     /**
+     * Export the group's GroupInfo (spec §3.1's `group_info` create
+     * param): the serialized MlsMessageOut, base64url, with the
+     * ratchet tree. The peer's `wmp.mls.group.create` validator
+     * demands the param — a wallet-driven create mints it here and
+     * hands it to the peer; a member joining by Welcome never needs
+     * it. Found live at the Cleverbase interop (2026-11-24): the
+     * wallet path hit the create's refusal on its first group create
+     * because this surface had no export (issue #108).
+     */
+    func exportGroupInfo(groupId: String) throws  -> String
+    
+    /**
      * A fresh KeyPackage (spec §2.3) for the suite: publish it on the
      * member's well-known for the add flows.
      */
@@ -979,6 +991,24 @@ open func encrypt(groupId: String, plaintext: Data)throws  -> MlsEncrypted {
     uniffi_engine_adapter_sdk_fn_method_wmpmls_encrypt(self.uniffiClonePointer(),
         FfiConverterString.lower(groupId),
         FfiConverterData.lower(plaintext),$0
+    )
+})
+}
+    
+    /**
+     * Export the group's GroupInfo (spec §3.1's `group_info` create
+     * param): the serialized MlsMessageOut, base64url, with the
+     * ratchet tree. The peer's `wmp.mls.group.create` validator
+     * demands the param — a wallet-driven create mints it here and
+     * hands it to the peer; a member joining by Welcome never needs
+     * it. Found live at the Cleverbase interop (2026-11-24): the
+     * wallet path hit the create's refusal on its first group create
+     * because this surface had no export (issue #108).
+     */
+open func exportGroupInfo(groupId: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMlsException.lift) {
+    uniffi_engine_adapter_sdk_fn_method_wmpmls_export_group_info(self.uniffiClonePointer(),
+        FfiConverterString.lower(groupId),$0
     )
 })
 }
@@ -8039,6 +8069,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_encrypt() != 53426) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_export_group_info() != 5896) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_engine_adapter_sdk_checksum_method_wmpmls_generate_key_package() != 10074) {
